@@ -1,0 +1,23 @@
+// Firestore rules
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function isOwner() { return isSignedIn() && request.auth.uid == resource.data.ownerUid; }
+    function isOwnerForCreate() { return isSignedIn() && request.resource.data.ownerUid == request.auth.uid; }
+
+    match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /tasks/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+
+    // Per-user integration profile
+    match /profiles/{uid} {
+      allow read, update, delete: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.ownerUid == uid;
+    }
+
+    // No client access to tokens by default (server-only)
+  }
+}
