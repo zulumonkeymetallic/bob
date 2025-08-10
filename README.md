@@ -8,7 +8,7 @@
 - Buttons to trigger **Trakt** / **Steam** sync (currently stubs; wire after adding secrets).
 - File uploads to Storage (optional checkbox): archives source files to `uploads/<uid>/<timestamp>-<filename>`.
 - AI helpers: `classifyGoal`, `prioritizeBacklog`, `rankResources` (OpenAI via secret).
-
+option 
 ## Setup
 ```bash
 cd /Users/jim/Github/bob/functions

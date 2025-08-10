@@ -13,6 +13,8 @@ admin.initializeApp();
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret("GOOGLE_OAUTH_CLIENT_ID");
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret("GOOGLE_OAUTH_CLIENT_SECRET");
+const TRAKT_CLIENT_ID = defineSecret("TRAKT_CLIENT_ID");
+const STEAM_WEB_API_KEY = defineSecret("STEAM_WEB_API_KEY");
 
 // ===== Utilities
 async function fetchJson(url, opts = {}) {
@@ -149,7 +151,7 @@ exports.prioritizeBacklog = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async 
   let tasks = (req.data && Array.isArray(req.data.tasks)) ? req.data.tasks : [];
   if (tasks.length > 50) tasks = tasks.slice(0,50);
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const prompt = "Score tasks 0-100 and bucket TODAY/NEXT/LATER. Return JSON {items:[{id,score,bucket}]}\\nTasks: " + JSON.stringify(tasks);
+  const prompt = "Score tasks 0-100 and bucket TODAY/NEXT/LATER. Return JSON {items:[{id,score,bucket}]}\nTasks: " + JSON.stringify(tasks);
   const resp = await client.chat.completions.create({ model: "gpt-4o-mini", messages: [{ role: "user", content: prompt }], temperature: 0.2 });
   let out = { items: [] }; try { out = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch {}
   return out;
@@ -182,4 +184,94 @@ exports.importItems = httpsV2.onCall(async (req) => {
   }
   await batch.commit();
   return { ok: true, written: items.length, type };
+});
+
+// ===== Trakt and Steam Sync
+async function _syncTrakt(uid) {
+  const db = admin.firestore();
+  const profile = await db.collection('profiles').doc(uid).get();
+  const traktUser = profile.data()?.traktUser;
+
+  if (!traktUser) {
+    throw new Error("Trakt username not found in profile.");
+  }
+
+  const url = `https://api.trakt.tv/users/${traktUser}/history`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'trakt-api-version': '2',
+    'trakt-api-key': process.env.TRAKT_CLIENT_ID,
+  };
+
+  const history = await fetchJson(url, { headers });
+
+  const batch = db.batch();
+  for (const item of history) {
+    const docRef = db.collection('trakt').doc(`${uid}_${item.id}`);
+    batch.set(docRef, { ...item, ownerUid: uid }, { merge: true });
+  }
+  await batch.commit();
+
+  return { ok: true, written: history.length };
+}
+
+async function _syncSteam(uid) {
+  const db = admin.firestore();
+  const profile = await db.collection('profiles').doc(uid).get();
+  const steamId = profile.data()?.steamId;
+
+  if (!steamId) {
+    throw new Error("SteamID not found in profile.");
+  }
+
+  const url = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${process.env.STEAM_WEB_API_KEY}&steamid=${steamId}&format=json`;
+  const data = await fetchJson(url);
+
+  const games = data.response.games || [];
+
+  const batch = db.batch();
+  for (const item of games) {
+    const docRef = db.collection('steam').doc(`${uid}_${item.appid}`);
+    batch.set(docRef, { ...item, ownerUid: uid }, { merge: true });
+  }
+  await batch.commit();
+
+  return { ok: true, written: games.length };
+}
+
+exports.syncTrakt = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  return await _syncTrakt(req.auth.uid);
+});
+
+exports.syncSteam = httpsV2.onCall({ secrets: [STEAM_WEB_API_KEY] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  return await _syncSteam(req.auth.uid);
+});
+
+// ===== Scheduled Syncs
+exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+
+  for (const profile of profiles.docs) {
+    const uid = profile.id;
+    const data = profile.data();
+
+    if (data.traktUser) {
+      try {
+        await _syncTrakt(uid);
+      } catch (error) {
+        console.error(`Failed to sync Trakt for user ${uid}`, error);
+      }
+    }
+
+    if (data.steamId) {
+      try {
+        await _syncSteam(uid);
+      } catch (error) {
+        console.error(`Failed to sync Steam for user ${uid}`, error);
+      }
+    }
+  }
 });
