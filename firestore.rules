@@ -12,6 +12,18 @@ service cloud.firestore {
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 
+    // Habits
+    match /habits/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+
+      // Habit Entries as a subcollection
+      match /habitEntries/{entryId} {
+        allow create: if isOwner(); // Owner of the parent habit can create entries
+        allow read, update, delete: if isOwner(); // Owner of the parent habit can manage entries
+      }
+    }
+
     // Per-user integration profile
     match /profiles/{uid} {
       allow read, update, delete: if isSignedIn() && request.auth.uid == uid;

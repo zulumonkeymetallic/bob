@@ -1,80 +1,82 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
-import KanbanBoard from './components/KanbanBoard';
-import Admin from './components/Admin';
+import React, { useState } from 'react';
+import { Container, Nav, Navbar, Button } from 'react-bootstrap';
+import { Routes, Route, BrowserRouter as Router, Link } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
-import { auth } from './firebase';
-import { GoogleAuthProvider, signInWithPopup, signOut, User } from 'firebase/auth';
+import StoryBacklog from './components/StoryBacklog';
+import SprintAdmin from './components/SprintAdmin';
+import GoalsManagement from './components/GoalsManagement';
+import DevelopmentTracking from './components/DevelopmentTracking';
+import Admin from './components/Admin';
+import KanbanPage from './components/KanbanPage';
+import Changelog from './components/Changelog';
+import { useTheme } from './contexts/ThemeContext';
+import { useAuth } from './contexts/AuthContext';
+import './App.css';
 
 function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const { theme, toggleTheme } = useTheme();
+  const { currentUser, signInWithGoogle, signOut } = useAuth();
+  const [isNavExpanded, setIsNavExpanded] = useState(false);
 
-  useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(user => {
-      setUser(user);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error(error);
-    }
-  };
+  if (!currentUser) {
+    return (
+      <div className={`app-container ${theme} vh-100 d-flex justify-content-center align-items-center`}>
+        <div className="text-center">
+          <h1>Welcome to BOB</h1>
+          <p>Your personal productivity assistant.</p>
+          <Button variant="primary" size="lg" onClick={signInWithGoogle}>
+            Sign in with Google
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Router>
-      <div className="App">
-        <nav className="navbar navbar-expand-lg navbar-light bg-light">
-          <div className="container-fluid">
-            <Link className="navbar-brand" to="/">Bob</Link>
-            <div className="collapse navbar-collapse">
-              <ul className="navbar-nav me-auto mb-2 mb-lg-0">
-                <li className="nav-item">
-                  <Link className="nav-link" to="/">Home</Link>
-                </li>
-                <li className="nav-item">
-                  <Link className="nav-link" to="/dashboard">Dashboard</Link>
-                </li>
-                <li className="nav-item">
-                  <Link className="nav-link" to="/admin">Admin</Link>
-                </li>
-              </ul>
-              {user ? (
-                <button className="btn btn-danger" onClick={handleLogout}>
-                  Logout
-                </button>
-              ) : (
-                <button className="btn btn-primary" onClick={handleLogin}>
-                  Login with Google
-                </button>
-              )}
-            </div>
-          </div>
-        </nav>
-
-        <div className="container-fluid p-3">
-          {user ? (
-            <Routes>
-              <Route path="/" element={<KanbanBoard />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/admin" element={<Admin />} />
-            </Routes>
-          ) : (
-            <p>Please log in to see the content.</p>
-          )}
-        </div>
+      <div className={`app-container ${theme}`}>
+        <Navbar
+          bg={theme === 'dark' ? 'dark' : 'light'}
+          variant={theme === 'dark' ? 'dark' : 'light'}
+          expand="lg"
+          fixed="top"
+          className="main-navbar"
+          onToggle={setIsNavExpanded}
+          expanded={isNavExpanded}
+        >
+          <Container fluid>
+            <Navbar.Brand as={Link} to="/">BOB</Navbar.Brand>
+            <Navbar.Toggle aria-controls="basic-navbar-nav" />
+            <Navbar.Collapse id="basic-navbar-nav">
+              <Nav className="me-auto">
+                <Nav.Link as={Link} to="/" onClick={() => setIsNavExpanded(false)}>Dashboard</Nav.Link>
+                <Nav.Link as={Link} to="/kanban" onClick={() => setIsNavExpanded(false)}>Kanban</Nav.Link>
+                <Nav.Link as={Link} to="/backlog" onClick={() => setIsNavExpanded(false)}>Backlog</Nav.Link>
+                <Nav.Link as={Link} to="/goals" onClick={() => setIsNavExpanded(false)}>Goals</Nav.Link>
+                <Nav.Link as={Link} to="/dev-tracking" onClick={() => setIsNavExpanded(false)}>Dev Tracking</Nav.Link>
+                <Nav.Link as={Link} to="/admin" onClick={() => setIsNavExpanded(false)}>Admin</Nav.Link>
+                <Nav.Link as={Link} to="/changelog" onClick={() => setIsNavExpanded(false)}>Changelog</Nav.Link>
+              </Nav>
+              <Button variant="outline-secondary" onClick={toggleTheme} className="me-2">
+                {theme === 'dark' ? 'Light' : 'Dark'} Mode
+              </Button>
+              <Button variant="outline-danger" onClick={signOut}>
+                Sign Out
+              </Button>
+            </Navbar.Collapse>
+          </Container>
+        </Navbar>
+        <Container fluid className="content-container">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/kanban" element={<KanbanPage />} />
+            <Route path="/backlog" element={<StoryBacklog />} />
+            <Route path="/goals" element={<GoalsManagement />} />
+            <Route path="/dev-tracking" element={<DevelopmentTracking />} />
+            <Route path="/admin" element={<Admin />} />
+            <Route path="/changelog" element={<Changelog />} />
+          </Routes>
+        </Container>
       </div>
     </Router>
   );

@@ -1,130 +1,76 @@
-import React, { useState, useEffect } from 'react';
-import { DragDropContext, DropResult } from 'react-beautiful-dnd';
-import { db, auth } from '../firebase';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
-import Column from './Column';
-import 'bootstrap/dist/css/bootstrap.min.css';
-import { Task, Column as ColumnType } from '../types';
+import React from 'react';
+import { useDroppableCollection, useDraggableItem, useDropIndicator } from "@react-aria/dnd";
+import { useListState } from "@react-stately/list";
+import { useListBox, useOption } from "@react-aria/listbox";
+import { useDroppableCollectionState } from "@react-stately/dnd";
+import { DraggableItemProps, DroppableCollectionOptions } from '@react-aria/dnd';
+import { AriaListBoxOptions } from '@react-aria/listbox';
+import { Node } from '@react-types/shared';
+import type { DroppableCollectionState } from '@react-stately/dnd';
 
-const KanbanBoard = () => {
-  const [tasks, setTasks] = useState<{ [key: string]: Task }>({});
-  const [columns, setColumns] = useState<{ [key: string]: ColumnType }>({});
-  const [columnOrder, setColumnOrder] = useState<string[]>([]);
 
-  useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(user => {
-      if (user) {
-        const statuses = ['backlog', 'doing', 'done'];
-        const q = query(collection(db, 'tasks'), where('ownerUid', '==', user.uid));
-
-        const unsubscribeSnapshot = onSnapshot(q, snapshot => {
-          const newTasks: { [key: string]: Task } = {};
-          snapshot.forEach(doc => {
-            newTasks[doc.id] = { id: doc.id, ...doc.data() } as Task;
-          });
-          setTasks(newTasks);
-
-          const newColumns: { [key: string]: ColumnType } = {};
-          statuses.forEach(status => {
-            newColumns[status] = {
-              id: status,
-              title: status.charAt(0).toUpperCase() + status.slice(1),
-              taskIds: Object.values(newTasks)
-                .filter(task => task.status === status)
-                .map(task => task.id),
-            };
-          });
-
-          setColumns(newColumns);
-          setColumnOrder(statuses);
-        });
-
-        return () => unsubscribeSnapshot();
-      } else {
-        setTasks({});
-        setColumns({});
-        setColumnOrder([]);
-      }
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  const onDragEnd = (result: DropResult) => {
-    const { destination, source, draggableId } = result;
-
-    if (!destination) {
-      return;
-    }
-
-    if (
-      destination.droppableId === source.droppableId &&
-      destination.index === source.index
-    ) {
-      return;
-    }
-
-    const start = columns[source.droppableId];
-    const end = columns[destination.droppableId];
-
-    if (start === end) {
-      const newTaskIds = Array.from(start.taskIds);
-      newTaskIds.splice(source.index, 1);
-      newTaskIds.splice(destination.index, 0, draggableId);
-
-      const newColumn = {
-        ...start,
-        taskIds: newTaskIds,
-      };
-
-      const newColumns = {
-        ...columns,
-        [newColumn.id]: newColumn,
-      };
-      setColumns(newColumns);
-
-    } else {
-      const startTaskIds = Array.from(start.taskIds);
-      startTaskIds.splice(source.index, 1);
-      const newStart = {
-        ...start,
-        taskIds: startTaskIds,
-      };
-
-      const endTaskIds = Array.from(end.taskIds);
-      endTaskIds.splice(destination.index, 0, draggableId);
-      const newEnd = {
-        ...end,
-        taskIds: endTaskIds,
-      };
-
-      const newColumns = {
-        ...columns,
-        [newStart.id]: newStart,
-        [newEnd.id]: newEnd,
-      };
-
-      setColumns(newColumns);
-
-      const taskRef = doc(db, 'tasks', draggableId);
-      updateDoc(taskRef, { status: destination.droppableId });
+function KanbanCard({ item, onSelect }: { item: Node<object>, onSelect?: (id: string) => void }) {
+  let ref = React.useRef(null);
+  let { optionProps } = useOption({ key: item.key }, {} as any, ref);
+  let { dragProps } = useDraggableItem({ key: item.key } as DraggableItemProps, {} as any);
+  
+  const handleClick = () => {
+    if (onSelect) {
+      onSelect(item.key.toString());
     }
   };
 
   return (
-    <DragDropContext onDragEnd={onDragEnd}>
-      <div className="container-fluid">
-        <div className="row">
-          {columnOrder.map(columnId => {
-            const column = columns[columnId];
-            const columnTasks = column.taskIds.map(taskId => tasks[taskId]);
-
-            return <Column key={column.id} column={column} tasks={columnTasks} />;
-          })}
-        </div>
-      </div>
-    </DragDropContext>
+    <li 
+      {...optionProps} 
+      {...dragProps} 
+      ref={ref} 
+      className="bg-white rounded p-2 mb-2 shadow-sm cursor-pointer" 
+      onClick={handleClick}
+    >
+      {item.rendered}
+    </li>
   );
-};
+}
 
-export default KanbanBoard;
+function KanbanColumn({ column, onDrop, onSelect }) {
+  let state = useListState({ items: column.stories });
+  let ref = React.useRef(null);
+  let { listBoxProps } = useListBox({ "aria-label": column.name } as AriaListBoxOptions<any>, state, ref);
+  const droppableCollection = useDroppableCollection({
+      onDrop: async (e) => {
+          const keys = [];
+          for (const item of e.items) {
+              if (item.kind === 'text') {
+                  const key = await item.getText('text/plain');
+                  keys.push(key);
+              }
+          }
+          onDrop(column.id, keys);
+      }
+  } as any, {} as any, ref);
+
+  const dropIndicatorRef = React.useRef(null);
+  const { dropIndicatorProps } = useDropIndicator({
+    target: { type: 'item', key: column.id, dropPosition: 'on' }
+  }, state as unknown as DroppableCollectionState, dropIndicatorRef);
+
+  return (
+    <div className="bg-gray-100 rounded p-2 w-64">
+      <h3 className="font-semibold mb-2">{column.name}</h3>
+      <ul {...listBoxProps} ref={ref}>
+        {[...state.collection].map(item => (
+          <KanbanCard key={item.key} item={item} onSelect={onSelect} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export default function KanbanBoard({ columns, onDrop, onStorySelect }) {
+  return (
+    <div className="flex gap-4">
+      {columns.map(col => <KanbanColumn key={col.id} column={col} onDrop={onDrop} onSelect={onStorySelect} />)}
+    </div>
+  );
+}
