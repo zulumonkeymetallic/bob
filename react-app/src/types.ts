@@ -2,10 +2,14 @@ export interface Goal {
   id: string;
   title: string;
   description?: string;
+  theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
+  size: 'XS' | 'S' | 'M' | 'L' | 'XL';
+  confidence: number;
+  targetDate?: string;
   ownerUid: string;
-  createdAt: number;
-  updatedAt: number;
-  status: 'active' | 'completed' | 'archived';
+  createdAt: any; // Firebase Timestamp
+  updatedAt: any; // Firebase Timestamp
+  status?: 'active' | 'completed' | 'archived';
   dueDate?: number;
   category?: string;
   priority?: 'low' | 'medium' | 'high';
@@ -14,11 +18,18 @@ export interface Goal {
 export interface Story {
   id: string;
   title: string;
+  description?: string;
   goalId: string;
+  status: 'backlog' | 'active' | 'done';
+  priority: 'P1' | 'P2' | 'P3';
+  points: number;
   sprintId?: string;
+  orderIndex: number;
+  acceptanceCriteria?: string[];
   ownerUid: string;
+  createdAt: any; // Firebase Timestamp
+  updatedAt: any; // Firebase Timestamp
   dueDate?: number; // Added dueDate
-  status: string; // Added status for Kanban board
 }
 
 export interface Sprint {
