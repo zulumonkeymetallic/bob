@@ -37,7 +37,7 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID] }, as
     const nonce = String(req.query.nonce || "");
     if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
     const projectId = process.env.GCLOUD_PROJECT;
-    const redirectUri = `https://${projectId}.web.app/api/oauth/callback`;
+    const redirectUri = `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
     const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
     const state = stateEncode({ uid, nonce });
     const scope = encodeURIComponent("https://www.googleapis.com/auth/calendar");
@@ -57,7 +57,7 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
     if (!code || !uid) return res.status(400).send("Missing code/uid");
 
     const projectId = process.env.GCLOUD_PROJECT;
-    const redirectUri = `https://${projectId}.web.app/api/oauth/callback`;
+    const redirectUri = `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
 
     const tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -145,6 +145,36 @@ exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, 
   return { ok: true, items: data.items || [] };
 });
 
+exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{storyId}", async (event) => {
+  const storyId = event.params.storyId;
+  const beforeData = event.data.before.data();
+  const afterData = event.data.after.data();
+
+  if (beforeData.sprintId !== afterData.sprintId) {
+    const db = admin.firestore();
+    const newSprintId = afterData.sprintId;
+
+    let newDueDate = null;
+    if (newSprintId) {
+      const sprintDoc = await db.collection("sprints").doc(newSprintId).get();
+      if (sprintDoc.exists) {
+        newDueDate = sprintDoc.data().endDate;
+      }
+    }
+
+    const tasksRef = db.collection("tasks").where("storyId", "==", storyId);
+    const tasksSnapshot = await tasksRef.get();
+
+    if (!tasksSnapshot.empty) {
+      const batch = db.batch();
+      tasksSnapshot.docs.forEach(doc => {
+        batch.update(doc.ref, { sprintId: newSprintId, dueDate: newDueDate });
+      });
+      await batch.commit();
+    }
+  }
+});
+
 // ===== AI helpers (as before, simplified)
 exports.prioritizeBacklog = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
@@ -184,6 +214,33 @@ exports.importItems = httpsV2.onCall(async (req) => {
   }
   await batch.commit();
   return { ok: true, written: items.length, type };
+});
+
+exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const items = req.data?.items || [];
+  if (!Array.isArray(items) || items.length === 0) return { ok: true, written: 0 };
+  if (items.length > 500) items = items.slice(0,500);
+
+  const db = admin.firestore();
+  const batch = db.batch();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  for (const item of items) {
+    const doc = {
+        feature: item.feature || null,
+        description: item.description || null,
+        implemented: item.implemented || false,
+        uatStatus: item.uatStatus || 'In Progress',
+        version: item.version || null,
+        createdAt: now,
+        ownerUid: req.auth.uid,
+    };
+    batch.set(db.collection("development_features").doc(), doc);
+  }
+
+  await batch.commit();
+  return { ok: true, written: items.length };
 });
 
 // ===== Trakt and Steam Sync
