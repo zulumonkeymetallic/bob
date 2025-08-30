@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table } from 'react-bootstrap';
+import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Task } from '../types';
 
@@ -12,6 +13,7 @@ const KanbanPage: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [showAddStory, setShowAddStory] = useState(false);
+  const [showEditStory, setShowEditStory] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   
   // Configurable swim lanes
@@ -34,6 +36,14 @@ const KanbanPage: React.FC = () => {
     description: '',
     effort: 'medium' as const,
     priority: 'medium' as const
+  });
+
+  const [editStory, setEditStory] = useState({
+    title: '',
+    description: '',
+    goalId: '',
+    priority: 'P2' as 'P1' | 'P2' | 'P3',
+    points: 1
   });
 
   useEffect(() => {
@@ -143,6 +153,84 @@ const KanbanPage: React.FC = () => {
     }
   };
 
+  const openEditStory = (story: Story) => {
+    setEditStory({
+      title: story.title,
+      description: story.description || '',
+      goalId: story.goalId,
+      priority: story.priority,
+      points: story.points
+    });
+    setSelectedStory(story);
+    setShowEditStory(true);
+  };
+
+  const handleEditStory = async () => {
+    if (!currentUser || !editStory.title.trim() || !selectedStory) return;
+
+    try {
+      await updateDoc(doc(db, 'stories', selectedStory.id), {
+        title: editStory.title,
+        description: editStory.description,
+        goalId: editStory.goalId,
+        priority: editStory.priority,
+        points: editStory.points,
+        updatedAt: serverTimestamp()
+      });
+
+      setEditStory({
+        title: '',
+        description: '',
+        goalId: '',
+        priority: 'P2',
+        points: 1
+      });
+      setShowEditStory(false);
+    } catch (error) {
+      console.error('Error editing story:', error);
+    }
+  };
+
+  // DELETE FUNCTION - ADDED FOR C20 FIX
+  const handleDeleteStory = async () => {
+    if (!selectedStory) return;
+
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete "${selectedStory.title}"?\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmDelete) return;
+
+    try {
+      // Get all tasks linked to this story
+      const linkedTasks = tasks.filter(task => task.storyId === selectedStory.id);
+      
+      if (linkedTasks.length > 0) {
+        const deleteTasksConfirm = window.confirm(
+          `This story has ${linkedTasks.length} linked task(s). Do you want to delete them as well?\n\nClick OK to delete story and all tasks, or Cancel to abort.`
+        );
+        
+        if (!deleteTasksConfirm) return;
+        
+        // Delete all linked tasks first
+        for (const task of linkedTasks) {
+          await deleteDoc(doc(db, 'tasks', task.id));
+        }
+      }
+
+      // Delete the story
+      await deleteDoc(doc(db, 'stories', selectedStory.id));
+      
+      console.log('Story deleted successfully:', selectedStory.id);
+      setShowEditStory(false);
+      setSelectedStory(null);
+      
+    } catch (error) {
+      console.error('Error deleting story:', error);
+      alert('Failed to delete story. Please try again.');
+    }
+  };
+
   const updateStoryStatus = async (storyId: string, newStatus: string) => {
     try {
       await updateDoc(doc(db, 'stories', storyId), {
@@ -162,6 +250,70 @@ const KanbanPage: React.FC = () => {
       });
     } catch (error) {
       console.error('Error updating task status:', error);
+    }
+  };
+
+  // Drag and Drop Handler
+  const handleDragEnd = async (result: DropResult) => {
+    console.log('🔄 Drag end result:', result);
+    
+    const { destination, source, draggableId } = result;
+
+    // If no destination, do nothing
+    if (!destination) {
+      console.log('❌ No destination for drag');
+      return;
+    }
+
+    // If dropped in same position, do nothing
+    if (
+      destination.droppableId === source.droppableId &&
+      destination.index === source.index
+    ) {
+      console.log('⏸️ Dropped in same position');
+      return;
+    }
+
+    // Find the story that was dragged
+    const draggedStory = stories.find(story => story.id === draggableId);
+    if (!draggedStory) {
+      console.log('❌ Could not find dragged story:', draggableId);
+      return;
+    }
+
+    // Map droppable IDs to status values
+    const statusMap: { [key: string]: string } = {
+      'backlog': 'backlog',
+      'active': 'active', 
+      'done': 'done'
+    };
+
+    const newStatus = statusMap[destination.droppableId];
+    if (!newStatus) {
+      console.log('❌ Invalid destination status:', destination.droppableId);
+      return;
+    }
+
+    // Business Rule: Prevent moving to "done" if story has open tasks
+    if (newStatus === 'done') {
+      const storyTasks = tasks.filter(task => task.storyId === draggableId);
+      const openTasks = storyTasks.filter(task => task.status !== 'done');
+      
+      if (openTasks.length > 0) {
+        alert(`Warning: Cannot mark story as Done: ${openTasks.length} task(s) still open.\n\nComplete all tasks before marking the story as done.`);
+        console.log(`❌ Blocked: Story has ${openTasks.length} open tasks`);
+        return;
+      }
+    }
+
+    console.log(`📋 Moving story "${draggedStory.title}" from ${source.droppableId} to ${destination.droppableId} (${newStatus})`);
+
+    try {
+      // Update the story status in Firestore
+      await updateStoryStatus(draggableId, newStatus);
+      console.log('✅ Story status updated successfully');
+    } catch (error) {
+      console.error('❌ Error updating story status:', error);
     }
   };
 
@@ -232,7 +384,17 @@ const KanbanPage: React.FC = () => {
 
       {/* Kanban Board - Stories Only */}
       {goals.length > 0 && (
-        <Row className="mb-4">
+        <DragDropContext 
+          onDragEnd={handleDragEnd}
+          onDragStart={(start) => {
+            console.log('🔄 Drag started:', start);
+            console.log('🔄 Available stories:', stories.map(s => ({ id: s.id, title: s.title, status: s.status })));
+          }}
+          onDragUpdate={(update) => {
+            console.log('🔄 Drag update:', update);
+          }}
+        >
+          <Row className="mb-4">
           {swimLanes.map((lane) => (
             <Col md={4} key={lane.id}>
               <Card className="h-100">
@@ -242,22 +404,47 @@ const KanbanPage: React.FC = () => {
                     {stories.filter(s => s.status === lane.status).length} stories
                   </small>
                 </Card.Header>
-                <Card.Body style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                <Droppable droppableId={lane.id}>
+                  {(provided, snapshot) => (
+                    <Card.Body
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                      className={`story-droppable-area ${snapshot.isDraggingOver ? 'dragging-over' : ''}`}
+                      style={{ 
+                        maxHeight: '60vh', 
+                        overflowY: 'auto',
+                        backgroundColor: snapshot.isDraggingOver ? '#f8f9fa' : 'transparent',
+                        transition: 'background-color 0.2s ease'
+                      }}
+                    >
                   {stories
                     .filter(story => story.status === lane.status)
-                    .map((story) => {
+                    .map((story, index) => {
                       const goalTheme = getGoalTheme(story.goalId);
                       const taskCount = getTaskCount(story.id);
                       const isSelected = selectedStory?.id === story.id;
                       
                       return (
-                        <Card 
-                          key={story.id} 
-                          className={`mb-3 shadow-sm cursor-pointer ${isSelected ? 'border-primary' : ''}`}
-                          style={{ cursor: 'pointer' }}
-                          onClick={() => handleStoryClick(story)}
-                        >
-                          <Card.Body className="p-3">
+                        <Draggable key={story.id} draggableId={story.id} index={index}>
+                          {(provided, snapshot) => (
+                            <Card 
+                              ref={provided.innerRef}
+                              {...provided.draggableProps}
+                              className={`mb-3 shadow-sm story-card-draggable ${isSelected ? 'border-primary' : ''} ${snapshot.isDragging ? 'story-card-dragging' : ''}`}
+                              style={{ 
+                                ...provided.draggableProps.style,
+                                position: 'relative'
+                              }}
+                              onClick={() => handleStoryClick(story)}
+                            >
+                          <Card.Body className="p-3" style={{ position: 'relative' }}>
+                            {/* Mobile-first drag handle */}
+                            <div 
+                              {...provided.dragHandleProps}
+                              className="drag-handle"
+                              title="Drag to move story"
+                            />
+                            
                             <div className="d-flex justify-content-between align-items-start mb-2">
                               <h6 className="mb-1">{story.title}</h6>
                               <div>
@@ -278,54 +465,33 @@ const KanbanPage: React.FC = () => {
 
                             <div className="d-flex justify-content-between align-items-center mb-2">
                               <small className="text-info">
-                                📋 {taskCount} tasks • {story.points} points
+                                {taskCount} tasks • {story.points} points
                               </small>
                               {isSelected && (
                                 <Badge bg="primary">Selected</Badge>
                               )}
                             </div>
 
-                            {/* Story Status Actions */}
-                            <div className="d-flex gap-1">
-                              {story.status !== 'backlog' && (
-                                <Button 
-                                  size="sm" 
-                                  variant="outline-secondary"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    updateStoryStatus(story.id, 'backlog');
-                                  }}
-                                >
-                                  ← Backlog
-                                </Button>
-                              )}
-                              {story.status !== 'active' && (
-                                <Button 
-                                  size="sm" 
-                                  variant="outline-warning"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    updateStoryStatus(story.id, 'active');
-                                  }}
-                                >
-                                  Active
-                                </Button>
-                              )}
-                              {story.status !== 'done' && (
-                                <Button 
-                                  size="sm" 
-                                  variant="outline-success"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    updateStoryStatus(story.id, 'done');
-                                  }}
-                                >
-                                  Done →
-                                </Button>
-                              )}
+                            {/* Edit button and drag hint */}
+                            <div className="d-flex justify-content-between align-items-center">
+                              <small className="text-muted">
+                                <i className="fas fa-arrows-alt"></i> Drag to move
+                              </small>
+                              <Button 
+                                size="sm" 
+                                variant="outline-primary"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEditStory(story);
+                                }}
+                              >
+                                Edit
+                              </Button>
                             </div>
                           </Card.Body>
                         </Card>
+                          )}
+                        </Draggable>
                       );
                     })}
 
@@ -334,11 +500,15 @@ const KanbanPage: React.FC = () => {
                       <p>No stories in {lane.title.toLowerCase()}</p>
                     </div>
                   )}
-                </Card.Body>
+                      {provided.placeholder}
+                    </Card.Body>
+                  )}
+                </Droppable>
               </Card>
             </Col>
           ))}
         </Row>
+        </DragDropContext>
       )}
 
       {/* Tasks Table for Selected Story */}
@@ -405,10 +575,11 @@ const KanbanPage: React.FC = () => {
                           </td>
                           <td>
                             <Badge 
-                              bg={task.status === 'Done' ? 'success' : 
-                                  task.status === 'In Progress' ? 'warning' : 'secondary'}
+                              bg={task.status === 'done' ? 'success' : 
+                                  task.status === 'in_progress' ? 'warning' : 'secondary'}
                             >
-                              {task.status}
+                              {task.status === 'in_progress' ? 'In Progress' : 
+                               task.status === 'done' ? 'Done' : 'Planned'}
                             </Badge>
                           </td>
                           <td>
@@ -417,36 +588,36 @@ const KanbanPage: React.FC = () => {
                           <td>
                             <Badge 
                               bg={task.priority === 'high' ? 'danger' : 
-                                  task.priority === 'medium' ? 'warning' : 'secondary'}
+                                  task.priority === 'med' ? 'warning' : 'secondary'}
                             >
                               {task.priority}
                             </Badge>
                           </td>
                           <td>
                             <div className="d-flex gap-1">
-                              {task.status !== 'In Progress' && (
+                              {task.status !== 'in_progress' && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-warning"
-                                  onClick={() => updateTaskStatus(task.id, 'In Progress')}
+                                  onClick={() => updateTaskStatus(task.id, 'in_progress')}
                                 >
                                   Start
                                 </Button>
                               )}
-                              {task.status !== 'Done' && (
+                              {task.status !== 'done' && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-success"
-                                  onClick={() => updateTaskStatus(task.id, 'Done')}
+                                  onClick={() => updateTaskStatus(task.id, 'done')}
                                 >
                                   Complete
                                 </Button>
                               )}
-                              {task.status !== 'Not Started' && (
+                              {task.status !== 'planned' && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-secondary"
-                                  onClick={() => updateTaskStatus(task.id, 'Not Started')}
+                                  onClick={() => updateTaskStatus(task.id, 'planned')}
                                 >
                                   Reset
                                 </Button>
@@ -623,6 +794,110 @@ const KanbanPage: React.FC = () => {
           >
             Add Task
           </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Edit Story Modal */}
+      <Modal show={showEditStory} onHide={() => setShowEditStory(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Edit Story</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Story Title *</Form.Label>
+              <Form.Control
+                type="text"
+                placeholder="e.g., Run 5k every morning"
+                value={editStory.title}
+                onChange={(e) => setEditStory({...editStory, title: e.target.value})}
+              />
+            </Form.Group>
+
+            <Form.Group className="mb-3">
+              <Form.Label>Description</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={3}
+                placeholder="Story details..."
+                value={editStory.description}
+                onChange={(e) => setEditStory({...editStory, description: e.target.value})}
+              />
+            </Form.Group>
+
+            <Row>
+              <Col md={6}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Goal *</Form.Label>
+                  <Form.Select
+                    value={editStory.goalId}
+                    onChange={(e) => setEditStory({...editStory, goalId: e.target.value})}
+                  >
+                    <option value="">Select a Goal...</option>
+                    {goals.map(goal => (
+                      <option key={goal.id} value={goal.id}>
+                        {goal.title} ({goal.theme})
+                      </option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+
+              <Col md={3}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Priority</Form.Label>
+                  <Form.Select
+                    value={editStory.priority}
+                    onChange={(e) => setEditStory({...editStory, priority: e.target.value as 'P1' | 'P2' | 'P3'})}
+                  >
+                    <option value="P1">P1 (High)</option>
+                    <option value="P2">P2 (Medium)</option>
+                    <option value="P3">P3 (Low)</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+
+              <Col md={3}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Story Points</Form.Label>
+                  <Form.Select
+                    value={editStory.points}
+                    onChange={(e) => setEditStory({...editStory, points: parseInt(e.target.value)})}
+                  >
+                    <option value={1}>1 point</option>
+                    <option value={2}>2 points</option>
+                    <option value={3}>3 points</option>
+                    <option value={5}>5 points</option>
+                    <option value={8}>8 points</option>
+                    <option value={13}>13 points</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+            </Row>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <div className="d-flex justify-content-between w-100">
+            <Button 
+              variant="danger" 
+              onClick={handleDeleteStory}
+              className="me-auto"
+            >
+              Delete Story
+            </Button>
+            <div>
+              <Button variant="secondary" onClick={() => setShowEditStory(false)} className="me-2">
+                Cancel
+              </Button>
+              <Button 
+                variant="primary" 
+                onClick={handleEditStory}
+                disabled={!editStory.title.trim() || !editStory.goalId}
+              >
+                Update Story
+              </Button>
+            </div>
+          </div>
         </Modal.Footer>
       </Modal>
     </Container>

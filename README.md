@@ -1,14 +1,65 @@
-# Bob — Goals/OKRs Kanban (no Goodreads) — 2025-08-10
+# BOB — AI-Powered Personal Productivity Platform v2.1.0 ⚠️
 
-## What this version does
-- Goals ↔ OKRs linkage (by `goalId`; auto-linker via `goalTitle`).
-- Kanban board (Backlog / Doing / Done) with drag-and-drop; cards colour-coded by area (growth/tribe/wealth/health/home).
-- Bulk import of `.xlsx`, `.csv`, `.json` into: `goals`, `okrs`, `tasks`, `resources`, `trips`.
-- Per-user profile storing **Trakt username** and **SteamID**.
-- Buttons to trigger **Trakt** / **Steam** sync (currently stubs; wire after adding secrets).
-- File uploads to Storage (optional checkbox): archives source files to `uploads/<uid>/<timestamp>-<filename>`.
-- AI helpers: `classifyGoal`, `prioritizeBacklog`, `rankResources` (OpenAI via secret).
-option 
+**Live Application:** https://bob20250810.web.app  
+**Current Version:** 2.1.0 - Major Feature Release (Critical Issues Identified)  
+**Next Version:** 2.1.1 - Critical Defect Fixes  
+**Last Updated:** August 29, 2025
+
+## 🔴 **CRITICAL ISSUES IDENTIFIED - Version 2.1.1 In Progress**
+
+**Post-deployment testing has revealed critical defects that require immediate fixes:**
+
+- **C17:** Emoji display issues (violates clean Material Design)
+- **C18:** Red circle buttons not visible (critical functionality blocked) 
+- **C19:** System status dashboard needs user-focused replacement
+- **C20:** Cannot delete goals/stories/tasks (CRUD operations incomplete)
+- **C21:** Kanban drag & drop still broken (library replacement needed)
+- **C22:** Tasks not visible under stories (hierarchical view missing)
+
+**Status:** Fixes in progress for Version 2.1.1 release
+
+## 🆕 **What's New in Version 2.1.0**
+
+### **Core Features**
+- ✅ **Material Design UI** with dark mode accessibility fixes
+- ✅ **Persona System** - Switch between Personal and Work contexts
+- ✅ **Goals → Stories → Tasks** hierarchy with progress tracking
+- ✅ **Kanban Board** with drag-and-drop functionality (mobile + desktop)
+- ✅ **AI-Powered Planning** - Smart task prioritization and calendar scheduling
+- ✅ **Separate Tasks List** view with advanced filtering
+
+### **🆕 NEW: Personal Backlogs Manager** 
+- Steam games library management
+- Trakt movies and TV shows tracking  
+- Books and custom collection support
+- Grid/list views with status tracking
+- Search and filter capabilities
+
+### **🆕 NEW: Mobile-Optimized Interface**
+- Auto-detected device-responsive design
+- Touch-friendly Priority Dashboard (`/mobile-priorities`)
+- One-tap task completion with priority filtering
+- Urgent task alerts and daily focus view
+
+### **🆕 NEW: Visual Canvas**
+- Interactive goal-story-task mind mapping
+- SVG-based visualization with zoom/pan controls
+- Click-to-select nodes with relationship highlighting
+- Visual project organization and planning tool
+
+### **🔧 Enhanced Features**
+- **Dark Mode Fixes** - All tables properly styled for accessibility
+- **Improved Drag & Drop** - Enhanced mobile touch support
+- **Device Detection** - Responsive UI adaptation
+- **Better Mobile UX** - Touch-optimized interfaces throughout
+
+## What this platform does
+- **Personal Productivity**: Goals ↔ Stories ↔ Tasks linkage with AI-powered prioritization
+- **Work Management**: Projects → Tasks without goal dependencies  
+- **Smart Planning**: AI calendar scheduling with constraint awareness
+- **Entertainment Tracking**: Personal backlogs for games, movies, books
+- **Mobile Optimization**: Touch-friendly interfaces with device detection
+- **Visual Organization**: Interactive mind mapping for project visualization 
 ## Setup
 ```bash
 cd /Users/jim/Github/bob/functions
