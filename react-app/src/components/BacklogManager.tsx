@@ -6,8 +6,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Goal, Sprint } from '../types';
-import GlobalEditButton from './GlobalEditButton';
-import { useGlobalEdit } from '../hooks/useGlobalEdit';
+
 
 interface BacklogItem {
   id: string;
@@ -317,31 +316,8 @@ const BacklogManager: React.FC = () => {
     }
   };
 
-  // Global edit functionality
-  const globalEdit = useGlobalEdit({
-    items: currentItems,
-    getItemId: (item) => item.id,
-    onBulkEdit: handleBulkEdit,
-    onBulkDelete: handleBulkDelete
-  });
-
   return (
     <Container fluid>
-      {/* Global Edit Button */}
-      <GlobalEditButton
-        isEditMode={globalEdit.isEditMode}
-        selectedCount={globalEdit.selectedCount}
-        onToggleEditMode={globalEdit.toggleEditMode}
-        onBulkEdit={globalEdit.handleBulkAction}
-        onSelectAll={globalEdit.selectAll}
-        onDeselectAll={globalEdit.deselectAll}
-        bulkActions={[
-          { key: 'edit', label: 'Edit Selected', variant: 'primary' },
-          { key: 'duplicate', label: 'Duplicate Selected', variant: 'secondary' },
-          { key: 'delete', label: 'Delete Selected', variant: 'danger' }
-        ]}
-      />
-      
       <div className="d-flex justify-content-between align-items-center mb-4">
         <h2>Personal Backlogs</h2>
         <div className="d-flex gap-2">
@@ -541,6 +517,14 @@ const BacklogManager: React.FC = () => {
                             <option value="completed">Completed</option>
                             <option value="dropped">Dropped</option>
                           </Form.Select>
+                          <Button
+                            variant="outline-primary"
+                            size="sm"
+                            onClick={() => {/* TODO: Add edit functionality */}}
+                            className="me-1"
+                          >
+                            Edit
+                          </Button>
                           <Button
                             variant="outline-danger"
                             size="sm"

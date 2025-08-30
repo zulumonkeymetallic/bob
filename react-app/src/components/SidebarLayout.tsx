@@ -44,14 +44,22 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children }) => {
       icon: 'calendar-alt',
       items: [
         { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
+        { label: 'Kanban', path: '/kanban', icon: 'kanban' }
       ]
     },
     {
-      label: 'Kanban & Views',
-      icon: 'kanban',
+      label: 'Delivery',
+      icon: 'rocket',
       items: [
-        { label: 'Kanban', path: '/kanban', icon: 'kanban' },
+        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
+      ]
+    },
+    {
+      label: 'Lists',
+      icon: 'list',
+      items: [
+        { label: 'Goals', path: '/goals-management', icon: 'target' },
         { label: 'Task List', path: '/task-list', icon: 'list-check' },
         { label: 'Story List', path: '/backlog', icon: 'list' },
         { label: 'Personal Lists', path: '/personal-lists', icon: 'bookmark' }
@@ -68,7 +76,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children }) => {
       label: 'Settings',
       icon: 'cog',
       items: [
-        { label: 'Theme Colors', path: '/theme-colors', icon: 'palette' },
+        { label: 'Settings', path: '/theme-colors', icon: 'cog' },
         { label: 'Developer Status', path: '/admin', icon: 'code' },
         { label: 'Changelog', path: '/changelog', icon: 'file-text' }
       ]

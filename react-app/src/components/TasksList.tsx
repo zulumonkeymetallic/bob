@@ -5,8 +5,6 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTim
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
-import GlobalEditButton from './GlobalEditButton';
-import { useGlobalEdit } from '../hooks/useGlobalEdit';
 
 interface TaskWithContext extends Task {
   referenceNumber?: string;
@@ -37,66 +35,7 @@ const TasksList: React.FC = () => {
     search: ''
   });
 
-  // Bulk edit handlers (defined before the hook that uses them)
-  const handleBulkEdit = async (selectedTasks: TaskWithContext[], action: string) => {
-    if (!currentUser) return;
-
-    try {
-      switch (action) {
-        case 'edit':
-          // Open bulk edit modal or form
-          alert(`Bulk editing ${selectedTasks.length} tasks - feature coming soon!`);
-          break;
-        case 'duplicate':
-          // Duplicate selected tasks
-          for (const task of selectedTasks) {
-            await addDoc(collection(db, 'tasks'), {
-              title: `${task.title} (Copy)`,
-              description: task.description,
-              priority: task.priority,
-              effort: task.effort,
-              status: 'planned',
-              theme: task.theme,
-              storyId: task.storyId,
-              projectId: task.projectId,
-              sprintId: task.sprintId,
-              goalId: task.goalId,
-              persona: currentPersona,
-              ownerUid: currentUser.uid,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp()
-            });
-          }
-          break;
-        default:
-          console.log(`Bulk action ${action} not implemented`);
-      }
-    } catch (error) {
-      console.error('Error performing bulk action:', error);
-    }
-  };
-
-  const handleBulkDelete = async (taskIds: string[]) => {
-    if (!currentUser || taskIds.length === 0) return;
-
-    if (window.confirm(`Are you sure you want to delete ${taskIds.length} task(s)?`)) {
-      try {
-        for (const taskId of taskIds) {
-          await deleteDoc(doc(db, 'tasks', taskId));
-        }
-      } catch (error) {
-        console.error('Error deleting tasks:', error);
-      }
-    }
-  };
-
-  // Global edit functionality
-  const globalEdit = useGlobalEdit({
-    items: filteredTasks,
-    getItemId: (task) => task.id,
-    onBulkEdit: handleBulkEdit,
-    onBulkDelete: handleBulkDelete
-  });
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
 
   const [newTask, setNewTask] = useState({
     title: '',
@@ -398,21 +337,6 @@ const TasksList: React.FC = () => {
 
   return (
     <Container fluid className="mt-4">
-      {/* Global Edit Button */}
-      <GlobalEditButton
-        isEditMode={globalEdit.isEditMode}
-        selectedCount={globalEdit.selectedCount}
-        onToggleEditMode={globalEdit.toggleEditMode}
-        onBulkEdit={globalEdit.handleBulkAction}
-        onSelectAll={globalEdit.selectAll}
-        onDeselectAll={globalEdit.deselectAll}
-        bulkActions={[
-          { key: 'edit', label: 'Edit Selected', variant: 'primary' },
-          { key: 'duplicate', label: 'Duplicate Selected', variant: 'secondary' },
-          { key: 'delete', label: 'Delete Selected', variant: 'danger' }
-        ]}
-      />
-      
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
           <h2>📋 Tasks Management</h2>
@@ -501,7 +425,6 @@ const TasksList: React.FC = () => {
         <Table striped bordered hover size="sm">
           <thead className="table-dark">
             <tr>
-              {globalEdit.isEditMode && <th>Select</th>}
               <th>Ref#</th>
               <th>Title</th>
               <th>Status</th>
@@ -517,17 +440,10 @@ const TasksList: React.FC = () => {
             {filteredTasks.map((task) => (
               <tr 
                 key={task.id}
-                {...globalEdit.getRowProps(task.id)}
+                className={selectedRowId === task.id ? 'table-active' : ''}
+                style={{ cursor: 'pointer' }}
               >
-                {globalEdit.isEditMode && (
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <Form.Check
-                      type="checkbox"
-                      {...globalEdit.getRowCheckboxProps(task.id)}
-                    />
-                  </td>
-                )}
-                <td onClick={() => !globalEdit.isEditMode && handleRowClick(task)}>
+                <td onClick={() => handleRowClick(task)}>
                   <code className="text-primary">{task.referenceNumber}</code>
                 </td>
                 <td onClick={() => handleRowClick(task)}>

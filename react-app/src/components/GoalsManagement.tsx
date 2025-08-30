@@ -5,8 +5,7 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTim
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Story } from '../types';
-import GlobalEditButton from './GlobalEditButton';
-import { useGlobalEdit } from '../hooks/useGlobalEdit';
+
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -74,14 +73,6 @@ const GoalsManagement: React.FC = () => {
       }
     }
   };
-
-  // Global edit functionality
-  const globalEdit = useGlobalEdit({
-    items: goals,
-    getItemId: (goal) => goal.id,
-    onBulkEdit: handleBulkEdit,
-    onBulkDelete: handleBulkDelete
-  });
 
   // Only show goals for personal persona
   useEffect(() => {
@@ -262,22 +253,7 @@ const GoalsManagement: React.FC = () => {
   };
 
   return (
-    <Container className="mt-4">
-      {/* Global Edit Button */}
-      <GlobalEditButton
-        isEditMode={globalEdit.isEditMode}
-        selectedCount={globalEdit.selectedCount}
-        onToggleEditMode={globalEdit.toggleEditMode}
-        onBulkEdit={globalEdit.handleBulkAction}
-        onSelectAll={globalEdit.selectAll}
-        onDeselectAll={globalEdit.deselectAll}
-        bulkActions={[
-          { key: 'edit', label: 'Edit Selected', variant: 'primary' },
-          { key: 'duplicate', label: 'Duplicate Selected', variant: 'secondary' },
-          { key: 'delete', label: 'Delete Selected', variant: 'danger' }
-        ]}
-      />
-      
+    <Container className="mt-4">      
       <Row>
         <Col md={12}>
           <div className="d-flex justify-content-between align-items-center mb-4">
@@ -312,7 +288,6 @@ const GoalsManagement: React.FC = () => {
           <Table striped hover>
             <thead>
               <tr>
-                {globalEdit.isEditMode && <th>Select</th>}
                 <th>Title</th>
                 <th>Theme</th>
                 <th>Size</th>
@@ -327,15 +302,7 @@ const GoalsManagement: React.FC = () => {
               {goals.map((goal) => {
                 const progress = calculateGoalProgress(goal.id);
                 return (
-                  <tr key={goal.id} {...globalEdit.getRowProps(goal.id)}>
-                    {globalEdit.isEditMode && (
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <Form.Check
-                          type="checkbox"
-                          {...globalEdit.getRowCheckboxProps(goal.id)}
-                        />
-                      </td>
-                    )}
+                  <tr key={goal.id}>
                     <td>
                       <div>
                         <strong>{goal.title}</strong>
