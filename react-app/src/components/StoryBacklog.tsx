@@ -1,14 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Card, Button, Badge, Table } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Badge, Table, Dropdown, Form } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import { Story, Goal } from '../types';
+import { Story, Goal, Sprint } from '../types';
 
 const StoryBacklog: React.FC = () => {
   const { currentUser } = useAuth();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [filters, setFilters] = useState({
+    status: '',
+    goal: '',
+    priority: '',
+    sprint: ''
+  });
 
   useEffect(() => {
     if (!currentUser) return;
@@ -39,9 +46,23 @@ const StoryBacklog: React.FC = () => {
       setStories(storiesData.sort((a, b) => a.orderIndex - b.orderIndex));
     });
 
+    // Subscribe to sprints
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
+      const sprintsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Sprint));
+      setSprints(sprintsData);
+    });
+
     return () => {
       unsubscribeGoals();
       unsubscribeStories();
+      unsubscribeSprints();
     };
   }, [currentUser]);
 
@@ -86,6 +107,18 @@ const StoryBacklog: React.FC = () => {
     return colors[priority] || 'secondary';
   };
 
+  // Filter stories based on current filters
+  const filteredStories = stories.filter(story => {
+    if (filters.status && story.status !== filters.status) return false;
+    if (filters.goal && story.goalId !== filters.goal) return false;
+    if (filters.priority && story.priority !== filters.priority) return false;
+    if (filters.sprint) {
+      if (filters.sprint === 'no-sprint' && story.sprintId) return false;
+      if (filters.sprint !== 'no-sprint' && story.sprintId !== filters.sprint) return false;
+    }
+    return true;
+  });
+
   return (
     <Container fluid className="mt-4">
       {/* Header */}
@@ -95,11 +128,75 @@ const StoryBacklog: React.FC = () => {
             <h2>Story Backlog</h2>
             <div>
               <Badge bg="primary" className="me-2">
-                {stories.length} Total Stories
+                {filteredStories.length} Total Stories
               </Badge>
               <Badge bg="secondary">
-                {stories.filter(s => s.status === 'backlog').length} In Backlog
+                {filteredStories.filter(s => s.status === 'backlog').length} In Backlog
               </Badge>
+            </div>
+          </div>
+
+          {/* Filter Controls */}
+          <div className="row mb-3">
+            <div className="col-md-3">
+              <Form.Select
+                size="sm"
+                value={filters.status}
+                onChange={(e) => setFilters({...filters, status: e.target.value})}
+              >
+                <option value="">All Statuses</option>
+                <option value="backlog">Backlog</option>
+                <option value="active">Active</option>
+                <option value="done">Done</option>
+              </Form.Select>
+            </div>
+            <div className="col-md-3">
+              <Form.Select
+                size="sm"
+                value={filters.goal}
+                onChange={(e) => setFilters({...filters, goal: e.target.value})}
+              >
+                <option value="">All Goals</option>
+                {goals.map(goal => (
+                  <option key={goal.id} value={goal.id}>{goal.title}</option>
+                ))}
+              </Form.Select>
+            </div>
+            <div className="col-md-3">
+              <Form.Select
+                size="sm"
+                value={filters.priority}
+                onChange={(e) => setFilters({...filters, priority: e.target.value})}
+              >
+                <option value="">All Priorities</option>
+                <option value="P1">P1</option>
+                <option value="P2">P2</option>
+                <option value="P3">P3</option>
+              </Form.Select>
+            </div>
+            <div className="col-md-3">
+              <Form.Select
+                size="sm"
+                value={filters.sprint}
+                onChange={(e) => setFilters({...filters, sprint: e.target.value})}
+              >
+                <option value="">All Sprints</option>
+                {sprints.map(sprint => (
+                  <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+                ))}
+                <option value="no-sprint">No Sprint</option>
+              </Form.Select>
+            </div>
+          </div>
+          <div className="row mb-3">
+            <div className="col-md-3">
+              <Button 
+                variant="outline-secondary" 
+                size="sm" 
+                onClick={() => setFilters({status: '', goal: '', priority: '', sprint: ''})}
+              >
+                Clear Filters
+              </Button>
             </div>
           </div>
         </Col>
@@ -126,12 +223,13 @@ const StoryBacklog: React.FC = () => {
                       <th>Goal</th>
                       <th>Priority</th>
                       <th>Points</th>
+                      <th>Sprint</th>
                       <th>Status</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {stories.map((story) => {
+                    {filteredStories.map((story) => {
                       const goalTheme = getGoalTheme(story.goalId);
                       return (
                         <tr key={story.id}>
@@ -158,15 +256,43 @@ const StoryBacklog: React.FC = () => {
                             <Badge bg="info">{story.points} pts</Badge>
                           </td>
                           <td>
-                            <Badge 
-                              bg={story.status === 'done' ? 'success' : 
-                                  story.status === 'active' ? 'warning' : 'secondary'}
-                            >
-                              {story.status}
-                            </Badge>
+                            {story.sprintId ? (
+                              <Badge bg="warning">
+                                {sprints.find(s => s.id === story.sprintId)?.name || 'Unknown Sprint'}
+                              </Badge>
+                            ) : (
+                              <span className="text-muted">No Sprint</span>
+                            )}
+                          </td>
+                          <td onClick={(e) => e.stopPropagation()}>
+                            <Dropdown>
+                              <Dropdown.Toggle as={Badge} bg={story.status === 'done' ? 'success' : 
+                                  story.status === 'active' ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                                {story.status.replace('_', ' ').toUpperCase()}
+                              </Dropdown.Toggle>
+                              <Dropdown.Menu>
+                                <Dropdown.Item onClick={() => updateStoryStatus(story.id, 'backlog')}>
+                                  Backlog
+                                </Dropdown.Item>
+                                <Dropdown.Item onClick={() => updateStoryStatus(story.id, 'active')}>
+                                  Active
+                                </Dropdown.Item>
+                                <Dropdown.Item onClick={() => updateStoryStatus(story.id, 'done')}>
+                                  Done
+                                </Dropdown.Item>
+                              </Dropdown.Menu>
+                            </Dropdown>
                           </td>
                           <td>
                             <div className="d-flex gap-1">
+                              <Button 
+                                size="sm" 
+                                variant="outline-primary"
+                                onClick={() => {/* TODO: Add edit functionality */}}
+                                title="Edit Story"
+                              >
+                                <i className="fas fa-edit"></i>
+                              </Button>
                               {story.status !== 'backlog' && (
                                 <Button 
                                   size="sm" 

@@ -458,6 +458,16 @@ const TaskListView: React.FC = () => {
                         </td>
                         <td>
                           <div className="d-flex gap-1">
+                            {/* Edit Button */}
+                            <Button
+                              variant="outline-primary"
+                              size="sm"
+                              onClick={() => {/* TODO: Add edit functionality */}}
+                              title="Edit Task"
+                            >
+                              <i className="fas fa-edit"></i>
+                            </Button>
+                            
                             {/* Convert to Story */}
                             <Button
                               variant="outline-primary"
