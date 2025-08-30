@@ -38,6 +38,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, index, onEdit, onDelete }) =>
           {...provided.draggableProps}
           {...provided.dragHandleProps}
           style={provided.draggableProps.style as React.CSSProperties}
+          data-parent-theme={task.theme}
         >
           <div className="task-content">
             {isEditing ? (

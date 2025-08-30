@@ -1,8 +1,12 @@
 {
-  "name": "react-app",
-  "version": "0.1.0",
+  "name": "bob-productivity-platform",
+  "version": "2.1.0",
+  "description": "AI-Powered Personal Productivity Platform with Personal Backlogs, Mobile UX & Visual Canvas",
   "private": true,
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@react-aria/button": "^3.14.0",
     "@react-aria/combobox": "^3.13.0",
     "@react-aria/dialog": "^3.5.28",
@@ -19,7 +23,6 @@
     "@types/jest": "^27.5.2",
     "@types/node": "^16.18.126",
     "@types/react": "^18.0.0",
-    "@types/react-beautiful-dnd": "^13.1.8",
     "@types/react-dom": "^18.0.0",
     "bootstrap": "^5.3.7",
     "chart.js": "^4.5.0",
@@ -29,6 +32,7 @@
     "react-aria": "^3.42.0",
     "react-beautiful-dnd": "^13.1.1",
     "react-bootstrap": "^2.10.10",
+    "react-bootstrap-icons": "^1.11.6",
     "react-chartjs-2": "^5.3.0",
     "react-dom": "^18.0.0",
     "react-router-dom": "^7.8.0",
@@ -64,6 +68,7 @@
   },
   "devDependencies": {
     "@types/papaparse": "^5.3.16",
+    "@types/react-beautiful-dnd": "^13.1.8",
     "@types/react-router-dom": "^5.3.3"
   }
 }

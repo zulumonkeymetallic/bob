@@ -93,7 +93,274 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   }
 });
 
-// ===== Token refresh helper
+// ===== AI Planning Function
+exports.planCalendar = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
+
+  const { persona = "personal", horizonDays = 7, applyIfScoreGe = 0.8 } = request.data;
+  
+  try {
+    const db = admin.firestore();
+    
+    // 1. Assemble context for planning
+    const context = await assemblePlanningContext(uid, persona, horizonDays);
+    
+    // 2. Generate AI plan
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const aiResponse = await generateAIPlan(openai, context);
+    
+    // 3. Validate proposed blocks
+    const validationResult = await validateCalendarBlocks(aiResponse.blocks, context);
+    
+    // 4. Apply if score is high enough
+    let applied = false;
+    if (validationResult.score >= applyIfScoreGe && validationResult.errors.length === 0) {
+      await applyCalendarBlocks(uid, persona, aiResponse.blocks);
+      applied = true;
+    }
+    
+    return {
+      proposedBlocks: aiResponse.blocks,
+      rationale: aiResponse.rationale,
+      validator: validationResult,
+      applied,
+      score: validationResult.score
+    };
+    
+  } catch (error) {
+    console.error('Calendar planning error:', error);
+    throw new functionsV2.https.HttpsError("internal", error.message);
+  }
+});
+
+async function assemblePlanningContext(uid, persona, horizonDays) {
+  const db = admin.firestore();
+  const startDate = new Date();
+  const endDate = new Date(Date.now() + (horizonDays * 24 * 60 * 60 * 1000));
+  
+  // Get user's planning preferences
+  const prefsDoc = await db.collection('planning_prefs').doc(uid).get();
+  const prefs = prefsDoc.exists ? prefsDoc.data() : getDefaultPlanningPrefs();
+  
+  // Get tasks for this persona
+  const tasksQuery = await db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('status', 'in', ['planned', 'in_progress'])
+    .get();
+  
+  const tasks = tasksQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  
+  // Get goals (if personal)
+  let goals = [];
+  if (persona === 'personal') {
+    const goalsQuery = await db.collection('goals')
+      .where('ownerUid', '==', uid)
+      .where('status', 'in', ['new', 'active'])
+      .get();
+    goals = goalsQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  }
+  
+  // Get existing calendar blocks
+  const blocksQuery = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('start', '>=', startDate.getTime())
+    .where('start', '<=', endDate.getTime())
+    .get();
+  
+  const existingBlocks = blocksQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  
+  // Get Google Calendar events (if connected)
+  let gcalEvents = [];
+  try {
+    gcalEvents = await fetchGoogleCalendarEvents(uid, startDate, endDate);
+  } catch (error) {
+    console.log('No Google Calendar access:', error.message);
+  }
+  
+  return {
+    uid,
+    persona,
+    prefs,
+    tasks,
+    goals,
+    existingBlocks,
+    gcalEvents,
+    timeWindow: { start: startDate.getTime(), end: endDate.getTime() }
+  };
+}
+
+async function generateAIPlan(openai, context) {
+  const systemPrompt = `You are an AI planning assistant for BOB, a personal productivity system.
+
+CONTEXT:
+- Persona: ${context.persona}
+- Tasks: ${context.tasks.length} pending
+- Goals: ${context.goals.length} active
+- Time window: ${Math.ceil((context.timeWindow.end - context.timeWindow.start) / (1000 * 60 * 60 * 24))} days
+
+PLANNING PREFERENCES:
+- Wake time: ${context.prefs.wakeTime || '07:00'}
+- Sleep time: ${context.prefs.sleepTime || '23:00'}
+- Quiet hours: ${JSON.stringify(context.prefs.quietHours || [])}
+- Weekly theme targets: ${JSON.stringify(context.prefs.weeklyThemeTargets || {})}
+
+TASKS TO SCHEDULE:
+${context.tasks.map(task => `- ${task.title} (${task.effort}, ${task.priority}, ${task.theme || 'No theme'})`).join('\n')}
+
+CONSTRAINTS:
+1. Only schedule between wake and sleep times
+2. Avoid quiet hours
+3. Respect existing calendar events
+4. Balance weekly theme targets
+5. Consider task effort and priority
+
+Generate a plan as JSON with:
+{
+  "blocks": [
+    {
+      "taskId": "task_id",
+      "theme": "Health|Growth|Wealth|Tribe|Home",
+      "category": "Task Work",
+      "start": timestamp,
+      "end": timestamp,
+      "rationale": "Why this time slot"
+    }
+  ],
+  "rationale": "Overall planning rationale"
+}`;
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4",
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: "Please generate an optimal schedule for these tasks." }
+    ],
+    temperature: 0.3
+  });
+
+  try {
+    return JSON.parse(completion.choices[0].message.content);
+  } catch (error) {
+    throw new Error(`Failed to parse AI response: ${error.message}`);
+  }
+}
+
+async function validateCalendarBlocks(blocks, context) {
+  const errors = [];
+  const warnings = [];
+  let score = 1.0;
+  
+  // Check for conflicts with existing events
+  for (const block of blocks) {
+    // Check Google Calendar conflicts
+    for (const event of context.gcalEvents) {
+      if (isTimeOverlap(block.start, block.end, event.start.getTime(), event.end.getTime())) {
+        errors.push(`Block conflicts with Google Calendar event: ${event.summary}`);
+        score -= 0.2;
+      }
+    }
+    
+    // Check existing blocks
+    for (const existing of context.existingBlocks) {
+      if (isTimeOverlap(block.start, block.end, existing.start, existing.end)) {
+        errors.push(`Block conflicts with existing calendar block`);
+        score -= 0.1;
+      }
+    }
+    
+    // Check time constraints
+    const blockDate = new Date(block.start);
+    const hour = blockDate.getHours();
+    const minute = blockDate.getMinutes();
+    const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+    
+    const wakeTime = context.prefs.wakeTime || '07:00';
+    const sleepTime = context.prefs.sleepTime || '23:00';
+    
+    if (timeStr < wakeTime || timeStr > sleepTime) {
+      errors.push(`Block outside wake/sleep hours: ${timeStr}`);
+      score -= 0.1;
+    }
+    
+    // Check quiet hours
+    for (const quietPeriod of context.prefs.quietHours || []) {
+      if (timeStr >= quietPeriod.start && timeStr <= quietPeriod.end) {
+        warnings.push(`Block during quiet hours: ${timeStr}`);
+        score -= 0.05;
+      }
+    }
+  }
+  
+  return { errors, warnings, score: Math.max(0, score) };
+}
+
+async function applyCalendarBlocks(uid, persona, blocks) {
+  const db = admin.firestore();
+  const batch = db.batch();
+  
+  for (const block of blocks) {
+    const blockRef = db.collection('calendar_blocks').doc();
+    batch.set(blockRef, {
+      ...block,
+      id: blockRef.id,
+      persona,
+      ownerUid: uid,
+      status: 'applied',
+      createdBy: 'ai',
+      version: 1,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  }
+  
+  await batch.commit();
+}
+
+function getDefaultPlanningPrefs() {
+  return {
+    wakeTime: '07:00',
+    sleepTime: '23:00',
+    quietHours: [{ start: '22:00', end: '07:00' }],
+    maxHiSessionsPerWeek: 3,
+    minRecoveryGapHours: 24,
+    weeklyThemeTargets: {
+      Health: 300,
+      Growth: 240,
+      Wealth: 300,
+      Tribe: 180,
+      Home: 120
+    },
+    autoApplyThreshold: 0.8
+  };
+}
+
+function isTimeOverlap(start1, end1, start2, end2) {
+  return start1 < end2 && start2 < end1;
+}
+
+async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
+  try {
+    const accessToken = await getAccessToken(uid);
+    const timeMin = startDate.toISOString();
+    const timeMax = endDate.toISOString();
+    
+    const eventsResponse = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    
+    return eventsResponse.items.map(event => ({
+      id: event.id,
+      summary: event.summary || 'Untitled Event',
+      start: new Date(event.start.dateTime || event.start.date),
+      end: new Date(event.end.dateTime || event.end.date)
+    }));
+  } catch (error) {
+    return [];
+  }
+}
 async function getAccessToken(uid) {
   const db = admin.firestore();
   const doc = await db.collection("tokens").doc(uid).get();

@@ -1,32 +1,107 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Card, Button, Form, Modal, Table, Badge } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Form, Modal, Table, Badge, ProgressBar } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import { Goal } from '../types';
+import { usePersona } from '../contexts/PersonaContext';
+import { Goal, Story } from '../types';
+import GlobalEditButton from './GlobalEditButton';
+import { useGlobalEdit } from '../hooks/useGlobalEdit';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
   const [showAddGoal, setShowAddGoal] = useState(false);
+  const [showEditGoal, setShowEditGoal] = useState(false);
+  const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   const [newGoal, setNewGoal] = useState({
     title: '',
     description: '',
-    theme: 'Growth' as const,
-    size: 'M' as const,
+    theme: 'Growth' as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
+    size: 'M' as 'XS' | 'S' | 'M' | 'L' | 'XL',
     confidence: 0.5,
-    targetDate: ''
+    targetDate: '',
+    timeToMasterHours: 40
   });
 
-  useEffect(() => {
+  // Bulk edit handlers
+  const handleBulkEdit = async (selectedGoals: Goal[], action: string) => {
     if (!currentUser) return;
 
-    const q = query(
+    try {
+      switch (action) {
+        case 'edit':
+          alert(`Bulk editing ${selectedGoals.length} goals - feature coming soon!`);
+          break;
+        case 'duplicate':
+          for (const goal of selectedGoals) {
+            await addDoc(collection(db, 'goals'), {
+              title: `${goal.title} (Copy)`,
+              description: goal.description,
+              theme: goal.theme,
+              size: goal.size,
+              confidence: goal.confidence,
+              targetDate: goal.targetDate,
+              timeToMasterHours: goal.timeToMasterHours,
+              persona: 'personal',
+              status: 'new',
+              ownerUid: currentUser.uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+          }
+          break;
+        default:
+          console.log(`Bulk action ${action} not implemented`);
+      }
+    } catch (error) {
+      console.error('Error performing bulk action:', error);
+    }
+  };
+
+  const handleBulkDelete = async (goalIds: string[]) => {
+    if (!currentUser || goalIds.length === 0) return;
+
+    if (window.confirm(`Are you sure you want to delete ${goalIds.length} goal(s)?`)) {
+      try {
+        for (const goalId of goalIds) {
+          await deleteDoc(doc(db, 'goals', goalId));
+        }
+      } catch (error) {
+        console.error('Error deleting goals:', error);
+      }
+    }
+  };
+
+  // Global edit functionality
+  const globalEdit = useGlobalEdit({
+    items: goals,
+    getItemId: (goal) => goal.id,
+    onBulkEdit: handleBulkEdit,
+    onBulkDelete: handleBulkDelete
+  });
+
+  // Only show goals for personal persona
+  useEffect(() => {
+    if (!currentUser || currentPersona !== 'personal') {
+      setGoals([]);
+      setStories([]);
+      return;
+    }
+
+    const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -34,8 +109,30 @@ const GoalsManagement: React.FC = () => {
       setGoals(goalsData);
     });
 
-    return unsubscribe;
-  }, [currentUser]);
+    const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+      const storiesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Story));
+      setStories(storiesData);
+    });
+
+    return () => {
+      unsubscribeGoals();
+      unsubscribeStories();
+    };
+  }, [currentUser, currentPersona]);
+
+  const calculateGoalProgress = (goalId: string) => {
+    const goalStories = stories.filter(story => story.goalId === goalId);
+    if (goalStories.length === 0) return { percentage: 0, completed: 0, total: 0 };
+    
+    const completed = goalStories.filter(story => story.status === 'done').length;
+    const total = goalStories.length;
+    const percentage = Math.round((completed / total) * 100);
+    
+    return { percentage, completed, total };
+  };
 
   const handleAddGoal = async () => {
     if (!currentUser || !newGoal.title.trim()) return;
@@ -48,6 +145,9 @@ const GoalsManagement: React.FC = () => {
         size: newGoal.size,
         confidence: newGoal.confidence,
         targetDate: newGoal.targetDate || null,
+        timeToMasterHours: newGoal.timeToMasterHours,
+        persona: 'personal',
+        status: 'new',
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -60,12 +160,90 @@ const GoalsManagement: React.FC = () => {
         theme: 'Growth',
         size: 'M',
         confidence: 0.5,
-        targetDate: ''
+        targetDate: '',
+        timeToMasterHours: 40
       });
       setShowAddGoal(false);
     } catch (error) {
       console.error('Error adding goal:', error);
     }
+  };
+
+  const handleEditGoal = async () => {
+    if (!currentUser || !selectedGoal || !newGoal.title.trim()) return;
+
+    try {
+      const goalRef = doc(db, 'goals', selectedGoal.id);
+      await updateDoc(goalRef, {
+        title: newGoal.title,
+        description: newGoal.description,
+        theme: newGoal.theme,
+        size: newGoal.size,
+        confidence: newGoal.confidence,
+        targetDate: newGoal.targetDate || null,
+        timeToMasterHours: newGoal.timeToMasterHours,
+        updatedAt: serverTimestamp()
+      });
+
+      // Reset form
+      setNewGoal({
+        title: '',
+        description: '',
+        theme: 'Growth',
+        size: 'M',
+        confidence: 0.5,
+        targetDate: '',
+        timeToMasterHours: 40
+      });
+      setShowEditGoal(false);
+      setSelectedGoal(null);
+    } catch (error) {
+      console.error('Error updating goal:', error);
+    }
+  };
+
+  // DELETE FUNCTION - ADDED FOR C20 FIX
+  const handleDeleteGoal = async () => {
+    if (!selectedGoal) return;
+
+    // Get all stories linked to this goal
+    const linkedStories = stories.filter(story => story.goalId === selectedGoal.id);
+    
+    let confirmMessage = `Are you sure you want to delete "${selectedGoal.title}"?`;
+    if (linkedStories.length > 0) {
+      confirmMessage += `\n\nThis goal has ${linkedStories.length} linked story/stories. They will become unlinked but won't be deleted.`;
+    }
+    confirmMessage += '\n\nThis action cannot be undone.';
+
+    const confirmDelete = window.confirm(confirmMessage);
+    if (!confirmDelete) return;
+
+    try {
+      // Delete the goal
+      await deleteDoc(doc(db, 'goals', selectedGoal.id));
+      
+      console.log('Goal deleted successfully:', selectedGoal.id);
+      setShowEditGoal(false);
+      setSelectedGoal(null);
+      
+    } catch (error) {
+      console.error('Error deleting goal:', error);
+      alert('Failed to delete goal. Please try again.');
+    }
+  };
+
+  const openEditGoal = (goal: Goal) => {
+    setSelectedGoal(goal);
+    setNewGoal({
+      title: goal.title,
+      description: goal.description || '',
+      theme: goal.theme,
+      size: goal.size,
+      confidence: goal.confidence,
+      targetDate: goal.targetDate || '',
+      timeToMasterHours: goal.timeToMasterHours
+    });
+    setShowEditGoal(true);
   };
 
   const getThemeBadge = (theme: string) => {
@@ -85,6 +263,21 @@ const GoalsManagement: React.FC = () => {
 
   return (
     <Container className="mt-4">
+      {/* Global Edit Button */}
+      <GlobalEditButton
+        isEditMode={globalEdit.isEditMode}
+        selectedCount={globalEdit.selectedCount}
+        onToggleEditMode={globalEdit.toggleEditMode}
+        onBulkEdit={globalEdit.handleBulkAction}
+        onSelectAll={globalEdit.selectAll}
+        onDeselectAll={globalEdit.deselectAll}
+        bulkActions={[
+          { key: 'edit', label: 'Edit Selected', variant: 'primary' },
+          { key: 'duplicate', label: 'Duplicate Selected', variant: 'secondary' },
+          { key: 'delete', label: 'Delete Selected', variant: 'danger' }
+        ]}
+      />
+      
       <Row>
         <Col md={12}>
           <div className="d-flex justify-content-between align-items-center mb-4">
@@ -103,58 +296,97 @@ const GoalsManagement: React.FC = () => {
               <h4 className="mb-0">Your Goals ({goals.length})</h4>
             </Card.Header>
             <Card.Body>
-              {goals.length === 0 ? (
-                <div className="text-center py-4">
-                  <p className="text-muted">No goals yet. Create your first goal to get started!</p>
-                  <Button variant="outline-primary" onClick={() => setShowAddGoal(true)}>
-                    Create First Goal
-                  </Button>
-                </div>
-              ) : (
-                <Table responsive>
-                  <thead>
-                    <tr>
-                      <th>Title</th>
-                      <th>Theme</th>
-                      <th>Size</th>
-                      <th>Confidence</th>
-                      <th>Target Date</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {goals.map((goal) => (
-                      <tr key={goal.id}>
-                        <td>
-                          <div>
-                            <strong>{goal.title}</strong>
-                            {goal.description && (
-                              <div className="text-muted small">{goal.description}</div>
-                            )}
-                          </div>
-                        </td>
-                        <td>{getThemeBadge(goal.theme)}</td>
-                        <td>{getSizeBadge(goal.size)}</td>
-                        <td>{Math.round(goal.confidence * 100)}%</td>
-                        <td>
-                          {goal.targetDate 
-                            ? new Date(goal.targetDate).toLocaleDateString() 
-                            : 'No date set'
-                          }
-                        </td>
-                        <td>
-                          <Button variant="outline-primary" size="sm" className="me-2">
-                            Edit
-                          </Button>
-                          <Button variant="outline-success" size="sm">
-                            Add Story
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              )}
+      {currentPersona !== 'personal' ? (
+        <div className="text-center py-4">
+          <p className="text-muted">Goals are only available in Personal mode. Switch to Personal to manage your goals.</p>
+        </div>
+      ) : goals.length === 0 ? (
+        <div className="text-center py-4">
+          <p className="text-muted">No goals yet. Create your first goal to get started!</p>
+          <Button variant="outline-primary" onClick={() => setShowAddGoal(true)}>
+            Create First Goal
+          </Button>
+        </div>
+      ) : (
+        <div className="table-responsive">
+          <Table striped hover>
+            <thead>
+              <tr>
+                {globalEdit.isEditMode && <th>Select</th>}
+                <th>Title</th>
+                <th>Theme</th>
+                <th>Size</th>
+                <th>Progress</th>
+                <th>Stories</th>
+                <th>Confidence</th>
+                <th>Target Date</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {goals.map((goal) => {
+                const progress = calculateGoalProgress(goal.id);
+                return (
+                  <tr key={goal.id} {...globalEdit.getRowProps(goal.id)}>
+                    {globalEdit.isEditMode && (
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <Form.Check
+                          type="checkbox"
+                          {...globalEdit.getRowCheckboxProps(goal.id)}
+                        />
+                      </td>
+                    )}
+                    <td>
+                      <div>
+                        <strong>{goal.title}</strong>
+                        {goal.description && (
+                          <div className="text-muted small">{goal.description}</div>
+                        )}
+                      </div>
+                    </td>
+                    <td>{getThemeBadge(goal.theme)}</td>
+                    <td>{getSizeBadge(goal.size)}</td>
+                    <td style={{ minWidth: '150px' }}>
+                      <div className="d-flex align-items-center">
+                        <ProgressBar 
+                          now={progress.percentage} 
+                          className="flex-grow-1 me-2"
+                          variant={progress.percentage === 100 ? 'success' : 'primary'}
+                          style={{ height: '8px' }}
+                        />
+                        <small className="text-muted">{progress.percentage}%</small>
+                      </div>
+                    </td>
+                    <td>
+                      <Badge bg="info">{progress.completed}/{progress.total}</Badge>
+                    </td>
+                    <td>{Math.round(goal.confidence * 100)}%</td>
+                    <td>
+                      {goal.targetDate 
+                        ? new Date(goal.targetDate).toLocaleDateString() 
+                        : 'No date set'
+                      }
+                    </td>
+                    <td>
+                      <Button 
+                        variant="outline-primary" 
+                        size="sm" 
+                        className="me-1"
+                        onClick={() => openEditGoal(goal)}
+                      >
+                        Edit
+                      </Button>
+                      <Button variant="outline-success" size="sm">
+                        + Story
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </div>
+      )}
             </Card.Body>
           </Card>
         </Col>
@@ -254,6 +486,19 @@ const GoalsManagement: React.FC = () => {
                   />
                 </Form.Group>
               </Col>
+              <Col md={6}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Time to Master (hours)</Form.Label>
+                  <Form.Control
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={newGoal.timeToMasterHours}
+                    onChange={(e) => setNewGoal({...newGoal, timeToMasterHours: parseInt(e.target.value) || 40})}
+                    placeholder="Estimated hours to complete"
+                  />
+                </Form.Group>
+              </Col>
             </Row>
           </Form>
         </Modal.Body>
@@ -268,6 +513,141 @@ const GoalsManagement: React.FC = () => {
           >
             Create Goal
           </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Edit Goal Modal */}
+      <Modal show={showEditGoal} onHide={() => setShowEditGoal(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Edit Goal</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form>
+            <Row>
+              <Col md={12}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Goal Title *</Form.Label>
+                  <Form.Control
+                    type="text"
+                    placeholder="e.g., Run a marathon in under 4 hours"
+                    value={newGoal.title}
+                    onChange={(e) => setNewGoal({...newGoal, title: e.target.value})}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+            
+            <Row>
+              <Col md={12}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Description</Form.Label>
+                  <Form.Control
+                    as="textarea"
+                    rows={3}
+                    placeholder="Describe your goal in detail..."
+                    value={newGoal.description}
+                    onChange={(e) => setNewGoal({...newGoal, description: e.target.value})}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+
+            <Row>
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Theme</Form.Label>
+                  <Form.Select
+                    value={newGoal.theme}
+                    onChange={(e) => setNewGoal({...newGoal, theme: e.target.value as any})}
+                  >
+                    <option value="Health">Health</option>
+                    <option value="Growth">Growth</option>
+                    <option value="Wealth">Wealth</option>
+                    <option value="Tribe">Tribe</option>
+                    <option value="Home">Home</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Size</Form.Label>
+                  <Form.Select
+                    value={newGoal.size}
+                    onChange={(e) => setNewGoal({...newGoal, size: e.target.value as any})}
+                  >
+                    <option value="XS">XS - Very Small</option>
+                    <option value="S">S - Small</option>
+                    <option value="M">M - Medium</option>
+                    <option value="L">L - Large</option>
+                    <option value="XL">XL - Very Large</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Confidence: {Math.round(newGoal.confidence * 100)}%</Form.Label>
+                  <Form.Range
+                    min={0}
+                    max={1}
+                    step={0.1}
+                    value={newGoal.confidence}
+                    onChange={(e) => setNewGoal({...newGoal, confidence: parseFloat(e.target.value)})}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+
+            <Row>
+              <Col md={6}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Target Date (optional)</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={newGoal.targetDate}
+                    onChange={(e) => setNewGoal({...newGoal, targetDate: e.target.value})}
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={6}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Time to Master (hours)</Form.Label>
+                  <Form.Control
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={newGoal.timeToMasterHours}
+                    onChange={(e) => setNewGoal({...newGoal, timeToMasterHours: parseInt(e.target.value) || 40})}
+                    placeholder="Estimated hours to complete"
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <div className="d-flex justify-content-between w-100">
+            <Button 
+              variant="danger" 
+              onClick={handleDeleteGoal}
+              className="me-auto"
+            >
+              Delete Goal
+            </Button>
+            <div>
+              <Button variant="secondary" onClick={() => setShowEditGoal(false)} className="me-2">
+                Cancel
+              </Button>
+              <Button 
+                variant="primary" 
+                onClick={handleEditGoal}
+                disabled={!newGoal.title.trim()}
+              >
+                Update Goal
+              </Button>
+            </div>
+          </div>
         </Modal.Footer>
       </Modal>
     </Container>
