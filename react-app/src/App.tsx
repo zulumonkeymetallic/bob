@@ -16,6 +16,8 @@ import Calendar from './components/Calendar';
 import Changelog from './components/Changelog';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
+import StoriesManagement from './components/StoriesManagement';
+import PersonalListsManagement from './components/PersonalListsManagement';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
@@ -25,7 +27,9 @@ import ThemeColorManager from './components/ThemeColorManager';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
+import { SidebarProvider } from './contexts/SidebarContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
+import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
 import { checkForUpdates, VERSION } from './version';
 import './App.css';
@@ -33,9 +37,11 @@ import './App.css';
 function App() {
   return (
     <PersonaProvider>
-      <Router>
-        <AppContent />
-      </Router>
+      <SidebarProvider>
+        <Router>
+          <AppContent />
+        </Router>
+      </SidebarProvider>
     </PersonaProvider>
   );
 }
@@ -46,6 +52,11 @@ function AppContent() {
   const deviceInfo = useDeviceInfo();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  
+  // Data for the global sidebar
+  const [goals, setGoals] = useState([]);
+  const [stories, setStories] = useState([]);
+  const [sprints, setSprints] = useState([]);
 
   // Check for updates on app load
   useEffect(() => {
@@ -119,7 +130,9 @@ function AppContent() {
           <Route path="/ai-planner" element={<PlanningDashboard />} />
           <Route path="/planning" element={<PlanningDashboard />} />
           <Route path="/backlog" element={<StoryBacklog />} />
+          <Route path="/stories" element={<StoriesManagement />} />
           <Route path="/personal-lists" element={<BacklogManager />} />
+          <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
           <Route path="/personal-backlogs" element={<BacklogManager />} />
           <Route path="/goals" element={<GoalsManagement />} />
           <Route path="/goals-management" element={<GoalsManagement />} />
@@ -139,6 +152,13 @@ function AppContent() {
         <ImportExportModal 
           show={showImportModal} 
           onHide={() => setShowImportModal(false)} 
+        />
+
+        {/* Global Sidebar */}
+        <GlobalSidebar
+          goals={goals}
+          stories={stories}
+          sprints={sprints}
         />
       </SidebarLayout>
   );

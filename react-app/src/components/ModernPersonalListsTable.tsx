@@ -25,15 +25,21 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Task, Story, Goal, Sprint } from '../types';
-import { useSidebar } from '../contexts/SidebarContext';
 
-interface TaskTableRow extends Omit<Task, 'priority'> {
-  storyTitle?: string;
-  goalTitle?: string;
-  sprintName?: string;
-  theme?: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
-  priority: 'low' | 'med' | 'high';
+interface PersonalItem {
+  id: string;
+  title: string;
+  description?: string;
+  category: 'personal' | 'work' | 'learning' | 'health' | 'finance';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  status: 'todo' | 'in-progress' | 'waiting' | 'done';
+  dueDate?: number;
+  tags?: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface PersonalListTableRow extends PersonalItem {
   sortOrder: number;
 }
 
@@ -47,20 +53,17 @@ interface Column {
   options?: string[];
 }
 
-interface ModernTaskTableProps {
-  tasks: Task[];
-  stories: Story[];
-  goals: Goal[];
-  sprints: Sprint[];
-  onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  onTaskDelete: (taskId: string) => Promise<void>;
-  onTaskPriorityChange: (taskId: string, newPriority: number) => Promise<void>;
+interface ModernPersonalListsTableProps {
+  items: PersonalItem[];
+  onItemUpdate: (itemId: string, updates: Partial<PersonalItem>) => Promise<void>;
+  onItemDelete: (itemId: string) => Promise<void>;
+  onItemPriorityChange: (itemId: string, newPriority: number) => Promise<void>;
 }
 
 const defaultColumns: Column[] = [
   { 
     key: 'title', 
-    label: 'Title', 
+    label: 'Item', 
     width: '25%', 
     visible: true, 
     editable: true, 
@@ -75,13 +78,22 @@ const defaultColumns: Column[] = [
     type: 'text' 
   },
   { 
-    key: 'status', 
-    label: 'Status', 
+    key: 'category', 
+    label: 'Category', 
     width: '12%', 
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['todo', 'planned', 'in-progress', 'blocked', 'done']
+    options: ['personal', 'work', 'learning', 'health', 'finance']
+  },
+  { 
+    key: 'status', 
+    label: 'Status', 
+    width: '10%', 
+    visible: true, 
+    editable: true, 
+    type: 'select',
+    options: ['todo', 'in-progress', 'waiting', 'done']
   },
   { 
     key: 'priority', 
@@ -90,21 +102,12 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['low', 'med', 'high']
-  },
-  { 
-    key: 'effort', 
-    label: 'Effort', 
-    width: '8%', 
-    visible: true, 
-    editable: true, 
-    type: 'select',
-    options: ['S', 'M', 'L']
+    options: ['low', 'medium', 'high', 'urgent']
   },
   { 
     key: 'dueDate', 
     label: 'Due Date', 
-    width: '15%', 
+    width: '13%', 
     visible: true, 
     editable: true, 
     type: 'date' 
@@ -112,21 +115,20 @@ const defaultColumns: Column[] = [
 ];
 
 interface SortableRowProps {
-  task: TaskTableRow;
+  item: PersonalListTableRow;
   columns: Column[];
   index: number;
-  onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  onTaskDelete: (taskId: string) => Promise<void>;
+  onItemUpdate: (itemId: string, updates: Partial<PersonalItem>) => Promise<void>;
+  onItemDelete: (itemId: string) => Promise<void>;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
-  task, 
+  item, 
   columns, 
   index, 
-  onTaskUpdate, 
-  onTaskDelete 
+  onItemUpdate, 
+  onItemDelete 
 }) => {
-  const { showSidebar } = useSidebar();
   const {
     attributes,
     listeners,
@@ -134,7 +136,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id });
+  } = useSortable({ id: item.id });
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
@@ -151,8 +153,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleCellSave = async (key: string) => {
-    const updates: Partial<Task> = { [key]: editValue };
-    await onTaskUpdate(task.id, updates);
+    const updates: Partial<PersonalItem> = { [key]: editValue };
+    await onItemUpdate(item.id, updates);
     setEditingCell(null);
   };
 
@@ -164,7 +166,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const renderCell = (column: Column) => {
-    const value = task[column.key as keyof TaskTableRow];
+    const value = item[column.key as keyof PersonalListTableRow];
     const isEditing = editingCell === column.key;
 
     if (isEditing && column.editable) {
@@ -316,7 +318,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <button
-            onClick={() => showSidebar(task, 'task')}
+            onClick={() => {/* Handle edit modal */}}
             style={{
               color: '#2563eb',
               padding: '4px',
@@ -336,12 +338,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = '#2563eb';
             }}
-            title="Edit task"
+            title="Edit item"
           >
             Edit
           </button>
           <button
-            onClick={() => onTaskDelete(task.id)}
+            onClick={() => onItemDelete(item.id)}
             style={{
               color: '#dc2626',
               padding: '4px',
@@ -361,7 +363,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = '#dc2626';
             }}
-            title="Delete task"
+            title="Delete item"
           >
             Delete
           </button>
@@ -371,14 +373,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
   );
 };
 
-const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
-  tasks,
-  stories,
-  goals,
-  sprints,
-  onTaskUpdate,
-  onTaskDelete,
-  onTaskPriorityChange,
+const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
+  items,
+  onItemUpdate,
+  onItemDelete,
+  onItemPriorityChange,
 }) => {
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
@@ -395,10 +394,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
-  // Convert tasks to table rows with sort order
-  const tableRows: TaskTableRow[] = tasks.map((task, index) => ({
-    ...task,
-    priority: task.priority as 'low' | 'med' | 'high',
+  // Convert items to table rows with sort order
+  const tableRows: PersonalListTableRow[] = items.map((item, index) => ({
+    ...item,
     sortOrder: index,
   }));
 
@@ -409,7 +407,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       const newIndex = tableRows.findIndex(item => item.id === over.id);
       
       // Update priority based on new position (1-indexed)
-      await onTaskPriorityChange(active.id as string, newIndex + 1);
+      await onItemPriorityChange(active.id as string, newIndex + 1);
     }
   };
 
@@ -449,14 +447,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             margin: 0, 
             marginBottom: '4px' 
           }}>
-            Tasks
+            Personal Lists
           </h3>
           <p style={{ 
             fontSize: '14px', 
             color: '#6b7280', 
             margin: 0 
           }}>
-            {tasks.length} tasks • {visibleColumnsCount} columns visible
+            {items.length} items • {visibleColumnsCount} columns visible
           </p>
         </div>
         <button
@@ -563,14 +561,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                   items={tableRows.map(row => row.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  {tableRows.map((task, index) => (
+                  {tableRows.map((item, index) => (
                     <SortableRow
-                      key={task.id}
-                      task={task}
+                      key={item.id}
+                      item={item}
                       columns={columns}
                       index={index}
-                      onTaskUpdate={onTaskUpdate}
-                      onTaskDelete={onTaskDelete}
+                      onItemUpdate={onItemUpdate}
+                      onItemDelete={onItemDelete}
                     />
                   ))}
                 </SortableContext>
@@ -688,7 +686,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 )}
               </div>
 
-              {/* Table Settings */}
+              {/* Display Options */}
               <div>
                 <button
                   onClick={() => setConfigExpanded(prev => ({ ...prev, display: !prev.display }))}
@@ -737,43 +735,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         color: '#111827', 
                         margin: '0 0 8px 0' 
                       }}>
-                        Text Wrapping
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: '#6b7280', 
-                        margin: '0 0 8px 0',
-                        lineHeight: '1.4',
-                      }}>
-                        Table cells automatically wrap text for better readability with proper line height and spacing
-                      </p>
-                      <div style={{ 
-                        width: '100%', 
-                        height: '8px', 
-                        backgroundColor: '#dcfce7', 
-                        borderRadius: '4px' 
-                      }}>
-                        <div style={{ 
-                          height: '8px', 
-                          backgroundColor: '#16a34a', 
-                          borderRadius: '4px',
-                          width: '100%',
-                        }}></div>
-                      </div>
-                    </div>
-                    
-                    <div style={{
-                      padding: '12px',
-                      backgroundColor: '#f9fafb',
-                      borderRadius: '8px',
-                    }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: '#111827', 
-                        margin: '0 0 8px 0' 
-                      }}>
-                        Inline Editing
+                        Personal Organization
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
@@ -781,30 +743,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         margin: 0,
                         lineHeight: '1.4',
                       }}>
-                        Click any editable cell to modify values directly in the table with modern form controls
-                      </p>
-                    </div>
-
-                    <div style={{
-                      padding: '12px',
-                      backgroundColor: '#f9fafb',
-                      borderRadius: '8px',
-                    }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: '#111827', 
-                        margin: '0 0 8px 0' 
-                      }}>
-                        Modern Actions
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: '#6b7280', 
-                        margin: 0,
-                        lineHeight: '1.4',
-                      }}>
-                        Text-based action buttons (Edit/Delete) follow design system guidelines with proper hover states
+                        Manage your personal tasks, learning items, health goals, and more. Use categories to organize by life areas and priorities for importance.
                       </p>
                     </div>
                   </div>
@@ -818,4 +757,4 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   );
 };
 
-export default ModernTaskTable;
+export default ModernPersonalListsTable;

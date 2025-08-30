@@ -26,7 +26,6 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { Task, Story, Goal, Sprint } from '../types';
-import { useSidebar } from '../contexts/SidebarContext';
 
 interface TaskTableRow extends Omit<Task, 'priority'> {
   storyTitle?: string;
@@ -126,7 +125,6 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onTaskUpdate, 
   onTaskDelete 
 }) => {
-  const { showSidebar } = useSidebar();
   const {
     attributes,
     listeners,
@@ -316,7 +314,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <button
-            onClick={() => showSidebar(task, 'task')}
+            onClick={() => {/* Handle edit modal */}}
             style={{
               color: '#2563eb',
               padding: '4px',

@@ -4,97 +4,112 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Goal } from '../types';
-import ModernGoalsTable from './ModernGoalsTable';
+import ModernPersonalListsTable from './ModernPersonalListsTable';
 
-const GoalsManagement: React.FC = () => {
+// Define PersonalItem interface locally
+interface PersonalItem {
+  id: string;
+  title: string;
+  description?: string;
+  category: 'personal' | 'work' | 'learning' | 'health' | 'finance';
+  priority: 'low' | 'medium' | 'high';
+  status: 'todo' | 'in-progress' | 'waiting' | 'done';
+  dueDate?: number;
+  tags?: string[];
+  createdAt: number;
+  updatedAt: number;
+  ownerUid: string;
+  persona: string;
+}
+
+const PersonalListsManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const [goals, setGoals] = useState<Goal[]>([]);
+  const [items, setItems] = useState<PersonalItem[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [filterTheme, setFilterTheme] = useState<string>('all');
+  const [filterCategory, setFilterCategory] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!currentUser) return;
-    loadGoalsData();
+    loadPersonalItems();
   }, [currentUser, currentPersona]);
 
-  const loadGoalsData = async () => {
+  const loadPersonalItems = async () => {
     if (!currentUser) return;
     
     setLoading(true);
     
-    // Load goals data
-    const goalsQuery = query(
-      collection(db, 'goals'),
+    // Load personal items data
+    const itemsQuery = query(
+      collection(db, 'personalItems'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona),
       orderBy('createdAt', 'desc')
     );
     
     // Subscribe to real-time updates
-    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const goalsData = snapshot.docs.map(doc => ({
+    const unsubscribeItems = onSnapshot(itemsQuery, (snapshot) => {
+      const itemsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      })) as Goal[];
-      setGoals(goalsData);
+      })) as PersonalItem[];
+      setItems(itemsData);
     });
 
     setLoading(false);
 
     return () => {
-      unsubscribeGoals();
+      unsubscribeItems();
     };
   };
 
-  // Handler functions for ModernGoalsTable
-  const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
+  // Handler functions for ModernPersonalListsTable
+  const handleItemUpdate = async (itemId: string, updates: Partial<PersonalItem>) => {
     try {
-      await updateDoc(doc(db, 'goals', goalId), {
+      await updateDoc(doc(db, 'personalItems', itemId), {
         ...updates,
         updatedAt: serverTimestamp()
       });
     } catch (error) {
-      console.error('Error updating goal:', error);
+      console.error('Error updating personal item:', error);
     }
   };
 
-  const handleGoalDelete = async (goalId: string) => {
+  const handleItemDelete = async (itemId: string) => {
     try {
-      await deleteDoc(doc(db, 'goals', goalId));
+      await deleteDoc(doc(db, 'personalItems', itemId));
     } catch (error) {
-      console.error('Error deleting goal:', error);
+      console.error('Error deleting personal item:', error);
     }
   };
 
-  const handleGoalPriorityChange = async (goalId: string, newPriority: number) => {
+  const handleItemPriorityChange = async (itemId: string, newPriority: number) => {
     try {
-      await updateDoc(doc(db, 'goals', goalId), {
+      await updateDoc(doc(db, 'personalItems', itemId), {
         priority: newPriority,
         updatedAt: serverTimestamp()
       });
     } catch (error) {
-      console.error('Error updating goal priority:', error);
+      console.error('Error updating personal item priority:', error);
     }
   };
 
-  // Apply filters to goals
-  const filteredGoals = goals.filter(goal => {
-    if (filterStatus !== 'all' && goal.status !== filterStatus) return false;
-    if (filterTheme !== 'all' && goal.theme !== filterTheme) return false;
-    if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+  // Apply filters to items
+  const filteredItems = items.filter(item => {
+    if (filterStatus !== 'all' && item.status !== filterStatus) return false;
+    if (filterCategory !== 'all' && item.category !== filterCategory) return false;
+    if (searchTerm && !item.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
 
   // Get counts for dashboard cards
-  const goalCounts = {
-    total: filteredGoals.length,
-    active: filteredGoals.filter(g => g.status === 'active').length,
-    done: filteredGoals.filter(g => g.status === 'done').length,
-    paused: filteredGoals.filter(g => g.status === 'paused').length
+  const itemCounts = {
+    total: filteredItems.length,
+    todo: filteredItems.filter(i => i.status === 'todo').length,
+    inProgress: filteredItems.filter(i => i.status === 'in-progress').length,
+    done: filteredItems.filter(i => i.status === 'done').length
   };
 
   return (
@@ -114,14 +129,14 @@ const GoalsManagement: React.FC = () => {
         }}>
           <div>
             <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
-              Goals Management
+              Personal Lists
             </h2>
             <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
-              Manage your life goals across different themes
+              Manage personal tasks across all life categories
             </p>
           </div>
-          <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
-            Add Goal
+          <Button variant="primary" onClick={() => alert('Add new personal item - coming soon')}>
+            Add Item
           </Button>
         </div>
 
@@ -131,10 +146,10 @@ const GoalsManagement: React.FC = () => {
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
-                  {goalCounts.total}
+                  {itemCounts.total}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Total Goals
+                  Total Items
                 </p>
               </Card.Body>
             </Card>
@@ -142,11 +157,11 @@ const GoalsManagement: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
-                  {goalCounts.active}
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#6b7280' }}>
+                  {itemCounts.todo}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Active
+                  To Do
                 </p>
               </Card.Body>
             </Card>
@@ -155,10 +170,10 @@ const GoalsManagement: React.FC = () => {
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
-                  {goalCounts.done}
+                  {itemCounts.inProgress}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Done
+                  In Progress
                 </p>
               </Card.Body>
             </Card>
@@ -166,11 +181,11 @@ const GoalsManagement: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#f59e0b' }}>
-                  {goalCounts.paused}
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+                  {itemCounts.done}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Paused
+                  Done
                 </p>
               </Card.Body>
             </Card>
@@ -183,7 +198,7 @@ const GoalsManagement: React.FC = () => {
             <Row>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Goals</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Items</Form.Label>
                   <InputGroup>
                     <Form.Control
                       type="text"
@@ -204,28 +219,27 @@ const GoalsManagement: React.FC = () => {
                     style={{ border: '1px solid #d1d5db' }}
                   >
                     <option value="all">All Status</option>
-                    <option value="new">New</option>
-                    <option value="active">Active</option>
+                    <option value="todo">To Do</option>
+                    <option value="in-progress">In Progress</option>
+                    <option value="waiting">Waiting</option>
                     <option value="done">Done</option>
-                    <option value="paused">Paused</option>
-                    <option value="dropped">Dropped</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Theme</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Category</Form.Label>
                   <Form.Select
-                    value={filterTheme}
-                    onChange={(e) => setFilterTheme(e.target.value)}
+                    value={filterCategory}
+                    onChange={(e) => setFilterCategory(e.target.value)}
                     style={{ border: '1px solid #d1d5db' }}
                   >
-                    <option value="all">All Themes</option>
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
+                    <option value="all">All Categories</option>
+                    <option value="personal">Personal</option>
+                    <option value="work">Work</option>
+                    <option value="learning">Learning</option>
+                    <option value="health">Health</option>
+                    <option value="finance">Finance</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -236,7 +250,7 @@ const GoalsManagement: React.FC = () => {
                   variant="outline-secondary" 
                   onClick={() => {
                     setFilterStatus('all');
-                    setFilterTheme('all');
+                    setFilterCategory('all');
                     setSearchTerm('');
                   }}
                   style={{ borderColor: '#d1d5db' }}
@@ -248,7 +262,7 @@ const GoalsManagement: React.FC = () => {
           </Card.Body>
         </Card>
 
-        {/* Modern Goals Table - Full Width */}
+        {/* Modern Personal Lists Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
           <Card.Header style={{ 
             backgroundColor: '#fff', 
@@ -256,7 +270,7 @@ const GoalsManagement: React.FC = () => {
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
-              Goals ({filteredGoals.length})
+              Personal Items ({filteredItems.length})
             </h5>
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
@@ -270,15 +284,15 @@ const GoalsManagement: React.FC = () => {
                 justifyContent: 'center'
               }}>
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading goals...</p>
+                <p style={{ margin: 0, color: '#6b7280' }}>Loading personal items...</p>
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }}>
-                <ModernGoalsTable
-                  goals={filteredGoals}
-                  onGoalUpdate={handleGoalUpdate}
-                  onGoalDelete={handleGoalDelete}
-                  onGoalPriorityChange={handleGoalPriorityChange}
+                <ModernPersonalListsTable
+                  items={filteredItems}
+                  onItemUpdate={handleItemUpdate}
+                  onItemDelete={handleItemDelete}
+                  onItemPriorityChange={handleItemPriorityChange}
                 />
               </div>
             )}
@@ -289,4 +303,4 @@ const GoalsManagement: React.FC = () => {
   );
 };
 
-export default GoalsManagement;
+export default PersonalListsManagement;

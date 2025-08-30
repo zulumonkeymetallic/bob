@@ -25,15 +25,9 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Task, Story, Goal, Sprint } from '../types';
-import { useSidebar } from '../contexts/SidebarContext';
+import { Goal } from '../types';
 
-interface TaskTableRow extends Omit<Task, 'priority'> {
-  storyTitle?: string;
-  goalTitle?: string;
-  sprintName?: string;
-  theme?: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
-  priority: 'low' | 'med' | 'high';
+interface GoalTableRow extends Goal {
   sortOrder: number;
 }
 
@@ -47,21 +41,18 @@ interface Column {
   options?: string[];
 }
 
-interface ModernTaskTableProps {
-  tasks: Task[];
-  stories: Story[];
+interface ModernGoalsTableProps {
   goals: Goal[];
-  sprints: Sprint[];
-  onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  onTaskDelete: (taskId: string) => Promise<void>;
-  onTaskPriorityChange: (taskId: string, newPriority: number) => Promise<void>;
+  onGoalUpdate: (goalId: string, updates: Partial<Goal>) => Promise<void>;
+  onGoalDelete: (goalId: string) => Promise<void>;
+  onGoalPriorityChange: (goalId: string, newPriority: number) => Promise<void>;
 }
 
 const defaultColumns: Column[] = [
   { 
     key: 'title', 
-    label: 'Title', 
-    width: '25%', 
+    label: 'Goal Title', 
+    width: '30%', 
     visible: true, 
     editable: true, 
     type: 'text' 
@@ -69,10 +60,19 @@ const defaultColumns: Column[] = [
   { 
     key: 'description', 
     label: 'Description', 
-    width: '30%', 
+    width: '35%', 
     visible: true, 
     editable: true, 
     type: 'text' 
+  },
+  { 
+    key: 'theme', 
+    label: 'Theme', 
+    width: '12%', 
+    visible: true, 
+    editable: true, 
+    type: 'select',
+    options: ['Health', 'Growth', 'Wealth', 'Tribe', 'Home']
   },
   { 
     key: 'status', 
@@ -81,29 +81,11 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['todo', 'planned', 'in-progress', 'blocked', 'done']
+    options: ['draft', 'active', 'completed', 'archived']
   },
   { 
-    key: 'priority', 
-    label: 'Priority', 
-    width: '10%', 
-    visible: true, 
-    editable: true, 
-    type: 'select',
-    options: ['low', 'med', 'high']
-  },
-  { 
-    key: 'effort', 
-    label: 'Effort', 
-    width: '8%', 
-    visible: true, 
-    editable: true, 
-    type: 'select',
-    options: ['S', 'M', 'L']
-  },
-  { 
-    key: 'dueDate', 
-    label: 'Due Date', 
+    key: 'targetDate', 
+    label: 'Target Date', 
     width: '15%', 
     visible: true, 
     editable: true, 
@@ -112,21 +94,20 @@ const defaultColumns: Column[] = [
 ];
 
 interface SortableRowProps {
-  task: TaskTableRow;
+  goal: GoalTableRow;
   columns: Column[];
   index: number;
-  onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  onTaskDelete: (taskId: string) => Promise<void>;
+  onGoalUpdate: (goalId: string, updates: Partial<Goal>) => Promise<void>;
+  onGoalDelete: (goalId: string) => Promise<void>;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
-  task, 
+  goal, 
   columns, 
   index, 
-  onTaskUpdate, 
-  onTaskDelete 
+  onGoalUpdate, 
+  onGoalDelete 
 }) => {
-  const { showSidebar } = useSidebar();
   const {
     attributes,
     listeners,
@@ -134,7 +115,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id });
+  } = useSortable({ id: goal.id });
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
@@ -151,20 +132,20 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleCellSave = async (key: string) => {
-    const updates: Partial<Task> = { [key]: editValue };
-    await onTaskUpdate(task.id, updates);
+    const updates: Partial<Goal> = { [key]: editValue };
+    await onGoalUpdate(goal.id, updates);
     setEditingCell(null);
   };
 
   const formatValue = (key: string, value: any): string => {
-    if (key === 'dueDate' && typeof value === 'number') {
+    if (key === 'targetDate' && typeof value === 'number') {
       return new Date(value).toLocaleDateString();
     }
     return value || '';
   };
 
   const renderCell = (column: Column) => {
-    const value = task[column.key as keyof TaskTableRow];
+    const value = goal[column.key as keyof GoalTableRow];
     const isEditing = editingCell === column.key;
 
     if (isEditing && column.editable) {
@@ -316,7 +297,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <button
-            onClick={() => showSidebar(task, 'task')}
+            onClick={() => {/* Handle edit modal */}}
             style={{
               color: '#2563eb',
               padding: '4px',
@@ -336,12 +317,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = '#2563eb';
             }}
-            title="Edit task"
+            title="Edit goal"
           >
             Edit
           </button>
           <button
-            onClick={() => onTaskDelete(task.id)}
+            onClick={() => onGoalDelete(goal.id)}
             style={{
               color: '#dc2626',
               padding: '4px',
@@ -361,7 +342,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = '#dc2626';
             }}
-            title="Delete task"
+            title="Delete goal"
           >
             Delete
           </button>
@@ -371,14 +352,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
   );
 };
 
-const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
-  tasks,
-  stories,
+const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   goals,
-  sprints,
-  onTaskUpdate,
-  onTaskDelete,
-  onTaskPriorityChange,
+  onGoalUpdate,
+  onGoalDelete,
+  onGoalPriorityChange,
 }) => {
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
@@ -395,10 +373,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
-  // Convert tasks to table rows with sort order
-  const tableRows: TaskTableRow[] = tasks.map((task, index) => ({
-    ...task,
-    priority: task.priority as 'low' | 'med' | 'high',
+  // Convert goals to table rows with sort order
+  const tableRows: GoalTableRow[] = goals.map((goal, index) => ({
+    ...goal,
     sortOrder: index,
   }));
 
@@ -409,7 +386,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       const newIndex = tableRows.findIndex(item => item.id === over.id);
       
       // Update priority based on new position (1-indexed)
-      await onTaskPriorityChange(active.id as string, newIndex + 1);
+      await onGoalPriorityChange(active.id as string, newIndex + 1);
     }
   };
 
@@ -449,14 +426,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             margin: 0, 
             marginBottom: '4px' 
           }}>
-            Tasks
+            Goals
           </h3>
           <p style={{ 
             fontSize: '14px', 
             color: '#6b7280', 
             margin: 0 
           }}>
-            {tasks.length} tasks • {visibleColumnsCount} columns visible
+            {goals.length} goals • {visibleColumnsCount} columns visible
           </p>
         </div>
         <button
@@ -563,14 +540,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                   items={tableRows.map(row => row.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  {tableRows.map((task, index) => (
+                  {tableRows.map((goal, index) => (
                     <SortableRow
-                      key={task.id}
-                      task={task}
+                      key={goal.id}
+                      goal={goal}
                       columns={columns}
                       index={index}
-                      onTaskUpdate={onTaskUpdate}
-                      onTaskDelete={onTaskDelete}
+                      onGoalUpdate={onGoalUpdate}
+                      onGoalDelete={onGoalDelete}
                     />
                   ))}
                 </SortableContext>
@@ -688,7 +665,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 )}
               </div>
 
-              {/* Table Settings */}
+              {/* Display Options */}
               <div>
                 <button
                   onClick={() => setConfigExpanded(prev => ({ ...prev, display: !prev.display }))}
@@ -737,43 +714,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         color: '#111827', 
                         margin: '0 0 8px 0' 
                       }}>
-                        Text Wrapping
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: '#6b7280', 
-                        margin: '0 0 8px 0',
-                        lineHeight: '1.4',
-                      }}>
-                        Table cells automatically wrap text for better readability with proper line height and spacing
-                      </p>
-                      <div style={{ 
-                        width: '100%', 
-                        height: '8px', 
-                        backgroundColor: '#dcfce7', 
-                        borderRadius: '4px' 
-                      }}>
-                        <div style={{ 
-                          height: '8px', 
-                          backgroundColor: '#16a34a', 
-                          borderRadius: '4px',
-                          width: '100%',
-                        }}></div>
-                      </div>
-                    </div>
-                    
-                    <div style={{
-                      padding: '12px',
-                      backgroundColor: '#f9fafb',
-                      borderRadius: '8px',
-                    }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: '#111827', 
-                        margin: '0 0 8px 0' 
-                      }}>
-                        Inline Editing
+                        Goals Management
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
@@ -781,30 +722,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         margin: 0,
                         lineHeight: '1.4',
                       }}>
-                        Click any editable cell to modify values directly in the table with modern form controls
-                      </p>
-                    </div>
-
-                    <div style={{
-                      padding: '12px',
-                      backgroundColor: '#f9fafb',
-                      borderRadius: '8px',
-                    }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: '#111827', 
-                        margin: '0 0 8px 0' 
-                      }}>
-                        Modern Actions
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: '#6b7280', 
-                        margin: 0,
-                        lineHeight: '1.4',
-                      }}>
-                        Text-based action buttons (Edit/Delete) follow design system guidelines with proper hover states
+                        Drag to reorder goals by priority. Click any cell to edit. Use theme categories to organize your objectives.
                       </p>
                     </div>
                   </div>
@@ -818,4 +736,4 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   );
 };
 
-export default ModernTaskTable;
+export default ModernGoalsTable;

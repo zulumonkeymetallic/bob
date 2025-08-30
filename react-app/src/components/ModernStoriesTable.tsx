@@ -25,15 +25,10 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Task, Story, Goal, Sprint } from '../types';
-import { useSidebar } from '../contexts/SidebarContext';
+import { Story, Goal } from '../types';
 
-interface TaskTableRow extends Omit<Task, 'priority'> {
-  storyTitle?: string;
+interface StoryTableRow extends Story {
   goalTitle?: string;
-  sprintName?: string;
-  theme?: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
-  priority: 'low' | 'med' | 'high';
   sortOrder: number;
 }
 
@@ -47,20 +42,18 @@ interface Column {
   options?: string[];
 }
 
-interface ModernTaskTableProps {
-  tasks: Task[];
+interface ModernStoriesTableProps {
   stories: Story[];
   goals: Goal[];
-  sprints: Sprint[];
-  onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  onTaskDelete: (taskId: string) => Promise<void>;
-  onTaskPriorityChange: (taskId: string, newPriority: number) => Promise<void>;
+  onStoryUpdate: (storyId: string, updates: Partial<Story>) => Promise<void>;
+  onStoryDelete: (storyId: string) => Promise<void>;
+  onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
 }
 
 const defaultColumns: Column[] = [
   { 
     key: 'title', 
-    label: 'Title', 
+    label: 'Story Title', 
     width: '25%', 
     visible: true, 
     editable: true, 
@@ -75,22 +68,30 @@ const defaultColumns: Column[] = [
     type: 'text' 
   },
   { 
-    key: 'status', 
-    label: 'Status', 
-    width: '12%', 
+    key: 'goalTitle', 
+    label: 'Goal', 
+    width: '15%', 
     visible: true, 
-    editable: true, 
-    type: 'select',
-    options: ['todo', 'planned', 'in-progress', 'blocked', 'done']
+    editable: false, 
+    type: 'text' 
   },
   { 
-    key: 'priority', 
-    label: 'Priority', 
+    key: 'status', 
+    label: 'Status', 
     width: '10%', 
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['low', 'med', 'high']
+    options: ['draft', 'planned', 'in-progress', 'testing', 'done']
+  },
+  { 
+    key: 'priority', 
+    label: 'Priority', 
+    width: '8%', 
+    visible: true, 
+    editable: true, 
+    type: 'select',
+    options: ['low', 'medium', 'high', 'critical']
   },
   { 
     key: 'effort', 
@@ -99,34 +100,25 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['S', 'M', 'L']
-  },
-  { 
-    key: 'dueDate', 
-    label: 'Due Date', 
-    width: '15%', 
-    visible: true, 
-    editable: true, 
-    type: 'date' 
+    options: ['XS', 'S', 'M', 'L', 'XL']
   },
 ];
 
 interface SortableRowProps {
-  task: TaskTableRow;
+  story: StoryTableRow;
   columns: Column[];
   index: number;
-  onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  onTaskDelete: (taskId: string) => Promise<void>;
+  onStoryUpdate: (storyId: string, updates: Partial<Story>) => Promise<void>;
+  onStoryDelete: (storyId: string) => Promise<void>;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
-  task, 
+  story, 
   columns, 
   index, 
-  onTaskUpdate, 
-  onTaskDelete 
+  onStoryUpdate, 
+  onStoryDelete 
 }) => {
-  const { showSidebar } = useSidebar();
   const {
     attributes,
     listeners,
@@ -134,7 +126,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id });
+  } = useSortable({ id: story.id });
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
@@ -151,20 +143,17 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleCellSave = async (key: string) => {
-    const updates: Partial<Task> = { [key]: editValue };
-    await onTaskUpdate(task.id, updates);
+    const updates: Partial<Story> = { [key]: editValue };
+    await onStoryUpdate(story.id, updates);
     setEditingCell(null);
   };
 
   const formatValue = (key: string, value: any): string => {
-    if (key === 'dueDate' && typeof value === 'number') {
-      return new Date(value).toLocaleDateString();
-    }
     return value || '';
   };
 
   const renderCell = (column: Column) => {
-    const value = task[column.key as keyof TaskTableRow];
+    const value = story[column.key as keyof StoryTableRow];
     const isEditing = editingCell === column.key;
 
     if (isEditing && column.editable) {
@@ -316,7 +305,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <button
-            onClick={() => showSidebar(task, 'task')}
+            onClick={() => {/* Handle edit modal */}}
             style={{
               color: '#2563eb',
               padding: '4px',
@@ -336,12 +325,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = '#2563eb';
             }}
-            title="Edit task"
+            title="Edit story"
           >
             Edit
           </button>
           <button
-            onClick={() => onTaskDelete(task.id)}
+            onClick={() => onStoryDelete(story.id)}
             style={{
               color: '#dc2626',
               padding: '4px',
@@ -361,7 +350,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = '#dc2626';
             }}
-            title="Delete task"
+            title="Delete story"
           >
             Delete
           </button>
@@ -371,14 +360,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
   );
 };
 
-const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
-  tasks,
+const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   stories,
   goals,
-  sprints,
-  onTaskUpdate,
-  onTaskDelete,
-  onTaskPriorityChange,
+  onStoryUpdate,
+  onStoryDelete,
+  onStoryPriorityChange,
 }) => {
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
@@ -395,12 +382,15 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
-  // Convert tasks to table rows with sort order
-  const tableRows: TaskTableRow[] = tasks.map((task, index) => ({
-    ...task,
-    priority: task.priority as 'low' | 'med' | 'high',
-    sortOrder: index,
-  }));
+  // Convert stories to table rows with goal titles and sort order
+  const tableRows: StoryTableRow[] = stories.map((story, index) => {
+    const goal = goals.find(g => g.id === story.goalId);
+    return {
+      ...story,
+      goalTitle: goal?.title || 'Unassigned',
+      sortOrder: index,
+    };
+  });
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -409,7 +399,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       const newIndex = tableRows.findIndex(item => item.id === over.id);
       
       // Update priority based on new position (1-indexed)
-      await onTaskPriorityChange(active.id as string, newIndex + 1);
+      await onStoryPriorityChange(active.id as string, newIndex + 1);
     }
   };
 
@@ -449,14 +439,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             margin: 0, 
             marginBottom: '4px' 
           }}>
-            Tasks
+            Stories
           </h3>
           <p style={{ 
             fontSize: '14px', 
             color: '#6b7280', 
             margin: 0 
           }}>
-            {tasks.length} tasks • {visibleColumnsCount} columns visible
+            {stories.length} stories • {visibleColumnsCount} columns visible
           </p>
         </div>
         <button
@@ -563,14 +553,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                   items={tableRows.map(row => row.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  {tableRows.map((task, index) => (
+                  {tableRows.map((story, index) => (
                     <SortableRow
-                      key={task.id}
-                      task={task}
+                      key={story.id}
+                      story={story}
                       columns={columns}
                       index={index}
-                      onTaskUpdate={onTaskUpdate}
-                      onTaskDelete={onTaskDelete}
+                      onStoryUpdate={onStoryUpdate}
+                      onStoryDelete={onStoryDelete}
                     />
                   ))}
                 </SortableContext>
@@ -688,7 +678,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 )}
               </div>
 
-              {/* Table Settings */}
+              {/* Display Options */}
               <div>
                 <button
                   onClick={() => setConfigExpanded(prev => ({ ...prev, display: !prev.display }))}
@@ -737,43 +727,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         color: '#111827', 
                         margin: '0 0 8px 0' 
                       }}>
-                        Text Wrapping
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: '#6b7280', 
-                        margin: '0 0 8px 0',
-                        lineHeight: '1.4',
-                      }}>
-                        Table cells automatically wrap text for better readability with proper line height and spacing
-                      </p>
-                      <div style={{ 
-                        width: '100%', 
-                        height: '8px', 
-                        backgroundColor: '#dcfce7', 
-                        borderRadius: '4px' 
-                      }}>
-                        <div style={{ 
-                          height: '8px', 
-                          backgroundColor: '#16a34a', 
-                          borderRadius: '4px',
-                          width: '100%',
-                        }}></div>
-                      </div>
-                    </div>
-                    
-                    <div style={{
-                      padding: '12px',
-                      backgroundColor: '#f9fafb',
-                      borderRadius: '8px',
-                    }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: '#111827', 
-                        margin: '0 0 8px 0' 
-                      }}>
-                        Inline Editing
+                        Story Management
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
@@ -781,30 +735,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         margin: 0,
                         lineHeight: '1.4',
                       }}>
-                        Click any editable cell to modify values directly in the table with modern form controls
-                      </p>
-                    </div>
-
-                    <div style={{
-                      padding: '12px',
-                      backgroundColor: '#f9fafb',
-                      borderRadius: '8px',
-                    }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: '#111827', 
-                        margin: '0 0 8px 0' 
-                      }}>
-                        Modern Actions
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: '#6b7280', 
-                        margin: 0,
-                        lineHeight: '1.4',
-                      }}>
-                        Text-based action buttons (Edit/Delete) follow design system guidelines with proper hover states
+                        Organize user stories by priority and effort. Stories automatically show their associated goal. Drag to reorder by importance.
                       </p>
                     </div>
                   </div>
@@ -818,4 +749,4 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   );
 };
 
-export default ModernTaskTable;
+export default ModernStoriesTable;
