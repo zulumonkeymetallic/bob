@@ -26,3 +26,5 @@ const PersonaSwitcher: React.FC = () => {
 };
 
 export default PersonaSwitcher;
+
+export {};

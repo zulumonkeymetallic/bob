@@ -78,3 +78,4 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, index, onEdit, onDelete }) =>
 };
 
 export default TaskCard;
+export {};

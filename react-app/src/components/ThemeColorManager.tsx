@@ -311,3 +311,5 @@ const ThemeColorManager: React.FC = () => {
 };
 
 export default ThemeColorManager;
+
+export {};

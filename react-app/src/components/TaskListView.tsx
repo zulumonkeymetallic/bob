@@ -522,3 +522,5 @@ const TaskListView: React.FC = () => {
 };
 
 export default TaskListView;
+
+export {};

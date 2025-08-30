@@ -412,3 +412,5 @@ const CalendarSyncManager: React.FC = () => {
 };
 
 export default CalendarSyncManager;
+
+export {};

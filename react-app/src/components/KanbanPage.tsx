@@ -925,3 +925,4 @@ const KanbanPage: React.FC = () => {
 };
 
 export default KanbanPage;
+export {};

@@ -273,3 +273,5 @@ const DevTools: React.FC<DevToolsProps> = ({ show, onHide }) => {
 };
 
 export default DevTools;
+
+export {};

@@ -193,3 +193,5 @@ const GlobalEditButton: React.FC<GlobalEditButtonProps> = ({
 };
 
 export default GlobalEditButton;
+
+export {};

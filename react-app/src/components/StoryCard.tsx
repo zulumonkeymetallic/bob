@@ -27,3 +27,5 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
 };
 
 export default StoryCard;
+
+export {};

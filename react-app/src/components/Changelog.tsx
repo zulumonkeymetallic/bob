@@ -272,3 +272,5 @@ const Changelog: React.FC = () => {
 };
 
 export default Changelog;
+
+export {};

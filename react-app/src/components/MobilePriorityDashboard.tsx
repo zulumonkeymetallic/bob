@@ -265,3 +265,5 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
 };
 
 export default MobilePriorityDashboard;
+
+export {};
