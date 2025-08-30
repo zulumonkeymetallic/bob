@@ -1,3 +1,6 @@
+/* Temporarily disable Tailwind CSS until configuration is resolved */
+/* @import url('https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css'); */
+
 :root {
   /* Light Theme (Default - will be overridden by data-theme="dark" if active) */
   --bg: #f0f2f5; /* Light background */
