@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table, Dropdown } from 'react-bootstrap';
 import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
@@ -573,14 +573,25 @@ const KanbanPage: React.FC = () => {
                               )}
                             </div>
                           </td>
-                          <td>
-                            <Badge 
-                              bg={task.status === 'done' ? 'success' : 
-                                  task.status === 'in_progress' ? 'warning' : 'secondary'}
-                            >
-                              {task.status === 'in_progress' ? 'In Progress' : 
-                               task.status === 'done' ? 'Done' : 'Planned'}
-                            </Badge>
+                          <td onClick={(e) => e.stopPropagation()}>
+                            <Dropdown>
+                              <Dropdown.Toggle as={Badge} bg={task.status === 'done' ? 'success' : 
+                                  task.status === 'in_progress' ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                                {task.status === 'in_progress' ? 'In Progress' : 
+                                 task.status === 'done' ? 'Done' : 'Planned'}
+                              </Dropdown.Toggle>
+                              <Dropdown.Menu>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'planned')}>
+                                  Planned
+                                </Dropdown.Item>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'in_progress')}>
+                                  In Progress
+                                </Dropdown.Item>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'done')}>
+                                  Done
+                                </Dropdown.Item>
+                              </Dropdown.Menu>
+                            </Dropdown>
                           </td>
                           <td>
                             <Badge bg="outline-dark">{task.effort}</Badge>
@@ -595,6 +606,15 @@ const KanbanPage: React.FC = () => {
                           </td>
                           <td>
                             <div className="d-flex gap-1">
+                              {/* Edit button */}
+                              <Button 
+                                size="sm" 
+                                variant="outline-primary"
+                                onClick={() => {/* TODO: Add edit functionality */}}
+                                title="Edit Task"
+                              >
+                                <i className="fas fa-edit"></i>
+                              </Button>
                               {task.status !== 'in_progress' && (
                                 <Button 
                                   size="sm" 
