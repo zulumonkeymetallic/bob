@@ -61,8 +61,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children }) => {
       items: [
         { label: 'Goals', path: '/goals-management', icon: 'target' },
         { label: 'Task List', path: '/task-list', icon: 'list-check' },
-        { label: 'Story List', path: '/backlog', icon: 'list' },
-        { label: 'Personal Lists', path: '/personal-lists', icon: 'bookmark' }
+        { label: 'Stories', path: '/stories', icon: 'book' },
+        { label: 'Story Backlog', path: '/backlog', icon: 'list' },
+        { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' }
       ]
     },
     {

@@ -2,90 +2,47 @@ import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { useSidebar } from '../contexts/SidebarContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Task, Story, Goal, Sprint } from '../types';
-import ModernTaskTable from './ModernTaskTable';
+import { Story, Goal } from '../types';
+import ModernStoriesTable from './ModernStoriesTable';
 
-const TaskListView: React.FC = () => {
+const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { setUpdateHandler } = useSidebar();
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [filterSprint, setFilterSprint] = useState<string>('all');
-  const [filterTheme, setFilterTheme] = useState<string>('all');
+  const [filterGoal, setFilterGoal] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!currentUser) return;
-    loadTaskData();
+    loadStoriesData();
   }, [currentUser, currentPersona]);
 
-  // Set up the update handler for the global sidebar
-  useEffect(() => {
-    const handleItemUpdate = async (item: Task | Story | Goal, type: 'task' | 'story' | 'goal', updates: any) => {
-      try {
-        const collection_name = type === 'story' ? 'stories' : type === 'goal' ? 'goals' : 'tasks';
-        await updateDoc(doc(db, collection_name, item.id), {
-          ...updates,
-          updatedAt: serverTimestamp()
-        });
-        console.log(`${type} updated successfully`);
-      } catch (error) {
-        console.error('Error updating item:', error);
-        throw error;
-      }
-    };
-
-    setUpdateHandler(handleItemUpdate);
-  }, [setUpdateHandler]);
-
-  const loadTaskData = async () => {
+  const loadStoriesData = async () => {
     if (!currentUser) return;
     
     setLoading(true);
     
-    // Load all related data
-    const tasksQuery = query(
-      collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('priority', 'desc')
-    );
-    
+    // Load stories data
     const storiesQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc')
     );
     
+    // Load goals data for relationships
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
     
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
-    );
-    
     // Subscribe to real-time updates
-    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
-      setTasks(tasksData);
-    });
-    
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
       const storiesData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -101,69 +58,60 @@ const TaskListView: React.FC = () => {
       })) as Goal[];
       setGoals(goalsData);
     });
-    
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      setSprints(sprintsData);
-    });
 
     setLoading(false);
 
     return () => {
-      unsubscribeTasks();
       unsubscribeStories();
       unsubscribeGoals();
-      unsubscribeSprints();
     };
   };
 
-  // Handler functions for ModernTaskTable
-  const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
+  // Handler functions for ModernStoriesTable
+  const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
     try {
-      await updateDoc(doc(db, 'tasks', taskId), {
+      await updateDoc(doc(db, 'stories', storyId), {
         ...updates,
         updatedAt: serverTimestamp()
       });
     } catch (error) {
-      console.error('Error updating task:', error);
+      console.error('Error updating story:', error);
     }
   };
 
-  const handleTaskDelete = async (taskId: string) => {
+  const handleStoryDelete = async (storyId: string) => {
     try {
-      await deleteDoc(doc(db, 'tasks', taskId));
+      await deleteDoc(doc(db, 'stories', storyId));
     } catch (error) {
-      console.error('Error deleting task:', error);
+      console.error('Error deleting story:', error);
     }
   };
 
-  const handleTaskPriorityChange = async (taskId: string, newPriority: number) => {
+  const handleStoryPriorityChange = async (storyId: string, newPriority: number) => {
     try {
-      await updateDoc(doc(db, 'tasks', taskId), {
+      await updateDoc(doc(db, 'stories', storyId), {
         priority: newPriority,
         updatedAt: serverTimestamp()
       });
     } catch (error) {
-      console.error('Error updating task priority:', error);
+      console.error('Error updating story priority:', error);
     }
   };
 
-  // Apply filters to tasks
-  const filteredTasks = tasks.filter(task => {
-    if (filterStatus !== 'all' && task.status !== filterStatus) return false;
-    if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+  // Apply filters to stories
+  const filteredStories = stories.filter(story => {
+    if (filterStatus !== 'all' && story.status !== filterStatus) return false;
+    if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
+    if (searchTerm && !story.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
 
   // Get counts for dashboard cards
-  const taskCounts = {
-    total: filteredTasks.length,
-    planned: filteredTasks.filter(t => t.status === 'planned').length,
-    inProgress: filteredTasks.filter(t => t.status === 'in_progress').length,
-    done: filteredTasks.filter(t => t.status === 'done').length
+  const storyCounts = {
+    total: filteredStories.length,
+    backlog: filteredStories.filter(s => s.status === 'backlog').length,
+    active: filteredStories.filter(s => s.status === 'active').length,
+    done: filteredStories.filter(s => s.status === 'done').length
   };
 
   return (
@@ -183,14 +131,14 @@ const TaskListView: React.FC = () => {
         }}>
           <div>
             <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
-              Task List View
+              Stories Management
             </h2>
             <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
-              Manage all your tasks with modern table interface
+              Manage user stories and their relationships to goals
             </p>
           </div>
-          <Button variant="outline-primary" href="#" disabled>
-            Switch to Kanban
+          <Button variant="primary" onClick={() => alert('Add new story - coming soon')}>
+            Add Story
           </Button>
         </div>
 
@@ -200,10 +148,10 @@ const TaskListView: React.FC = () => {
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
-                  {taskCounts.total}
+                  {storyCounts.total}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Total Tasks
+                  Total Stories
                 </p>
               </Card.Body>
             </Card>
@@ -211,11 +159,11 @@ const TaskListView: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#f59e0b' }}>
-                  {taskCounts.planned}
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#6b7280' }}>
+                  {storyCounts.backlog}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Planned
+                  Backlog
                 </p>
               </Card.Body>
             </Card>
@@ -224,10 +172,10 @@ const TaskListView: React.FC = () => {
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
-                  {taskCounts.inProgress}
+                  {storyCounts.active}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  In Progress
+                  Active
                 </p>
               </Card.Body>
             </Card>
@@ -236,7 +184,7 @@ const TaskListView: React.FC = () => {
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
-                  {taskCounts.done}
+                  {storyCounts.done}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
                   Done
@@ -250,9 +198,9 @@ const TaskListView: React.FC = () => {
         <Card style={{ marginBottom: '24px', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
           <Card.Body style={{ padding: '24px' }}>
             <Row>
-              <Col md={3}>
+              <Col md={4}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Tasks</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Stories</Form.Label>
                   <InputGroup>
                     <Form.Control
                       type="text"
@@ -264,7 +212,7 @@ const TaskListView: React.FC = () => {
                   </InputGroup>
                 </Form.Group>
               </Col>
-              <Col md={3}>
+              <Col md={4}>
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Status</Form.Label>
                   <Form.Select
@@ -273,41 +221,25 @@ const TaskListView: React.FC = () => {
                     style={{ border: '1px solid #d1d5db' }}
                   >
                     <option value="all">All Status</option>
-                    <option value="planned">Planned</option>
-                    <option value="in_progress">In Progress</option>
+                    <option value="backlog">Backlog</option>
+                    <option value="active">Active</option>
                     <option value="done">Done</option>
+                    <option value="archived">Archived</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
-              <Col md={3}>
+              <Col md={4}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Sprint</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Goal</Form.Label>
                   <Form.Select
-                    value={filterSprint}
-                    onChange={(e) => setFilterSprint(e.target.value)}
+                    value={filterGoal}
+                    onChange={(e) => setFilterGoal(e.target.value)}
                     style={{ border: '1px solid #d1d5db' }}
                   >
-                    <option value="all">All Sprints</option>
-                    {sprints.map(sprint => (
-                      <option key={sprint.id} value={sprint.name}>{sprint.name}</option>
+                    <option value="all">All Goals</option>
+                    {goals.map(goal => (
+                      <option key={goal.id} value={goal.id}>{goal.title}</option>
                     ))}
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={3}>
-                <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Theme</Form.Label>
-                  <Form.Select
-                    value={filterTheme}
-                    onChange={(e) => setFilterTheme(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
-                  >
-                    <option value="all">All Themes</option>
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -318,8 +250,7 @@ const TaskListView: React.FC = () => {
                   variant="outline-secondary" 
                   onClick={() => {
                     setFilterStatus('all');
-                    setFilterSprint('all');
-                    setFilterTheme('all');
+                    setFilterGoal('all');
                     setSearchTerm('');
                   }}
                   style={{ borderColor: '#d1d5db' }}
@@ -331,7 +262,7 @@ const TaskListView: React.FC = () => {
           </Card.Body>
         </Card>
 
-        {/* Modern Task Table - Full Width */}
+        {/* Modern Stories Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
           <Card.Header style={{ 
             backgroundColor: '#fff', 
@@ -339,7 +270,7 @@ const TaskListView: React.FC = () => {
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
-              Tasks ({filteredTasks.length})
+              Stories ({filteredStories.length})
             </h5>
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
@@ -353,31 +284,16 @@ const TaskListView: React.FC = () => {
                 justifyContent: 'center'
               }}>
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading tasks...</p>
-              </div>
-            ) : filteredTasks.length === 0 ? (
-              <div style={{ 
-                textAlign: 'center', 
-                padding: '60px 20px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
-                  No tasks found. Create your first task to get started!
-                </p>
+                <p style={{ margin: 0, color: '#6b7280' }}>Loading stories...</p>
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }}>
-                <ModernTaskTable
-                  tasks={filteredTasks}
-                  stories={stories}
+                <ModernStoriesTable
+                  stories={filteredStories}
                   goals={goals}
-                  sprints={sprints}
-                  onTaskUpdate={handleTaskUpdate}
-                  onTaskDelete={handleTaskDelete}
-                  onTaskPriorityChange={handleTaskPriorityChange}
+                  onStoryUpdate={handleStoryUpdate}
+                  onStoryDelete={handleStoryDelete}
+                  onStoryPriorityChange={handleStoryPriorityChange}
                 />
               </div>
             )}
@@ -388,4 +304,4 @@ const TaskListView: React.FC = () => {
   );
 };
 
-export default TaskListView;
+export default StoriesManagement;
