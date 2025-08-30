@@ -120,6 +120,7 @@ function AppContent() {
           <Route path="/personal-lists" element={<BacklogManager />} />
           <Route path="/personal-backlogs" element={<BacklogManager />} />
           <Route path="/goals" element={<GoalsManagement />} />
+          <Route path="/goals-management" element={<GoalsManagement />} />
           <Route path="/canvas" element={<VisualCanvas />} />
           <Route path="/visual-canvas" element={<VisualCanvas />} />
           <Route path="/calendar" element={<Calendar />} />
