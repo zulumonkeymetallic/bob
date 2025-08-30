@@ -246,3 +246,5 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
 };
 
 export default AddGoalModal;
+
+export {};

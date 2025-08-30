@@ -672,3 +672,5 @@ const TasksList: React.FC = () => {
 };
 
 export default TasksList;
+
+export {};

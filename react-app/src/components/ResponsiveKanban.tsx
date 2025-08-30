@@ -1070,3 +1070,4 @@ const ResponsiveKanban: React.FC = () => {
 };
 
 export default ResponsiveKanban;
+export {};

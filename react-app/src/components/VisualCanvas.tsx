@@ -501,3 +501,5 @@ const VisualCanvas: React.FC = () => {
 };
 
 export default VisualCanvas;
+
+export {};

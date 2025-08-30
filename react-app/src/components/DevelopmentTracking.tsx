@@ -298,3 +298,5 @@ const DevelopmentTracking: React.FC = () => {
 };
 
 export default DevelopmentTracking;
+
+export {};

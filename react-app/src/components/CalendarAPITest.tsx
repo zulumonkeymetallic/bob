@@ -326,3 +326,5 @@ const CalendarAPITest: React.FC = () => {
 };
 
 export default CalendarAPITest;
+
+export {};

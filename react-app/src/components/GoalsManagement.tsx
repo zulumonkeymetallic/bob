@@ -622,3 +622,4 @@ const GoalsManagement: React.FC = () => {
 };
 
 export default GoalsManagement;
+export {};

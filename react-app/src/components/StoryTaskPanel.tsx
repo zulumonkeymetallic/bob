@@ -10,3 +10,4 @@ const StoryTaskPanel: React.FC = () => {
 };
 
 export default StoryTaskPanel;
+export {};

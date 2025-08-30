@@ -254,3 +254,5 @@ const PriorityPane: React.FC<PriorityPaneProps> = ({ tasks }) => {
 };
 
 export default PriorityPane;
+
+export {};

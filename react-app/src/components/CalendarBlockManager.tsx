@@ -386,3 +386,5 @@ export const CalendarBlockManager: React.FC<CalendarBlockManagerProps> = ({ clas
 };
 
 export default CalendarBlockManager;
+
+export {};
