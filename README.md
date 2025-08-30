@@ -1,22 +1,53 @@
-# BOB — AI-Powered Personal Productivity Platform v2.1.0 ⚠️
+# BOB — AI-Enhanced Productivity Platform v2.1.5 ✅
 
-**Live Application:** https://bob20250810.web.app  
-**Current Version:** 2.1.0 - Major Feature Release (Critical Issues Identified)  
-**Next Version:** 2.1.1 - Critical Defect Fixes  
-**Last Updated:** August 29, 2025
+**Live Application:** https://bob20250810.web.agit push -u origin main
+```
 
-## 🔴 **CRITICAL ISSUES IDENTIFIED - Version 2.1.1 In Progress**
+## 🚀 Quick Start
 
-**Post-deployment testing has revealed critical defects that require immediate fixes:**
+### Using the Live Application
+1. **Access:** Open [https://bob20250810.web.app](https://bob20250810.web.app)
+2. **Sign In:** Use Google authentication
+3. **Start Managing:** Create tasks, set goals, organize with kanban boards
 
-- **C17:** Emoji display issues (violates clean Material Design)
-- **C18:** Red circle buttons not visible (critical functionality blocked) 
-- **C19:** System status dashboard needs user-focused replacement
-- **C20:** Cannot delete goals/stories/tasks (CRUD operations incomplete)
-- **C21:** Kanban drag & drop still broken (library replacement needed)
-- **C22:** Tasks not visible under stories (hierarchical view missing)
+### For Developers
+1. **Documentation:** Start with `Business Analyst AI/GETTING_STARTED.md`
+2. **Setup:** Follow the one-command setup process
+3. **Development:** See `Business Analyst AI/README.md` for complete guide
+4. **Automation:** Use scripts in `Business Analyst AI/automation-scripts/`
 
-**Status:** Fixes in progress for Version 2.1.1 release
+## 📚 Documentation Navigation
+
+- **📋 Project Overview:** `Business Analyst AI/README.md`
+- **🚀 Getting Started:** `Business Analyst AI/GETTING_STARTED.md`  
+- **📊 Project Status:** `Business Analyst AI/STATUS.md`
+- **🎯 Action Plan:** `CRITICAL_ACTION_PLAN.md`
+- **🔧 Automation:** `Business Analyst AI/automation-scripts/`
+- **🏗️ Architecture:** `Business Analyst AI/requirements-traceability-matrix.md`
+
+## 📞 Support & Contributing
+
+- **Issues:** Create GitHub issues for bugs and feature requests
+- **Development:** Follow the automation scripts for quality assurance
+- **Documentation:** All documentation is in the unified structure under `Business Analyst AI/`
+
+---
+
+**🔥 PRIORITY:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) for current development priorities and next steps. Version:** 2.1.5 - Production Ready Core  
+**Next Phase:** AI Integration & Enhancement  
+**Last Updated:** August 30, 2025
+
+## 🎯 **PROJECT STATUS - Post-Documentation Cleanup**
+
+**✅ CORE PLATFORM STABLE:** Task management, UI/UX, and infrastructure complete  
+**🔄 NEXT PHASE:** AI integration and advanced features in development  
+**📋 ACTION PLAN:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) for priorities
+
+### 📁 **Clean Documentation Structure**
+- **Master Documentation:** `Business Analyst AI/` (unified requirements, guides, automation)
+- **Developer Documentation:** `Developer AI/` (technical implementation details)  
+- **Archived Files:** `archive/` (historical documentation preserved in compressed format)
+- **Action Plan:** `CRITICAL_ACTION_PLAN.md` (current priorities and roadmap)
 
 ## 🆕 **What's New in Version 2.1.0**
 

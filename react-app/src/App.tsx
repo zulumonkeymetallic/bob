@@ -17,6 +17,7 @@ import Changelog from './components/Changelog';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
+import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
@@ -112,6 +113,7 @@ function AppContent() {
           <Route path="/tasks" element={<TasksList />} />
           <Route path="/task-list" element={<TaskListView />} />
           <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
+          <Route path="/modern-table" element={<ModernTableDemo />} />
           <Route path="/kanban" element={<ResponsiveKanban />} />
           <Route path="/kanban-old" element={<KanbanPage />} />
           <Route path="/ai-planner" element={<PlanningDashboard />} />
