@@ -55,7 +55,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
         targetDate: formData.targetDate ? new Date(formData.targetDate) : null,
-        status: 'active',
+        status: 'Not Started',
         persona: 'personal',
         ownerUid: currentUser.uid,
         kpis: [],

@@ -93,10 +93,10 @@ const GoalsManagement: React.FC = () => {
 
   // Get counts for dashboard cards
   const goalCounts = {
-    total: filteredGoals.length,
-    active: filteredGoals.filter(g => g.status === 'Work in Progress').length,
-    done: filteredGoals.filter(g => g.status === 'Complete').length,
-    paused: filteredGoals.filter(g => g.status === 'Paused').length
+    total: goals.length,
+    active: goals.filter(g => g.status === 'Work in Progress').length,
+    done: goals.filter(g => g.status === 'Complete').length,
+    paused: goals.filter(g => g.status === 'Paused').length
   };
 
   return (
