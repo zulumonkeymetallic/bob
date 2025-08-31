@@ -1,11 +1,11 @@
 // Version tracking for cache busting
-export const VERSION = 'v3.0.6';
+export const VERSION = 'v3.0.7';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Add Goal Modal Fixed - Full CRUD Operations Available`);
-console.log(`🎯 Features: Working Add Goal Modal, Enhanced Sprint Planning, Comprehensive Analysis`);
-console.log(`🚀 Architecture: v3.0.6 with fixed goal creation workflow`);
+console.log(`✅ Status: Critical Fixes Applied - Defect Tracking System Active`);
+console.log(`🎯 Features: Fixed Goal Creation, Working Sprint Planning, Comprehensive Defect Tracking`);
+console.log(`🚀 Architecture: v3.0.7 with critical stability fixes and GitHub issue templates`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force refresh if version mismatch detected
