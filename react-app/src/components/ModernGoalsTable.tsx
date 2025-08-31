@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Modal, Button, Form } from 'react-bootstrap';
 import {
   DndContext,
   closestCenter,
@@ -28,7 +29,8 @@ import {
 import { Goal } from '../types';
 
 interface GoalTableRow extends Goal {
-  sortOrder: number;
+  storiesCount?: number;
+  sprintStoriesCount?: number;
 }
 
 interface Column {
@@ -77,11 +79,27 @@ const defaultColumns: Column[] = [
   { 
     key: 'status', 
     label: 'Status', 
-    width: '12%', 
+    width: '15%', 
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['draft', 'active', 'completed', 'archived']
+    options: ['Not Started', 'Work in Progress', 'Complete', 'Paused']
+  },
+  { 
+    key: 'storiesCount', 
+    label: 'Stories', 
+    width: '10%', 
+    visible: true, 
+    editable: false, 
+    type: 'text' 
+  },
+  { 
+    key: 'sprintStoriesCount', 
+    label: 'In Sprint', 
+    width: '10%', 
+    visible: true, 
+    editable: false, 
+    type: 'text' 
   },
   { 
     key: 'targetDate', 
@@ -99,6 +117,7 @@ interface SortableRowProps {
   index: number;
   onGoalUpdate: (goalId: string, updates: Partial<Goal>) => Promise<void>;
   onGoalDelete: (goalId: string) => Promise<void>;
+  onEditModal: (goal: Goal) => void;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -106,7 +125,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   columns, 
   index, 
   onGoalUpdate, 
-  onGoalDelete 
+  onGoalDelete,
+  onEditModal
 }) => {
   const {
     attributes,
@@ -131,6 +151,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
     setEditValue(value || '');
   };
 
+  const handleEditClick = () => {
+    onEditModal(goal);
+  };
+
   const handleCellSave = async (key: string) => {
     const updates: Partial<Goal> = { [key]: editValue };
     await onGoalUpdate(goal.id, updates);
@@ -140,6 +164,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const formatValue = (key: string, value: any): string => {
     if (key === 'targetDate' && typeof value === 'number') {
       return new Date(value).toLocaleDateString();
+    }
+    if (key === 'storiesCount') {
+      return `${value || 0} stories`;
+    }
+    if (key === 'sprintStoriesCount') {
+      return `${value || 0} in sprint`;
     }
     return value || '';
   };
@@ -297,7 +327,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <button
-            onClick={() => {/* Handle edit modal */}}
+            onClick={() => handleEditClick()}
             style={{
               color: '#2563eb',
               padding: '4px',
@@ -365,6 +395,13 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     filters: false,
     display: false,
   });
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+
+  const handleEditModal = (goal: Goal) => {
+    setEditingGoal(goal);
+    setShowEditModal(true);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -548,6 +585,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       index={index}
                       onGoalUpdate={onGoalUpdate}
                       onGoalDelete={onGoalDelete}
+                      onEditModal={handleEditModal}
                     />
                   ))}
                 </SortableContext>
@@ -732,6 +770,83 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Edit Goal Modal */}
+      <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Edit Goal</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {editingGoal && (
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Goal Title</Form.Label>
+                <Form.Control
+                  type="text"
+                  defaultValue={editingGoal.title}
+                  onChange={(e) => setEditingGoal({...editingGoal, title: e.target.value})}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  defaultValue={editingGoal.description}
+                  onChange={(e) => setEditingGoal({...editingGoal, description: e.target.value})}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Theme</Form.Label>
+                <Form.Select
+                  defaultValue={editingGoal.theme}
+                  onChange={(e) => setEditingGoal({...editingGoal, theme: e.target.value as any})}
+                >
+                  <option value="Health">Health</option>
+                  <option value="Growth">Growth</option>
+                  <option value="Wealth">Wealth</option>
+                  <option value="Tribe">Tribe</option>
+                  <option value="Home">Home</option>
+                </Form.Select>
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Status</Form.Label>
+                <Form.Select
+                  defaultValue={editingGoal.status}
+                  onChange={(e) => setEditingGoal({...editingGoal, status: e.target.value as any})}
+                >
+                  <option value="draft">Draft</option>
+                  <option value="active">Active</option>
+                  <option value="completed">Completed</option>
+                  <option value="archived">Archived</option>
+                </Form.Select>
+              </Form.Group>
+            </Form>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowEditModal(false)}>
+            Cancel
+          </Button>
+          <Button 
+            variant="primary" 
+            onClick={() => {
+              if (editingGoal) {
+                onGoalUpdate(editingGoal.id, {
+                  title: editingGoal.title,
+                  description: editingGoal.description,
+                  theme: editingGoal.theme,
+                  status: editingGoal.status
+                });
+                setShowEditModal(false);
+                setEditingGoal(null);
+              }
+            }}
+          >
+            Save Changes
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </div>
   );
 };

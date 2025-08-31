@@ -112,7 +112,7 @@ const Dashboard: React.FC = () => {
     const currentSprint = 'current'; // This could be dynamic
     const sprintTasks = tasks.filter(t => t.storyId); // Tasks linked to stories
     const sprintStories = stories.filter(s => s.sprintId === currentSprint);
-    const activeGoals = goals.filter(g => g.status === 'active');
+    const activeGoals = goals.filter(g => g.status === 'Work in Progress');
     
     return {
       goals: activeGoals.length,
@@ -234,7 +234,7 @@ const Dashboard: React.FC = () => {
                     <div className="text-center">
                       <div className="md-headline-4 text-success">{goals.length}</div>
                       <div className="md-caption text-muted">Goals</div>
-                      <small className="text-muted">{goals.filter(g => g.status === 'done').length} completed</small>
+                      <small className="text-muted">{goals.filter(g => g.status === 'Complete').length} completed</small>
                     </div>
                   </Col>
                   <Col md={4}>

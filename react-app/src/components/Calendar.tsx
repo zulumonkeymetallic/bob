@@ -91,9 +91,22 @@ const Calendar: React.FC = () => {
 
       setNewEvent({ title: '', start: '', duration: 60 });
       setShowCreateEvent(false);
-    } catch (error) {
+      alert('Event created successfully!');
+    } catch (error: any) {
       console.error('Error creating event:', error);
-      alert('Failed to create event: ' + error.message);
+      let errorMessage = 'Failed to create event';
+      
+      if (error.code === 'unauthenticated') {
+        errorMessage = 'Please sign in to create calendar events';
+      } else if (error.code === 'permission-denied') {
+        errorMessage = 'Please connect your Google Calendar first';
+      } else if (error.message?.includes('No token') || error.message?.includes('No refresh token')) {
+        errorMessage = 'Please connect your Google Calendar in Settings first';
+      } else if (error.code === 'internal') {
+        errorMessage = 'Calendar service unavailable. Please connect your Google Calendar in Settings.';
+      }
+      
+      alert(errorMessage);
     }
   };
 

@@ -103,7 +103,7 @@ const VisualCanvas: React.FC = () => {
 
     // Filter data based on view mode
     const filteredGoals = viewMode === 'active-only' 
-      ? goals.filter(g => g.status === 'active')
+      ? goals.filter(g => g.status === 'Work in Progress')
       : goals;
 
     const filteredStories = viewMode === 'active-only'
@@ -398,7 +398,7 @@ const VisualCanvas: React.FC = () => {
                 height: '8px', 
                 borderRadius: '50%',
                 backgroundColor: (() => {
-                  if (node.type === 'goal') return (node.data as Goal).status === 'active' ? '#00ff00' : '#ffff00';
+                  if (node.type === 'goal') return (node.data as Goal).status === 'Work in Progress' ? '#00ff00' : '#ffff00';
                   if (node.type === 'story') return (node.data as Story).status === 'done' ? '#00ff00' : '#ffff00';
                   return (node.data as Task).status === 'done' ? '#00ff00' : '#ffff00';
                 })()
