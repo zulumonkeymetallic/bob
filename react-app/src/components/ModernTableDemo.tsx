@@ -6,6 +6,7 @@ import { Task } from '../types';
 const sampleTasks: Task[] = [
   {
     id: '1',
+    ref: 'TSK-001',
     persona: 'personal',
     parentType: 'story',
     parentId: 'story-1',
@@ -29,6 +30,7 @@ const sampleTasks: Task[] = [
   },
   {
     id: '2',
+    ref: 'TSK-002',
     persona: 'personal',
     parentType: 'story',
     parentId: 'story-1',
@@ -52,6 +54,7 @@ const sampleTasks: Task[] = [
   },
   {
     id: '3',
+    ref: 'TSK-003',
     persona: 'personal',
     parentType: 'story',
     parentId: 'story-1',
@@ -75,6 +78,7 @@ const sampleTasks: Task[] = [
   },
   {
     id: '4',
+    ref: 'TSK-004',
     persona: 'personal',
     parentType: 'story',
     parentId: 'story-2',
@@ -98,6 +102,7 @@ const sampleTasks: Task[] = [
   },
   {
     id: '5',
+    ref: 'TSK-005',
     persona: 'personal',
     parentType: 'story',
     parentId: 'story-2',

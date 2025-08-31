@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, orderBy, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { CalendarBlock, Story, Task, IHabit } from '../types';
@@ -30,17 +30,17 @@ export const CalendarBlockManager: React.FC<CalendarBlockManagerProps> = ({ clas
     const [showBlockModal, setShowBlockModal] = useState(false);
     const [loading, setLoading] = useState(true);
     const [aiScheduling, setAiScheduling] = useState(false);
+    const [showAddForm, setShowAddForm] = useState(false);
+    const [editingBlock, setEditingBlock] = useState<CalendarBlock | null>(null);
+    const currentPersona = 'personal'; // Add this line for the current persona
 
-    const [newBlock, setNewBlock] = useState({
-        theme: 'Health' as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
-        subTheme: '',
-        category: 'Fitness' as 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep',
+    const [formData, setFormData] = useState({
+        theme: 'Health' as CalendarBlock['theme'],
+        category: 'Fitness' as CalendarBlock['category'],
         start: '',
         end: '',
-        flexibility: 'soft' as 'hard' | 'soft',
-        storyId: '',
-        taskId: '',
-        habitId: ''
+        flexibility: 'soft' as CalendarBlock['flexibility'],
+        description: ''
     });
 
     const themeColors = {
@@ -103,11 +103,10 @@ export const CalendarBlockManager: React.FC<CalendarBlockManagerProps> = ({ clas
 
       // Reset form
       setFormData({
-        title: '',
         start: '',
         end: '',
         theme: 'Health',
-        category: 'Wellbeing',
+        category: 'Fitness',
         flexibility: 'soft',
         description: ''
       });
@@ -122,7 +121,6 @@ export const CalendarBlockManager: React.FC<CalendarBlockManagerProps> = ({ clas
   const handleEdit = (block: CalendarBlock) => {
     setEditingBlock(block);
     setFormData({
-      title: block.category,
       start: new Date(block.start).toISOString().slice(0, 16),
       end: new Date(block.end).toISOString().slice(0, 16),
       theme: block.theme,
@@ -324,11 +322,10 @@ export const CalendarBlockManager: React.FC<CalendarBlockManagerProps> = ({ clas
                   setShowAddForm(false);
                   setEditingBlock(null);
                   setFormData({
-                    title: '',
                     start: '',
                     end: '',
                     theme: 'Health',
-                    category: 'Wellbeing',
+                    category: 'Fitness',
                     flexibility: 'soft',
                     description: ''
                   });
