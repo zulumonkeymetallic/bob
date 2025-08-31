@@ -1,11 +1,11 @@
 // Version tracking for cache busting
-export const VERSION = 'v3.0.2';
+export const VERSION = 'v3.0.3';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: All v3.0.2 Features Deployed - Sprint Planning, Kanban, Calendar, Mobile, Testing`);
-console.log(`🎯 Features: Sprint Planner, Current Sprint Kanban, Calendar Blocks, Daily Digest, Mobile View, Test Auth`);
-console.log(`🚀 Architecture: v3.0.2 with comprehensive deployment pipeline`);
+console.log(`✅ Status: All v3.0.3 Features Deployed - Enhanced Tables, Sprint Selector, Modern UI`);
+console.log(`🎯 Features: Modern Goals Table, Sprint Selector, Enhanced Status Options, Story Counts, Improved Calendar`);
+console.log(`🚀 Architecture: v3.0.3 with streamlined deployment and enhanced user experience`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force refresh if version mismatch detected
