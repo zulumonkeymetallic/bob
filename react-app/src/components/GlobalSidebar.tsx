@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
-import { Card, Button, Badge, Form, Row, Col, Modal } from 'react-bootstrap';
-import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
+import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle } from 'lucide-react';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useTestMode } from '../contexts/TestModeContext';
+import { useAuth } from '../contexts/AuthContext';
+import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
 
 interface GlobalSidebarProps {
   goals: Goal[];
@@ -20,9 +23,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   onDelete
 }) => {
   const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, toggleCollapse, updateItem } = useSidebar();
+  const { isTestMode, testModeLabel } = useTestMode();
+  const { currentUser } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [showAddNote, setShowAddNote] = useState(false);
+  const [newNote, setNewNote] = useState('');
 
   // Theme colors mapping
   const themeColors = {
@@ -37,6 +45,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     if (selectedItem) {
       setEditForm({ ...selectedItem });
       setIsEditing(false);
+      
+      // Subscribe to activity stream for this item
+      const unsubscribe = ActivityStreamService.subscribeToActivityStream(
+        selectedItem.id,
+        setActivities
+      );
+      
+      return unsubscribe;
+    } else {
+      setActivities([]);
     }
   }, [selectedItem]);
 
@@ -46,7 +64,53 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const handleSave = async () => {
     try {
+      // Track field changes for activity stream
+      const changes: Array<{field: string, oldValue: any, newValue: any}> = [];
+      
+      Object.keys(editForm).forEach(key => {
+        if (selectedItem && editForm[key] !== selectedItem[key]) {
+          changes.push({
+            field: key,
+            oldValue: selectedItem[key],
+            newValue: editForm[key]
+          });
+        }
+      });
+
       await updateItem(editForm);
+      
+      // Log activity for each change
+      if (currentUser && selectedItem && selectedType) {
+        const referenceNumber = generateReferenceNumber();
+        
+        for (const change of changes) {
+          if (change.field === 'status') {
+            await ActivityStreamService.logStatusChange(
+              selectedItem.id,
+              selectedType,
+              change.oldValue,
+              change.newValue,
+              currentUser.uid,
+              currentUser.email || undefined,
+              undefined, // persona can be added if needed
+              referenceNumber
+            );
+          } else {
+            await ActivityStreamService.logFieldChange(
+              selectedItem.id,
+              selectedType,
+              change.field,
+              change.oldValue,
+              change.newValue,
+              currentUser.uid,
+              currentUser.email || undefined,
+              undefined,
+              referenceNumber
+            );
+          }
+        }
+      }
+      
       setIsEditing(false);
     } catch (error) {
       console.error('Error updating item:', error);
@@ -71,6 +135,28 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     }
     setShowDeleteModal(false);
     hideSidebar();
+  };
+
+  const handleAddNote = async () => {
+    if (!newNote.trim() || !selectedItem || !selectedType || !currentUser) return;
+    
+    try {
+      const referenceNumber = generateReferenceNumber();
+      await ActivityStreamService.addNote(
+        selectedItem.id,
+        selectedType,
+        newNote,
+        currentUser.uid,
+        currentUser.email || undefined,
+        undefined,
+        referenceNumber
+      );
+      
+      setNewNote('');
+      setShowAddNote(false);
+    } catch (error) {
+      console.error('Error adding note:', error);
+    }
   };
 
   const getGoalForItem = () => {
@@ -202,11 +288,68 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 borderBottom: '1px solid #e5e7eb'
               }}
             >
+              {/* Test Mode Indicator */}
+              {isTestMode && (
+                <div style={{
+                  position: 'absolute',
+                  top: '8px',
+                  right: '8px',
+                  backgroundColor: '#ff6b6b',
+                  color: 'white',
+                  padding: '4px 8px',
+                  borderRadius: '12px',
+                  fontSize: '10px',
+                  fontWeight: '700',
+                  letterSpacing: '0.5px',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  zIndex: 1002
+                }}>
+                  {testModeLabel}
+                </div>
+              )}
+
+              {/* Large Reference Number */}
+              <div style={{
+                marginBottom: '16px',
+                textAlign: 'center',
+                padding: '12px',
+                backgroundColor: 'rgba(255,255,255,0.15)',
+                borderRadius: '8px',
+                border: '2px solid rgba(255,255,255,0.3)'
+              }}>
+                <div style={{ 
+                  fontSize: '11px', 
+                  opacity: 0.8, 
+                  marginBottom: '4px',
+                  letterSpacing: '0.5px'
+                }}>
+                  REFERENCE
+                </div>
+                <div style={{ 
+                  fontSize: '24px', 
+                  fontWeight: '900',
+                  fontFamily: 'monospace',
+                  letterSpacing: '2px',
+                  textShadow: '0 1px 2px rgba(0,0,0,0.3)'
+                }}>
+                  {generateReferenceNumber()}
+                </div>
+              </div>
+
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
                   {selectedType === 'goal' ? 'Goal Details' : selectedType === 'story' ? 'Story Details' : 'Task Details'}
                 </h5>
                 <div style={{ display: 'flex', gap: '8px' }}>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    style={{ color: 'white', padding: '4px' }}
+                    onClick={() => setShowAddNote(true)}
+                    title="Add Note"
+                  >
+                    <MessageCircle size={16} />
+                  </Button>
                   <Button
                     variant="link"
                     size="sm"
@@ -232,14 +375,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     <X size={16} />
                   </Button>
                 </div>
-              </div>
-
-              {/* Reference Number */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                <Hash size={14} />
-                <span style={{ fontSize: '14px', fontFamily: 'monospace' }}>
-                  {generateReferenceNumber()}
-                </span>
               </div>
 
               {/* Theme Inheritance Chain */}
@@ -436,6 +571,86 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 </div>
               </div>
 
+              {/* Activity Stream */}
+              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '20px', marginTop: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <h6 style={{ fontSize: '14px', fontWeight: '600', color: '#374151', margin: 0 }}>
+                    Activity Stream
+                  </h6>
+                  <Button
+                    variant="outline-primary"
+                    size="sm"
+                    onClick={() => setShowAddNote(true)}
+                    style={{ padding: '4px 8px', fontSize: '12px' }}
+                  >
+                    <Plus size={12} style={{ marginRight: '4px' }} />
+                    Note
+                  </Button>
+                </div>
+                
+                <div style={{ 
+                  maxHeight: '300px', 
+                  overflow: 'auto',
+                  backgroundColor: '#f8f9fa',
+                  borderRadius: '6px',
+                  padding: '8px'
+                }}>
+                  {activities.length === 0 ? (
+                    <div style={{ 
+                      textAlign: 'center', 
+                      color: '#6b7280', 
+                      fontSize: '13px',
+                      padding: '20px'
+                    }}>
+                      No activity yet
+                    </div>
+                  ) : (
+                    <ListGroup variant="flush">
+                      {activities.map((activity, index) => (
+                        <ListGroup.Item 
+                          key={activity.id || index}
+                          style={{ 
+                            border: 'none',
+                            backgroundColor: 'transparent',
+                            padding: '8px 0',
+                            borderBottom: index < activities.length - 1 ? '1px solid #e5e7eb' : 'none'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                            <span style={{ fontSize: '16px', marginTop: '2px' }}>
+                              {ActivityStreamService.formatActivityIcon(activity.activityType)}
+                            </span>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: '13px', color: '#374151', lineHeight: '1.4' }}>
+                                {activity.description}
+                              </div>
+                              {activity.noteContent && (
+                                <div style={{ 
+                                  fontSize: '12px', 
+                                  color: '#6b7280', 
+                                  fontStyle: 'italic',
+                                  marginTop: '4px',
+                                  padding: '6px',
+                                  backgroundColor: '#ffffff',
+                                  borderRadius: '4px',
+                                  border: '1px solid #e5e7eb'
+                                }}>
+                                  "{activity.noteContent}"
+                                </div>
+                              )}
+                              <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '4px' }}>
+                                {ActivityStreamService.formatTimestamp(activity.timestamp)}
+                                {activity.userEmail && ` • ${activity.userEmail.split('@')[0]}`}
+                              </div>
+                            </div>
+                          </div>
+                        </ListGroup.Item>
+                      ))}
+                    </ListGroup>
+                  )}
+                </div>
+              </div>
+
               {/* Save Button */}
               {isEditing && (
                 <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #e5e7eb' }}>
@@ -469,6 +684,38 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
           </Button>
           <Button variant="danger" onClick={confirmDelete}>
             Delete
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Add Note Modal */}
+      <Modal show={showAddNote} onHide={() => setShowAddNote(false)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Add Note</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group>
+            <Form.Label>Note</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={4}
+              value={newNote}
+              onChange={(e) => setNewNote(e.target.value)}
+              placeholder="Enter your note here..."
+              style={{ resize: 'vertical' }}
+            />
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowAddNote(false)}>
+            Cancel
+          </Button>
+          <Button 
+            variant="primary" 
+            onClick={handleAddNote}
+            disabled={!newNote.trim()}
+          >
+            Add Note
           </Button>
         </Modal.Footer>
       </Modal>

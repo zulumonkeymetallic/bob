@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { useTestMode } from '../contexts/TestModeContext';
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -25,6 +26,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children }) => {
   const { currentUser, signOut } = useAuth();
   const { currentPersona, setPersona } = usePersona();
   const { theme, toggleTheme } = useTheme();
+  const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
@@ -248,6 +250,20 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children }) => {
               >
                 {theme === 'light' ? 'Dark' : 'Light'} Mode
               </Button>
+              <Button
+                size="sm"
+                onClick={toggleTestMode}
+                className="flex-fill"
+                style={{
+                  background: isTestMode ? '#ff6b6b' : 'var(--notion-hover)',
+                  border: `1px solid ${isTestMode ? '#ff6b6b' : 'var(--notion-border)'}`,
+                  color: isTestMode ? 'white' : 'var(--notion-text)',
+                  borderRadius: '6px'
+                }}
+                title={`Switch to ${isTestMode ? 'Production' : 'Test'} Mode`}
+              >
+                {isTestMode ? '🧪 TEST' : '🏭 PROD'}
+              </Button>
             </div>
             <Button 
               size="sm" 
@@ -276,8 +292,32 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children }) => {
           >
             Menu
           </Button>
-          <Navbar.Brand className="mx-auto">BOB</Navbar.Brand>
-          <div className="d-flex align-items-center">
+          <Navbar.Brand className="mx-auto">
+            BOB
+            {isTestMode && (
+              <span style={{ 
+                marginLeft: '8px', 
+                fontSize: '10px', 
+                backgroundColor: '#ff6b6b', 
+                color: 'white', 
+                padding: '2px 6px', 
+                borderRadius: '8px',
+                fontWeight: 'bold'
+              }}>
+                TEST
+              </span>
+            )}
+          </Navbar.Brand>
+          <div className="d-flex align-items-center gap-2">
+            <Button
+              variant={isTestMode ? "danger" : "outline-secondary"}
+              size="sm"
+              onClick={toggleTestMode}
+              style={{ fontSize: '10px', padding: '2px 6px' }}
+              title={`Switch to ${isTestMode ? 'Production' : 'Test'} Mode`}
+            >
+              {isTestMode ? '🧪' : '🏭'}
+            </Button>
             {currentUser && (
               <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center" 
                    style={{ width: '24px', height: '24px', fontSize: '12px' }}>

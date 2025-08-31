@@ -28,6 +28,7 @@ import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
 import { SidebarProvider } from './contexts/SidebarContext';
+import { TestModeProvider } from './contexts/TestModeContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
@@ -36,13 +37,15 @@ import './App.css';
 
 function App() {
   return (
-    <PersonaProvider>
-      <SidebarProvider>
-        <Router>
-          <AppContent />
-        </Router>
-      </SidebarProvider>
-    </PersonaProvider>
+    <TestModeProvider>
+      <PersonaProvider>
+        <SidebarProvider>
+          <Router>
+            <AppContent />
+          </Router>
+        </SidebarProvider>
+      </PersonaProvider>
+    </TestModeProvider>
   );
 }
 
