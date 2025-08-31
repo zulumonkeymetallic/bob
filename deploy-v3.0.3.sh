@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# BOB v3.0.2 Comprehensive Deployment Script
-# This script handles backup, versioning, testing, and deployment
+# BOB v3.0.3 Deployment Script (No Backup)
+# This script handles versioning, testing, and deployment
 
 set -e
 
@@ -14,12 +14,11 @@ NC='\033[0m' # No Color
 
 # Configuration
 PROJECT_NAME="bob"
-VERSION="v3.0.2"
-BACKUP_DIR="./backups"
+VERSION="v3.0.3"
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 BRANCH_NAME="main"
 
-echo -e "${BLUE}🚀 BOB Deployment Script v3.0.2${NC}"
+echo -e "${BLUE}🚀 BOB Deployment Script v3.0.3${NC}"
 echo -e "${BLUE}===========================================${NC}"
 
 # Function to log messages
@@ -61,26 +60,6 @@ check_prerequisites() {
     fi
     
     log "✅ Prerequisites check passed"
-}
-
-# Create backup
-create_backup() {
-    log "Creating backup..."
-    
-    mkdir -p "$BACKUP_DIR"
-    
-    # Create git bundle backup
-    git bundle create "$BACKUP_DIR/${PROJECT_NAME}-${VERSION}-${TIMESTAMP}.bundle" --all
-    
-    # Create tar backup of entire project (excluding node_modules and .git)
-    tar --exclude='node_modules' \
-        --exclude='.git' \
-        --exclude='build' \
-        --exclude='dist' \
-        --exclude='*.log' \
-        -czf "$BACKUP_DIR/${PROJECT_NAME}-${VERSION}-${TIMESTAMP}.tar.gz" .
-    
-    log "✅ Backup created: $BACKUP_DIR/${PROJECT_NAME}-${VERSION}-${TIMESTAMP}.tar.gz"
 }
 
 # Check git status
@@ -302,22 +281,19 @@ main() {
     # Step 1: Prerequisites
     check_prerequisites
     
-    # Step 2: Create backup
-    create_backup
-    
-    # Step 3: Check git status and commit if needed
+    # Step 2: Check git status and commit if needed
     check_git_status
     
-    # Step 4: Update version numbers
+    # Step 3: Update version numbers
     update_version
     
-    # Step 5: Run tests
+    # Step 4: Run tests
     run_tests
     
-    # Step 6: Deploy to Firebase
+    # Step 5: Deploy to Firebase
     deploy_firebase
     
-    # Step 7: Run E2E tests
+    # Step 6: Run E2E tests
     run_e2e_tests
     
     # Step 8: Health check
@@ -335,7 +311,6 @@ main() {
     
     log "🎉 Deployment completed successfully!"
     log "Version: ${VERSION}"
-    log "Backup: $BACKUP_DIR/${PROJECT_NAME}-${VERSION}-${TIMESTAMP}.tar.gz"
     log "Git tag: ${VERSION}"
     
     echo -e "${GREEN}"
@@ -347,10 +322,6 @@ main() {
 
 # Handle script arguments
 case "${1:-deploy}" in
-    "backup")
-        check_prerequisites
-        create_backup
-        ;;
     "test")
         check_prerequisites
         run_tests
@@ -363,8 +334,7 @@ case "${1:-deploy}" in
         create_git_tag
         ;;
     *)
-        echo "Usage: $0 [backup|test|deploy|version]"
-        echo "  backup  - Create backup only"
+        echo "Usage: $0 [test|deploy|version]"
         echo "  test    - Run tests only" 
         echo "  deploy  - Full deployment (default)"
         echo "  version - Update version and create tag only"
