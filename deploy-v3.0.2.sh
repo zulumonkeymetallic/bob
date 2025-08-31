@@ -223,20 +223,32 @@ update_version() {
     
     # Update root package.json if it exists
     if [ -f "package.json" ]; then
-        npm version "$VERSION" --no-git-tag-version
+        if npm version "$VERSION" --no-git-tag-version 2>/dev/null; then
+            log "✅ Root package.json version updated"
+        else
+            log "ℹ️ Root package.json already at version $VERSION"
+        fi
     fi
     
     # Update React app package.json
     if [ -f "react-app/package.json" ]; then
         cd react-app
-        npm version "$VERSION" --no-git-tag-version
+        if npm version "$VERSION" --no-git-tag-version 2>/dev/null; then
+            log "✅ React app package.json version updated"
+        else
+            log "ℹ️ React app package.json already at version $VERSION"
+        fi
         cd ..
     fi
     
     # Update Functions package.json
     if [ -f "functions/package.json" ]; then
         cd functions
-        npm version "$VERSION" --no-git-tag-version
+        if npm version "$VERSION" --no-git-tag-version 2>/dev/null; then
+            log "✅ Functions package.json version updated"
+        else
+            log "ℹ️ Functions package.json already at version $VERSION"
+        fi
         cd ..
     fi
     

@@ -1,1 +1,4 @@
 node_modules
+backups/
+*.bundle
+*.tar.gz
