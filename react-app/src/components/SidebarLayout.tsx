@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useTestMode } from '../contexts/TestModeContext';
+import { useActivityTracking } from '../hooks/useActivityTracking';
 import { VERSION } from '../version';
 import SprintSelector from './SprintSelector';
 
@@ -31,6 +32,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const { theme, toggleTheme } = useTheme();
   const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { trackClick } = useActivityTracking();
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
   const [selectedSprintId, setSelectedSprintId] = useState<string>('');
@@ -95,8 +98,39 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   ];
 
   const handleNavigation = (path: string) => {
-    navigate(path);
+    console.log('🔀 BOB v3.1.1: Navigating to:', path);
+    console.log('🔀 Current URL:', window.location.pathname);
+    console.log('🔀 React Router location:', location.pathname);
+    
+    // Track navigation with activity tracking
+    trackClick({
+      elementId: `nav-link-${path.replace('/', '')}`,
+      elementType: 'link',
+      entityId: 'navigation',
+      entityType: 'work_project',
+      entityTitle: `Navigate to ${path}`,
+      additionalData: { 
+        from: location.pathname,
+        to: path,
+        action: 'sidebar_navigation'
+      }
+    });
+    
+    // Force navigation with replace if same path
+    if (location.pathname === path) {
+      console.log('🔀 Same path - forcing navigation with replace');
+      navigate(path, { replace: true });
+    } else {
+      navigate(path);
+    }
+    
     setShowSidebar(false);
+    console.log('🔀 Navigation triggered, sidebar closed');
+    
+    // Small delay to ensure navigation completes
+    setTimeout(() => {
+      console.log('🔀 Post-navigation check:', window.location.pathname);
+    }, 100);
   };
 
   const toggleGroup = (groupLabel: string) => {

@@ -26,6 +26,7 @@ const GoalsManagement: React.FC = () => {
   const loadGoalsData = async () => {
     if (!currentUser) return;
     
+    console.log('🎯 Loading goals data for user:', currentUser.email);
     setLoading(true);
     
     // Load goals data
@@ -38,14 +39,17 @@ const GoalsManagement: React.FC = () => {
     
     // Subscribe to real-time updates
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      console.log('🎯 Goals data received:', snapshot.docs.length, 'goals');
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Goal[];
       setGoals(goalsData);
+      setLoading(false); // Set loading false when data arrives
+    }, (error) => {
+      console.error('❌ Error loading goals:', error);
+      setLoading(false); // Set loading false on error too
     });
-
-    setLoading(false);
 
     return () => {
       unsubscribeGoals();
