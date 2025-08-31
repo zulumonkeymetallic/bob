@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { generateRef } from '../utils/referenceGenerator';
 
 interface AddStoryModalProps {
   onClose: () => void;
@@ -63,7 +64,21 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
     setSubmitResult(null);
 
     try {
+      // Get existing story references for unique ref generation
+      const existingStoriesQuery = query(
+        collection(db, 'stories'),
+        where('ownerUid', '==', currentUser.uid)
+      );
+      const existingSnapshot = await getDocs(existingStoriesQuery);
+      const existingRefs = existingSnapshot.docs
+        .map(doc => doc.data().ref)
+        .filter(ref => ref);
+      
+      // Generate unique reference number
+      const ref = generateRef('story', existingRefs);
+
       await addDoc(collection(db, 'stories'), {
+        ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
         goalId: formData.goalId,
@@ -79,7 +94,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
         updatedAt: new Date()
       });
 
-      setSubmitResult('✅ Story created successfully!');
+      setSubmitResult(`✅ Story created successfully! (${ref})`);
       setFormData({ title: '', description: '', goalId: '', priority: 'P2', points: 3 });
       
       // Auto-close after success
