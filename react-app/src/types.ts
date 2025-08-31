@@ -21,6 +21,7 @@ export interface Goal {
 
 export interface Story {
   id: string;
+  ref: string;
   persona: 'personal'; // Stories are personal-only per requirements
   title: string;
   description?: string;
@@ -38,16 +39,24 @@ export interface Story {
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
   dueDate?: number; // Legacy compatibility
+  taskCount?: number;
+  doneTaskCount?: number;
 }
 
 export interface Sprint {
   id: string;
+  ref: string;
   name: string;
+  objective?: string;
+  notes?: string;
+  status: 'planned' | 'active' | 'closed';
   startDate: number;
   endDate: number;
   planningDate: number;
   retroDate: number;
   ownerUid: string;
+  createdAt: any; // Firebase Timestamp
+  updatedAt: any; // Firebase Timestamp
 }
 
 export interface WorkProject {
@@ -66,6 +75,7 @@ export interface WorkProject {
 
 export interface Task {
   id: string;
+  ref: string;
   persona: 'personal' | 'work';
   parentType: 'story' | 'project';
   parentId: string;
@@ -94,6 +104,10 @@ export interface Task {
   serverUpdatedAt: number;
   createdBy: string;
   ownerUid: string;
+  // New fields for v3.0.2
+  importanceScore?: number;
+  isImportant?: boolean;
+  reminderId?: string;
   // Enhanced fields for v2.1.4+
   sprintId?: string;
   projectId?: string;
@@ -155,6 +169,9 @@ export interface CalendarBlock {
   googleEventId?: string;
   taskId?: string;
   goalId?: string;
+  storyId?: string;
+  habitId?: string;
+  subTheme?: string;
   persona: 'personal' | 'work';
   theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
   category: 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep';
@@ -193,3 +210,57 @@ export interface PlanningPrefs {
 }
 
 export type Persona = 'personal' | 'work';
+
+export interface Digest {
+  id: string;
+  date: any; // Firebase Timestamp
+  tasksDue: Task[];
+  storiesFocus: Story[];
+  calendarBlocks: CalendarBlock[];
+  velocitySnapshot: any;
+  html: string;
+}
+
+export interface MetricsHrv {
+  id: string;
+  date: any; // Firebase Timestamp
+  value: number;
+  source: string;
+}
+
+export interface MetricsWorkouts {
+  id: string;
+  date: any; // Firebase Timestamp
+  type: string;
+  distance: number;
+  duration: number;
+  hr_avg: number;
+  source: string;
+  stravaActivityId: string;
+}
+
+export interface MetricsNutrition {
+  id: string;
+  date: any; // Firebase Timestamp
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fats_g: number;
+  source: string;
+  mfpEntryId: string;
+}
+
+export interface TestLoginToken {
+  id: string;
+  token: string;
+  uid: string;
+  expiresAt: any; // Firebase Timestamp
+  scope: string;
+}
+
+export interface Taxonomy {
+    id: string;
+    type: 'theme' | 'subtheme';
+    name: string;
+    parent?: string;
+}

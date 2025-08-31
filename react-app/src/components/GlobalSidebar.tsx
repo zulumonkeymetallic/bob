@@ -194,7 +194,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         newNote,
         currentUser.uid,
         currentUser.email || undefined,
-        undefined,
+        'personal', // Set default persona to 'personal'
         referenceNumber
       );
       

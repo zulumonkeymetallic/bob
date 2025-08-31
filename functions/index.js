@@ -599,3 +599,194 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
     }
   }
 });
+
+// ===== New v3.0.2 Functions =====
+
+// Daily Digest Email Generation
+exports.generateDailyDigest = schedulerV2.onSchedule("30 6 * * *", async (event) => {
+  const nodemailer = require('nodemailer');
+  
+  // Email transporter configuration
+  const transporter = nodemailer.createTransporter({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASSWORD
+    }
+  });
+
+  try {
+    // Get all users who have opted in for daily digest
+    const usersSnapshot = await admin.firestore().collection('users').where('emailDigest', '==', true).get();
+    
+    for (const userDoc of usersSnapshot.docs) {
+      const userId = userDoc.id;
+      const userData = userDoc.data();
+      
+      await generateUserDigest(userId, userData, transporter);
+    }
+    
+    console.log('Daily digest generation completed');
+  } catch (error) {
+    console.error('Error generating daily digest:', error);
+  }
+});
+
+async function generateUserDigest(userId, userData, transporter) {
+  try {
+    const today = new Date();
+    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
+    // Get tasks due today
+    const tasksSnapshot = await admin.firestore().collection('tasks')
+      .where('ownerUid', '==', userId)
+      .where('dueDate', '>=', startOfDay.getTime())
+      .where('dueDate', '<', endOfDay.getTime())
+      .orderBy('priority')
+      .limit(10)
+      .get();
+
+    const tasksDue = tasksSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Generate simple HTML digest
+    const html = `
+      <h1>BOB Daily Digest - ${today.toLocaleDateString()}</h1>
+      <h2>Tasks Due Today (${tasksDue.length})</h2>
+      ${tasksDue.map(task => `
+        <div style="border-left: 4px solid #3b82f6; padding: 10px; margin: 10px 0;">
+          <strong>${task.title}</strong><br>
+          Priority: ${task.priority} | Effort: ${task.effort}
+        </div>
+      `).join('')}
+      <p>Generated at ${new Date().toLocaleString()}</p>
+    `;
+
+    // Save digest to database
+    await admin.firestore().collection('digests').add({
+      ownerUid: userId,
+      date: admin.firestore.Timestamp.fromDate(today),
+      tasksDue,
+      html,
+      createdAt: admin.firestore.Timestamp.now()
+    });
+
+    // Send email if user has email
+    if (userData.email) {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: userData.email,
+        subject: `BOB Daily Digest - ${today.toLocaleDateString()}`,
+        html: html
+      });
+      
+      console.log(`Daily digest sent to ${userData.email}`);
+    }
+
+  } catch (error) {
+    console.error(`Error generating digest for user ${userId}:`, error);
+  }
+}
+
+// Test Authentication Functions
+exports.generateTestToken = httpsV2.onCall(async (request) => {
+  // Only allow in development/test environments
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Test tokens not available in production');
+  }
+
+  const { uid, scope } = request.data;
+  
+  if (!uid) {
+    throw new Error('UID is required');
+  }
+
+  try {
+    const { v4: uuidv4 } = require('uuid');
+    const token = uuidv4();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+
+    await admin.firestore().collection('test_login_tokens').add({
+      token,
+      uid,
+      expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
+      scope: scope || 'full',
+      createdAt: admin.firestore.Timestamp.now()
+    });
+
+    return { token, expiresAt: expiresAt.toISOString() };
+  } catch (error) {
+    console.error('Error generating test token:', error);
+    throw new Error('Failed to generate test token');
+  }
+});
+
+exports.testLogin = httpsV2.onRequest(async (req, res) => {
+  // Only allow in development/test environments
+  if (process.env.NODE_ENV === 'production') {
+    res.status(403).json({ error: 'Test login not available in production' });
+    return;
+  }
+
+  const { token } = req.query;
+  
+  if (!token) {
+    res.status(400).json({ error: 'Token is required' });
+    return;
+  }
+
+  try {
+    // Find the token in the database
+    const tokensSnapshot = await admin.firestore().collection('test_login_tokens')
+      .where('token', '==', token)
+      .where('expiresAt', '>', admin.firestore.Timestamp.now())
+      .limit(1)
+      .get();
+
+    if (tokensSnapshot.empty) {
+      res.status(401).json({ error: 'Invalid or expired token' });
+      return;
+    }
+
+    const tokenDoc = tokensSnapshot.docs[0];
+    const tokenData = tokenDoc.data();
+
+    // Create a custom token for the user
+    const customToken = await admin.auth().createCustomToken(tokenData.uid);
+
+    // Clean up the test token (one-time use)
+    await tokenDoc.ref.delete();
+
+    res.json({ 
+      customToken,
+      uid: tokenData.uid,
+      scope: tokenData.scope 
+    });
+
+  } catch (error) {
+    console.error('Error processing test login:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Cleanup expired test tokens
+exports.cleanupTestTokens = schedulerV2.onSchedule("every 6 hours", async (event) => {
+  try {
+    const expiredTokens = await admin.firestore().collection('test_login_tokens')
+      .where('expiresAt', '<', admin.firestore.Timestamp.now())
+      .get();
+
+    const batch = admin.firestore().batch();
+    expiredTokens.docs.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+
+    await batch.commit();
+    console.log(`Cleaned up ${expiredTokens.size} expired test tokens`);
+  } catch (error) {
+    console.error('Error cleaning up test tokens:', error);
+  }
+});

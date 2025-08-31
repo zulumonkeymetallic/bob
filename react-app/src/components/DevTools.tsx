@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Alert, Table, Card, Row, Col, ProgressBar } from 'react-bootstrap';
-import { VERSION, BUILD_TIME } from '../version';
+// import { VERSION, BUILD_TIME } from '../version';
 import { fetchProjectStatus, ProjectStats } from '../services/dataService';
 
 interface DevToolsProps {
@@ -96,8 +96,8 @@ const DevTools: React.FC<DevToolsProps> = ({ show, onHide }) => {
 
   const showAppInfo = () => {
     const info = {
-      version: VERSION,
-      buildTime: BUILD_TIME,
+      version: '3.0.1',
+      buildTime: new Date().toISOString(),
       userAgent: navigator.userAgent,
       localStorage: Object.keys(localStorage).length + ' items',
       sessionStorage: Object.keys(sessionStorage).length + ' items',
@@ -199,11 +199,11 @@ const DevTools: React.FC<DevToolsProps> = ({ show, onHide }) => {
             <tbody>
               <tr>
                 <td><strong>Version:</strong></td>
-                <td>{VERSION}</td>
+                <td>3.0.1</td>
               </tr>
               <tr>
                 <td><strong>Build Time:</strong></td>
-                <td>{new Date(BUILD_TIME).toLocaleString()}</td>
+                <td>{new Date().toLocaleString()}</td>
               </tr>
               <tr>
                 <td><strong>Current URL:</strong></td>

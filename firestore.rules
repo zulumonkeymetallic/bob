@@ -13,6 +13,20 @@ service cloud.firestore {
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    
+    // New collections for v3.0.2
+    match /sprints/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /calendar_blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /digests/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_hrv/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_workouts/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /taxonomies/{id} { allow read: if isSignedIn(); allow create: if isOwnerForCreate(); allow update, delete: if isOwner(); }
+    match /activity_stream/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    
+    // Test login tokens - DENY in production
+    match /test_login_tokens/{id} { allow read, write: if false; }
 
     // Habits
     match /habits/{id} {

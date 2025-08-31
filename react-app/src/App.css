@@ -873,6 +873,81 @@ p, .text-muted {
   border-color: var(--line);
 }
 
+/* Force Bootstrap components to respect dark theme */
+[data-theme='dark'] .btn {
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme='dark'] .form-control {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .form-control:focus {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-accent) !important;
+  color: var(--notion-text) !important;
+  box-shadow: 0 0 0 0.2rem rgba(91, 168, 211, 0.25) !important;
+}
+
+[data-theme='dark'] .form-select {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .dropdown-menu {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme='dark'] .dropdown-item {
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .dropdown-item:hover {
+  background-color: var(--notion-hover) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .card {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme='dark'] .card-header {
+  background-color: var(--notion-hover) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .card-body {
+  background-color: var(--panel) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .table {
+  color: var(--notion-text) !important;
+  background-color: var(--panel) !important;
+}
+
+[data-theme='dark'] .table th {
+  background-color: var(--notion-hover) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .table td {
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .table-hover tbody tr:hover {
+  background-color: var(--notion-hover) !important;
+  color: var(--notion-text) !important;
+}
+
 /* Importing Bootstrap CSS */
 @import 'bootstrap/dist/css/bootstrap.min.css';
 @import 'bootstrap-icons/font/bootstrap-icons.css';

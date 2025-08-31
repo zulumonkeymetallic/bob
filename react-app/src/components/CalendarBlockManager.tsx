@@ -1,30 +1,55 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, updateDoc, deleteDoc, doc, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { usePersona } from '../contexts/PersonaContext';
-import { CalendarBlock } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import { CalendarBlock, Story, Task, IHabit } from '../types';
+import { Container, Row, Col, Card, Button, Modal, Form, Alert } from 'react-bootstrap';
+
+interface CalendarEvent {
+    id: string;
+    title: string;
+    start: Date;
+    end: Date;
+    backgroundColor: string;
+    extendedProps: {
+        block: CalendarBlock;
+        entity?: Story | Task | IHabit;
+    };
+}
 
 interface CalendarBlockManagerProps {
   className?: string;
 }
 
 export const CalendarBlockManager: React.FC<CalendarBlockManagerProps> = ({ className = '' }) => {
-  const { currentPersona } = usePersona();
-  const [blocks, setBlocks] = useState<CalendarBlock[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [editingBlock, setEditingBlock] = useState<CalendarBlock | null>(null);
+    const { currentUser } = useAuth();
+    const [blocks, setBlocks] = useState<CalendarBlock[]>([]);
+    const [stories, setStories] = useState<Story[]>([]);
+    const [tasks, setTasks] = useState<Task[]>([]);
+    const [habits, setHabits] = useState<IHabit[]>([]);
+    const [showBlockModal, setShowBlockModal] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [aiScheduling, setAiScheduling] = useState(false);
 
-  // Form state
-  const [formData, setFormData] = useState({
-    title: '',
-    start: '',
-    end: '',
-    theme: 'Health' as CalendarBlock['theme'],
-    category: 'Wellbeing' as CalendarBlock['category'],
-    flexibility: 'soft' as CalendarBlock['flexibility'],
-    description: ''
-  });
+    const [newBlock, setNewBlock] = useState({
+        theme: 'Health' as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
+        subTheme: '',
+        category: 'Fitness' as 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep',
+        start: '',
+        end: '',
+        flexibility: 'soft' as 'hard' | 'soft',
+        storyId: '',
+        taskId: '',
+        habitId: ''
+    });
+
+    const themeColors = {
+        'Health': '#22c55e',
+        'Growth': '#3b82f6', 
+        'Wealth': '#eab308',
+        'Tribe': '#8b5cf6',
+        'Home': '#f97316'
+    };
 
   useEffect(() => {
     const q = query(

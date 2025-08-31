@@ -11,7 +11,7 @@ import DevTools from './DevTools';
 import PriorityPane from './PriorityPane';
 import AddGoalModal from './AddGoalModal';
 import AddStoryModal from './AddStoryModal';
-import { VERSION, BUILD_TIME } from '../version';
+// import { VERSION, BUILD_TIME } from '../version';
 import '../styles/MaterialDesign.css';
 
 const Dashboard: React.FC = () => {
