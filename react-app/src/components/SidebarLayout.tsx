@@ -81,6 +81,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children }) => {
       items: [
         { label: 'Settings', path: '/theme-colors', icon: 'cog' },
         { label: 'Developer Status', path: '/admin', icon: 'code' },
+        { label: 'Test Suite', path: '/test', icon: 'vial' },
         { label: 'Changelog', path: '/changelog', icon: 'file-text' }
       ]
     }
