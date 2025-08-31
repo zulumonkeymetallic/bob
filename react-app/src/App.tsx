@@ -142,8 +142,8 @@ function AppContent() {
           <Route path="/modern-table" element={<ModernTableDemo />} />
           <Route path="/kanban" element={<ModernKanbanPage />} />
           <Route path="/kanban-old" element={<KanbanPage />} />
-          <Route path="/sprint-planning" element={<SprintPlannerSimple />} />
-          <Route path="/sprint-matrix" element={<SprintPlannerMatrix />} />
+          <Route path="/sprint-planning" element={<SprintPlannerMatrix />} />
+          <Route path="/sprint-simple" element={<SprintPlannerSimple />} />
           <Route path="/current-sprint" element={<CurrentSprintKanban />} />
           <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
           <Route path="/mobile-view" element={<MobileView />} />

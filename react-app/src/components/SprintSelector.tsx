@@ -21,7 +21,12 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   const { currentUser } = useAuth();
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      setLoading(false);
+      return;
+    }
+
+    console.log('🔄 SprintSelector: Setting up sprint listener for user:', currentUser.uid);
 
     const q = query(
       collection(db, 'sprints'),
@@ -29,23 +34,37 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
       orderBy('startDate', 'desc')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const sprintData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      
-      setSprints(sprintData);
-      setLoading(false);
+    const unsubscribe = onSnapshot(q, 
+      (snapshot) => {
+        console.log('✅ SprintSelector: Received sprint data:', snapshot.docs.length, 'sprints');
+        const sprintData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Sprint[];
+        
+        setSprints(sprintData);
+        setLoading(false);
 
-      // Auto-select active sprint if none selected
-      if (!selectedSprintId && sprintData.length > 0) {
-        const activeSprint = sprintData.find(sprint => sprint.status === 'active');
-        if (activeSprint) {
-          onSprintChange(activeSprint.id);
+        // Auto-select active sprint if none selected
+        if (!selectedSprintId && sprintData.length > 0) {
+          const activeSprint = sprintData.find(sprint => sprint.status === 'active');
+          if (activeSprint) {
+            onSprintChange(activeSprint.id);
+          }
         }
+      },
+      (error) => {
+        console.error('❌ SprintSelector: Error loading sprints:', error);
+        console.log('🔍 SprintSelector: Error details:', {
+          code: error.code,
+          message: error.message,
+          userUid: currentUser?.uid,
+          timestamp: new Date().toISOString()
+        });
+        setLoading(false);
+        setSprints([]);
       }
-    });
+    );
 
     return () => unsubscribe();
   }, [currentUser, selectedSprintId, onSprintChange]);
@@ -59,6 +78,15 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           <span className="visually-hidden">Loading...</span>
         </div>
         <span>Loading sprints...</span>
+      </div>
+    );
+  }
+
+  if (sprints.length === 0) {
+    return (
+      <div className={`d-flex align-items-center ${className}`}>
+        <span className="me-2">🏃‍♂️</span>
+        <span className="text-muted">No sprints available</span>
       </div>
     );
   }

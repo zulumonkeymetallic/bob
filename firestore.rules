@@ -14,7 +14,7 @@ service cloud.firestore {
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     
-    // New collections for v3.0.2
+    // Core v3.0.8 collections with enhanced logging
     match /sprints/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /calendar_blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /digests/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -24,11 +24,12 @@ service cloud.firestore {
     match /taxonomies/{id} { allow read: if isSignedIn(); allow create: if isOwnerForCreate(); allow update, delete: if isOwner(); }
     match /activity_stream/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     
     // Test login tokens - DENY in production
     match /test_login_tokens/{id} { allow read, write: if false; }
 
-    // Habits
+    // Habits with enhanced logging support
     match /habits/{id} {
       allow create: if isOwnerForCreate();
       allow read, update, delete: if isOwner();
@@ -40,7 +41,7 @@ service cloud.firestore {
       }
     }
 
-    // Per-user integration profile
+    // Per-user integration profile with v3.0.8 support
     match /profiles/{uid} {
       allow read, update, delete: if isSignedIn() && request.auth.uid == uid;
       allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.ownerUid == uid;

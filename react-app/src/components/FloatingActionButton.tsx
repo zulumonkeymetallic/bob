@@ -36,6 +36,15 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const handleQuickAdd = async () => {
     if (!currentUser || !quickAddData.title.trim()) return;
 
+    console.log('🚀 FloatingActionButton: QUICK ADD button clicked', {
+      action: 'quick_add_button_clicked',
+      itemType: quickAddType,
+      formData: quickAddData,
+      user: currentUser.uid,
+      persona: currentPersona,
+      timestamp: new Date().toISOString()
+    });
+
     setIsSubmitting(true);
     setSubmitResult(null);
 
@@ -49,8 +58,14 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         updatedAt: new Date()
       };
 
+      console.log('📝 FloatingActionButton: Prepared base data', {
+        action: 'base_data_prepared',
+        itemType: quickAddType,
+        baseData: baseData
+      });
+
       if (quickAddType === 'goal') {
-        await addDoc(collection(db, 'goals'), {
+        const goalData = {
           ...baseData,
           theme: quickAddData.theme,
           size: 'M',
@@ -58,9 +73,21 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           confidence: 0.5,
           status: 'active',
           kpis: []
+        };
+        
+        console.log('💾 FloatingActionButton: Saving GOAL to database', {
+          action: 'goal_save_start',
+          data: goalData
+        });
+        
+        await addDoc(collection(db, 'goals'), goalData);
+        
+        console.log('✅ FloatingActionButton: GOAL saved successfully', {
+          action: 'goal_save_success',
+          timestamp: new Date().toISOString()
         });
       } else if (quickAddType === 'story') {
-        await addDoc(collection(db, 'stories'), {
+        const storyData = {
           ...baseData,
           goalId: '', // Will need to be linked later
           priority: quickAddData.priority,
@@ -69,10 +96,22 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           orderIndex: 0,
           tags: [],
           acceptanceCriteria: []
+        };
+        
+        console.log('💾 FloatingActionButton: Saving STORY to database', {
+          action: 'story_save_start',
+          data: storyData
+        });
+        
+        await addDoc(collection(db, 'stories'), storyData);
+        
+        console.log('✅ FloatingActionButton: STORY saved successfully', {
+          action: 'story_save_success',
+          timestamp: new Date().toISOString()
         });
       } else if (quickAddType === 'task') {
         const effortData = efforts.find(e => e.value === quickAddData.effort);
-        await addDoc(collection(db, 'tasks'), {
+        const taskData = {
           ...baseData,
           parentType: 'story',
           parentId: '', // Will need to be linked later
@@ -87,6 +126,18 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           syncState: 'clean',
           labels: [],
           checklist: []
+        };
+        
+        console.log('💾 FloatingActionButton: Saving TASK to database', {
+          action: 'task_save_start',
+          data: taskData
+        });
+        
+        await addDoc(collection(db, 'tasks'), taskData);
+        
+        console.log('✅ FloatingActionButton: TASK saved successfully', {
+          action: 'task_save_success',
+          timestamp: new Date().toISOString()
         });
       }
 
@@ -100,7 +151,13 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       }, 2000);
 
     } catch (error) {
-      console.error('Quick add error:', error);
+      console.error('❌ FloatingActionButton: QUICK ADD operation failed', {
+        action: 'quick_add_error',
+        itemType: quickAddType,
+        error: error.message,
+        formData: quickAddData,
+        timestamp: new Date().toISOString()
+      });
       setSubmitResult(`❌ Failed to create ${quickAddType}: ${error.message}`);
     }
     setIsSubmitting(false);

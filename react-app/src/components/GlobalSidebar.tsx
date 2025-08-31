@@ -6,6 +6,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { useTestMode } from '../contexts/TestModeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
+import { useActivityTracking } from '../hooks/useActivityTracking';
 
 interface GlobalSidebarProps {
   goals: Goal[];
@@ -25,6 +26,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, toggleCollapse, updateItem } = useSidebar();
   const { isTestMode, testModeLabel } = useTestMode();
   const { currentUser } = useAuth();
+  const { trackClick, trackView, addNote, subscribeToActivity } = useActivityTracking();
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -42,13 +44,24 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   React.useEffect(() => {
-    if (selectedItem) {
+    if (selectedItem && currentUser) {
       setEditForm({ ...selectedItem });
       setIsEditing(false);
       
-      // Subscribe to activity stream for this item
-      const unsubscribe = ActivityStreamService.subscribeToActivityStream(
+      console.log('🎯 BOB v3.1.0: GlobalSidebar - Setting up activity stream for', selectedType, selectedItem.id);
+      
+      // Track that user viewed this record
+      trackView(
         selectedItem.id,
+        selectedType as any,
+        selectedItem.title || 'Unknown',
+        (selectedItem as any).referenceNumber
+      );
+      
+      // Subscribe to activity stream using new global method
+      const unsubscribe = subscribeToActivity(
+        selectedItem.id,
+        selectedType as any,
         setActivities
       );
       
@@ -56,7 +69,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     } else {
       setActivities([]);
     }
-  }, [selectedItem]);
+  }, [selectedItem, currentUser, selectedType, trackView, subscribeToActivity]);
 
   // Apply margin to main content when sidebar is visible
   React.useEffect(() => {
@@ -81,6 +94,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const handleSave = async () => {
     try {
+      console.log('🎯 BOB v3.1.0: GlobalSidebar - Saving changes to', selectedType, selectedItem?.id);
+      
+      // Track save button click
+      await trackClick({
+        elementId: 'sidebar-save-btn',
+        elementType: 'button',
+        entityId: selectedItem?.id || '',
+        entityType: selectedType as any,
+        entityTitle: selectedItem?.title || 'Unknown',
+        additionalData: { action: 'save_changes' }
+      });
+
       // Track field changes for activity stream
       const changes: Array<{field: string, oldValue: any, newValue: any}> = [];
       
@@ -96,45 +121,25 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
       await updateItem(editForm);
       
-      // Log activity for each change
-      if (currentUser && selectedItem && selectedType) {
-        const referenceNumber = generateReferenceNumber();
-        
-        for (const change of changes) {
-          if (change.field === 'status') {
-            await ActivityStreamService.logStatusChange(
-              selectedItem.id,
-              selectedType,
-              change.oldValue,
-              change.newValue,
-              currentUser.uid,
-              currentUser.email || undefined,
-              undefined, // persona can be added if needed
-              referenceNumber
-            );
-          } else {
-            await ActivityStreamService.logFieldChange(
-              selectedItem.id,
-              selectedType,
-              change.field,
-              change.oldValue,
-              change.newValue,
-              currentUser.uid,
-              currentUser.email || undefined,
-              undefined,
-              referenceNumber
-            );
-          }
-        }
-      }
-      
+      console.log('✅ BOB v3.1.0: Changes saved successfully', { changesCount: changes.length });
       setIsEditing(false);
     } catch (error) {
-      console.error('Error updating item:', error);
+      console.error('❌ BOB v3.1.0: Error updating item:', error);
     }
   };
 
-  const handleEdit = () => {
+  const handleEdit = async () => {
+    console.log('🎯 BOB v3.1.0: GlobalSidebar - Edit button clicked for', selectedType, selectedItem?.id);
+    
+    await trackClick({
+      elementId: 'sidebar-edit-btn',
+      elementType: 'edit',
+      entityId: selectedItem?.id || '',
+      entityType: selectedType as any,
+      entityTitle: selectedItem?.title || 'Unknown',
+      additionalData: { action: 'start_edit' }
+    });
+
     if (onEdit) {
       onEdit(selectedItem, selectedType);
     } else {
@@ -142,7 +147,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     }
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
+    console.log('🎯 BOB v3.1.0: GlobalSidebar - Delete button clicked for', selectedType, selectedItem?.id);
+    
+    await trackClick({
+      elementId: 'sidebar-delete-btn',
+      elementType: 'delete',
+      entityId: selectedItem?.id || '',
+      entityType: selectedType as any,
+      entityTitle: selectedItem?.title || 'Unknown',
+      additionalData: { action: 'initiate_delete' }
+    });
+
     setShowDeleteModal(true);
   };
 
@@ -155,7 +171,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const handleAddNote = async () => {
-    console.log('Adding note...', { 
+    console.log('🎯 BOB v3.1.0: GlobalSidebar - Add note initiated', { 
       hasNote: !!newNote.trim(), 
       hasItem: !!selectedItem, 
       hasType: !!selectedType, 
@@ -179,30 +195,20 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     
     try {
       const referenceNumber = generateReferenceNumber();
-      console.log('Calling ActivityStreamService.addNote...', {
-        itemId: selectedItem.id,
-        itemType: selectedType,
-        note: newNote,
-        userId: currentUser.uid,
-        userEmail: currentUser.email,
-        referenceNumber
-      });
       
-      await ActivityStreamService.addNote(
+      // Use the new activity tracking system
+      await addNote(
         selectedItem.id,
-        selectedType,
+        selectedType as any,
         newNote,
-        currentUser.uid,
-        currentUser.email || undefined,
-        'personal', // Set default persona to 'personal'
         referenceNumber
       );
       
-      console.log('Note added successfully');
+      console.log('✅ BOB v3.1.0: Note added successfully');
       setNewNote('');
       setShowAddNote(false);
     } catch (error) {
-      console.error('Error adding note:', error);
+      console.error('❌ BOB v3.1.0: Error adding note:', error);
       alert('Failed to add note: ' + (error as Error).message);
     }
   };
