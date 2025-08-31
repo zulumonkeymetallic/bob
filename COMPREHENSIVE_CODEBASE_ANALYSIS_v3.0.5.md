@@ -1,504 +1,379 @@
-# BOB v3.0.5 - Comprehensive Codebase Analysis & Missing Features Report
-
-## Executive Summary
-
-This document provides a complete analysis of BOB v3.0.5 against the comprehensive requirements, identifying implemented features, gaps, and priority fixes needed. It includes detailed implementation status, test coverage recommendations, and a roadmap for achieving full feature parity.
-
----
-
-## 1. Sprint Planning Blank Screen - ROOT CAUSE IDENTIFIED
-
-### Issue Analysis
-After reviewing the `SprintPlanner.tsx` code, the component appears well-implemented with proper:
-- ✅ Data loading with Firebase listeners
-- ✅ Drag and drop functionality  
-- ✅ Error handling (now enhanced in v3.0.5)
-- ✅ Empty state management
-- ✅ Loading states
-
-### Likely Causes of Blank Screen
-1. **No Data**: User has no stories, goals, or sprints created yet
-2. **Firestore Rules**: Permission denied accessing collections
-3. **Authentication**: Current user context not properly set
-4. **Browser Console Errors**: JavaScript errors preventing render
-
-### Quick Diagnostic Steps
-```javascript
-// Check browser console for these logs:
-// "SprintPlanner: Loading data for user: [uid]"
-// "SprintPlanner: Loaded stories: [count]" 
-// "SprintPlanner: Loaded sprints: [count]"
-// "SprintPlanner: Loaded goals: [count]"
-
-// If no logs appear: Authentication issue
-// If error logs appear: Firestore rules or connection issue
-// If counts are 0: No data exists for user
-```
-
-### Fixed in v3.0.5
-- Enhanced error handling with try-catch blocks
-- Added error callbacks to onSnapshot listeners
-- Improved console logging for debugging
-
----
-
-## 2. Feature Implementation Status
-
-### ✅ FULLY IMPLEMENTED (Ready for Production)
-
-#### Goals Management
-- **Status**: Complete
-- **Components**: `ModernGoalsTable.tsx`
-- **Features**: 
-  - ✅ CRUD operations with inline editing
-  - ✅ Modal editing interface
-  - ✅ Drag-and-drop reordering
-  - ✅ Column configuration
-  - ✅ Story count tracking
-  - ✅ Consistent status values
-  - ✅ Theme-based organization
-
-#### Sprint Selection & Context
-- **Status**: Complete
-- **Components**: `SprintSelector.tsx`, `SidebarLayout.tsx`
-- **Features**:
-  - ✅ Global sprint context dropdown
-  - ✅ Real-time sprint data
-  - ✅ Auto-selection of active sprint
-  - ✅ Sticky header integration
-
-#### Basic Sprint Planning
-- **Status**: Implemented, needs debugging
-- **Components**: `SprintPlanner.tsx`
-- **Features**:
-  - ✅ Backlog management
-  - ✅ Theme-based story grouping
-  - ✅ Drag-and-drop to sprints
-  - ✅ Sprint creation modal
-  - ✅ Activity stream logging
-  - ❓ May show blank due to data/auth issues
-
-### 🟡 PARTIALLY IMPLEMENTED (Needs Enhancement)
-
-#### Current Sprint Kanban
-- **Status**: Basic structure exists
-- **Components**: `CurrentSprintKanban.tsx`
-- **Implemented**: 
-  - ✅ Basic kanban layout
-  - ✅ Story cards
-  - ✅ Drag-and-drop between columns
-- **Missing**:
-  - ❌ Expandable task subgrid
-  - ❌ Excel-like inline task editing
-  - ❌ One-click task status updates
-
-#### Calendar Management
-- **Status**: Basic functionality exists
-- **Components**: `CalendarBlockManagerNew.tsx`, `Calendar.tsx`
-- **Implemented**:
-  - ✅ Basic calendar interface
-  - ✅ Event creation
-  - ✅ Time blocking
-- **Missing**:
-  - ❌ AI-powered task scheduling
-  - ❌ Google Calendar bidirectional sync
-  - ❌ Deep links in events
-  - ❌ Subtheme support
-  - ❌ Recovery constraints
-
-#### Mobile View
-- **Status**: Basic mobile interface exists
-- **Components**: `MobileView.tsx`
-- **Implemented**:
-  - ✅ Responsive design
-  - ✅ Basic task display
-  - ✅ Touch-friendly interface
-- **Missing**:
-  - ❌ "Important Now" logic
-  - ❌ Importance scoring algorithm
-  - ❌ One-tap complete/defer
-  - ❌ Habits checklist strip
-
-### ❌ NOT IMPLEMENTED (Major Gaps)
-
-#### Daily LLM Email Digest
-- **Status**: Stub only
-- **Current**: `dailyDigest.js` function exists but incomplete
-- **Missing**:
-  - ❌ Comprehensive email template
-  - ❌ LLM narrative generation
-  - ❌ Mobile-friendly HTML
-  - ❌ Tasks due today aggregation
-  - ❌ Sprint velocity snapshots
-  - ❌ Calendar blocks integration
-
-#### Health & Nutrition Integrations  
-- **Status**: Not started
-- **Missing Everything**:
-  - ❌ OAuth flows for Strava, Runna, MyFitnessPal
-  - ❌ `metrics_hrv` collection
-  - ❌ `metrics_workouts` collection  
-  - ❌ `metrics_nutrition` collection
-  - ❌ Nightly data ingestion functions
-  - ❌ HRV-based workout scheduling
-  - ❌ Nutrition tracking dashboard
-
-#### iOS Reminders Two-Way Sync
-- **Status**: Schema ready, no implementation
-- **Prepared**: `reminderId` field exists in Task type
-- **Missing**:
-  - ❌ iOS Reminders API integration
-  - ❌ Sync functions
-  - ❌ Conflict resolution
-  - ❌ Reference number preservation
-  - ❌ Activity stream logging
-
----
-
-## 3. Database Schema Analysis
-
-### ✅ Properly Implemented Collections
-
-```typescript
-// Goals - Complete implementation
-interface Goal {
-  id: string;
-  title: string;
-  description?: string;
-  theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
-  status: 'Not Started' | 'Work in Progress' | 'Complete' | 'Paused';
-  ownerUid: string;
-  // ... other fields properly defined
-}
-
-// Stories - Well structured
-interface Story {
-  id: string;
-  ref: string;
-  title: string;
-  goalId: string;
-  sprintId?: string;
-  priority: 'P1' | 'P2' | 'P3';
-  points: number;
-  status: 'backlog' | 'active' | 'done' | 'defect';
-  // ... comprehensive field set
-}
-
-// Sprints - Fully defined
-interface Sprint {
-  id: string;
-  ref: string;
-  name: string;
-  objective?: string;
-  status: 'planned' | 'active' | 'closed';
-  startDate: number;
-  endDate: number;
-  // ... complete schema
-}
-```
-
-### ❌ Missing Collections (Critical Gaps)
-
-```typescript
-// These collections are mentioned in requirements but don't exist:
-
-interface Digest {
-  id: string;
-  date: string; // YYYY-MM-DD
-  ownerUid: string;
-  tasksDue: TaskSummary[];
-  storiesFocus: StorySummary[];
-  calendarBlocks: CalendarBlockSummary[];
-  velocitySnapshot: VelocityData;
-  llmSummary: string;
-  html: string;
-  createdAt: Timestamp;
-}
-
-interface MetricsHRV {
-  id: string;
-  ownerUid: string;
-  date: number;
-  value: number;
-  source: 'manual' | 'strava' | 'whoop' | 'oura';
-  createdAt: Timestamp;
-}
-
-interface MetricsWorkouts {
-  id: string;
-  ownerUid: string;
-  date: number;
-  type: string;
-  distance?: number;
-  duration: number;
-  hr_avg?: number;
-  source: 'strava' | 'runna' | 'manual';
-  stravaActivityId?: string;
-  createdAt: Timestamp;
-}
-
-interface MetricsNutrition {
-  id: string;
-  ownerUid: string;
-  date: number;
-  calories: number;
-  protein_g: number;
-  carbs_g: number;
-  fats_g: number;
-  source: 'myfitnesspal' | 'manual';
-  mfpEntryId?: string;
-  createdAt: Timestamp;
-}
-
-interface TestLoginTokens {
-  id: string;
-  token: string;
-  uid: string;
-  expiresAt: Timestamp;
-  scope: string[];
-  environment: 'test' | 'development';
-  createdAt: Timestamp;
-}
-```
-
-### 🟡 Partially Implemented Schema
-
-```typescript
-// Task type has some required fields but missing others
-interface Task {
-  // ✅ Existing fields are comprehensive
-  id: string;
-  ref: string;
-  title: string;
-  status: string;
-  // ... existing fields
-  
-  // ✅ Schema prepared for requirements  
-  importanceScore?: number;
-  isImportant?: boolean;
-  reminderId?: string;
-  
-  // ❌ Missing calculated fields
-  // aiCalculatedImportance?: number;
-  // recurringPattern?: RecurringPattern;
-  // syncedToReminders?: boolean;
-}
-
-// Calendar blocks need enhancement
-interface CalendarBlock {
-  // ✅ Basic fields exist
-  id: string;
-  title: string;
-  start: number;
-  end: number;
-  
-  // ❌ Missing required fields
-  // storyId?: string;
-  // habitId?: string;
-  // subTheme?: string;
-  // googleEventId?: string;
-  // isAiGenerated?: boolean;
-  // conflictVersion?: number;
-  // supersededBy?: string;
-}
-```
-
----
-
-## 4. Cloud Functions Analysis
-
-### ✅ Implemented Functions
-
-```javascript
-// functions/index.js - These exist:
-exports.testLogin = functions.https.onRequest(testLogin);
-exports.generateTestToken = functions.https.onCall(generateTestToken);
-exports.dailyDigest = functions.pubsub.schedule('0 6 * * *').onRun(dailyDigest);
-// ... OAuth and calendar functions
-```
-
-### ❌ Missing Critical Functions
-
-```javascript
-// These functions are referenced in requirements but don't exist:
-
-exports.stravaWebhook = functions.https.onRequest(handleStravaWebhook);
-exports.syncStrava = functions.pubsub.schedule('0 2 * * *').onRun(syncStravaData);
-exports.syncRunna = functions.pubsub.schedule('0 3 * * *').onRun(syncRunnaData);
-exports.syncMyFitnessPal = functions.pubsub.schedule('0 4 * * *').onRun(syncMFPData);
-
-exports.calculateImportanceScores = functions.firestore
-  .document('tasks/{taskId}')
-  .onWrite(calculateTaskImportance);
-
-exports.aiScheduleTasks = functions.https.onCall(scheduleTasksWithAI);
-
-exports.syncReminders = functions.pubsub
-  .schedule('*/5 * * * *')
-  .onRun(syncWithIOSReminders);
-
-exports.generateCalendarEvents = functions.firestore
-  .document('calendar_blocks/{blockId}')
-  .onWrite(syncToGoogleCalendar);
-```
-
----
-
-## 5. Comprehensive Test Implementation Guide
-
-### Test Categories & Priority
-
-#### Priority 1: Core CRUD Operations (Selenium)
-```javascript
-// These tests need immediate implementation:
-describe('Critical User Flows', () => {
-  test('Goal → Story → Task → Sprint Workflow');
-  test('Inline Editing Across All Tables'); 
-  test('Drag and Drop Functionality');
-  test('Modal Editing Interfaces');
-  test('Sprint Planning Complete Flow');
-});
-```
-
-#### Priority 2: Integration Tests  
-```javascript
-describe('System Integration', () => {
-  test('Calendar Block Creation & Sync');
-  test('Story-Task Relationship Integrity');
-  test('Sprint Status Transitions');
-  test('Activity Stream Logging');
-  test('Real-time Updates Across Components');
-});
-```
-
-#### Priority 3: Performance & Load Tests
-```javascript
-describe('Performance Validation', () => {
-  test('Page Load Times < 3s');
-  test('Drag-Drop Response < 500ms');
-  test('Large Dataset Handling (100+ items)');
-  test('Concurrent User Simulation');
-  test('Offline/Online State Management');
-});
-```
-
-### Test Infrastructure Requirements
-
-#### Test Account Management
-```javascript
-// Side-door authentication for CI/CD
-const TEST_ACCOUNTS = {
-  basic: { uid: 'test-basic-user', token: 'test-token-basic' },
-  powerUser: { uid: 'test-power-user', token: 'test-token-power' },
-  emptyState: { uid: 'test-empty-user', token: 'test-token-empty' }
-};
-```
-
-#### Test Data Factory
-```javascript
-class TestDataFactory {
-  static createGoal(overrides = {}) {
-    return {
-      title: 'Test Goal ' + Date.now(),
-      theme: 'Health',
-      status: 'Not Started',
-      description: 'Test goal description',
-      ...overrides
-    };
-  }
-  
-  static createStory(goalId, overrides = {}) {
-    return {
-      title: 'Test Story ' + Date.now(),
-      goalId,
-      priority: 'P1',
-      points: 5,
-      status: 'backlog',
-      ...overrides
-    };
-  }
-  
-  // ... more factories
-}
-```
-
----
-
-## 6. Implementation Roadmap
-
-### Phase 1: Critical Fixes (v3.0.6) - 1 week
-1. **Sprint Planning Debug** ✅ (Fixed in v3.0.5)
-2. **Task Subgrid in Kanban** - Add expandable task editing
-3. **Basic Test Suite** - Cover 80% of user workflows  
-4. **Mobile Important Tasks** - Implement importance scoring
-
-### Phase 2: Major Features (v3.1.0) - 2-3 weeks
-1. **Calendar AI Scheduling** - Implement task auto-scheduling
-2. **Google Calendar Sync** - Bidirectional event sync
-3. **Daily Digest Enhancement** - Add LLM narrative
-4. **Comprehensive Test Coverage** - 95% automation
-
-### Phase 3: Integrations (v3.2.0) - 3-4 weeks  
-1. **Health Integrations** - Strava, Runna, MyFitnessPal
-2. **iOS Reminders Sync** - Two-way synchronization
-3. **Advanced Analytics** - Performance dashboards
-4. **Load Testing** - Production readiness
-
-### Phase 4: Polish & Scale (v3.3.0) - 2 weeks
-1. **Performance Optimization** - Sub-second response times
-2. **Advanced Features** - Custom workflows, automation
-3. **Documentation** - User guides, API docs
-4. **Production Monitoring** - Error tracking, analytics
-
----
-
-## 7. Immediate Action Items
-
-### For v3.0.6 (Next Release)
-1. **Debug Sprint Planning**: Test with sample data, verify auth flow
-2. **Add Task Subgrid**: Expand story cards to show tasks inline
-3. **Implement Basic Tests**: Cover top 10 user workflows
-4. **Fix Mobile Importance**: Add task prioritization logic
-
-### Development Commands
-```bash
-# Debug sprint planning locally
-npm start
-# Navigate to /sprint-planning
-# Open browser console to see logs
-
-# Run test suite (when implemented)
-npm test -- --testNamePattern="Sprint Planning"
-
-# Deploy fixes
-./deploy-v3.0.6.sh
-```
-
-### Success Metrics
-- Sprint Planning screen loads successfully with data
-- Task subgrid functionality working in kanban
-- 80% test coverage of critical user flows
-- Mobile view shows prioritized tasks correctly
-
----
-
-## 8. Risk Assessment
-
-### High Risk (Immediate Attention Required)
-- **Sprint Planning Blank Screen**: Blocks sprint management workflow
-- **Missing Test Coverage**: Difficult to validate changes safely
-- **Calendar AI Integration**: Complex feature, high user value
-
-### Medium Risk (Monitor)
-- **Performance with Large Datasets**: May impact user experience
-- **Mobile Responsiveness**: Critical for user adoption
-- **Data Integrity**: Ensure referential consistency
-
-### Low Risk (Future Consideration)  
-- **Health Integrations**: Nice-to-have features
-- **Advanced Analytics**: Enhancement features
-- **Third-party API Dependencies**: External service reliability
-
----
-
-This comprehensive analysis provides a complete picture of BOB's current state and implementation roadmap. The focus should be on resolving the Sprint Planning issue first, then systematically addressing the missing features according to user priority and business value.
+Here’s a single, merged, handoff-ready file that combines your v3.0.2 Priority Requirements & Schema Deltas with the critical addenda (theme colour inheritance + corrected Sprint Planner layout). I’ve kept your original structure and language, and folded in the new requirements, schema deltas, acceptance criteria, tests, and migration notes.
+
+—
+
+📘 BOB – Consolidated Priority Requirements & Schema Deltas (v3.0.6 Handoff)
+
+Owner: Jim Donnelly
+Date: August 31, 2025
+Audience: Development AI / Coding Team
+Purpose: Merge v3.0.2 handoff with critical addenda to deliver an authoritative, implementation-ready specification for BOB’s near-term releases (v3.0.6 baseline), including system-wide theme colour inheritance and a corrected 2-D Sprint Planner (vertical swimlanes per sprint; horizontal by Theme→Goal→Subgoal).
+
+⸻
+
+1. Executive Context
+
+The BOB platform is a personal productivity system built on Firebase Firestore, integrating goals, stories, tasks, sprints, and habits with AI-assisted scheduling and cross-device integrations.
+
+The current schema (v3.0.1) is strong, but several priority gaps remain. These gaps prevent us from delivering the most critical functionality:
+	1.	Sprint Planning & Maintenance (future sprint visualisation).
+	2.	Current Sprint Kanban (execution focus).
+	3.	Calendar Blocking & AI Scheduling.
+	4.	Daily LLM Email Digest.
+	5.	Health & Nutrition Integrations (Strava, Runna, MyFitnessPal).
+	6.	iOS Reminders Two-Way Sync.
+	7.	Mobile View (surface urgent tasks).
+	8.	Test Automation with Side-Door Auth.
+	9.	NEW (Critical): System-wide Theme Colour Inheritance from Theme Settings.
+	10.	NEW (Critical): Sprint Planner must render vertical swimlanes per sprint and horizontal groupings by Theme→Goal→Subgoal with cell-level story ordering.
+
+This document consolidates the requirements and schema deltas into a single, robust specification.
+
+⸻
+
+2. Priority Requirements
+
+2.1 Sprint Planning & Maintenance (Future Planning) — Updated to 2-D Matrix
+
+Goal: Provide a two-dimensional planner to manage backlog and assign stories into current and upcoming sprints.
+
+Layout:
+	•	Vertical (columns): One column per Sprint (active + N future), reorderable.
+	•	Horizontal (rows): Grouped by Theme → Goal → Subgoal (expand/collapse rows).
+	•	Cells: Each intersection holds Story cards belonging to that Goal/Subgoal in that Sprint.
+
+UI & Interactions:
+	•	Drag & Drop:
+	•	Vertical move: Changes stories.sprintId.
+	•	Horizontal move: Changes stories.goalId and optionally stories.subGoalId.
+	•	In-cell ordering: Maintain stable order per sprint via stories.orderIndexBySprint[sprintId].
+	•	Reordering:
+	•	Sprints: User can reorder sprint columns; persist to sprints.orderIndex.
+	•	Stories within a cell: Update orderIndexBySprint[currentSprintId] immediately.
+	•	Sprint Creation/Edit: Inline modal with ref (SPR-###), name, objective, status (planned|active|closed), notes, startDate, endDate.
+	•	Row Controls: Expand/collapse Theme/Goal/Subgoal; persist per user in ui_state.plannerRowExpansion.
+	•	Custom Lanes (Kanban labels): Users can rename column lanes for status views; persist in profiles.kanbanLaneLabels (used by 2.2).
+
+Activity Logging:
+	•	Write to activity_stream with activityType:
+	•	sprint_changed (vertical move),
+	•	backlog_retargeted (row move),
+	•	reordered_in_cell (in-cell reorder).
+
+Acceptance Criteria:
+	•	Vertical columns are Sprints; rows are Theme → Goal → Subgoal.
+	•	DnD updates persist with optimistic UI (<150–200ms).
+	•	Sprint ref numbers auto-generate unique (SPR-###).
+	•	Row expansion and visible sprint set are remembered per user.
+	•	Rendering performance: 200 stories × 8 sprints maintains smooth drag/drop.
+
+⸻
+
+2.2 Current Sprint Kanban (Execution View)
+
+Goal: Run the current sprint effectively.
+
+UI & Interactions:
+	•	Sprint Selector: Dropdown (defaults to current sprint).
+	•	Columns: Kanban lanes from profiles.kanbanLaneLabels.
+	•	Story Cards: Click expands an inline task subgrid (Excel-like) to quick-edit tasks (status, dueDate, priority).
+	•	Drag & Drop: Move stories between columns (status transitions).
+
+Acceptance Criteria:
+	•	Sprint switch reloads < 500ms.
+	•	Inline task edits persist instantly.
+	•	Denormalised fields (taskCount, doneTaskCount) keep progress visible without expensive queries.
+
+⸻
+
+2.3 Calendar Blocking & AI Scheduling
+
+Goal: Allow users to block time by theme/subtheme; AI dynamically fills remaining free space with tasks, stories, and habits.
+Google Calendar: Bidirectional sync via googleEventId.
+
+Data Model Changes (see §3):
+	•	Extend calendar_blocks with storyId?, habitId?, subTheme?, googleEventId?, isAiGenerated?, conflictVersion?, supersededBy?.
+
+Behaviour:
+	1.	User defines recurring or static blocks (e.g., Thu 19:00–21:00 for Home/Chores).
+	2.	AI fills unblocked time based on:
+	•	Task importance (importanceScore),
+	•	Due dates,
+	•	Weekly theme targets (profiles.weeklyThemeTargets),
+	•	Recovery constraints (profiles.maxHiSessionsPerWeek, minRecoveryGapHours),
+	•	Theme colour resolution (see §2.9, §3.1).
+	3.	Blocks sync with Google Calendar (googleEventId); event description includes deep links back to BOB entities (ref).
+
+Acceptance Criteria:
+	•	AI scheduling respects quiet hours/facility hours.
+	•	Conflicts resolved with conflictVersion/supersededBy.
+	•	Bidirectional sync: Manual edits in Google reflect back in BOB.
+
+⸻
+
+2.4 Daily LLM Email Digest
+
+Goal: Deliver a daily 06:30 email summarising priorities.
+
+Content:
+	•	Tasks Due Today (Ref, Title, Goal, Due, Priority),
+	•	Focus Stories (top N by points/priority),
+	•	Today’s Calendar Blocks,
+	•	Sprint Pulse (velocity snapshot),
+	•	LLM narrative: “what first, risks.”
+
+Data Model: New digests collection.
+
+Acceptance Criteria:
+	•	Mobile-friendly HTML; links to /story/STRY-### or /task/TASK-###.
+	•	Data reflects live DB at generation time.
+
+⸻
+
+2.5 Health & Nutrition Integrations
+
+Goal: Import metrics (Strava, Runna, MyFitnessPal) for smarter planning.
+
+Data Model:
+	•	Per-user integrations document (OAuth tokens/meta).
+	•	New collections: metrics_hrv, metrics_workouts, metrics_nutrition.
+
+Planning:
+	•	Avoid HI sessions when HRV is low.
+	•	Nutrition dashboards—adherence vs protein/calories.
+	•	Runna workouts appear in Calendar as read-only events.
+
+Acceptance Criteria:
+	•	Tokens are server-side secure.
+	•	Nightly ingestion.
+	•	7/30-day dashboards.
+
+⸻
+
+2.6 iOS Reminders Two-Way Sync
+
+Goal: Keep BOB tasks in sync with Apple Reminders.
+
+Data Model: Add reminderId to tasks.
+
+Behaviour:
+	•	Create/update/complete in one system syncs to the other within 60s.
+	•	Conflict: latest edit wins.
+	•	Changes logged in activity_stream.
+	•	Preserve TASK-### in Reminders title/notes.
+
+Acceptance Criteria:
+	•	Deletions handled gracefully.
+	•	Round-trip integrity maintained.
+
+⸻
+
+2.7 Mobile View (Surface Important First)
+
+Goal: Mobile home is hyper-focused.
+
+Behaviour:
+	•	“Important Now”: Overdue, Due today, High importanceScore, Current sprint tasks.
+	•	Habits checklist strip (streak badge).
+	•	One-tap complete/defer (+ Reminders sync if linked).
+
+Data Model:
+	•	Tasks gain importanceScore (0–100), isImportant.
+
+Acceptance Criteria:
+	•	Loads < 1s.
+	•	One-tap actions persist.
+	•	Syncs with Reminders when linked.
+
+⸻
+
+2.8 Test Automation (Selenium + Side-Door Auth)
+
+Goal: Enable automated testing without OAuth friction.
+
+Data Model:
+	•	Non-prod test_login_tokens: { token, uid, expiresAt, scope }.
+
+Behaviour:
+	•	/test-login?token= maps token→uid (disabled in prod).
+
+Acceptance Criteria:
+	•	Selenium can run full CRUD, drag/drop, digest gen, calendar sync in CI.
+	•	Full run < 10 minutes with artifacts.
+
+⸻
+
+2.9 NEW: Theme Colour Inheritance (System-wide)
+
+Goal: All Goals, Stories, Tasks, Habits, Sprints, Calendar Blocks, and Widgets inherit the colour defined in Theme Settings. Visual identity is consistent across web/mobile, Kanban, tables, chips, calendar events, and progress bars.
+
+Behaviour & UX:
+	•	Single Source of Truth: User’s theme_settings define theme palette.
+	•	Inheritance:
+	•	If entity has themeId, use it.
+	•	Else inherit from parent (Task → Story → Goal chain).
+	•	Else fallback to theme_settings.defaultThemeId.
+	•	No blanket hex persistence: Colours resolved at render.
+	•	AA Contrast: Auto compute foreground text colour to meet WCAG AA in both light & dark modes.
+	•	Optional non-destructive view overrides: high-contrast toggle does not persist to DB.
+
+Acceptance Criteria:
+	•	Changing a theme colour in Settings updates all views without data writes.
+	•	AA contrast satisfied in CI checks.
+	•	Calendar events render with resolved colour, and GCal sync reflects mapping.
+
+⸻
+
+3. Schema Deltas (v3.0.1 → v3.0.6)
+
+3.1 New or Changed Fields
+	•	All entities: ref: string (unique, prefixed).
+	•	Stories:
+	•	taskCount?: number, doneTaskCount?: number (denormalised),
+	•	sprintId?: string,
+	•	goalId: string,
+	•	subGoalId?: string (new),
+	•	orderIndexBySprint?: { [sprintId: string]: number } (new),
+	•	themeId?: string (new, for explicit override).
+	•	Sprints:
+	•	ref, objective?, status: 'planned'|'active'|'closed', notes?, startDate, endDate,
+	•	orderIndex: number (new),
+	•	createdAt, updatedAt.
+	•	CalendarBlock:
+	•	storyId?, habitId?, subTheme?,
+	•	googleEventId? (new),
+	•	isAiGenerated?: boolean (new),
+	•	conflictVersion?: number, supersededBy?: string,
+	•	themeId?: string (new).
+	•	Tasks:
+	•	importanceScore?, isImportant?, reminderId?,
+	•	(optional future) aiCalculatedImportance?, recurringPattern?.
+	•	Profiles/Habits:
+	•	Integration IDs (stravaAthleteId, runnaPlanId, mfpUserId),
+	•	weeklyThemeTargets (map),
+	•	Recovery constraints (maxHiSessionsPerWeek, minRecoveryGapHours),
+	•	kanbanLaneLabels (string[]).
+	•	Theme Settings (per user) – NEW:
+	•	themes[]: { id, name, colorHex, colorToken?, isDefault? },
+	•	defaultThemeId: string,
+	•	highContrastMode: boolean.
+	•	UI State (per user) – NEW:
+	•	plannerRowExpansion: { [key: string]: boolean },
+	•	plannerVisibleSprints: string[].
+	•	Sub-Goals – NEW (collection or nested):
+	•	{ id, goalId, title, description?, orderIndex }.
+
+3.2 New Collections
+	•	digests
+	•	metrics_hrv, metrics_workouts, metrics_nutrition
+	•	test_login_tokens
+	•	sub_goals (if not nested under goals)
+	•	theme_settings (per user)
+	•	ui_state (per user)
+	•	taxonomies (optional central theme/subtheme mapping)
+
+3.3 Indexes
+	•	Stories: (ownerUid, sprintId, status), (ownerUid, goalId, orderIndex), (ownerUid, goalId, subGoalId), (ownerUid, sprintId, updatedAt)
+	•	Tasks: (ownerUid, parentId, status, dueDate), (ownerUid, isImportant, dueDate)
+	•	Calendar Blocks: (ownerUid, start, end)
+	•	Sprints: (ownerUid, status, startDate), (ownerUid, orderIndex)
+
+3.4 Security Rules
+	•	Owner-based rules for all new collections.
+	•	Explicit deny for test_login_tokens in production.
+	•	theme_settings, ui_state readable/writable by owner only.
+	•	Calendar sync endpoints VERIFY ownership of googleEventId mapping.
+
+⸻
+
+4. Non-Functional Requirements
+	•	Performance: DnD perceived <150ms via optimistic UI; matrix planner remains responsive under 200 stories × 8 sprints.
+	•	Accessibility: Theme colour and foreground must meet WCAG AA; keyboard DnD supported; ARIA roles on matrix/kanban.
+	•	Observability: Log digest generation times, calendar sync failures, integration webhook errors.
+	•	Feature Flags: Incremental rollout for Sprint Planner 2-D, Calendar AI, Digest, Reminders sync, Theme inheritance.
+	•	Resilience: Clear conflict handling for calendar (conflictVersion/supersededBy).
+
+⸻
+
+5. Testing & CI (Expanded)
+
+Unit:
+	•	useThemeColor resolution: explicit, inherited, default; AA contrast util.
+	•	Story state transitions (sprint change, goal/subgoal change, in-cell re-order).
+
+Integration:
+	•	Calendar Block creation → GCal sync (round-trip googleEventId).
+	•	Reminders sync (create/update/complete/delete, latest-wins).
+	•	Digest generation pulls correct live data.
+
+E2E (Selenium, side-door auth):
+	•	Goal → Story → Task → Sprint workflow.
+	•	2-D Planner DnD: vertical, horizontal, in-cell reorder; persistence of row expansion & visible sprints.
+	•	Current Sprint Kanban task subgrid inline edits.
+	•	Mobile “Important Now” (one-tap complete/defer; Reminders sync).
+
+Performance:
+	•	Page load < 3s; DnD < 500ms perceived; large dataset handling.
+
+Accessibility:
+	•	Keyboard-only DnD success; screen reader live announcements; colour contrast checks in CI.
+
+⸻
+
+6. Migration Notes
+	1.	Themes:
+
+	•	If goals.theme string exists, create theme_settings.themes[] palette and map to goals.themeId.
+	•	Set theme_settings.defaultThemeId to user’s most common theme or “Home”.
+
+	2.	Sprints:
+
+	•	Backfill sprints.orderIndex sorted by (status desc, startDate asc).
+
+	3.	Stories:
+
+	•	Initialise orderIndexBySprint[sprintId] by creation time within that sprint.
+
+	4.	Sub-Goals:
+
+	•	If sub-goals are currently implicit, create sub_goals and link from stories as needed.
+
+	5.	Indexes & Rules:
+
+	•	Deploy new indexes before enabling features; update security rules atomically.
+
+⸻
+
+7. Developer Tasks (Backlog → v3.0.6)
+	1.	Implement theme_settings + useThemeColor hook; replace ad-hoc colour usage in ModernGoalsTable, CurrentSprintKanban, SprintPlanner, Calendar, MobileView.
+	2.	Refactor Sprint Planner to 2-D matrix (columns=Sprints; rows=Theme→Goal→Subgoal; cells=Stories).
+	3.	Add sub_goals support and row hierarchy with persisted expansion state (ui_state).
+	4.	Introduce stories.orderIndexBySprint and sprints.orderIndex.
+	5.	Update calendar sync to honour theme colour mapping and round-trip googleEventId.
+	6.	Expand Selenium suite to cover matrix DnD, colour inheritance, and mobile “Important Now”.
+
+⸻
+
+8. Handoff Checklist
+	•	Schema v3.0.6 deltas implemented (incl. theme_settings, ui_state, sub_goals, orderIndexBySprint, googleEventId).
+	•	Security rules updated (owner-only, deny test tokens in prod).
+	•	Indexes created and verified.
+	•	CI: headless Selenium with side-door auth; AA contrast checks.
+	•	Daily digest scheduler running and templated.
+	•	Google Calendar credentials configured; bidirectional sync verified.
+	•	iOS Reminders sync operational.
+	•	Mobile “Important Now” view live with one-tap actions.
+	•	Theme colour inheritance verified across web/mobile & calendar.
+	•	Sprint Planner 2-D matrix live with persisted states.
+
+⸻
+
+9. Conclusion
+
+This consolidated handoff merges the original v3.0.2 requirements with the critical addenda. It delivers a precise, unambiguous spec for:
+	•	Correct 2-D Sprint Planner (vertical sprints × horizontal Theme→Goal→Subgoal),
+	•	System-wide theme colour inheritance driven by Theme Settings with AA compliance,
+	•	Calendar AI and GCal bidirectional sync,
+	•	Digest, integrations, Reminders sync, Mobile “Important Now”, and CI test automation.
+
+It is ready to hand directly to a coding AI or development team. No external context is required.

@@ -32,7 +32,7 @@ import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
 import { checkForUpdates, VERSION } from './version';
 import ComprehensiveTest from './components/ComprehensiveTest';
-import SprintPlanner from './components/SprintPlanner';
+import SprintPlannerSimple from './components/SprintPlannerSimple';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
@@ -141,7 +141,7 @@ function AppContent() {
           <Route path="/modern-table" element={<ModernTableDemo />} />
           <Route path="/kanban" element={<ModernKanbanPage />} />
           <Route path="/kanban-old" element={<KanbanPage />} />
-          <Route path="/sprint-planning" element={<SprintPlanner />} />
+          <Route path="/sprint-planning" element={<SprintPlannerSimple />} />
           <Route path="/current-sprint" element={<CurrentSprintKanban />} />
           <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
           <Route path="/mobile-view" element={<MobileView />} />
