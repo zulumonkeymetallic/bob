@@ -9,7 +9,7 @@ export interface Goal {
   targetDate?: string;
   confidence: number;
   kpis?: Array<{name: string; target: number; unit: string}>;
-  status: 'new' | 'active' | 'paused' | 'done' | 'dropped';
+  status: 'Not Started' | 'Work in Progress' | 'Complete' | 'Paused';
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp

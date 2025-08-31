@@ -34,23 +34,28 @@ const SprintPlanner: React.FC = () => {
     useEffect(() => {
         if (!currentUser) return;
 
+        console.log('SprintPlanner: Loading data for user:', currentUser.uid);
+
         const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
         const sprintsQuery = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
         const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
 
         const unsubscribeStories = onSnapshot(storiesQuery, snapshot => {
             const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
+            console.log('SprintPlanner: Loaded stories:', storiesData.length);
             setStories(storiesData.sort((a, b) => a.orderIndex - b.orderIndex));
             setLoading(false);
         });
 
         const unsubscribeSprints = onSnapshot(sprintsQuery, snapshot => {
             const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
+            console.log('SprintPlanner: Loaded sprints:', sprintsData.length);
             setSprints(sprintsData.sort((a, b) => a.startDate - b.startDate));
         });
 
         const unsubscribeGoals = onSnapshot(goalsQuery, snapshot => {
             const goalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
+            console.log('SprintPlanner: Loaded goals:', goalsData.length);
             setGoals(goalsData);
         });
 
@@ -205,7 +210,28 @@ const SprintPlanner: React.FC = () => {
     };
 
     if (loading) {
-        return <div className="d-flex justify-content-center p-5"><div className="spinner-border" role="status"></div></div>;
+        return (
+            <Container fluid className="p-3">
+                <div className="d-flex justify-content-center align-items-center" style={{ height: '50vh' }}>
+                    <div className="text-center">
+                        <div className="spinner-border text-primary" role="status">
+                            <span className="visually-hidden">Loading...</span>
+                        </div>
+                        <p className="mt-3 text-muted">Loading Sprint Planning...</p>
+                    </div>
+                </div>
+            </Container>
+        );
+    }
+
+    if (!currentUser) {
+        return (
+            <Container fluid className="p-3">
+                <div className="alert alert-warning" role="alert">
+                    Please sign in to access Sprint Planning.
+                </div>
+            </Container>
+        );
     }
 
     const backlogStories = stories.filter(s => !s.sprintId);
@@ -216,6 +242,27 @@ const SprintPlanner: React.FC = () => {
         groups[theme].push(story);
         return groups;
     }, {} as Record<string, Story[]>);
+
+    // Show empty state if no stories exist
+    if (stories.length === 0) {
+        return (
+            <Container fluid className="p-3">
+                <div className="d-flex justify-content-between align-items-center mb-4">
+                    <h1 className="h3 mb-0">Sprint Planning</h1>
+                    <Button variant="primary" onClick={() => setShowSprintModal(true)}>
+                        Create Sprint
+                    </Button>
+                </div>
+                <div className="text-center py-5">
+                    <h4 className="text-muted mb-3">No Stories Available</h4>
+                    <p className="text-muted">Create some stories first to start sprint planning.</p>
+                    <Button variant="outline-primary" href="/stories">
+                        Go to Stories Management
+                    </Button>
+                </div>
+            </Container>
+        );
+    }
 
     return (
         <DndProvider backend={HTML5Backend}>

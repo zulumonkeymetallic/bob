@@ -5,6 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useTestMode } from '../contexts/TestModeContext';
+import { VERSION } from '../version';
+import SprintSelector from './SprintSelector';
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -31,6 +33,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
+  const [selectedSprintId, setSelectedSprintId] = useState<string>('');
 
   const navigationGroups: NavigationGroup[] = [
     {
@@ -39,22 +42,26 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' },
         { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' },
-        { label: 'Goals Dashboard', path: '/goals', icon: 'target' }
+        { label: 'Goals Dashboard', path: '/goals', icon: 'target' },
+        { label: 'Mobile View', path: '/mobile-view', icon: 'mobile-alt' }
       ]
     },
     {
       label: 'Planning',
       icon: 'calendar-alt',
       items: [
+        { label: 'Sprint Planning', path: '/sprint-planning', icon: 'tasks' },
+        { label: 'Sprint Management', path: '/sprint-dashboard', icon: 'chart-gantt' },
         { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Kanban', path: '/kanban', icon: 'kanban' }
+        { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'calendar' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar-alt' }
       ]
     },
     {
       label: 'Delivery',
       icon: 'rocket',
       items: [
+        { label: 'Current Sprint', path: '/current-sprint', icon: 'play' },
         { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
       ]
     },
@@ -279,6 +286,15 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             >
               Sign Out
             </Button>
+            
+            {/* Version Display */}
+            <div className="text-center mt-2" style={{ 
+              fontSize: '0.75rem', 
+              color: 'var(--notion-text-gray)',
+              padding: '4px 0'
+            }}>
+              {VERSION}
+            </div>
           </div>
         </div>
       </div>
@@ -435,12 +451,35 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             >
               Sign Out
             </Button>
+            
+            {/* Version Display Mobile */}
+            <div className="text-center mt-2" style={{ 
+              fontSize: '0.75rem', 
+              color: 'rgba(255,255,255,0.6)'
+            }}>
+              {VERSION}
+            </div>
           </div>
         </Offcanvas.Body>
       </Offcanvas>
 
       {/* Main Content Area */}
       <div className="flex-grow-1" style={{ paddingTop: window.innerWidth < 992 ? '60px' : '0' }}>
+        {/* Top Header with Sprint Selector */}
+        <div className="bg-white border-bottom px-3 py-2 d-flex justify-content-between align-items-center" 
+             style={{ position: 'sticky', top: '0', zIndex: 1000 }}>
+          <div className="d-flex align-items-center">
+            <h6 className="mb-0 text-muted">Current Context</h6>
+          </div>
+          <div className="d-flex align-items-center gap-3">
+            <SprintSelector
+              selectedSprintId={selectedSprintId}
+              onSprintChange={setSelectedSprintId}
+              className="me-2"
+            />
+          </div>
+        </div>
+        
         <main className="h-100">
           {children}
         </main>

@@ -30,8 +30,12 @@ import { TestModeProvider } from './contexts/TestModeContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
-// import { checkForUpdates, VERSION } from './version';
+import { checkForUpdates, VERSION } from './version';
 import ComprehensiveTest from './components/ComprehensiveTest';
+import SprintPlanner from './components/SprintPlanner';
+import CurrentSprintKanban from './components/CurrentSprintKanban';
+import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
+import MobileView from './components/MobileView';
 
 function App() {
   return (
@@ -61,7 +65,7 @@ function AppContent() {
 
   // Check for updates on app load
   useEffect(() => {
-    // checkForUpdates();
+    checkForUpdates();
     
     // Add keyboard shortcut for force refresh (Ctrl+Shift+R or Cmd+Shift+R)
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -137,6 +141,10 @@ function AppContent() {
           <Route path="/modern-table" element={<ModernTableDemo />} />
           <Route path="/kanban" element={<ModernKanbanPage />} />
           <Route path="/kanban-old" element={<KanbanPage />} />
+          <Route path="/sprint-planning" element={<SprintPlanner />} />
+          <Route path="/current-sprint" element={<CurrentSprintKanban />} />
+          <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
+          <Route path="/mobile-view" element={<MobileView />} />
           <Route path="/ai-planner" element={<PlanningDashboard />} />
           <Route path="/planning" element={<PlanningDashboard />} />
           <Route path="/stories" element={<StoriesManagement />} />
