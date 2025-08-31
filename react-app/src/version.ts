@@ -1,11 +1,11 @@
-// Version tracking for cache busting - v3.1.1 Global Activity Stream & UI Tracking
-export const VERSION = 'v3.1.1';
+// Version tracking for cache busting - v3.1.2 Navigation & Database Fixes
+export const VERSION = 'v3.1.2';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Global Activity Stream & Comprehensive UI Tracking Active`);
-console.log(`🎯 Features: Global Activity Stream, UI Click Tracking, Enhanced Error Reporting, User Notes`);
-console.log(`🚀 Architecture: v3.1.1 with Global Activity System and Automated UI Tracking`);
+console.log(`✅ Status: Navigation & Database Issues RESOLVED`);
+console.log(`🎯 Features: Fixed React Router Navigation, Complete Firestore Indexes, Enhanced Debugging`);
+console.log(`🚀 Architecture: v3.1.2 with Critical Navigation and Database Fixes`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force refresh if version mismatch detected

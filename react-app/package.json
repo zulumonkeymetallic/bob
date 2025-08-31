@@ -1,7 +1,7 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.1.1",
-  "description": "AI-Powered Personal Productivity Platform with Global Activity Stream, UI Tracking & Enhanced User Experience",
+  "version": "3.1.2",
+  "description": "AI-Powered Personal Productivity Platform with Fixed Navigation, Complete Database Indexes & Enhanced Debugging",
   "private": true,
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^1.7.4",
