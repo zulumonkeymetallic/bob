@@ -3,10 +3,12 @@ import { Card, Row, Col, Badge, Button, Form, Modal } from 'react-bootstrap';
 import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import { Settings, Plus, Edit3, Trash2, User, Calendar, Target, BookOpen, AlertCircle } from 'lucide-react';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../types';
+import { generateRef } from '../utils/referenceGenerator';
 
 interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
@@ -15,6 +17,7 @@ interface ModernKanbanBoardProps {
 const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { showSidebar, setUpdateHandler } = useSidebar();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -49,6 +52,25 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   useEffect(() => {
     loadData();
   }, [currentUser, currentPersona]);
+
+  // Set up the update handler for the global sidebar
+  useEffect(() => {
+    const handleItemUpdate = async (item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => {
+      try {
+        const collection_name = type === 'story' ? 'stories' : type === 'task' ? 'tasks' : 'goals';
+        await updateDoc(doc(db, collection_name, item.id), {
+          ...updates,
+          updatedAt: serverTimestamp()
+        });
+        console.log(`${type} updated successfully`);
+      } catch (error) {
+        console.error('Error updating item:', error);
+        throw error;
+      }
+    };
+
+    setUpdateHandler(handleItemUpdate);
+  }, [setUpdateHandler]);
 
   const loadData = () => {
     if (!currentUser) return;
@@ -211,7 +233,22 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const handleSaveAdd = async () => {
     try {
       const collection_name = addType === 'story' ? 'stories' : 'tasks';
+      
+      // Get existing references for unique ref generation
+      const existingQuery = query(
+        collection(db, collection_name),
+        where('ownerUid', '==', currentUser?.uid)
+      );
+      const existingSnapshot = await getDocs(existingQuery);
+      const existingRefs = existingSnapshot.docs
+        .map(doc => doc.data().ref)
+        .filter(ref => ref);
+      
+      // Generate unique reference number
+      const ref = generateRef(addType === 'story' ? 'story' : 'task', existingRefs);
+      
       await addDoc(collection(db, collection_name), {
+        ref: ref, // Add reference number
         ...addForm,
         ownerUid: currentUser?.uid,
         persona: currentPersona,
@@ -247,6 +284,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   };
 
   const handleItemClick = (item: Story | Task, type: 'story' | 'task') => {
+    // Show in sidebar
+    showSidebar(item, type);
+    
+    // Also call the optional prop callback
     if (onItemSelect) {
       onItemSelect(item, type);
     }
@@ -282,9 +323,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
               <Card.Body style={{ padding: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                   <div style={{ flex: 1 }}>
-                    <h6 style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: '600', color: '#111827' }}>
-                      {story.title}
-                    </h6>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: '600', color: themeColor }}>
+                        {story.ref || `STRY-${story.id.slice(-3).toUpperCase()}`}
+                      </span>
+                      <h6 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#111827' }}>
+                        {story.title}
+                      </h6>
+                    </div>
                     {goal && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '8px' }}>
                         <Target size={12} color={themeColor} />
@@ -391,9 +437,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
               <Card.Body style={{ padding: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div style={{ flex: 1 }}>
-                    <h6 style={{ margin: '0 0 4px 0', fontSize: '13px', fontWeight: '500', color: '#111827' }}>
-                      {task.title}
-                    </h6>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: '600', color: themeColor }}>
+                        {task.ref || `TASK-${task.id.slice(-3).toUpperCase()}`}
+                      </span>
+                      <h6 style={{ margin: 0, fontSize: '13px', fontWeight: '500', color: '#111827' }}>
+                        {task.title}
+                      </h6>
+                    </div>
                     {story && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '6px' }}>
                         <BookOpen size={10} color={themeColor} />

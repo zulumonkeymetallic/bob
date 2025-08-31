@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table, Dropdown } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task } from '../types';
+import { generateRef } from '../utils/referenceGenerator';
 
 const ModernKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
+  const { showSidebar, setUpdateHandler } = useSidebar();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -97,11 +100,44 @@ const ModernKanbanPage: React.FC = () => {
     };
   }, [currentUser]);
 
+  // Set up the update handler for the global sidebar
+  useEffect(() => {
+    const handleItemUpdate = async (item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => {
+      try {
+        const collection_name = type === 'story' ? 'stories' : type === 'task' ? 'tasks' : 'goals';
+        await updateDoc(doc(db, collection_name, item.id), {
+          ...updates,
+          updatedAt: serverTimestamp()
+        });
+        console.log(`${type} updated successfully`);
+      } catch (error) {
+        console.error('Error updating item:', error);
+        throw error;
+      }
+    };
+
+    setUpdateHandler(handleItemUpdate);
+  }, [setUpdateHandler]);
+
   const handleAddStory = async () => {
     if (!currentUser || !newStory.title.trim()) return;
 
     try {
+      // Get existing story references for unique ref generation
+      const existingStoriesQuery = query(
+        collection(db, 'stories'),
+        where('ownerUid', '==', currentUser.uid)
+      );
+      const existingSnapshot = await getDocs(existingStoriesQuery);
+      const existingRefs = existingSnapshot.docs
+        .map(doc => doc.data().ref)
+        .filter(ref => ref);
+      
+      // Generate unique reference number
+      const ref = generateRef('story', existingRefs);
+
       await addDoc(collection(db, 'stories'), {
+        ref: ref, // Add reference number
         title: newStory.title,
         description: newStory.description,
         goalId: newStory.goalId,
@@ -131,7 +167,21 @@ const ModernKanbanPage: React.FC = () => {
     if (!currentUser || !newTask.title.trim() || !selectedStory) return;
 
     try {
+      // Get existing task references for unique ref generation
+      const existingTasksQuery = query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid)
+      );
+      const existingSnapshot = await getDocs(existingTasksQuery);
+      const existingRefs = existingSnapshot.docs
+        .map(doc => doc.data().ref)
+        .filter(ref => ref);
+      
+      // Generate unique reference number
+      const ref = generateRef('task', existingRefs);
+
       await addDoc(collection(db, 'tasks'), {
+        ref: ref, // Add reference number
         persona: 'personal',
         parentType: 'story',
         parentId: selectedStory.id,
@@ -185,6 +235,7 @@ const ModernKanbanPage: React.FC = () => {
 
   const handleStoryClick = (story: Story) => {
     setSelectedStory(story);
+    showSidebar(story, 'story');
   };
 
   const openEditStory = (story: Story) => {
@@ -344,7 +395,14 @@ const ModernKanbanPage: React.FC = () => {
                         >
                           <Card.Body className="p-3">
                             <div className="d-flex justify-content-between align-items-start mb-2">
-                              <h6 className="mb-1">{story.title}</h6>
+                              <div>
+                                <div className="d-flex align-items-center gap-2 mb-1">
+                                  <span style={{ fontSize: '12px', fontWeight: '600', color: getThemeColor(goalTheme) }}>
+                                    {story.ref || `STRY-${story.id.slice(-3).toUpperCase()}`}
+                                  </span>
+                                  <h6 className="mb-0">{story.title}</h6>
+                                </div>
+                              </div>
                               <div>
                                 <Badge bg={getThemeColor(goalTheme)} className="me-1">
                                   {goalTheme}
@@ -474,7 +532,11 @@ const ModernKanbanPage: React.FC = () => {
                     </thead>
                     <tbody>
                       {getTasksForSelectedStory().map((task) => (
-                        <tr key={task.id}>
+                        <tr 
+                          key={task.id} 
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => showSidebar(task, 'task')}
+                        >
                           <td>
                             <div>
                               <strong>{task.title}</strong>

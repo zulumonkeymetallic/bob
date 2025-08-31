@@ -52,9 +52,17 @@ interface ModernStoriesTableProps {
 
 const defaultColumns: Column[] = [
   { 
+    key: 'ref', 
+    label: 'Ref', 
+    width: '10%', 
+    visible: true, 
+    editable: false, 
+    type: 'text' 
+  },
+  { 
     key: 'title', 
     label: 'Story Title', 
-    width: '25%', 
+    width: '20%', 
     visible: true, 
     editable: true, 
     type: 'text' 
@@ -237,7 +245,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <div style={{
           minHeight: '20px',
           fontSize: '14px',
-          color: '#374151',
+          color: column.key === 'ref' ? '#dc2626' : '#374151',
+          fontWeight: column.key === 'ref' ? '600' : 'normal',
+          fontFamily: column.key === 'ref' ? 'monospace' : 'inherit',
           wordBreak: 'break-word',
           whiteSpace: 'normal',
           lineHeight: '1.4',

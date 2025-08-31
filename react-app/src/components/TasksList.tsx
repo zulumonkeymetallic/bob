@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Table, Badge, Button, Form, Row, Col, Modal, InputGroup, Dropdown, Alert } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, deleteDoc, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
+import { generateRef } from '../utils/referenceGenerator';
 
 interface TaskWithContext extends Task {
   referenceNumber?: string;
@@ -204,7 +205,21 @@ const TasksList: React.FC = () => {
     if (!currentUser || !newTask.title.trim()) return;
 
     try {
+      // Get existing task references for unique ref generation
+      const existingTasksQuery = query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid)
+      );
+      const existingSnapshot = await getDocs(existingTasksQuery);
+      const existingRefs = existingSnapshot.docs
+        .map(doc => doc.data().ref)
+        .filter(ref => ref);
+      
+      // Generate unique reference number
+      const ref = generateRef('task', existingRefs);
+
       await addDoc(collection(db, 'tasks'), {
+        ref: ref, // Add reference number
         title: newTask.title,
         description: newTask.description,
         priority: newTask.priority,

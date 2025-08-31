@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Modal, Button, Form, Alert } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { generateRef } from '../utils/referenceGenerator';
 
 interface AddGoalModalProps {
   onClose: () => void;
@@ -45,9 +46,23 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     setSubmitResult(null);
 
     try {
+      // Get existing goal references for unique ref generation
+      const existingGoalsQuery = query(
+        collection(db, 'goals'),
+        where('ownerUid', '==', currentUser.uid)
+      );
+      const existingSnapshot = await getDocs(existingGoalsQuery);
+      const existingRefs = existingSnapshot.docs
+        .map(doc => doc.data().ref)
+        .filter(ref => ref);
+      
+      // Generate unique reference number
+      const ref = generateRef('goal', existingRefs);
+      
       const selectedSize = sizes.find(s => s.value === formData.size);
       
       await addDoc(collection(db, 'goals'), {
+        ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
         theme: formData.theme,
@@ -63,7 +78,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         updatedAt: new Date()
       });
 
-      setSubmitResult('✅ Goal created successfully!');
+      setSubmitResult(`✅ Goal created successfully! (${ref})`);
       setFormData({
         title: '',
         description: '',
