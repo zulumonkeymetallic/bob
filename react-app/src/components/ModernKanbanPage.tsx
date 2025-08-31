@@ -132,12 +132,18 @@ const ModernKanbanPage: React.FC = () => {
 
     try {
       await addDoc(collection(db, 'tasks'), {
+        persona: 'personal',
+        parentType: 'story',
+        parentId: selectedStory.id,
         title: newTask.title,
         description: newTask.description,
-        storyId: selectedStory.id,
-        status: 'Not Started',
+        status: 'planned',
         effort: newTask.effort,
         priority: newTask.priority,
+        estimateMin: 0,
+        alignedToGoal: true,
+        source: 'web',
+        aiLinkConfidence: 0,
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -271,11 +277,11 @@ const ModernKanbanPage: React.FC = () => {
 
   const getTasksForSelectedStory = () => {
     if (!selectedStory) return [];
-    return tasks.filter(t => t.storyId === selectedStory.id);
+    return tasks.filter(t => t.parentType === 'story' && t.parentId === selectedStory.id);
   };
 
   const getTaskCount = (storyId: string) => {
-    return tasks.filter(t => t.storyId === storyId).length;
+    return tasks.filter(t => t.parentType === 'story' && t.parentId === storyId).length;
   };
 
   return (
@@ -480,16 +486,25 @@ const ModernKanbanPage: React.FC = () => {
                           <td onClick={(e) => e.stopPropagation()}>
                             <Dropdown>
                               <Dropdown.Toggle as={Badge} bg={task.status === 'done' ? 'success' : 
-                                  task.status === 'in_progress' ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
-                                {task.status === 'in_progress' ? 'In Progress' : 
-                                 task.status === 'done' ? 'Done' : 'Planned'}
+                                  task.status === 'in-progress' ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                                {task.status === 'in-progress' ? 'In Progress' : 
+                                 task.status === 'done' ? 'Done' : 
+                                 task.status === 'planned' ? 'Planned' :
+                                 task.status === 'todo' ? 'To Do' :
+                                 task.status === 'blocked' ? 'Blocked' : 'Unknown'}
                               </Dropdown.Toggle>
                               <Dropdown.Menu>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'todo')}>
+                                  To Do
+                                </Dropdown.Item>
                                 <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'planned')}>
                                   Planned
                                 </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'in_progress')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'in-progress')}>
                                   In Progress
+                                </Dropdown.Item>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'blocked')}>
+                                  Blocked
                                 </Dropdown.Item>
                                 <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'done')}>
                                   Done

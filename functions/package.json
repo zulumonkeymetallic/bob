@@ -12,7 +12,9 @@
   "dependencies": {
     "firebase-admin": "^12.5.0",
     "firebase-functions": "^5.1.0",
-    "openai": "^4.104.0"
+    "nodemailer": "^7.0.6",
+    "openai": "^4.104.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "eslint": "^8.57.0"

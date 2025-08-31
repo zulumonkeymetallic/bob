@@ -30,7 +30,7 @@ import { TestModeProvider } from './contexts/TestModeContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
-import { checkForUpdates, VERSION } from './version';
+// import { checkForUpdates, VERSION } from './version';
 import ComprehensiveTest from './components/ComprehensiveTest';
 
 function App() {
@@ -61,7 +61,7 @@ function AppContent() {
 
   // Check for updates on app load
   useEffect(() => {
-    checkForUpdates();
+    // checkForUpdates();
     
     // Add keyboard shortcut for force refresh (Ctrl+Shift+R or Cmd+Shift+R)
     const handleKeyDown = (event: KeyboardEvent) => {
