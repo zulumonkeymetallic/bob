@@ -38,3 +38,4 @@ const Column: React.FC<ColumnProps> = ({ column, stories }) => {
 };
 
 export default Column;
+export {};

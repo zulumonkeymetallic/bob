@@ -10,3 +10,4 @@ const KanbanContainer: React.FC = () => {
 };
 
 export default KanbanContainer;
+export {};

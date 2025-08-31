@@ -9,8 +9,10 @@ service cloud.firestore {
     match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /tasks/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /stories/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 
     // Habits
     match /habits/{id} {
