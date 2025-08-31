@@ -36,6 +36,7 @@ import SprintPlannerSimple from './components/SprintPlannerSimple';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
+import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 
 function App() {
   return (
@@ -142,6 +143,7 @@ function AppContent() {
           <Route path="/kanban" element={<ModernKanbanPage />} />
           <Route path="/kanban-old" element={<KanbanPage />} />
           <Route path="/sprint-planning" element={<SprintPlannerSimple />} />
+          <Route path="/sprint-matrix" element={<SprintPlannerMatrix />} />
           <Route path="/current-sprint" element={<CurrentSprintKanban />} />
           <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
           <Route path="/mobile-view" element={<MobileView />} />
