@@ -233,6 +233,23 @@ const Changelog: React.FC = () => {
                   https://bob20250810.web.app
                 </a>
               </Alert>
+              
+              <Alert variant="info" className="mt-3">
+                <strong>🔄 Version 2.1.5 - Modern UI Restoration - August 31, 2025</strong>
+                <br/>
+                Successfully restored modern UI components from backup branch after deployment reversion. 
+                All modern table views, inline editing functionality, and comprehensive testing framework restored.
+                <br/><br/>
+                <strong>✅ Restored Features:</strong>
+                <ul className="mb-0 mt-2">
+                  <li>Modern table views with inline editing for Goals, Stories, and Tasks</li>
+                  <li>Comprehensive CoreFunctionalityTest suite with 40+ individual tests</li>
+                  <li>Dynamic sidebar resizing and activity stream integration</li>
+                  <li>Advanced drag & drop functionality with @dnd-kit integration</li>
+                  <li>Professional icon sets (Lucide React & React Bootstrap Icons)</li>
+                  <li>Real-time data synchronization and responsive design verification</li>
+                </ul>
+              </Alert>
             </div>
           </div>
           

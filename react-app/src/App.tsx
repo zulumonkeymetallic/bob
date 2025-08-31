@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Nav, Navbar, Button } from 'react-bootstrap';
-import { Routes, Route, BrowserRouter as Router, Link, Navigate } from 'react-router-dom';
+import { Button } from 'react-bootstrap';
+import { Routes, Route, BrowserRouter as Router, Navigate } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import SprintDashboard from './components/SprintDashboard';
 import TaskListView from './components/TaskListView';
-import StoryBacklog from './components/StoryBacklog';
-import SprintAdmin from './components/SprintAdmin';
 import GoalsManagement from './components/GoalsManagement';
 import Admin from './components/Admin';
 import KanbanPage from './components/KanbanPage';
-import ResponsiveKanban from './components/ResponsiveKanban';
+import ModernKanbanPage from './components/ModernKanbanPage';
 import TasksList from './components/TasksList';
 import PlanningDashboard from './components/PlanningDashboard';
 import Calendar from './components/Calendar';
@@ -118,8 +116,17 @@ function AppContent() {
     );
   }
 
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      console.log('Sign out successful');
+    } catch (error) {
+      console.error('Sign out failed:', error);
+    }
+  };
+
   return (
-      <SidebarLayout>
+      <SidebarLayout onSignOut={handleSignOut}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/dashboard" element={<Dashboard />} />
@@ -128,11 +135,10 @@ function AppContent() {
           <Route path="/task-list" element={<TaskListView />} />
           <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
           <Route path="/modern-table" element={<ModernTableDemo />} />
-          <Route path="/kanban" element={<ResponsiveKanban />} />
+          <Route path="/kanban" element={<ModernKanbanPage />} />
           <Route path="/kanban-old" element={<KanbanPage />} />
           <Route path="/ai-planner" element={<PlanningDashboard />} />
           <Route path="/planning" element={<PlanningDashboard />} />
-          <Route path="/backlog" element={<StoryBacklog />} />
           <Route path="/stories" element={<StoriesManagement />} />
           <Route path="/personal-lists" element={<BacklogManager />} />
           <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />

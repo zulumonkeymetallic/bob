@@ -1,12 +1,12 @@
 // Version tracking for cache busting
-export const VERSION = '2.1.5.20250830.001'; // Version 2.1.5 - Comprehensive Task Management + Editing System
+export const VERSION = '3.0.0.20250831.001'; // Version 3.0.0 - Pragmatic DnD Architecture Migration
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Comprehensive Task Management + Reference Numbers + Excel-like Editing`);
-console.log(`🎯 Features: Enhanced TasksList, Reference Numbers, Quick Actions, Column Editing`);
-console.log(`🔧 Fixes: C45 (Blank Task List), C46 (Edit System), C47 (Column Editing), C48 (Reference Numbers)`);
-console.log(`🔴 Next: C49 (Goals Update), C35 (Sprint Modal), C39 (Comments System)`);
+console.log(`✅ Status: Pragmatic DnD Migration + Modern Architecture + Sign Out + Task Table`);
+console.log(`🎯 Features: ModernKanbanPage, Pragmatic DnD, Task Table, Sign Out, Removed StoryBacklog`);
+console.log(`🔧 Migration: Removed react-beautiful-dnd, Added @atlaskit/pragmatic-drag-and-drop`);
+console.log(`� Architecture: Clean separation of stories/tasks, Modern UI patterns, Type safety`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 console.log(`🎯 Features: Sprint Dashboard, Task List View, Personal Backlog Integration, Settings Page`);
 console.log(`� Fixes: C24 (Settings Menu), C28 (Dark Mode Banners) - Implemented`);
