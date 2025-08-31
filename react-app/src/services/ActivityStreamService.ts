@@ -13,8 +13,8 @@ import { db } from '../firebase';
 export interface ActivityEntry {
   id?: string;
   entityId: string;
-  entityType: 'goal' | 'story' | 'task';
-  activityType: 'created' | 'updated' | 'deleted' | 'note_added' | 'status_changed' | 'sprint_changed' | 'priority_changed';
+  entityType: 'goal' | 'story' | 'task' | 'sprint' | 'calendar_block' | 'digest' | 'habit' | 'personal_list' | 'okr' | 'resource' | 'trip' | 'work_project';
+  activityType: 'created' | 'updated' | 'deleted' | 'note_added' | 'status_changed' | 'sprint_changed' | 'priority_changed' | 'viewed' | 'clicked' | 'edited' | 'exported' | 'imported';
   userId: string;
   userEmail?: string;
   timestamp: Timestamp;
@@ -30,9 +30,18 @@ export interface ActivityEntry {
   // General description
   description: string;
   
-  // Metadata
+  // Enhanced metadata
   persona?: string;
   referenceNumber?: string;
+  entityTitle?: string;
+  uiComponent?: string;
+  userAgent?: string;
+  sessionId?: string;
+  
+  // For UI interaction tracking
+  clickType?: 'button' | 'link' | 'dropdown' | 'checkbox' | 'edit' | 'delete' | 'view' | 'drag' | 'drop';
+  elementId?: string;
+  elementClass?: string;
 }
 
 export class ActivityStreamService {
@@ -41,6 +50,7 @@ export class ActivityStreamService {
     try {
       await addDoc(collection(db, 'activity_stream'), {
         ...activity,
+        ownerUid: activity.userId, // Add ownerUid for Firestore security rules
         timestamp: serverTimestamp(),
       });
     } catch (error) {
@@ -186,11 +196,13 @@ export class ActivityStreamService {
   // Get activity stream for entity
   static subscribeToActivityStream(
     entityId: string,
+    userId: string,
     callback: (activities: ActivityEntry[]) => void
   ): () => void {
     const q = query(
       collection(db, 'activity_stream'),
       where('entityId', '==', entityId),
+      where('ownerUid', '==', userId),
       orderBy('timestamp', 'desc')
     );
 
@@ -201,6 +213,8 @@ export class ActivityStreamService {
       })) as ActivityEntry[];
       
       callback(activities);
+    }, (error) => {
+      console.error('ActivityStreamService: Error in subscribeToActivityStream:', error);
     });
   }
 
@@ -212,7 +226,7 @@ export class ActivityStreamService {
   ): () => void {
     const q = query(
       collection(db, 'activity_stream'),
-      where('userId', '==', userId),
+      where('ownerUid', '==', userId), // Use ownerUid instead of userId for security rules
       orderBy('timestamp', 'desc')
     );
 
@@ -225,6 +239,8 @@ export class ActivityStreamService {
         })) as ActivityEntry[];
       
       callback(activities);
+    }, (error) => {
+      console.error('ActivityStreamService: Error in subscribeToUserActivityStream:', error);
     });
   }
 
@@ -259,5 +275,182 @@ export class ActivityStreamService {
     if (diffDays < 7) return `${diffDays}d ago`;
     
     return date.toLocaleDateString();
+  }
+
+  // 🎯 GLOBAL UI TRACKING METHODS FOR v3.1.0
+  
+  // Generate unique session ID for tracking
+  static generateSessionId(): string {
+    return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  // Log UI element clicks with comprehensive metadata
+  static async logUIClick(
+    elementId: string,
+    elementType: 'button' | 'link' | 'dropdown' | 'checkbox' | 'edit' | 'delete' | 'view' | 'drag' | 'drop',
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    userId: string,
+    userEmail?: string,
+    additionalData?: any
+  ): Promise<void> {
+    const sessionId = sessionStorage.getItem('bobSessionId') || this.generateSessionId();
+    sessionStorage.setItem('bobSessionId', sessionId);
+
+    const description = `🖱️ UI Click: ${elementType} on ${entityType} (${elementId})`;
+    
+    console.log(`🎯 BOB v3.1.0 UI TRACKING: ${description}`, {
+      elementId,
+      elementType, 
+      entityId,
+      entityType,
+      userId,
+      userEmail,
+      timestamp: new Date().toISOString(),
+      sessionId,
+      userAgent: navigator.userAgent,
+      url: window.location.href,
+      additionalData
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'clicked',
+      userId,
+      userEmail,
+      description,
+      clickType: elementType,
+      elementId,
+      uiComponent: elementId,
+      userAgent: navigator.userAgent,
+      sessionId,
+      ...additionalData
+    });
+  }
+
+  // Add user notes to any entity
+  static async addUserNote(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    noteContent: string,
+    userId: string,
+    userEmail?: string,
+    referenceNumber?: string
+  ): Promise<void> {
+    const description = `📝 User Note: ${noteContent.substring(0, 100)}${noteContent.length > 100 ? '...' : ''}`;
+    
+    console.log(`📝 BOB v3.1.0 USER NOTE ADDED:`, {
+      entityId,
+      entityType,
+      noteContent,
+      userId,
+      userEmail,
+      referenceNumber,
+      timestamp: new Date().toISOString()
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'note_added',
+      userId,
+      userEmail,
+      noteContent,
+      description,
+      referenceNumber
+    });
+  }
+
+  // Log record views for audit trail
+  static async logRecordView(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    entityTitle: string,
+    userId: string,
+    userEmail?: string,
+    referenceNumber?: string
+  ): Promise<void> {
+    const description = `👁️ Viewed ${entityType}: ${entityTitle}`;
+    
+    console.log(`👁️ BOB v3.1.0 RECORD VIEW:`, {
+      entityId,
+      entityType,
+      entityTitle,
+      userId,
+      userEmail,
+      referenceNumber,
+      timestamp: new Date().toISOString(),
+      url: window.location.href
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'viewed',
+      userId,
+      userEmail,
+      description,
+      entityTitle,
+      referenceNumber
+    });
+  }
+
+  // Enhanced format activity icon for new activity types
+  static formatActivityIconEnhanced(activityType: string): string {
+    switch (activityType) {
+      case 'created': return '🆕';
+      case 'updated': return '✏️';
+      case 'deleted': return '🗑️';
+      case 'note_added': return '📝';
+      case 'status_changed': return '🔄';
+      case 'sprint_changed': return '🏃';
+      case 'priority_changed': return '⚡';
+      case 'viewed': return '👁️';
+      case 'clicked': return '🖱️';
+      case 'edited': return '✏️';
+      case 'exported': return '📤';
+      case 'imported': return '📥';
+      default: return '📋';
+    }
+  }
+
+  // Get comprehensive activity stream for any entity type
+  static subscribeToGlobalActivityStream(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    userId: string,
+    callback: (activities: ActivityEntry[]) => void
+  ): () => void {
+    const q = query(
+      collection(db, 'activity_stream'),
+      where('entityId', '==', entityId),
+      where('ownerUid', '==', userId),
+      orderBy('timestamp', 'desc')
+    );
+
+    console.log(`🔄 BOB v3.1.0 ACTIVITY STREAM: Subscribing to ${entityType} ${entityId}`, {
+      entityId,
+      entityType,
+      userId,
+      timestamp: new Date().toISOString()
+    });
+
+    return onSnapshot(q, (snapshot) => {
+      const activities = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as ActivityEntry[];
+      
+      console.log(`✅ BOB v3.1.0 ACTIVITY STREAM: Received ${activities.length} activities for ${entityType} ${entityId}`);
+      callback(activities);
+    }, (error) => {
+      console.error('❌ BOB v3.1.0 ACTIVITY STREAM ERROR:', error, {
+        entityId,
+        entityType,
+        userId,
+        timestamp: new Date().toISOString()
+      });
+    });
   }
 }

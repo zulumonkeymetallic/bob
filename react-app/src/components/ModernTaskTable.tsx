@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Task, Story, Goal, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useActivityTracking } from '../hooks/useActivityTracking';
 
 interface TaskTableRow extends Omit<Task, 'priority'> {
   storyTitle?: string;
@@ -135,6 +136,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onTaskDelete 
 }) => {
   const { showSidebar } = useSidebar();
+  const { trackClick } = useActivityTracking();
   const {
     attributes,
     listeners,
@@ -326,7 +328,31 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <button
-            onClick={() => showSidebar(task, 'task')}
+            onClick={async () => {
+              console.log('🔧 ModernTaskTable: EDIT button clicked', {
+                action: 'edit_button_clicked',
+                taskId: task.id,
+                taskTitle: task.title,
+                taskStatus: task.status,
+                timestamp: new Date().toISOString()
+              });
+              
+              // 🎯 BOB v3.1.0: Enhanced Activity Tracking
+              await trackClick({
+                elementId: 'task-edit-btn',
+                elementType: 'edit',
+                entityId: task.id,
+                entityType: 'task',
+                entityTitle: task.title,
+                additionalData: {
+                  taskStatus: task.status,
+                  taskPriority: task.priority,
+                  action: 'edit_button_clicked'
+                }
+              });
+              
+              showSidebar(task, 'task');
+            }}
             style={{
               color: '#2563eb',
               padding: '4px',
@@ -351,7 +377,17 @@ const SortableRow: React.FC<SortableRowProps> = ({
             Edit
           </button>
           <button
-            onClick={() => onTaskDelete(task.id)}
+            onClick={() => {
+              console.log('🗑️ ModernTaskTable: DELETE button clicked', {
+                action: 'delete_button_clicked',
+                taskId: task.id,
+                taskTitle: task.title,
+                taskStatus: task.status,
+                confirmationRequired: true,
+                timestamp: new Date().toISOString()
+              });
+              onTaskDelete(task.id);
+            }}
             style={{
               color: '#dc2626',
               padding: '4px',
@@ -390,6 +426,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   onTaskDelete,
   onTaskPriorityChange,
 }) => {
+  const { trackClick, trackView } = useActivityTracking();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -415,11 +452,53 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
+    console.log('🔄 ModernTaskTable: Drag operation initiated', {
+      action: 'drag_start',
+      activeId: active.id,
+      overId: over?.id,
+      timestamp: new Date().toISOString()
+    });
+
     if (over && active.id !== over.id) {
+      const oldIndex = tableRows.findIndex(item => item.id === active.id);
       const newIndex = tableRows.findIndex(item => item.id === over.id);
       
-      // Update priority based on new position (1-indexed)
-      await onTaskPriorityChange(active.id as string, newIndex + 1);
+      console.log('🎯 ModernTaskTable: Task reorder operation', {
+        action: 'task_reorder',
+        taskId: active.id,
+        oldPosition: oldIndex + 1,
+        newPosition: newIndex + 1,
+        oldIndex,
+        newIndex,
+        totalTasks: tableRows.length,
+        timestamp: new Date().toISOString()
+      });
+
+      try {
+        // Update priority based on new position (1-indexed)
+        await onTaskPriorityChange(active.id as string, newIndex + 1);
+        
+        console.log('✅ ModernTaskTable: Task reorder successful', {
+          action: 'task_reorder_success',
+          taskId: active.id,
+          newPriority: newIndex + 1,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        console.error('❌ ModernTaskTable: Task reorder failed', {
+          action: 'task_reorder_error',
+          taskId: active.id,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+    } else {
+      console.log('↩️ ModernTaskTable: Drag cancelled - no position change', {
+        action: 'drag_cancelled',
+        activeId: active.id,
+        overId: over?.id,
+        timestamp: new Date().toISOString()
+      });
     }
   };
 

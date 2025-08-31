@@ -205,6 +205,18 @@ const TasksList: React.FC = () => {
     if (!currentUser || !newTask.title.trim()) return;
 
     try {
+      console.log('🚀 TasksList: Starting TASK creation', {
+        action: 'task_creation_start',
+        user: currentUser.uid,
+        persona: currentPersona,
+        title: newTask.title.trim(),
+        parentType: newTask.parentType,
+        parentId: newTask.parentId,
+        priority: newTask.priority,
+        effort: newTask.effort,
+        timestamp: new Date().toISOString()
+      });
+
       // Get existing task references for unique ref generation
       const existingTasksQuery = query(
         collection(db, 'tasks'),
@@ -217,8 +229,13 @@ const TasksList: React.FC = () => {
       
       // Generate unique reference number
       const ref = generateRef('task', existingRefs);
+      console.log('🏷️ TasksList: Generated reference', {
+        action: 'reference_generated',
+        ref: ref,
+        timestamp: new Date().toISOString()
+      });
 
-      await addDoc(collection(db, 'tasks'), {
+      const taskData = {
         ref: ref, // Add reference number
         title: newTask.title,
         description: newTask.description,
@@ -227,12 +244,27 @@ const TasksList: React.FC = () => {
         status: newTask.status,
         theme: newTask.theme,
         persona: currentPersona,
-        ownerUid: currentUser.uid,
+        ownerUid: currentUser.uid, // Ensure ownerUid is included
         storyId: newTask.parentType === 'story' ? newTask.parentId : null,
         projectId: newTask.parentType === 'project' ? newTask.parentId : null,
         sprintId: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
+      };
+
+      console.log('💾 TasksList: Saving TASK to database', {
+        action: 'task_save_start',
+        data: taskData,
+        timestamp: new Date().toISOString()
+      });
+
+      await addDoc(collection(db, 'tasks'), taskData);
+      
+      console.log('✅ TasksList: TASK created successfully', {
+        action: 'task_creation_success',
+        ref: ref,
+        taskId: 'pending_from_firestore',
+        timestamp: new Date().toISOString()
       });
 
       setNewTask({
@@ -247,7 +279,12 @@ const TasksList: React.FC = () => {
       });
       setShowAddTask(false);
     } catch (error) {
-      console.error('Error adding task:', error);
+      console.error('❌ TasksList: TASK creation failed', {
+        action: 'task_creation_error',
+        error: error.message,
+        formData: newTask,
+        timestamp: new Date().toISOString()
+      });
     }
   };
 
@@ -255,37 +292,107 @@ const TasksList: React.FC = () => {
     if (!currentUser) return;
 
     try {
+      console.log('🔧 TasksList: Starting TASK update', {
+        action: 'task_update_start',
+        taskId: taskId,
+        updates: updates,
+        user: currentUser.uid,
+        timestamp: new Date().toISOString()
+      });
+
       await updateDoc(doc(db, 'tasks', taskId), {
         ...updates,
         updatedAt: serverTimestamp()
       });
+
+      console.log('✅ TasksList: TASK updated successfully', {
+        action: 'task_update_success',
+        taskId: taskId,
+        updates: updates,
+        timestamp: new Date().toISOString()
+      });
     } catch (error) {
-      console.error('Error updating task:', error);
+      console.error('❌ TasksList: TASK update failed', {
+        action: 'task_update_error',
+        taskId: taskId,
+        updates: updates,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
     }
   };
 
   const handleDeleteTask = async (taskId: string) => {
     if (!currentUser) return;
     
+    console.log('🗑️ TasksList: DELETE confirmation requested', {
+      action: 'delete_confirmation_requested',
+      taskId: taskId,
+      user: currentUser.uid,
+      timestamp: new Date().toISOString()
+    });
+
     if (window.confirm('Are you sure you want to delete this task?')) {
       try {
+        console.log('💾 TasksList: Starting TASK deletion', {
+          action: 'task_delete_start',
+          taskId: taskId,
+          user: currentUser.uid,
+          timestamp: new Date().toISOString()
+        });
+
         await deleteDoc(doc(db, 'tasks', taskId));
+        
+        console.log('✅ TasksList: TASK deleted successfully', {
+          action: 'task_delete_success',
+          taskId: taskId,
+          timestamp: new Date().toISOString()
+        });
       } catch (error) {
-        console.error('Error deleting task:', error);
+        console.error('❌ TasksList: TASK deletion failed', {
+          action: 'task_delete_error',
+          taskId: taskId,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        });
       }
+    } else {
+      console.log('↩️ TasksList: DELETE cancelled by user', {
+        action: 'delete_cancelled',
+        taskId: taskId,
+        timestamp: new Date().toISOString()
+      });
     }
   };
 
   // Quick edit functions
   const handleQuickStatusChange = async (taskId: string, newStatus: string) => {
+    console.log('⚡ TasksList: Quick STATUS change', {
+      action: 'quick_status_change',
+      taskId: taskId,
+      newStatus: newStatus,
+      timestamp: new Date().toISOString()
+    });
     await handleUpdateTask(taskId, { status: newStatus as any });
   };
 
   const handleQuickSprintAssign = async (taskId: string, sprintId: string) => {
+    console.log('⚡ TasksList: Quick SPRINT assign', {
+      action: 'quick_sprint_assign',
+      taskId: taskId,
+      sprintId: sprintId || 'unassigned',
+      timestamp: new Date().toISOString()
+    });
     await handleUpdateTask(taskId, { sprintId: sprintId || null });
   };
 
   const handleQuickPriorityChange = async (taskId: string, priority: string) => {
+    console.log('⚡ TasksList: Quick PRIORITY change', {
+      action: 'quick_priority_change',
+      taskId: taskId,
+      newPriority: priority,
+      timestamp: new Date().toISOString()
+    });
     await handleUpdateTask(taskId, { priority: priority as any });
   };
 

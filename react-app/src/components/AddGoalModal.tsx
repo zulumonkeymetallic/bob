@@ -46,6 +46,16 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     setSubmitResult(null);
 
     try {
+      console.log('🚀 AddGoalModal: Starting GOAL creation', {
+        action: 'goal_creation_start',
+        user: currentUser.uid,
+        persona: currentPersona,
+        title: formData.title.trim(),
+        theme: formData.theme,
+        size: formData.size,
+        timestamp: new Date().toISOString()
+      });
+
       // Get existing goal references for unique ref generation
       const existingGoalsQuery = query(
         collection(db, 'goals'),
@@ -58,10 +68,15 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       
       // Generate unique reference number
       const ref = generateRef('goal', existingRefs);
+      console.log('🏷️ AddGoalModal: Generated reference', {
+        action: 'reference_generated',
+        ref: ref,
+        timestamp: new Date().toISOString()
+      });
       
       const selectedSize = sizes.find(s => s.value === formData.size);
       
-      await addDoc(collection(db, 'goals'), {
+      const goalData = {
         ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
@@ -72,10 +87,25 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         targetDate: formData.targetDate ? new Date(formData.targetDate) : null,
         status: 'Not Started',
         persona: 'personal',
-        ownerUid: currentUser.uid,
+        ownerUid: currentUser.uid, // Ensure ownerUid is included
         kpis: [],
         createdAt: new Date(),
         updatedAt: new Date()
+      };
+
+      console.log('💾 AddGoalModal: Saving GOAL to database', {
+        action: 'goal_save_start',
+        data: goalData,
+        timestamp: new Date().toISOString()
+      });
+
+      await addDoc(collection(db, 'goals'), goalData);
+      
+      console.log('✅ AddGoalModal: GOAL created successfully', {
+        action: 'goal_creation_success',
+        ref: ref,
+        goalId: 'pending_from_firestore',
+        timestamp: new Date().toISOString()
       });
 
       setSubmitResult(`✅ Goal created successfully! (${ref})`);
@@ -96,7 +126,12 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       }, 1500);
 
     } catch (error) {
-      console.error('Goal creation error:', error);
+      console.error('❌ AddGoalModal: GOAL creation failed', {
+        action: 'goal_creation_error',
+        error: error.message,
+        formData: formData,
+        timestamp: new Date().toISOString()
+      });
       setSubmitResult(`❌ Failed to create goal: ${error.message}`);
     }
     setIsSubmitting(false);

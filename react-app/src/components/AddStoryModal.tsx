@@ -64,6 +64,16 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
     setSubmitResult(null);
 
     try {
+      console.log('🚀 AddStoryModal: Starting STORY creation', {
+        action: 'story_creation_start',
+        user: currentUser.uid,
+        persona: currentPersona,
+        title: formData.title.trim(),
+        goalId: formData.goalId,
+        priority: formData.priority,
+        timestamp: new Date().toISOString()
+      });
+
       // Get existing story references for unique ref generation
       const existingStoriesQuery = query(
         collection(db, 'stories'),
@@ -76,8 +86,13 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
       
       // Generate unique reference number
       const ref = generateRef('story', existingRefs);
+      console.log('🏷️ AddStoryModal: Generated reference', {
+        action: 'reference_generated',
+        ref: ref,
+        timestamp: new Date().toISOString()
+      });
 
-      await addDoc(collection(db, 'stories'), {
+      const storyData = {
         ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
@@ -86,12 +101,28 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
         points: parseInt(formData.points.toString()),
         status: 'backlog',
         persona: currentPersona,
-        ownerUid: currentUser.uid,
+        ownerUid: currentUser.uid, // Ensure ownerUid is included
         orderIndex: Date.now(), // Simple ordering by creation time
         tags: [],
         acceptanceCriteria: [],
         createdAt: new Date(),
         updatedAt: new Date()
+      };
+
+      console.log('💾 AddStoryModal: Saving STORY to database', {
+        action: 'story_save_start',
+        data: storyData,
+        timestamp: new Date().toISOString()
+      });
+
+      await addDoc(collection(db, 'stories'), storyData);
+      
+      console.log('✅ AddStoryModal: STORY created successfully', {
+        action: 'story_creation_success',
+        ref: ref,
+        storyId: 'pending_from_firestore',
+        goalId: formData.goalId || 'none',
+        timestamp: new Date().toISOString()
       });
 
       setSubmitResult(`✅ Story created successfully! (${ref})`);
@@ -104,7 +135,12 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
       }, 1500);
 
     } catch (error) {
-      console.error('Story creation error:', error);
+      console.error('❌ AddStoryModal: STORY creation failed', {
+        action: 'story_creation_error',
+        error: error.message,
+        formData: formData,
+        timestamp: new Date().toISOString()
+      });
       setSubmitResult(`❌ Failed to create story: ${error.message}`);
     }
     setIsSubmitting(false);

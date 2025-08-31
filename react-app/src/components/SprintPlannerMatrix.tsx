@@ -9,12 +9,14 @@ import {
   Flag
 } from 'react-bootstrap-icons';
 
-import { Goal, Sprint } from '../types';
+import { Goal, Sprint, Story, Task } from '../types';
 import { EnhancedStory, SubGoal } from '../types/v3.0.8-types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useThemeColors, getThemeColorById } from '../hooks/useThemeColor';
 import StoryCard from './StoryCard';
+import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface PlannerRowExpansion {
   [themeId: string]: {
@@ -51,187 +53,83 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   // Theme system
   const { themes } = useThemeColors();
 
-  // Load data - using mock data instead of direct database queries
+  // Load data - using real Firebase data
   useEffect(() => {
-    // Most components should not directly talk to the database
-    // Use mock data for now until proper data flow is established
-    const loadMockData = () => {
-      setLoading(true);
-      
-      // Mock sprints data
-      const mockSprints: Sprint[] = [
-        {
-          id: 'sprint-1',
-          ref: 'SPR-001',
-          name: 'Current Sprint',
-          status: 'active',
-          startDate: Date.now() - (7 * 24 * 60 * 60 * 1000), // 1 week ago
-          endDate: Date.now() + (7 * 24 * 60 * 60 * 1000), // 1 week from now
-          planningDate: Date.now() - (10 * 24 * 60 * 60 * 1000),
-          retroDate: Date.now() + (7 * 24 * 60 * 60 * 1000),
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        },
-        {
-          id: 'sprint-2',
-          ref: 'SPR-002', 
-          name: 'Next Sprint',
-          status: 'planned',
-          startDate: Date.now() + (7 * 24 * 60 * 60 * 1000),
-          endDate: Date.now() + (14 * 24 * 60 * 60 * 1000),
-          planningDate: Date.now() + (5 * 24 * 60 * 60 * 1000),
-          retroDate: Date.now() + (14 * 24 * 60 * 60 * 1000),
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        },
-        {
-          id: 'sprint-3',
-          ref: 'SPR-003',
-          name: 'Future Sprint',
-          status: 'planned',
-          startDate: Date.now() + (14 * 24 * 60 * 60 * 1000),
-          endDate: Date.now() + (21 * 24 * 60 * 60 * 1000),
-          planningDate: Date.now() + (12 * 24 * 60 * 60 * 1000),
-          retroDate: Date.now() + (21 * 24 * 60 * 60 * 1000),
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        }
-      ];
+    if (!currentUser) return;
 
-      // Mock goals data
-      const mockGoals: Goal[] = [
-        {
-          id: 'goal-1',
-          persona: 'personal',
-          title: 'Complete Health & Fitness Program',
-          description: 'Comprehensive health improvement initiative',
-          theme: 'Health',
-          size: 'L',
-          timeToMasterHours: 100,
-          confidence: 0.8,
-          status: 'Work in Progress',
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        },
-        {
-          id: 'goal-2',
-          persona: 'personal',
-          title: 'Launch Side Business',
-          description: 'Start and scale consulting business',
-          theme: 'Wealth',
-          size: 'XL',
-          timeToMasterHours: 200,
-          confidence: 0.6,
-          status: 'Work in Progress',
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        },
-        {
-          id: 'goal-3',
-          persona: 'personal',
-          title: 'Master New Skills',
-          description: 'Learn advanced programming and design',
-          theme: 'Growth',
-          size: 'M',
-          timeToMasterHours: 80,
-          confidence: 0.9,
-          status: 'Work in Progress',
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        }
-      ];
+    const unsubscribes: (() => void)[] = [];
 
-      // Mock stories data
-      const mockStories: EnhancedStory[] = [
-        {
-          id: 'story-1',
-          ref: 'STRY-001',
-          persona: 'personal',
-          title: 'Set up gym routine',
-          goalId: 'goal-1',
-          sprintId: 'sprint-1',
-          status: 'active',
-          priority: 'P1',
-          points: 5,
-          wipLimit: 3,
-          orderIndex: 1,
-          rank: 1,
-          rankByLane: {},
-          rankByCell: { 'sprint-1/goal-1/': 1 },
-          dragLockVersion: 0,
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        },
-        {
-          id: 'story-2',
-          ref: 'STRY-002',
-          persona: 'personal',
-          title: 'Create business plan',
-          goalId: 'goal-2',
-          sprintId: 'sprint-1',
-          status: 'active',
-          priority: 'P2',
-          points: 8,
-          wipLimit: 3,
-          orderIndex: 2,
-          rank: 2,
-          rankByLane: {},
-          rankByCell: { 'sprint-1/goal-2/': 1 },
-          dragLockVersion: 0,
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        },
-        {
-          id: 'story-3',
-          ref: 'STRY-003',
-          persona: 'personal',
-          title: 'Complete online course',
-          goalId: 'goal-3',
-          sprintId: 'sprint-2',
-          status: 'backlog',
-          priority: 'P1',
-          points: 3,
-          wipLimit: 3,
-          orderIndex: 3,
-          rank: 3,
-          rankByLane: {},
-          rankByCell: { 'sprint-2/goal-3/': 1 },
-          dragLockVersion: 0,
-          ownerUid: currentUser?.uid || '',
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        }
-      ];
-
-      // Set mock data
-      setSprints(mockSprints);
-      setGoals(mockGoals);
-      setStories(mockStories);
-      setSubGoals([]); // No subgoals for now
-
-      // Load UI state from localStorage
-      if (activePersona) {
-        const savedExpansion = localStorage.getItem(`plannerRowExpansion_${activePersona}`);
-        if (savedExpansion) {
-          setRowExpansion(JSON.parse(savedExpansion));
-        }
-      }
-
-      setLoading(false);
-    };
-
-    // Simulate loading delay
-    const timer = setTimeout(loadMockData, 500);
+    // Load sprints
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('startDate', 'asc')
+    );
     
-    return () => clearTimeout(timer);
+    const sprintsUnsub = onSnapshot(sprintsQuery, (snapshot) => {
+      const sprintsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Sprint[];
+      setSprints(sprintsData);
+      console.log('SprintPlannerMatrix: Loaded', sprintsData.length, 'sprints');
+    });
+    unsubscribes.push(sprintsUnsub);
+
+    // Load goals
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', activePersona)
+    );
+    
+    const goalsUnsub = onSnapshot(goalsQuery, (snapshot) => {
+      const goalsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Goal[];
+      setGoals(goalsData);
+      console.log('SprintPlannerMatrix: Loaded', goalsData.length, 'goals');
+    });
+    unsubscribes.push(goalsUnsub);
+
+    // Load stories
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', activePersona)
+    );
+    
+    const storiesUnsub = onSnapshot(storiesQuery, (snapshot) => {
+      const storiesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        rank: doc.data().rank || 0,
+        rankByLane: doc.data().rankByLane || {},
+        rankByCell: doc.data().rankByCell || {},
+        dragLockVersion: doc.data().dragLockVersion || 0
+      })) as EnhancedStory[];
+      setStories(storiesData);
+      console.log('SprintPlannerMatrix: Loaded', storiesData.length, 'stories');
+    });
+    unsubscribes.push(storiesUnsub);
+
+    // TODO: Load sub-goals when that collection is implemented
+    setSubGoals([]);
+
+    // Load UI state from localStorage
+    if (activePersona) {
+      const savedExpansion = localStorage.getItem(`plannerRowExpansion_${activePersona}`);
+      if (savedExpansion) {
+        setRowExpansion(JSON.parse(savedExpansion));
+      }
+    }
+    
+    setLoading(false);
+
+    return () => {
+      unsubscribes.forEach(unsub => unsub());
+    };
   }, [currentUser, activePersona]);
 
   // Save expansion state
@@ -490,16 +388,16 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
 
       {/* Instructions */}
       <div className="mt-4 p-3 bg-light rounded">
-        <h6>📋 Sprint Planner Matrix (v3.0.8 Preview)</h6>
+        <h6>📋 Sprint Planner Matrix (v3.0.8 - Real Data)</h6>
         <small className="text-muted">
           This is the 2-D Sprint Planner Matrix from the v3.0.8 specification. 
-          Stories can be organized by Theme → Goal → SubGoal hierarchy (rows) and Sprint timeline (columns).
+          Stories are organized by Theme → Goal → SubGoal hierarchy (rows) and Sprint timeline (columns).
           <br />
-          <strong>Status:</strong> Using mock data (components should not directly query database per architecture)
+          <strong>Status:</strong> Using live Firebase data with real-time updates
           <br />
-          <strong>Features visible:</strong> Reference numbers (STRY-###), theme colors, priority display
+          <strong>Features:</strong> Reference numbers (STRY-###), theme colors, priority display, data persistence
           <br />
-          <strong>Next iterations:</strong> Connect to proper data flow, drag & drop functionality, SubGoal management
+          <strong>Next iterations:</strong> Drag & drop functionality, SubGoal management, enhanced cell interactions
         </small>
       </div>
     </div>
