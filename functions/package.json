@@ -1,6 +1,6 @@
 {
   "name": "bob-functions",
-  "version": "3.0.4",
+  "version": "3.0.7",
   "private": true,
   "engines": {
     "node": "22"
