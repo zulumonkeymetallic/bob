@@ -59,17 +59,21 @@ function AppContent() {
   const deviceInfo = useDeviceInfo();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [forceRender, setForceRender] = useState(0);
   
   // Data for the global sidebar
   const [goals, setGoals] = useState([]);
   const [stories, setStories] = useState([]);
   const [sprints, setSprints] = useState([]);
 
-  // Debug location changes
+  // Debug location changes and force re-render
   useEffect(() => {
     console.log('🔄 BOB v3.1.1: Location changed to:', location.pathname);
     console.log('🔄 Location key:', location.key);
-  }, [location]);
+    
+    // Force component re-render by updating state
+    setForceRender(prev => prev + 1);
+  }, [location.pathname, location.key]);
 
   // Check for updates on app load
   useEffect(() => {
@@ -152,41 +156,43 @@ function AppContent() {
           zIndex: 1000,
           fontFamily: 'monospace'
         }}>
-          Route: {location.pathname} | Key: {location.key}
+          Route: {location.pathname} | Render: {forceRender}
         </div>
         
-        <Routes key={location.pathname}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/sprint-dashboard" element={<SprintDashboard />} />
-          <Route path="/tasks" element={<TasksList />} />
-          <Route path="/task-list" element={<TaskListView />} />
-          <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
-          <Route path="/modern-table" element={<ModernTableDemo />} />
-          <Route path="/kanban" element={<ModernKanbanPage />} />
-          <Route path="/kanban-old" element={<KanbanPage />} />
-          <Route path="/sprint-planning" element={<SprintPlannerMatrix />} />
-          <Route path="/sprint-simple" element={<SprintPlannerSimple />} />
-          <Route path="/current-sprint" element={<CurrentSprintKanban />} />
-          <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
-          <Route path="/mobile-view" element={<MobileView />} />
-          <Route path="/ai-planner" element={<PlanningDashboard />} />
-          <Route path="/planning" element={<PlanningDashboard />} />
-          <Route path="/stories" element={<StoriesManagement />} />
-          <Route path="/personal-lists" element={<BacklogManager />} />
-          <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
-          <Route path="/personal-backlogs" element={<BacklogManager />} />
-          <Route path="/goals" element={<GoalsManagement />} />
-          <Route path="/goals-management" element={<GoalsManagement />} />
-          <Route path="/canvas" element={<VisualCanvas />} />
-          <Route path="/visual-canvas" element={<VisualCanvas />} />
-          <Route path="/calendar" element={<Calendar />} />
-          <Route path="/settings" element={<Navigate to="/theme-colors" replace />} />
-          <Route path="/theme-colors" element={<ThemeColorManager />} />
-          <Route path="/admin" element={<Admin />} />
-          <Route path="/test" element={<ComprehensiveTest />} />
-          <Route path="/changelog" element={<Changelog />} />
-        </Routes>
+        <div key={`${location.pathname}-${forceRender}`}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/sprint-dashboard" element={<SprintDashboard />} />
+            <Route path="/tasks" element={<TasksList />} />
+            <Route path="/task-list" element={<TaskListView />} />
+            <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
+            <Route path="/modern-table" element={<ModernTableDemo />} />
+            <Route path="/kanban" element={<ModernKanbanPage />} />
+            <Route path="/kanban-old" element={<KanbanPage />} />
+            <Route path="/sprint-planning" element={<SprintPlannerMatrix />} />
+            <Route path="/sprint-simple" element={<SprintPlannerSimple />} />
+            <Route path="/current-sprint" element={<CurrentSprintKanban />} />
+            <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
+            <Route path="/mobile-view" element={<MobileView />} />
+            <Route path="/ai-planner" element={<PlanningDashboard />} />
+            <Route path="/planning" element={<PlanningDashboard />} />
+            <Route path="/stories" element={<StoriesManagement />} />
+            <Route path="/personal-lists" element={<BacklogManager />} />
+            <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
+            <Route path="/personal-backlogs" element={<BacklogManager />} />
+            <Route path="/goals" element={<GoalsManagement />} />
+            <Route path="/goals-management" element={<GoalsManagement />} />
+            <Route path="/canvas" element={<VisualCanvas />} />
+            <Route path="/visual-canvas" element={<VisualCanvas />} />
+            <Route path="/calendar" element={<Calendar />} />
+            <Route path="/settings" element={<Navigate to="/theme-colors" replace />} />
+            <Route path="/theme-colors" element={<ThemeColorManager />} />
+            <Route path="/admin" element={<Admin />} />
+            <Route path="/test" element={<ComprehensiveTest />} />
+            <Route path="/changelog" element={<Changelog />} />
+          </Routes>
+        </div>
 
         {/* Floating Action Button for quick adds */}
         <FloatingActionButton onImportClick={() => setShowImportModal(true)} />
