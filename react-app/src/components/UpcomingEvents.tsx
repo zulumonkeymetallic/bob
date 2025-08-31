@@ -66,3 +66,5 @@ const UpcomingEvents = () => {
 };
 
 export default UpcomingEvents;
+
+export {};

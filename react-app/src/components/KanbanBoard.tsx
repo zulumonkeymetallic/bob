@@ -74,3 +74,4 @@ export default function KanbanBoard({ columns, onDrop, onStorySelect }) {
     </div>
   );
 }
+export {};

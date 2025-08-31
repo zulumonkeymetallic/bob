@@ -1,0 +1,327 @@
+/* Dynamic Theme Color System */
+
+/* CSS Custom Properties for Theme Colors */
+:root {
+  /* Default Theme Colors - Material Design inspired */
+  --theme-health-primary: #e53e3e;
+  --theme-health-light: rgba(229, 62, 62, 0.2);
+  --theme-health-lighter: rgba(229, 62, 62, 0.1);
+  --theme-health-dark: rgb(189, 22, 22);
+  --theme-health-darker: rgb(149, 2, 2);
+
+  --theme-growth-primary: #3182ce;
+  --theme-growth-light: rgba(49, 130, 206, 0.2);
+  --theme-growth-lighter: rgba(49, 130, 206, 0.1);
+  --theme-growth-dark: rgb(9, 90, 166);
+  --theme-growth-darker: rgb(0, 70, 146);
+
+  --theme-wealth-primary: #38a169;
+  --theme-wealth-light: rgba(56, 161, 105, 0.2);
+  --theme-wealth-lighter: rgba(56, 161, 105, 0.1);
+  --theme-wealth-dark: rgb(16, 121, 65);
+  --theme-wealth-darker: rgb(0, 101, 45);
+
+  --theme-tribe-primary: #805ad5;
+  --theme-tribe-light: rgba(128, 90, 213, 0.2);
+  --theme-tribe-lighter: rgba(128, 90, 213, 0.1);
+  --theme-tribe-dark: rgb(88, 50, 173);
+  --theme-tribe-darker: rgb(68, 30, 153);
+
+  --theme-home-primary: #d69e2e;
+  --theme-home-light: rgba(214, 158, 46, 0.2);
+  --theme-home-lighter: rgba(214, 158, 46, 0.1);
+  --theme-home-dark: rgb(174, 118, 6);
+  --theme-home-darker: rgb(154, 98, 0);
+
+  /* Defect status styling */
+  --defect-primary: #dc3545;
+  --defect-light: rgba(220, 53, 69, 0.2);
+  --defect-lighter: rgba(220, 53, 69, 0.1);
+}
+
+/* Theme-based component styling */
+
+/* Story Cards with Theme Colors */
+.story-card[data-theme="Health"] {
+  border-left: 4px solid var(--theme-health-primary);
+  background-color: var(--theme-health-lighter);
+}
+
+.story-card[data-theme="Growth"] {
+  border-left: 4px solid var(--theme-growth-primary);
+  background-color: var(--theme-growth-lighter);
+}
+
+.story-card[data-theme="Wealth"] {
+  border-left: 4px solid var(--theme-wealth-primary);
+  background-color: var(--theme-wealth-lighter);
+}
+
+.story-card[data-theme="Tribe"] {
+  border-left: 4px solid var(--theme-tribe-primary);
+  background-color: var(--theme-tribe-lighter);
+}
+
+.story-card[data-theme="Home"] {
+  border-left: 4px solid var(--theme-home-primary);
+  background-color: var(--theme-home-lighter);
+}
+
+/* Defect status cards - special styling */
+.story-card[data-status="defect"] {
+  border-left: 4px solid var(--defect-primary);
+  background-color: var(--defect-lighter);
+  border: 1px solid var(--defect-light);
+}
+
+/* Kanban column styling for defects */
+.kanban-column[data-status="defect"] .card-header {
+  background-color: var(--defect-lighter);
+  border-bottom: 2px solid var(--defect-primary);
+}
+
+.kanban-column[data-status="defect"] .card-header h5 {
+  color: var(--defect-primary);
+  font-weight: 600;
+}
+
+/* Dark mode adjustments */
+[data-bs-theme="dark"] .story-card[data-theme="Health"] {
+  background-color: var(--theme-health-light);
+  border-color: var(--theme-health-primary);
+}
+
+[data-bs-theme="dark"] .story-card[data-theme="Growth"] {
+  background-color: var(--theme-growth-light);
+  border-color: var(--theme-growth-primary);
+}
+
+[data-bs-theme="dark"] .story-card[data-theme="Wealth"] {
+  background-color: var(--theme-wealth-light);
+  border-color: var(--theme-wealth-primary);
+}
+
+[data-bs-theme="dark"] .story-card[data-theme="Tribe"] {
+  background-color: var(--theme-tribe-light);
+  border-color: var(--theme-tribe-primary);
+}
+
+[data-bs-theme="dark"] .story-card[data-theme="Home"] {
+  background-color: var(--theme-home-light);
+  border-color: var(--theme-home-primary);
+}
+
+/* Dark mode for defect cards */
+[data-bs-theme="dark"] .story-card[data-status="defect"] {
+  background-color: var(--defect-light);
+  border-color: var(--defect-primary);
+}
+
+[data-bs-theme="dark"] .kanban-column[data-status="defect"] .card-header {
+  background-color: var(--defect-light);
+}
+
+/* Theme Badges */
+.theme-badge.Health {
+  background-color: var(--theme-health-primary) !important;
+  color: white;
+}
+
+.theme-badge.Growth {
+  background-color: var(--theme-growth-primary) !important;
+  color: white;
+}
+
+.theme-badge.Wealth {
+  background-color: var(--theme-wealth-primary) !important;
+  color: white;
+}
+
+.theme-badge.Tribe {
+  background-color: var(--theme-tribe-primary) !important;
+  color: white;
+}
+
+.theme-badge.Home {
+  background-color: var(--theme-home-primary) !important;
+  color: white;
+}
+
+/* Task Cards inherit from parent story theme */
+.task-card[data-parent-theme="Health"] {
+  border-left: 2px solid var(--theme-health-primary);
+  background-color: var(--theme-health-lighter);
+}
+
+.task-card[data-parent-theme="Growth"] {
+  border-left: 2px solid var(--theme-growth-primary);
+  background-color: var(--theme-growth-lighter);
+}
+
+.task-card[data-parent-theme="Wealth"] {
+  border-left: 2px solid var(--theme-wealth-primary);
+  background-color: var(--theme-wealth-lighter);
+}
+
+.task-card[data-parent-theme="Tribe"] {
+  border-left: 2px solid var(--theme-tribe-primary);
+  background-color: var(--theme-tribe-lighter);
+}
+
+.task-card[data-parent-theme="Home"] {
+  border-left: 2px solid var(--theme-home-primary);
+  background-color: var(--theme-home-lighter);
+}
+
+/* Dark mode for task cards */
+[data-bs-theme="dark"] .task-card[data-parent-theme="Health"] {
+  background-color: var(--theme-health-light);
+}
+
+[data-bs-theme="dark"] .task-card[data-parent-theme="Growth"] {
+  background-color: var(--theme-growth-light);
+}
+
+[data-bs-theme="dark"] .task-card[data-parent-theme="Wealth"] {
+  background-color: var(--theme-wealth-light);
+}
+
+[data-bs-theme="dark"] .task-card[data-parent-theme="Tribe"] {
+  background-color: var(--theme-tribe-light);
+}
+
+[data-bs-theme="dark"] .task-card[data-parent-theme="Home"] {
+  background-color: var(--theme-home-light);
+}
+
+/* Calendar time blocks */
+.calendar-block[data-theme="Health"] {
+  background-color: var(--theme-health-lighter);
+  border-color: var(--theme-health-primary);
+}
+
+.calendar-block[data-theme="Growth"] {
+  background-color: var(--theme-growth-lighter);
+  border-color: var(--theme-growth-primary);
+}
+
+.calendar-block[data-theme="Wealth"] {
+  background-color: var(--theme-wealth-lighter);
+  border-color: var(--theme-wealth-primary);
+}
+
+.calendar-block[data-theme="Tribe"] {
+  background-color: var(--theme-tribe-lighter);
+  border-color: var(--theme-tribe-primary);
+}
+
+.calendar-block[data-theme="Home"] {
+  background-color: var(--theme-home-lighter);
+  border-color: var(--theme-home-primary);
+}
+
+/* Dark mode for calendar blocks */
+[data-bs-theme="dark"] .calendar-block[data-theme="Health"] {
+  background-color: var(--theme-health-light);
+}
+
+[data-bs-theme="dark"] .calendar-block[data-theme="Growth"] {
+  background-color: var(--theme-growth-light);
+}
+
+[data-bs-theme="dark"] .calendar-block[data-theme="Wealth"] {
+  background-color: var(--theme-wealth-light);
+}
+
+[data-bs-theme="dark"] .calendar-block[data-theme="Tribe"] {
+  background-color: var(--theme-tribe-light);
+}
+
+[data-bs-theme="dark"] .calendar-block[data-theme="Home"] {
+  background-color: var(--theme-home-light);
+}
+
+/* Progress bars with theme colors */
+.progress-health .progress-bar {
+  background-color: var(--theme-health-primary);
+}
+
+.progress-growth .progress-bar {
+  background-color: var(--theme-growth-primary);
+}
+
+.progress-wealth .progress-bar {
+  background-color: var(--theme-wealth-primary);
+}
+
+.progress-tribe .progress-bar {
+  background-color: var(--theme-tribe-primary);
+}
+
+.progress-home .progress-bar {
+  background-color: var(--theme-home-primary);
+}
+
+/* Hover effects */
+.story-card[data-theme="Health"]:hover {
+  background-color: var(--theme-health-light);
+  border-left-color: var(--theme-health-dark);
+}
+
+.story-card[data-theme="Growth"]:hover {
+  background-color: var(--theme-growth-light);
+  border-left-color: var(--theme-growth-dark);
+}
+
+.story-card[data-theme="Wealth"]:hover {
+  background-color: var(--theme-wealth-light);
+  border-left-color: var(--theme-wealth-dark);
+}
+
+.story-card[data-theme="Tribe"]:hover {
+  background-color: var(--theme-tribe-light);
+  border-left-color: var(--theme-tribe-dark);
+}
+
+.story-card[data-theme="Home"]:hover {
+  background-color: var(--theme-home-light);
+  border-left-color: var(--theme-home-dark);
+}
+
+/* Theme color picker specific styles */
+.color-preview {
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.color-preview:hover {
+  transform: scale(1.1);
+}
+
+/* Ensure proper contrast for badges */
+.badge.theme-badge {
+  font-weight: 600;
+  font-size: 0.75em;
+  padding: 0.35em 0.65em;
+}
+
+/* Dashboard chart colors */
+.chart-health {
+  color: var(--theme-health-primary);
+}
+
+.chart-growth {
+  color: var(--theme-growth-primary);
+}
+
+.chart-wealth {
+  color: var(--theme-wealth-primary);
+}
+
+.chart-tribe {
+  color: var(--theme-tribe-primary);
+}
+
+.chart-home {
+  color: var(--theme-home-primary);
+}

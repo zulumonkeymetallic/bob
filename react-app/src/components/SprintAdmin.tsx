@@ -11,3 +11,5 @@ const SprintAdmin: React.FC = () => {
 };
 
 export default SprintAdmin;
+
+export {};

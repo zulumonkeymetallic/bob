@@ -10,3 +10,4 @@ const TestFirebase: React.FC = () => {
 };
 
 export default TestFirebase;
+export {};

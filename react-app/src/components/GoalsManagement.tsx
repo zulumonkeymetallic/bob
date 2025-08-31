@@ -1,209 +1,226 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Card, Button, Form, Modal, Table, Badge } from 'react-bootstrap';
-import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
+import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
 import { Goal } from '../types';
+import ModernGoalsTable from './ModernGoalsTable';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [showAddGoal, setShowAddGoal] = useState(false);
-  const [newGoal, setNewGoal] = useState({
-    title: '',
-    description: '',
-    theme: 'Growth' as const,
-    size: 'M' as const,
-    confidence: 0.5,
-    targetDate: ''
-  });
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterTheme, setFilterTheme] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!currentUser) return;
+    loadGoalsData();
+  }, [currentUser, currentPersona]);
 
-    const q = query(
+  const loadGoalsData = async () => {
+    if (!currentUser) return;
+    
+    setLoading(true);
+    
+    // Load goals data
+    const goalsQuery = query(
       collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc')
     );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    
+    // Subscribe to real-time updates
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      } as Goal));
+      })) as Goal[];
       setGoals(goalsData);
     });
 
-    return unsubscribe;
-  }, [currentUser]);
+    setLoading(false);
 
-  const handleAddGoal = async () => {
-    if (!currentUser || !newGoal.title.trim()) return;
+    return () => {
+      unsubscribeGoals();
+    };
+  };
 
+  // Handler functions for ModernGoalsTable
+  const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
     try {
-      await addDoc(collection(db, 'goals'), {
-        title: newGoal.title,
-        description: newGoal.description,
-        theme: newGoal.theme,
-        size: newGoal.size,
-        confidence: newGoal.confidence,
-        targetDate: newGoal.targetDate || null,
-        ownerUid: currentUser.uid,
-        createdAt: serverTimestamp(),
+      await updateDoc(doc(db, 'goals', goalId), {
+        ...updates,
         updatedAt: serverTimestamp()
       });
-
-      // Reset form
-      setNewGoal({
-        title: '',
-        description: '',
-        theme: 'Growth',
-        size: 'M',
-        confidence: 0.5,
-        targetDate: ''
-      });
-      setShowAddGoal(false);
     } catch (error) {
-      console.error('Error adding goal:', error);
+      console.error('Error updating goal:', error);
     }
   };
 
-  const getThemeBadge = (theme: string) => {
-    const themeColors = {
-      Health: 'danger',
-      Growth: 'primary', 
-      Wealth: 'success',
-      Tribe: 'info',
-      Home: 'warning'
-    };
-    return <Badge bg={themeColors[theme] || 'secondary'}>{theme}</Badge>;
+  const handleGoalDelete = async (goalId: string) => {
+    try {
+      await deleteDoc(doc(db, 'goals', goalId));
+    } catch (error) {
+      console.error('Error deleting goal:', error);
+    }
   };
 
-  const getSizeBadge = (size: string) => {
-    return <Badge bg="outline-secondary">{size}</Badge>;
+  const handleGoalPriorityChange = async (goalId: string, newPriority: number) => {
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        priority: newPriority,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error updating goal priority:', error);
+    }
+  };
+
+  // Apply filters to goals
+  const filteredGoals = goals.filter(goal => {
+    if (filterStatus !== 'all' && goal.status !== filterStatus) return false;
+    if (filterTheme !== 'all' && goal.theme !== filterTheme) return false;
+    if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    return true;
+  });
+
+  // Get counts for dashboard cards
+  const goalCounts = {
+    total: filteredGoals.length,
+    active: filteredGoals.filter(g => g.status === 'active').length,
+    done: filteredGoals.filter(g => g.status === 'done').length,
+    paused: filteredGoals.filter(g => g.status === 'paused').length
   };
 
   return (
-    <Container className="mt-4">
-      <Row>
-        <Col md={12}>
-          <div className="d-flex justify-content-between align-items-center mb-4">
-            <h2>Goals Management</h2>
-            <Button variant="primary" onClick={() => setShowAddGoal(true)}>
-              Add Goal
-            </Button>
+    <div style={{ 
+      padding: '24px', 
+      backgroundColor: '#f8f9fa',
+      minHeight: '100vh',
+      width: '100%'
+    }}>
+      <div style={{ maxWidth: '100%', margin: '0' }}>
+        {/* Header */}
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          marginBottom: '24px' 
+        }}>
+          <div>
+            <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
+              Goals Management
+            </h2>
+            <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
+              Manage your life goals across different themes
+            </p>
           </div>
-        </Col>
-      </Row>
+          <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
+            Add Goal
+          </Button>
+        </div>
 
-      <Row>
-        <Col md={12}>
-          <Card>
-            <Card.Header>
-              <h4 className="mb-0">Your Goals ({goals.length})</h4>
-            </Card.Header>
-            <Card.Body>
-              {goals.length === 0 ? (
-                <div className="text-center py-4">
-                  <p className="text-muted">No goals yet. Create your first goal to get started!</p>
-                  <Button variant="outline-primary" onClick={() => setShowAddGoal(true)}>
-                    Create First Goal
-                  </Button>
-                </div>
-              ) : (
-                <Table responsive>
-                  <thead>
-                    <tr>
-                      <th>Title</th>
-                      <th>Theme</th>
-                      <th>Size</th>
-                      <th>Confidence</th>
-                      <th>Target Date</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {goals.map((goal) => (
-                      <tr key={goal.id}>
-                        <td>
-                          <div>
-                            <strong>{goal.title}</strong>
-                            {goal.description && (
-                              <div className="text-muted small">{goal.description}</div>
-                            )}
-                          </div>
-                        </td>
-                        <td>{getThemeBadge(goal.theme)}</td>
-                        <td>{getSizeBadge(goal.size)}</td>
-                        <td>{Math.round(goal.confidence * 100)}%</td>
-                        <td>
-                          {goal.targetDate 
-                            ? new Date(goal.targetDate).toLocaleDateString() 
-                            : 'No date set'
-                          }
-                        </td>
-                        <td>
-                          <Button variant="outline-primary" size="sm" className="me-2">
-                            Edit
-                          </Button>
-                          <Button variant="outline-success" size="sm">
-                            Add Story
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              )}
-            </Card.Body>
-          </Card>
-        </Col>
-      </Row>
+        {/* Dashboard Cards */}
+        <Row className="mb-4">
+          <Col lg={3} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
+                  {goalCounts.total}
+                </h3>
+                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                  Total Goals
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={3} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+                  {goalCounts.active}
+                </h3>
+                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                  Active
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={3} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
+                  {goalCounts.done}
+                </h3>
+                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                  Done
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={3} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#f59e0b' }}>
+                  {goalCounts.paused}
+                </h3>
+                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                  Paused
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
 
-      {/* Add Goal Modal */}
-      <Modal show={showAddGoal} onHide={() => setShowAddGoal(false)} size="lg">
-        <Modal.Header closeButton>
-          <Modal.Title>Add New Goal</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <Form>
-            <Row>
-              <Col md={12}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Goal Title *</Form.Label>
-                  <Form.Control
-                    type="text"
-                    placeholder="e.g., Run a marathon in under 4 hours"
-                    value={newGoal.title}
-                    onChange={(e) => setNewGoal({...newGoal, title: e.target.value})}
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-            
-            <Row>
-              <Col md={12}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Description</Form.Label>
-                  <Form.Control
-                    as="textarea"
-                    rows={3}
-                    placeholder="Describe your goal in more detail..."
-                    value={newGoal.description}
-                    onChange={(e) => setNewGoal({...newGoal, description: e.target.value})}
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-
+        {/* Filters */}
+        <Card style={{ marginBottom: '24px', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+          <Card.Body style={{ padding: '24px' }}>
             <Row>
               <Col md={4}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Theme</Form.Label>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Goals</Form.Label>
+                  <InputGroup>
+                    <Form.Control
+                      type="text"
+                      placeholder="Search by title..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      style={{ border: '1px solid #d1d5db' }}
+                    />
+                  </InputGroup>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Status</Form.Label>
                   <Form.Select
-                    value={newGoal.theme}
-                    onChange={(e) => setNewGoal({...newGoal, theme: e.target.value as any})}
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    style={{ border: '1px solid #d1d5db' }}
                   >
+                    <option value="all">All Status</option>
+                    <option value="new">New</option>
+                    <option value="active">Active</option>
+                    <option value="done">Done</option>
+                    <option value="paused">Paused</option>
+                    <option value="dropped">Dropped</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Theme</Form.Label>
+                  <Form.Select
+                    value={filterTheme}
+                    onChange={(e) => setFilterTheme(e.target.value)}
+                    style={{ border: '1px solid #d1d5db' }}
+                  >
+                    <option value="all">All Themes</option>
                     <option value="Health">Health</option>
                     <option value="Growth">Growth</option>
                     <option value="Wealth">Wealth</option>
@@ -212,65 +229,63 @@ const GoalsManagement: React.FC = () => {
                   </Form.Select>
                 </Form.Group>
               </Col>
-              
-              <Col md={4}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Size</Form.Label>
-                  <Form.Select
-                    value={newGoal.size}
-                    onChange={(e) => setNewGoal({...newGoal, size: e.target.value as any})}
-                  >
-                    <option value="XS">XS - Quick win</option>
-                    <option value="S">S - Small goal</option>
-                    <option value="M">M - Medium goal</option>
-                    <option value="L">L - Large goal</option>
-                    <option value="XL">XL - Major goal</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-
-              <Col md={4}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Confidence: {Math.round(newGoal.confidence * 100)}%</Form.Label>
-                  <Form.Range
-                    min={0}
-                    max={1}
-                    step={0.1}
-                    value={newGoal.confidence}
-                    onChange={(e) => setNewGoal({...newGoal, confidence: parseFloat(e.target.value)})}
-                  />
-                </Form.Group>
+            </Row>
+            <Row style={{ marginTop: '16px' }}>
+              <Col>
+                <Button 
+                  variant="outline-secondary" 
+                  onClick={() => {
+                    setFilterStatus('all');
+                    setFilterTheme('all');
+                    setSearchTerm('');
+                  }}
+                  style={{ borderColor: '#d1d5db' }}
+                >
+                  Clear Filters
+                </Button>
               </Col>
             </Row>
+          </Card.Body>
+        </Card>
 
-            <Row>
-              <Col md={6}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Target Date (optional)</Form.Label>
-                  <Form.Control
-                    type="date"
-                    value={newGoal.targetDate}
-                    onChange={(e) => setNewGoal({...newGoal, targetDate: e.target.value})}
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-          </Form>
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowAddGoal(false)}>
-            Cancel
-          </Button>
-          <Button 
-            variant="primary" 
-            onClick={handleAddGoal}
-            disabled={!newGoal.title.trim()}
-          >
-            Create Goal
-          </Button>
-        </Modal.Footer>
-      </Modal>
-    </Container>
+        {/* Modern Goals Table - Full Width */}
+        <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
+          <Card.Header style={{ 
+            backgroundColor: '#fff', 
+            borderBottom: '1px solid #e5e7eb', 
+            padding: '20px 24px' 
+          }}>
+            <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
+              Goals ({filteredGoals.length})
+            </h5>
+          </Card.Header>
+          <Card.Body style={{ padding: 0 }}>
+            {loading ? (
+              <div style={{ 
+                textAlign: 'center', 
+                padding: '60px 20px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <div className="spinner-border" style={{ marginBottom: '16px' }} />
+                <p style={{ margin: 0, color: '#6b7280' }}>Loading goals...</p>
+              </div>
+            ) : (
+              <div style={{ height: '600px', overflow: 'auto' }}>
+                <ModernGoalsTable
+                  goals={filteredGoals}
+                  onGoalUpdate={handleGoalUpdate}
+                  onGoalDelete={handleGoalDelete}
+                  onGoalPriorityChange={handleGoalPriorityChange}
+                />
+              </div>
+            )}
+          </Card.Body>
+        </Card>
+      </div>
+    </div>
   );
 };
 

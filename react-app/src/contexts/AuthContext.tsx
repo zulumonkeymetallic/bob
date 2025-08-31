@@ -1,38 +1,26 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../firebase';
-import { User, signInWithPopup, GoogleAuthProvider, signOut as firebaseSignOut } from 'firebase/auth';
 
 interface AuthContextType {
   currentUser: User | null;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
-  loading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
-
-interface AuthProviderProps {
-  children: ReactNode;
-}
-
-export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
 
   const signInWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
     try {
-      await signInWithPopup(auth, provider);
+      console.log('Starting Google sign in...');
+      const result = await signInWithPopup(auth, provider);
+      console.log('Sign in successful:', result.user.email);
     } catch (error) {
-      console.error('Error signing in with Google:', error);
+      console.error("Error signing in with Google", error);
       throw error;
     }
   };
@@ -41,30 +29,37 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       await firebaseSignOut(auth);
     } catch (error) {
-      console.error('Error signing out:', error);
-      throw error;
+      console.error("Error signing out", error);
     }
   };
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
+    console.log('Setting up auth state listener...');
+    const unsubscribe = onAuthStateChanged(auth, user => {
+      console.log('Auth state changed:', user ? user.email : 'null');
       setCurrentUser(user);
-      setLoading(false);
     });
 
     return unsubscribe;
   }, []);
 
-  const value: AuthContextType = {
+  const value = {
     currentUser,
     signInWithGoogle,
     signOut,
-    loading
   };
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 };
