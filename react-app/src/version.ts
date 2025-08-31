@@ -1,6 +1,6 @@
 // Version tracking for cache busting - v3.1.0 Global Activity Stream & UI Tracking
-export const VERSION = 'v3.1.0';
-export const BUILD_TIME = new Date().toISOString();
+export const VERSION = 'v3.1.1';
+export const BUILD_TIME = '2025-08-31T20:54:16.3NZ';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
 console.log(`✅ Status: Global Activity Stream & Comprehensive UI Tracking Active`);
