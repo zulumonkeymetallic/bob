@@ -1,11 +1,11 @@
-// Version tracking for cache busting - v3.1.2 Navigation & Database Fixes
-export const VERSION = 'v3.1.2';
+// Version tracking for cache busting - v3.1.3 Goals UI Enhancement & Navigation Fixes
+export const VERSION = 'v3.1.3';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Navigation & Database Issues RESOLVED`);
-console.log(`🎯 Features: Fixed React Router Navigation, Complete Firestore Indexes, Enhanced Debugging`);
-console.log(`🚀 Architecture: v3.1.2 with Critical Navigation and Database Fixes`);
+console.log(`✅ Status: Goals UI Enhanced & Navigation Issues RESOLVED`);
+console.log(`🎯 Features: Goals Card/List View Toggle, Activity Stream Integration, Enhanced Navigation`);
+console.log(`🚀 Architecture: v3.1.3 with Interactive Goals Interface and Force Navigation`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force refresh if version mismatch detected

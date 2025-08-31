@@ -6,7 +6,6 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
-import AddGoalModal from './AddGoalModal';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -16,7 +15,6 @@ const GoalsManagement: React.FC = () => {
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
-  const [showAddGoalModal, setShowAddGoalModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -26,7 +24,6 @@ const GoalsManagement: React.FC = () => {
   const loadGoalsData = async () => {
     if (!currentUser) return;
     
-    console.log('🎯 Loading goals data for user:', currentUser.email);
     setLoading(true);
     
     // Load goals data
@@ -39,17 +36,14 @@ const GoalsManagement: React.FC = () => {
     
     // Subscribe to real-time updates
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      console.log('🎯 Goals data received:', snapshot.docs.length, 'goals');
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Goal[];
       setGoals(goalsData);
-      setLoading(false); // Set loading false when data arrives
-    }, (error) => {
-      console.error('❌ Error loading goals:', error);
-      setLoading(false); // Set loading false on error too
     });
+
+    setLoading(false);
 
     return () => {
       unsubscribeGoals();
@@ -97,207 +91,149 @@ const GoalsManagement: React.FC = () => {
 
   // Get counts for dashboard cards
   const goalCounts = {
-    total: goals.length,
-    active: goals.filter(g => g.status === 'Work in Progress').length,
-    done: goals.filter(g => g.status === 'Complete').length,
-    paused: goals.filter(g => g.status === 'Paused').length
+    total: filteredGoals.length,
+    active: filteredGoals.filter(g => g.status === 'Work in Progress').length,
+    done: filteredGoals.filter(g => g.status === 'Complete').length,
+    paused: filteredGoals.filter(g => g.status === 'Paused').length
   };
 
   return (
-    <div style={{ 
-      padding: '24px', 
-      backgroundColor: '#f8f9fa',
-      minHeight: '100vh',
-      width: '100%'
-    }}>
-      <div style={{ maxWidth: '100%', margin: '0' }}>
-        {/* Header */}
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center', 
-          marginBottom: '24px' 
-        }}>
-          <div>
-            <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
-              Goals Management
-            </h2>
-            <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
-              Manage your life goals across different themes
-            </p>
-          </div>
-          <Button variant="primary" onClick={() => setShowAddGoalModal(true)}>
-            Add Goal
-          </Button>
+    <Container fluid className="py-4">
+      <div className="d-flex justify-content-between align-items-center mb-4">
+        <div>
+          <h2 className="mb-1">Goals Management</h2>
+          <p className="text-muted mb-0">Manage your life goals across different themes</p>
         </div>
-
-        {/* Dashboard Cards */}
-        <Row className="mb-4">
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
-                  {goalCounts.total}
-                </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Total Goals
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
-                  {goalCounts.active}
-                </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Active
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
-                  {goalCounts.done}
-                </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Done
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#f59e0b' }}>
-                  {goalCounts.paused}
-                </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Paused
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
-
-        {/* Filters */}
-        <Card style={{ marginBottom: '24px', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-          <Card.Body style={{ padding: '24px' }}>
-            <Row>
-              <Col md={4}>
-                <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Goals</Form.Label>
-                  <InputGroup>
-                    <Form.Control
-                      type="text"
-                      placeholder="Search by title..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      style={{ border: '1px solid #d1d5db' }}
-                    />
-                  </InputGroup>
-                </Form.Group>
-              </Col>
-              <Col md={4}>
-                <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Status</Form.Label>
-                  <Form.Select
-                    value={filterStatus}
-                    onChange={(e) => setFilterStatus(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
-                  >
-                    <option value="all">All Status</option>
-                    <option value="new">New</option>
-                    <option value="active">Active</option>
-                    <option value="done">Done</option>
-                    <option value="paused">Paused</option>
-                    <option value="dropped">Dropped</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={4}>
-                <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Theme</Form.Label>
-                  <Form.Select
-                    value={filterTheme}
-                    onChange={(e) => setFilterTheme(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
-                  >
-                    <option value="all">All Themes</option>
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-            </Row>
-            <Row style={{ marginTop: '16px' }}>
-              <Col>
-                <Button 
-                  variant="outline-secondary" 
-                  onClick={() => {
-                    setFilterStatus('all');
-                    setFilterTheme('all');
-                    setSearchTerm('');
-                  }}
-                  style={{ borderColor: '#d1d5db' }}
-                >
-                  Clear Filters
-                </Button>
-              </Col>
-            </Row>
-          </Card.Body>
-        </Card>
-
-        {/* Modern Goals Table - Full Width */}
-        <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
-          <Card.Header style={{ 
-            backgroundColor: '#fff', 
-            borderBottom: '1px solid #e5e7eb', 
-            padding: '20px 24px' 
-          }}>
-            <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
-              Goals ({filteredGoals.length})
-            </h5>
-          </Card.Header>
-          <Card.Body style={{ padding: 0 }}>
-            {loading ? (
-              <div style={{ 
-                textAlign: 'center', 
-                padding: '60px 20px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading goals...</p>
-              </div>
-            ) : (
-              <div style={{ height: '600px', overflow: 'auto' }}>
-                <ModernGoalsTable
-                  goals={filteredGoals}
-                  onGoalUpdate={handleGoalUpdate}
-                  onGoalDelete={handleGoalDelete}
-                  onGoalPriorityChange={handleGoalPriorityChange}
-                />
-              </div>
-            )}
-          </Card.Body>
-        </Card>
+        <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
+          Add Goal
+        </Button>
       </div>
 
-      {/* Add Goal Modal */}
-      <AddGoalModal
-        show={showAddGoalModal}
-        onClose={() => setShowAddGoalModal(false)}
-      />
-    </div>
+      {/* Dashboard Cards */}
+      <Row className="mb-4">
+        <Col lg={3} md={6} className="mb-3">
+          <Card className="h-100">
+            <Card.Body className="text-center">
+              <h3 className="mb-1">{goalCounts.total}</h3>
+              <p className="text-muted mb-0">Total Goals</p>
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col lg={3} md={6} className="mb-3">
+          <Card className="h-100">
+            <Card.Body className="text-center">
+              <h3 className="mb-1">{goalCounts.active}</h3>
+              <p className="text-muted mb-0">Active</p>
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col lg={3} md={6} className="mb-3">
+          <Card className="h-100">
+            <Card.Body className="text-center">
+              <h3 className="mb-1">{goalCounts.done}</h3>
+              <p className="text-muted mb-0">Done</p>
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col lg={3} md={6} className="mb-3">
+          <Card className="h-100">
+            <Card.Body className="text-center">
+              <h3 className="mb-1">{goalCounts.paused}</h3>
+              <p className="text-muted mb-0">Paused</p>
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
+
+      {/* Filters */}
+      <Card className="mb-4">
+        <Card.Body>
+          <Row>
+            <Col md={4}>
+              <Form.Group>
+                <Form.Label>Search Goals</Form.Label>
+                <InputGroup>
+                  <Form.Control
+                    type="text"
+                    placeholder="Search by title..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </InputGroup>
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group>
+                <Form.Label>Status</Form.Label>
+                <Form.Select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                >
+                  <option value="all">All Status</option>
+                  <option value="new">New</option>
+                  <option value="active">Active</option>
+                  <option value="done">Done</option>
+                  <option value="paused">Paused</option>
+                  <option value="dropped">Dropped</option>
+                </Form.Select>
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group>
+                <Form.Label>Theme</Form.Label>
+                <Form.Select
+                  value={filterTheme}
+                  onChange={(e) => setFilterTheme(e.target.value)}
+                >
+                  <option value="all">All Themes</option>
+                  <option value="Health">Health</option>
+                  <option value="Growth">Growth</option>
+                  <option value="Wealth">Wealth</option>
+                  <option value="Tribe">Tribe</option>
+                  <option value="Home">Home</option>
+                </Form.Select>
+              </Form.Group>
+            </Col>
+          </Row>
+          <Row className="mt-3">
+            <Col>
+              <Button 
+                variant="outline-secondary" 
+                onClick={() => {
+                  setFilterStatus('all');
+                  setFilterTheme('all');
+                  setSearchTerm('');
+                }}
+              >
+                Clear Filters
+              </Button>
+            </Col>
+          </Row>
+        </Card.Body>
+      </Card>
+
+      {/* Modern Goals Table */}
+      <Card>
+        <Card.Header>
+          <h5 className="mb-0">Goals ({filteredGoals.length})</h5>
+        </Card.Header>
+        <Card.Body className="p-0">
+          {loading ? (
+            <div className="text-center p-4">
+              <div className="spinner-border" />
+              <p className="mt-2">Loading goals...</p>
+            </div>
+          ) : (
+            <ModernGoalsTable
+              goals={filteredGoals}
+              onGoalUpdate={handleGoalUpdate}
+              onGoalDelete={handleGoalDelete}
+              onGoalPriorityChange={handleGoalPriorityChange}
+            />
+          )}
+        </Card.Body>
+      </Card>
+    </Container>
   );
 };
 

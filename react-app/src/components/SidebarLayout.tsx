@@ -98,7 +98,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   ];
 
   const handleNavigation = (path: string) => {
-    console.log('🔀 BOB v3.1.1: Navigating to:', path);
+    console.log('🔀 BOB v3.1.2: Navigating to:', path);
     console.log('🔀 Current URL:', window.location.pathname);
     console.log('🔀 React Router location:', location.pathname);
     
@@ -116,21 +116,36 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       }
     });
     
-    // Force navigation with replace if same path
+    // FORCE NAVIGATION - Always clear cache and reload component
+    console.log('🔀 FORCE NAVIGATION: Clearing location state and forcing navigation');
+    
+    // Force a hard navigation by going to a different route first then to target
     if (location.pathname === path) {
-      console.log('🔀 Same path - forcing navigation with replace');
-      navigate(path, { replace: true });
+      console.log('🔀 Same path - using dummy redirect to force reload');
+      navigate('/');
+      setTimeout(() => {
+        navigate(path, { replace: true });
+      }, 10);
     } else {
-      navigate(path);
+      // Force a complete navigation refresh
+      navigate(path, { 
+        replace: false,
+        state: { forceRefresh: Date.now() }
+      });
     }
     
     setShowSidebar(false);
-    console.log('🔀 Navigation triggered, sidebar closed');
+    console.log('🔀 Navigation triggered, sidebar closed, force refresh initiated');
     
-    // Small delay to ensure navigation completes
+    // Extended delay to ensure navigation completes with state clearing
     setTimeout(() => {
       console.log('🔀 Post-navigation check:', window.location.pathname);
-    }, 100);
+      // Force a page refresh if navigation seems stuck
+      if (window.location.pathname !== path && location.pathname !== path) {
+        console.log('🔀 Navigation appears stuck, forcing window reload');
+        window.location.href = window.location.origin + path;
+      }
+    }, 200);
   };
 
   const toggleGroup = (groupLabel: string) => {
