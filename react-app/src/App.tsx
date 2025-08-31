@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from 'react-bootstrap';
-import { Routes, Route, BrowserRouter as Router, Navigate } from 'react-router-dom';
+import { Routes, Route, BrowserRouter as Router, Navigate, useLocation } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import SprintDashboard from './components/SprintDashboard';
 import TaskListView from './components/TaskListView';
@@ -55,6 +55,7 @@ function App() {
 function AppContent() {
   const { theme, toggleTheme } = useTheme();
   const { currentUser, signInWithGoogle, signOut } = useAuth();
+  const location = useLocation();
   const deviceInfo = useDeviceInfo();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -63,6 +64,12 @@ function AppContent() {
   const [goals, setGoals] = useState([]);
   const [stories, setStories] = useState([]);
   const [sprints, setSprints] = useState([]);
+
+  // Debug location changes
+  useEffect(() => {
+    console.log('🔄 BOB v3.1.1: Location changed to:', location.pathname);
+    console.log('🔄 Location key:', location.key);
+  }, [location]);
 
   // Check for updates on app load
   useEffect(() => {
@@ -132,7 +139,23 @@ function AppContent() {
 
   return (
       <SidebarLayout onSignOut={handleSignOut}>
-        <Routes>
+        {/* Debug current route */}
+        <div style={{
+          position: 'fixed',
+          top: '10px',
+          right: '10px',
+          background: 'rgba(0,0,0,0.8)',
+          color: 'white',
+          padding: '5px 10px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          zIndex: 1000,
+          fontFamily: 'monospace'
+        }}>
+          Route: {location.pathname} | Key: {location.key}
+        </div>
+        
+        <Routes key={location.pathname}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/sprint-dashboard" element={<SprintDashboard />} />
