@@ -18,6 +18,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { useActivityTracking } from '../hooks/useActivityTracking';
 import { 
   Settings, 
   GripVertical, 
@@ -147,6 +148,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const { trackClick, trackView } = useActivityTracking();
+
+  // Track goal view when component mounts
+  React.useEffect(() => {
+    trackView(goal.id, 'goal', goal.title, goal.id, { viewContext: 'goals_table' });
+  }, [goal.id, goal.title, trackView]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -155,6 +162,14 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleCellEdit = (key: string, value: string) => {
+    trackClick({
+      elementId: `goal-cell-edit-${key}`,
+      elementType: 'edit',
+      entityId: goal.id,
+      entityType: 'goal',
+      entityTitle: goal.title,
+      additionalData: { field: key, originalValue: value }
+    });
     setEditingCell(key);
     setEditValue(value || '');
   };
@@ -164,9 +179,28 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleCellSave = async (key: string) => {
-    const updates: Partial<Goal> = { [key]: editValue };
-    await onGoalUpdate(goal.id, updates);
-    setEditingCell(null);
+    try {
+      const updates: Partial<Goal> = { [key]: editValue };
+      await onGoalUpdate(goal.id, updates);
+      
+      trackClick({
+        elementId: `goal-cell-save-${key}`,
+        elementType: 'button',
+        entityId: goal.id,
+        entityType: 'goal',
+        entityTitle: goal.title,
+        additionalData: { 
+          field: key, 
+          newValue: editValue,
+          action: 'inline_edit_save'
+        }
+      });
+      
+      setEditingCell(null);
+      console.log(`🎯 Goal inline edit saved: ${key} = "${editValue}" for goal ${goal.id}`);
+    } catch (error) {
+      console.error('❌ Error saving goal cell edit:', error);
+    }
   };
 
   const formatValue = (key: string, value: any): string => {
@@ -193,7 +227,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
             <div className="relative">
               <select
                 value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
+                onChange={(e) => {
+                  setEditValue(e.target.value);
+                  trackClick({
+                    elementId: `goal-dropdown-${column.key}`,
+                    elementType: 'dropdown',
+                    entityId: goal.id,
+                    entityType: 'goal',
+                    entityTitle: goal.title,
+                    additionalData: { 
+                      field: column.key, 
+                      newValue: e.target.value,
+                      action: 'dropdown_change'
+                    }
+                  });
+                  // Auto-save on dropdown change
+                  setTimeout(() => handleCellSave(column.key), 100);
+                }}
                 onBlur={() => handleCellSave(column.key)}
                 style={{
                   width: '100%',
@@ -407,8 +457,17 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   });
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+  const { trackClick } = useActivityTracking();
 
   const handleEditModal = (goal: Goal) => {
+    trackClick({
+      elementId: 'goal-edit-modal-open',
+      elementType: 'button',
+      entityId: goal.id,
+      entityType: 'goal',
+      entityTitle: goal.title,
+      additionalData: { action: 'open_edit_modal' }
+    });
     setEditingGoal(goal);
     setShowEditModal(true);
   };
