@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
+import AddGoalModal from './AddGoalModal';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -15,6 +16,7 @@ const GoalsManagement: React.FC = () => {
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showAddGoalModal, setShowAddGoalModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -120,7 +122,7 @@ const GoalsManagement: React.FC = () => {
               Manage your life goals across different themes
             </p>
           </div>
-          <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
+          <Button variant="primary" onClick={() => setShowAddGoalModal(true)}>
             Add Goal
           </Button>
         </div>
@@ -285,6 +287,12 @@ const GoalsManagement: React.FC = () => {
           </Card.Body>
         </Card>
       </div>
+
+      {/* Add Goal Modal */}
+      <AddGoalModal
+        show={showAddGoalModal}
+        onClose={() => setShowAddGoalModal(false)}
+      />
     </div>
   );
 };
