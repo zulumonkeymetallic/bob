@@ -33,7 +33,7 @@ import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
 import { checkForUpdates, VERSION } from './version';
-import './App.css';
+import ComprehensiveTest from './components/ComprehensiveTest';
 
 function App() {
   return (
@@ -145,6 +145,7 @@ function AppContent() {
           <Route path="/settings" element={<Navigate to="/theme-colors" replace />} />
           <Route path="/theme-colors" element={<ThemeColorManager />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/test" element={<ComprehensiveTest />} />
           <Route path="/changelog" element={<Changelog />} />
         </Routes>
 

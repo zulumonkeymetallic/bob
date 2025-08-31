@@ -58,6 +58,23 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     }
   }, [selectedItem]);
 
+  // Apply margin to main content when sidebar is visible
+  React.useEffect(() => {
+    const sidebarWidth = isCollapsed ? '60px' : '400px';
+    
+    if (isVisible) {
+      document.body.style.marginRight = sidebarWidth;
+      document.body.style.transition = 'margin-right 0.3s ease';
+    } else {
+      document.body.style.marginRight = '0px';
+    }
+    
+    // Cleanup on unmount
+    return () => {
+      document.body.style.marginRight = '0px';
+    };
+  }, [isVisible, isCollapsed]);
+
   if (!isVisible || !selectedItem || !selectedType) {
     return null;
   }
@@ -138,10 +155,39 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const handleAddNote = async () => {
-    if (!newNote.trim() || !selectedItem || !selectedType || !currentUser) return;
+    console.log('Adding note...', { 
+      hasNote: !!newNote.trim(), 
+      hasItem: !!selectedItem, 
+      hasType: !!selectedType, 
+      hasUser: !!currentUser 
+    });
+    
+    if (!newNote.trim()) {
+      alert('Please enter a note');
+      return;
+    }
+    
+    if (!selectedItem || !selectedType) {
+      alert('No item selected');
+      return;
+    }
+    
+    if (!currentUser) {
+      alert('You must be logged in to add notes');
+      return;
+    }
     
     try {
       const referenceNumber = generateReferenceNumber();
+      console.log('Calling ActivityStreamService.addNote...', {
+        itemId: selectedItem.id,
+        itemType: selectedType,
+        note: newNote,
+        userId: currentUser.uid,
+        userEmail: currentUser.email,
+        referenceNumber
+      });
+      
       await ActivityStreamService.addNote(
         selectedItem.id,
         selectedType,
@@ -152,10 +198,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         referenceNumber
       );
       
+      console.log('Note added successfully');
       setNewNote('');
       setShowAddNote(false);
     } catch (error) {
       console.error('Error adding note:', error);
+      alert('Failed to add note: ' + (error as Error).message);
     }
   };
 
