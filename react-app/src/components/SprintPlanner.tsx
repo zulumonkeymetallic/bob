@@ -35,35 +35,56 @@ const SprintPlanner: React.FC = () => {
         if (!currentUser) return;
 
         console.log('SprintPlanner: Loading data for user:', currentUser.uid);
+        
+        try {
+            const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
+            const sprintsQuery = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
+            const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
 
-        const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
-        const sprintsQuery = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
-        const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
+            const unsubscribeStories = onSnapshot(storiesQuery, 
+                snapshot => {
+                    const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
+                    console.log('SprintPlanner: Loaded stories:', storiesData.length);
+                    setStories(storiesData.sort((a, b) => a.orderIndex - b.orderIndex));
+                    setLoading(false);
+                },
+                error => {
+                    console.error('SprintPlanner: Error loading stories:', error);
+                    setLoading(false);
+                }
+            );
 
-        const unsubscribeStories = onSnapshot(storiesQuery, snapshot => {
-            const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
-            console.log('SprintPlanner: Loaded stories:', storiesData.length);
-            setStories(storiesData.sort((a, b) => a.orderIndex - b.orderIndex));
+            const unsubscribeSprints = onSnapshot(sprintsQuery,
+                snapshot => {
+                    const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
+                    console.log('SprintPlanner: Loaded sprints:', sprintsData.length);
+                    setSprints(sprintsData.sort((a, b) => a.startDate - b.startDate));
+                },
+                error => {
+                    console.error('SprintPlanner: Error loading sprints:', error);
+                }
+            );
+
+            const unsubscribeGoals = onSnapshot(goalsQuery,
+                snapshot => {
+                    const goalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
+                    console.log('SprintPlanner: Loaded goals:', goalsData.length);
+                    setGoals(goalsData);
+                },
+                error => {
+                    console.error('SprintPlanner: Error loading goals:', error);
+                }
+            );
+
+            return () => {
+                unsubscribeStories();
+                unsubscribeSprints();
+                unsubscribeGoals();
+            };
+        } catch (error) {
+            console.error('SprintPlanner: Error setting up listeners:', error);
             setLoading(false);
-        });
-
-        const unsubscribeSprints = onSnapshot(sprintsQuery, snapshot => {
-            const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
-            console.log('SprintPlanner: Loaded sprints:', sprintsData.length);
-            setSprints(sprintsData.sort((a, b) => a.startDate - b.startDate));
-        });
-
-        const unsubscribeGoals = onSnapshot(goalsQuery, snapshot => {
-            const goalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
-            console.log('SprintPlanner: Loaded goals:', goalsData.length);
-            setGoals(goalsData);
-        });
-
-        return () => {
-            unsubscribeStories();
-            unsubscribeSprints();
-            unsubscribeGoals();
-        };
+        }
     }, [currentUser]);
 
     const handleDrop = async (storyId: string, sprintId: string | null) => {
