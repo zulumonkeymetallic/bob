@@ -815,10 +815,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                   defaultValue={editingGoal.status}
                   onChange={(e) => setEditingGoal({...editingGoal, status: e.target.value as any})}
                 >
-                  <option value="draft">Draft</option>
-                  <option value="active">Active</option>
-                  <option value="completed">Completed</option>
-                  <option value="archived">Archived</option>
+                  <option value="Not Started">Not Started</option>
+                  <option value="Work in Progress">Work in Progress</option>
+                  <option value="Complete">Complete</option>
+                  <option value="Paused">Paused</option>
                 </Form.Select>
               </Form.Group>
             </Form>
