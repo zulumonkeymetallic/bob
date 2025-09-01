@@ -104,6 +104,43 @@ export const useActivityTracking = () => {
     }
   };
 
+  const trackFieldChange = async (
+    entityId: string,
+    entityType: 'goal' | 'story' | 'task', // Restricted to what ActivityStreamService supports
+    fieldName: string,
+    oldValue: any,
+    newValue: any,
+    entityTitle?: string,
+    referenceNumber?: string
+  ) => {
+    if (!currentUser) {
+      console.warn('🚫 BOB v3.2.4: Cannot track field change - user not authenticated');
+      return;
+    }
+
+    try {
+      await ActivityStreamService.logFieldChange(
+        entityId,
+        entityType,
+        fieldName,
+        oldValue,
+        newValue,
+        currentUser.uid,
+        currentUser.email,
+        'personal', // persona
+        referenceNumber
+      );
+    } catch (error) {
+      console.error('❌ BOB v3.2.4: Failed to track field change:', error, { 
+        entityId, 
+        entityType, 
+        fieldName, 
+        oldValue, 
+        newValue 
+      });
+    }
+  };
+
   const subscribeToActivity = (
     entityId: string,
     entityType: TrackingOptions['entityType'],
@@ -126,6 +163,7 @@ export const useActivityTracking = () => {
     trackClick,
     trackView,
     addNote,
+    trackFieldChange,
     subscribeToActivity,
     isAuthenticated: !!currentUser
   };

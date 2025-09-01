@@ -17,6 +17,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { useActivityTracking } from '../hooks/useActivityTracking';
 import { 
   Settings, 
   GripVertical, 
@@ -140,6 +141,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const { trackFieldChange, trackView } = useActivityTracking();
+
+  // Track story view when component mounts
+  React.useEffect(() => {
+    trackView(story.id, 'story', story.title, story.ref, { viewContext: 'stories_table' });
+  }, [story.id, story.title, story.ref, trackView]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -153,9 +160,33 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleCellSave = async (key: string) => {
-    const updates: Partial<Story> = { [key]: editValue };
-    await onStoryUpdate(story.id, updates);
-    setEditingCell(null);
+    try {
+      const oldValue = (story as any)[key]; // Store the original value
+      
+      // Only proceed if the value actually changed
+      if (oldValue !== editValue) {
+        const updates: Partial<Story> = { [key]: editValue };
+        await onStoryUpdate(story.id, updates);
+        
+        // Track the field change for activity stream
+        trackFieldChange(
+          story.id,
+          'story',
+          key,
+          oldValue,
+          editValue,
+          story.title,
+          story.ref
+        );
+        
+        console.log(`🎯 Story field changed: ${key} from "${oldValue}" to "${editValue}" for story ${story.id}`);
+      }
+      
+      setEditingCell(null);
+    } catch (error) {
+      console.error('Error saving story field:', error);
+      setEditingCell(null);
+    }
   };
 
   const formatValue = (key: string, value: any): string => {
