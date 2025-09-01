@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { auth } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { auth, functions } from '../firebase';
 import { User } from 'firebase/auth';
 
 const UpcomingEvents = () => {
@@ -12,7 +12,6 @@ const UpcomingEvents = () => {
     const unsubscribe = auth.onAuthStateChanged(user => {
       if (user) {
         setUser(user);
-        const functions = getFunctions();
         const calendarStatus = httpsCallable(functions, 'calendarStatus');
         calendarStatus().then(result => {
           setIsConnected((result.data as { connected: boolean }).connected);

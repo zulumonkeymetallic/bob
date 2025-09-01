@@ -20,6 +20,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useAuth } from '../contexts/AuthContext';
+import { ActivityStreamService } from '../services/ActivityStreamService';
 import { 
   Settings, 
   GripVertical, 
@@ -155,11 +157,27 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const { trackClick, trackView, trackFieldChange } = useActivityTracking();
+  const { currentUser } = useAuth();
 
-  // Track goal view when component mounts
+  // Track goal view when component mounts (only once per goal)
   React.useEffect(() => {
-    trackView(goal.id, 'goal', goal.title, goal.id, { viewContext: 'goals_table' });
-  }, [goal.id, goal.title, trackView]);
+    if (currentUser) {
+      (async () => {
+        try {
+          await ActivityStreamService.logRecordView(
+            goal.id,
+            'goal',
+            goal.title,
+            currentUser.uid,
+            currentUser.email,
+            goal.id
+          );
+        } catch (error) {
+          console.error('❌ Failed to track goal view:', error);
+        }
+      })();
+    }
+  }, [goal.id, currentUser?.uid]); // Only re-run when goal ID or user changes
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -195,14 +213,18 @@ const SortableRow: React.FC<SortableRowProps> = ({
       if (key === 'status') {
         const statusChoice = ChoiceHelper.getChoices('goal', 'status').find(choice => choice.label === editValue);
         valueToSave = statusChoice ? statusChoice.value : editValue;
+        console.log(`🎯 Status conversion: "${editValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
       } else if (key === 'theme') {
         const themeChoice = ChoiceHelper.getChoices('goal', 'theme').find(choice => choice.label === editValue);
         valueToSave = themeChoice ? themeChoice.value : editValue;
+        console.log(`🎯 Theme conversion: "${editValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
       }
       
       // Only proceed if the value actually changed
       if (oldValue !== valueToSave) {
         const updates: Partial<Goal> = { [key]: valueToSave };
+        console.log(`🎯 Goal update for ${goal.id}:`, updates);
+        
         await onGoalUpdate(goal.id, updates);
         
         // Track the field change for activity stream
@@ -230,12 +252,15 @@ const SortableRow: React.FC<SortableRowProps> = ({
           }
         });
         
-        console.log(`🎯 Goal field changed: ${key} from "${oldValue}" to "${valueToSave}" for goal ${goal.id}`);
+        console.log(`✅ Goal field changed: ${key} from "${oldValue}" to "${valueToSave}" for goal ${goal.id}`);
+      } else {
+        console.log(`🔄 No change detected for ${key}: ${oldValue} === ${valueToSave}`);
       }
       
       setEditingCell(null);
     } catch (error) {
       console.error('❌ Error saving goal cell edit:', error);
+      setEditingCell(null); // Clear editing state even on error
     }
   };
 
@@ -270,7 +295,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
               <select
                 value={editValue}
                 onChange={(e) => {
-                  setEditValue(e.target.value);
+                  const newValue = e.target.value;
+                  setEditValue(newValue);
                   trackClick({
                     elementId: `goal-dropdown-${column.key}`,
                     elementType: 'dropdown',
@@ -279,14 +305,21 @@ const SortableRow: React.FC<SortableRowProps> = ({
                     entityTitle: goal.title,
                     additionalData: { 
                       field: column.key, 
-                      newValue: e.target.value,
+                      newValue: newValue,
                       action: 'dropdown_change'
                     }
                   });
                   // Auto-save on dropdown change
-                  setTimeout(() => handleCellSave(column.key), 100);
+                  setTimeout(() => {
+                    handleCellSave(column.key);
+                  }, 50);
                 }}
-                onBlur={() => handleCellSave(column.key)}
+                onBlur={() => {
+                  // For dropdowns, we auto-save on change, so just clear editing state
+                  if (editingCell === column.key) {
+                    setEditingCell(null);
+                  }
+                }}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -354,7 +387,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
             e.currentTarget.style.backgroundColor = 'transparent';
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, formatValue(column.key, value))}
+        onClick={() => {
+          if (column.editable) {
+            // For dropdown fields, we need to use the formatted (label) value for editing
+            const editValueToUse = (column.type === 'select') ? formatValue(column.key, value) : formatValue(column.key, value);
+            handleCellEdit(column.key, editValueToUse);
+          }
+        }}
       >
         <div style={{
           minHeight: '20px',
