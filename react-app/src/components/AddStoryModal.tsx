@@ -17,43 +17,67 @@ interface Goal {
   theme: string;
 }
 
+interface Sprint {
+  id: string;
+  name: string;
+  status: string;
+}
+
 const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
     goalId: '',
+    sprintId: '',
     priority: 'P2',
     points: 3
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
 
-  // Load goals for the current persona
+  // Load goals and sprints for the current persona
   useEffect(() => {
-    if (show && currentUser && currentPersona === 'personal') {
-      const loadGoals = async () => {
+    if (show && currentUser) {
+      const loadData = async () => {
         try {
+          // Load goals for current persona
           const goalsQuery = query(
             collection(db, 'goals'),
-            where('persona', '==', 'personal'),
+            where('persona', '==', currentPersona),
             where('ownerUid', '==', currentUser.uid),
             where('status', '!=', 'dropped')
           );
-          const snapshot = await getDocs(goalsQuery);
-          const goalsData = snapshot.docs.map(doc => ({
+          const goalsSnapshot = await getDocs(goalsQuery);
+          const goalsData = goalsSnapshot.docs.map(doc => ({
             id: doc.id,
             title: doc.data().title,
             theme: doc.data().theme
           }));
           setGoals(goalsData);
+
+          // Load active sprints for current persona
+          const sprintsQuery = query(
+            collection(db, 'sprints'),
+            where('persona', '==', currentPersona),
+            where('ownerUid', '==', currentUser.uid),
+            where('status', 'in', ['active', 'planned'])
+          );
+          const sprintsSnapshot = await getDocs(sprintsQuery);
+          const sprintsData = sprintsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            name: doc.data().name,
+            status: doc.data().status
+          }));
+          setSprints(sprintsData);
         } catch (error) {
-          console.error('Error loading goals:', error);
+          console.error('Error loading data:', error);
         }
       };
-      loadGoals();
+      loadData();
     }
   }, [show, currentUser, currentPersona]);
 
@@ -97,6 +121,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
         title: formData.title.trim(),
         description: formData.description.trim(),
         goalId: formData.goalId,
+        sprintId: formData.sprintId,
         priority: formData.priority,
         points: parseInt(formData.points.toString()),
         status: 'backlog',
@@ -126,7 +151,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
       });
 
       setSubmitResult(`✅ Story created successfully! (${ref})`);
-      setFormData({ title: '', description: '', goalId: '', priority: 'P2', points: 3 });
+      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3 });
       
       // Auto-close after success
       setTimeout(() => {
@@ -147,7 +172,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
   };
 
   const handleClose = () => {
-    setFormData({ title: '', description: '', goalId: '', priority: 'P2', points: 3 });
+    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3 });
     setSubmitResult(null);
     onClose();
   };
@@ -181,25 +206,41 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
             />
           </Form.Group>
 
-          {currentPersona === 'personal' && (
-            <Form.Group className="mb-3">
-              <Form.Label>Link to Goal</Form.Label>
-              <Form.Select
-                value={formData.goalId}
-                onChange={(e) => setFormData({ ...formData, goalId: e.target.value })}
-              >
-                <option value="">Select a goal (optional)</option>
-                {goals.map(goal => (
-                  <option key={goal.id} value={goal.id}>
-                    {goal.title} ({goal.theme})
-                  </option>
-                ))}
-              </Form.Select>
-              <Form.Text className="text-muted">
-                Stories linked to goals contribute to goal progress
-              </Form.Text>
-            </Form.Group>
-          )}
+          <Form.Group className="mb-3">
+            <Form.Label>Link to Goal</Form.Label>
+            <Form.Select
+              value={formData.goalId}
+              onChange={(e) => setFormData({ ...formData, goalId: e.target.value })}
+            >
+              <option value="">Select a goal (optional)</option>
+              {goals.map(goal => (
+                <option key={goal.id} value={goal.id}>
+                  {goal.title} ({goal.theme})
+                </option>
+              ))}
+            </Form.Select>
+            <Form.Text className="text-muted">
+              Stories linked to goals contribute to goal progress
+            </Form.Text>
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Assign to Sprint</Form.Label>
+            <Form.Select
+              value={formData.sprintId}
+              onChange={(e) => setFormData({ ...formData, sprintId: e.target.value })}
+            >
+              <option value="">No sprint (backlog)</option>
+              {sprints.map(sprint => (
+                <option key={sprint.id} value={sprint.id}>
+                  {sprint.name} ({sprint.status})
+                </option>
+              ))}
+            </Form.Select>
+            <Form.Text className="text-muted">
+              Assign to a sprint for sprint planning
+            </Form.Text>
+          </Form.Group>
 
           <Form.Group className="mb-3">
             <Form.Label>Priority</Form.Label>
