@@ -184,22 +184,22 @@ export class ChoiceMigration {
     
     // Migrate status field
     if (goal.status !== undefined) {
-      migrated.status = this.migrateGoalStatus(goal.status);
+      migrated.status = ChoiceMigration.migrateGoalStatus(goal.status);
     }
     
     // Migrate theme field
     if (goal.theme !== undefined) {
-      migrated.theme = this.migrateGoalTheme(goal.theme);
+      migrated.theme = ChoiceMigration.migrateGoalTheme(goal.theme);
     }
     
     // Migrate size field
     if (goal.size !== undefined) {
-      migrated.size = this.migrateGoalSize(goal.size);
+      migrated.size = ChoiceMigration.migrateGoalSize(goal.size);
     }
     
     // Migrate confidence field
     if (goal.confidence !== undefined) {
-      migrated.confidence = this.migrateGoalConfidence(goal.confidence);
+      migrated.confidence = ChoiceMigration.migrateGoalConfidence(goal.confidence);
     }
     
     return migrated;
@@ -210,17 +210,17 @@ export class ChoiceMigration {
     
     // Migrate status field
     if (story.status !== undefined) {
-      migrated.status = this.migrateStoryStatus(story.status);
+      migrated.status = ChoiceMigration.migrateStoryStatus(story.status);
     }
     
     // Migrate priority field
     if (story.priority !== undefined) {
-      migrated.priority = this.migrateStoryPriority(story.priority);
+      migrated.priority = ChoiceMigration.migrateStoryPriority(story.priority);
     }
     
     // Migrate theme field (stories use goal theme)
     if (story.theme !== undefined) {
-      migrated.theme = this.migrateGoalTheme(story.theme);
+      migrated.theme = ChoiceMigration.migrateGoalTheme(story.theme);
     }
     
     return migrated;
@@ -231,17 +231,17 @@ export class ChoiceMigration {
     
     // Migrate status field
     if (task.status !== undefined) {
-      migrated.status = this.migrateTaskStatus(task.status);
+      migrated.status = ChoiceMigration.migrateTaskStatus(task.status);
     }
     
     // Migrate priority field
     if (task.priority !== undefined) {
-      migrated.priority = this.migrateTaskPriority(task.priority);
+      migrated.priority = ChoiceMigration.migrateTaskPriority(task.priority);
     }
     
     // Migrate theme field (tasks use goal theme)
     if (task.theme !== undefined) {
-      migrated.theme = this.migrateGoalTheme(task.theme);
+      migrated.theme = ChoiceMigration.migrateGoalTheme(task.theme);
     }
     
     return migrated;
@@ -252,7 +252,7 @@ export class ChoiceMigration {
     
     // Migrate status field
     if (sprint.status !== undefined) {
-      migrated.status = this.migrateSprintStatus(sprint.status);
+      migrated.status = ChoiceMigration.migrateSprintStatus(sprint.status);
     }
     
     return migrated;
