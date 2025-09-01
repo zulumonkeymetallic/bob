@@ -121,6 +121,15 @@
       ]
     },
     {
+      "collectionGroup": "goals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "persona", "order": "ASCENDING" },
+        { "fieldPath": "priority", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "sprints",
       "queryScope": "COLLECTION",
       "fields": [
