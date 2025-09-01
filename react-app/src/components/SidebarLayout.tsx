@@ -59,10 +59,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'calendar-alt',
       items: [
         { label: 'Sprint Planning', path: '/sprint-planning', icon: 'tasks' },
-        { label: 'Sprint Management', path: '/sprint-dashboard', icon: 'chart-gantt' },
+        { label: 'Sprint Management', path: '/sprints/management', icon: 'chart-gantt' },
         { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
         { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'calendar' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar-alt' }
+        { label: 'Calendar Integration', path: '/calendar/integration', icon: 'calendar-sync' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar-alt' },
+        { label: 'Routes & Routines', path: '/routes', icon: 'route' }
       ]
     },
     {
@@ -87,6 +89,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Visualization',
       icon: 'share-alt',
       items: [
+        { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'timeline' },
         { label: 'Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },

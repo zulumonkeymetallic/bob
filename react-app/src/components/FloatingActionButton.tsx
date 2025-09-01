@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Modal, Button, Form, Alert, ButtonGroup } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { generateRef } from '../utils/referenceGenerator';
 import '../styles/MaterialDesign.css';
 
 interface FloatingActionButtonProps {
@@ -65,8 +66,20 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       });
 
       if (quickAddType === 'goal') {
+        // Get existing goal references for unique ref generation
+        const existingGoalsQuery = query(
+          collection(db, 'goals'),
+          where('ownerUid', '==', currentUser.uid)
+        );
+        const existingSnapshot = await getDocs(existingGoalsQuery);
+        const existingRefs = existingSnapshot.docs
+          .map(doc => doc.data().ref)
+          .filter(ref => ref);
+        
+        const goalRef = generateRef('goal', existingRefs);
         const goalData = {
           ...baseData,
+          ref: goalRef,
           theme: quickAddData.theme,
           size: 'M',
           timeToMasterHours: 40,
@@ -77,18 +90,32 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         
         console.log('💾 FloatingActionButton: Saving GOAL to database', {
           action: 'goal_save_start',
-          data: goalData
+          data: goalData,
+          ref: goalRef
         });
         
         await addDoc(collection(db, 'goals'), goalData);
         
         console.log('✅ FloatingActionButton: GOAL saved successfully', {
           action: 'goal_save_success',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          ref: goalRef
         });
       } else if (quickAddType === 'story') {
+        // Get existing story references for unique ref generation
+        const existingStoriesQuery = query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUser.uid)
+        );
+        const existingSnapshot = await getDocs(existingStoriesQuery);
+        const existingRefs = existingSnapshot.docs
+          .map(doc => doc.data().ref)
+          .filter(ref => ref);
+        
+        const storyRef = generateRef('story', existingRefs);
         const storyData = {
           ...baseData,
+          ref: storyRef,
           goalId: '', // Will need to be linked later
           priority: quickAddData.priority,
           points: 3,
@@ -100,19 +127,33 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         
         console.log('💾 FloatingActionButton: Saving STORY to database', {
           action: 'story_save_start',
-          data: storyData
+          data: storyData,
+          ref: storyRef
         });
         
         await addDoc(collection(db, 'stories'), storyData);
         
         console.log('✅ FloatingActionButton: STORY saved successfully', {
           action: 'story_save_success',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          ref: storyRef
         });
       } else if (quickAddType === 'task') {
+        // Get existing task references for unique ref generation
+        const existingTasksQuery = query(
+          collection(db, 'tasks'),
+          where('ownerUid', '==', currentUser.uid)
+        );
+        const existingSnapshot = await getDocs(existingTasksQuery);
+        const existingRefs = existingSnapshot.docs
+          .map(doc => doc.data().ref)
+          .filter(ref => ref);
+        
+        const taskRef = generateRef('task', existingRefs);
         const effortData = efforts.find(e => e.value === quickAddData.effort);
         const taskData = {
           ...baseData,
+          ref: taskRef,
           parentType: 'story',
           parentId: '', // Will need to be linked later
           effort: quickAddData.effort,
@@ -130,14 +171,16 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         
         console.log('💾 FloatingActionButton: Saving TASK to database', {
           action: 'task_save_start',
-          data: taskData
+          data: taskData,
+          ref: taskRef
         });
         
         await addDoc(collection(db, 'tasks'), taskData);
         
         console.log('✅ FloatingActionButton: TASK saved successfully', {
           action: 'task_save_success',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          ref: taskRef
         });
       }
 

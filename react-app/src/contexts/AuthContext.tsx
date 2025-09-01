@@ -18,8 +18,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const signInWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
+    
+    // Force account selection on every login
+    provider.setCustomParameters({
+      prompt: 'select_account'
+    });
+    
     try {
-      console.log('Starting Google sign in...');
+      console.log('Starting Google sign in with account selection...');
       const result = await signInWithPopup(auth, provider);
       console.log('Sign in successful:', result.user.email);
     } catch (error) {
@@ -36,7 +42,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setIsTestUser(false);
       }
       
+      // Sign out from Firebase
       await firebaseSignOut(auth);
+      
+      // Clear any cached Google session data
+      // Note: Google OAuth will still remember the account unless user manually signs out from Google
+      console.log('🔐 Successfully signed out from BOB');
+      console.log('ℹ️  Note: To change Google accounts, you may need to sign out from Google.com');
+      
     } catch (error) {
       console.error("Error signing out", error);
     }

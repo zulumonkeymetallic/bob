@@ -10,6 +10,7 @@ import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import GoalsCardView from './GoalsCardView';
 import AddGoalModal from './AddGoalModal';
+import EditGoalModal from './EditGoalModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const GoalsManagement: React.FC = () => {
@@ -22,6 +23,7 @@ const GoalsManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddGoalModal, setShowAddGoalModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState<Goal | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'card'>('card');
 
   useEffect(() => {
@@ -95,6 +97,13 @@ const GoalsManagement: React.FC = () => {
     } catch (error) {
       console.error('Error updating goal priority:', error);
     }
+  };
+
+  const handleEditModal = (goal: Goal) => {
+    console.log('✏️ GoalsManagement: Edit modal triggered');
+    console.log('✏️ Goal:', goal.id, goal.title);
+    console.log('✏️ Current user:', currentUser?.email);
+    setShowEditModal(goal);
   };
 
   // Apply filters to goals
@@ -368,6 +377,7 @@ const GoalsManagement: React.FC = () => {
                     onGoalUpdate={handleGoalUpdate}
                     onGoalDelete={handleGoalDelete}
                     onGoalPriorityChange={handleGoalPriorityChange}
+                    onEditModal={handleEditModal}
                   />
                 </div>
               )}
@@ -381,6 +391,16 @@ const GoalsManagement: React.FC = () => {
         show={showAddGoalModal}
         onClose={() => setShowAddGoalModal(false)}
       />
+
+      {/* Edit Goal Modal */}
+      {showEditModal && (
+        <EditGoalModal
+          goal={showEditModal}
+          show={true}
+          onClose={() => setShowEditModal(null)}
+          currentUserId={currentUser?.uid || ''}
+        />
+      )}
     </div>
   );
 };

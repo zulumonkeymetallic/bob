@@ -634,8 +634,18 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       size="sm"
                       onClick={(e) => {
                         e.stopPropagation();
+                        const isExpanding = expandedGoalId !== goal.id;
+                        console.log('🎯 GoalsCardView: Stories button clicked');
+                        console.log('🎯 Goal:', goal.id, goal.title);
+                        console.log('🎯 Action:', isExpanding ? 'EXPANDING' : 'COLLAPSING');
+                        console.log('🎯 Current stories count:', goalStories[goal.id]?.length || 0);
+                        console.log('🎯 User:', currentUser?.email);
+                        
                         setExpandedGoalId(expandedGoalId === goal.id ? null : goal.id);
-                        if (expandedGoalId !== goal.id) loadStoriesForGoal(goal.id);
+                        if (expandedGoalId !== goal.id) {
+                          console.log('🎯 GoalsCardView: Loading stories for goal:', goal.id);
+                          loadStoriesForGoal(goal.id);
+                        }
                       }}
                       style={{ 
                         fontSize: '12px',
@@ -711,33 +721,17 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   </Button>
                 </Card.Header>
                 <Card.Body style={{ padding: 0 }}>
-                  {goalStories[goal.id] && goalStories[goal.id].length > 0 ? (
-                    <div style={{ maxHeight: '400px', overflow: 'auto' }}>
-                      <ModernStoriesTable
-                        stories={goalStories[goal.id]}
-                        goals={[goal]}
-                        onStoryUpdate={handleStoryUpdate}
-                        onStoryDelete={handleStoryDelete}
-                        onStoryPriorityChange={handleStoryPriorityChange}
-                        onStoryAdd={handleStoryAdd(goal.id)}
-                        goalId={goal.id}
-                      />
-                    </div>
-                  ) : (
-                    <div style={{ 
-                      textAlign: 'center', 
-                      padding: '40px 20px',
-                      color: '#6b7280'
-                    }}>
-                      <Target size={24} style={{ marginBottom: '8px', opacity: 0.5 }} />
-                      <p style={{ margin: 0, fontSize: '14px' }}>
-                        No stories yet for this goal
-                      </p>
-                      <p style={{ margin: '4px 0 0 0', fontSize: '12px', opacity: 0.7 }}>
-                        Break down your goal into actionable stories
-                      </p>
-                    </div>
-                  )}
+                  <div style={{ maxHeight: '400px', overflow: 'auto' }}>
+                    <ModernStoriesTable
+                      stories={goalStories[goal.id] || []}
+                      goals={[goal]}
+                      onStoryUpdate={handleStoryUpdate}
+                      onStoryDelete={handleStoryDelete}
+                      onStoryPriorityChange={handleStoryPriorityChange}
+                      onStoryAdd={handleStoryAdd(goal.id)}
+                      goalId={goal.id}
+                    />
+                  </div>
                 </Card.Body>
               </Card>
             )}

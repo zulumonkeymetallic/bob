@@ -1,14 +1,30 @@
-# BOB — AI-Enhanced Productivity Platform v2.1.5 ✅
+# BOB — AI-Enhanced Productivity Platform v3.5.2 🚀
 
-**Live Application:** https://bob20250810.web.agit push -u origin main
-```
+## 🌐 **IMPORTANT URLS & ACCESS**
+
+### **Production Application**
+- **Live URL:** [https://bob20250810.web.app](https://bob20250810.web.app)
+- **Test Mode:** [https://bob20250810.web.app?test_login=true](https://bob20250810.web.app?test_login=true)
+- **AI Agent Test:** [https://bob20250810.web.app?test-login=ai-agent-token&test-mode=true](https://bob20250810.web.app?test-login=ai-agent-token&test-mode=true)
+
+### **Firebase Console & Management**
+- **Firebase Console:** [https://console.firebase.google.com/project/bob20250810/overview](https://console.firebase.google.com/project/bob20250810/overview)
+- **Firestore Database:** [https://console.firebase.google.com/project/bob20250810/firestore](https://console.firebase.google.com/project/bob20250810/firestore)
+- **Firebase Hosting:** [https://console.firebase.google.com/project/bob20250810/hosting](https://console.firebase.google.com/project/bob20250810/hosting)
+- **Firebase Functions:** [https://console.firebase.google.com/project/bob20250810/functions](https://console.firebase.google.com/project/bob20250810/functions)
+
+### **GitHub Repository**
+- **Main Repository:** [https://github.com/zulumonkeymetallic/bob](https://github.com/zulumonkeymetallic/bob)
+- **Latest Release:** [https://github.com/zulumonkeymetallic/bob/releases](https://github.com/zulumonkeymetallic/bob/releases)
+- **Issues:** [https://github.com/zulumonkeymetallic/bob/issues](https://github.com/zulumonkeymetallic/bob/issues)
+- **Pull Requests:** [https://github.com/zulumonkeymetallic/bob/pulls](https://github.com/zulumonkeymetallic/bob/pulls)
 
 ## 🚀 Quick Start
 
 ### Using the Live Application
 1. **Access:** Open [https://bob20250810.web.app](https://bob20250810.web.app)
-2. **Sign In:** Use Google authentication
-3. **Start Managing:** Create tasks, set goals, organize with kanban boards
+2. **Sign In:** Use Google authentication (fixed v3.5.2 - now prompts for account selection)
+3. **Start Managing:** Create goals, stories, tasks with new visualization tools
 
 ### For Developers
 1. **Documentation:** Start with `Business Analyst AI/GETTING_STARTED.md`
@@ -33,15 +49,27 @@
 
 ---
 
-**🔥 PRIORITY:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) for current development priorities and next steps. Version:** 2.1.5 - Production Ready Core  
-**Next Phase:** AI Integration & Enhancement  
-**Last Updated:** August 30, 2025
+**🔥 PRIORITY:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) for current development priorities and next steps. 
 
-## 🎯 **PROJECT STATUS - Post-Documentation Cleanup**
+**Version:** v3.5.2 - Goals Refinements + Comprehensive UI Scaffolding  
+**Latest Features:** Goals Visualization, Calendar Integration, Sprint Management, Routes & Routines  
+**Next Phase:** Full CRUD operations for all platform entities  
+**Last Updated:** September 1, 2025
 
-**✅ CORE PLATFORM STABLE:** Task management, UI/UX, and infrastructure complete  
-**🔄 NEXT PHASE:** AI integration and advanced features in development  
+---
+
+## 🎯 **PROJECT STATUS - v3.5.2 Scaffolding Complete**
+
+**✅ CORE PLATFORM STABLE:** Goals refinements, authentication fixes, and comprehensive UI scaffolding  
+**✅ NEW SCAFFOLDING:** Goals timeline, calendar integration, sprint management, route optimization  
+**🔄 NEXT PHASE:** Backend API integration and real data connectivity  
 **📋 ACTION PLAN:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) for priorities
+
+### 🆕 **v3.5.2 New Components** 
+- **Goals Visualization:** Interactive roadmap timeline with drag-and-drop scheduling
+- **Calendar Integration:** Google/Outlook sync with goal linking and auto-task creation
+- **Sprint Management:** Complete sprint lifecycle with retrospectives and burndown charts
+- **Routes & Routines:** Daily optimization with efficiency tracking and navigation integration
 
 ### 📁 **Clean Documentation Structure**
 - **Master Documentation:** `Business Analyst AI/` (unified requirements, guides, automation)
@@ -49,40 +77,34 @@
 - **Archived Files:** `archive/` (historical documentation preserved in compressed format)
 - **Action Plan:** `CRITICAL_ACTION_PLAN.md` (current priorities and roadmap)
 
-## 🆕 **What's New in Version 2.1.0**
+## 🆕 **What's New in Version 3.5.2**
 
-### **Core Features**
-- ✅ **Material Design UI** with dark mode accessibility fixes
-- ✅ **Persona System** - Switch between Personal and Work contexts
-- ✅ **Goals → Stories → Tasks** hierarchy with progress tracking
-- ✅ **Kanban Board** with drag-and-drop functionality (mobile + desktop)
-- ✅ **AI-Powered Planning** - Smart task prioritization and calendar scheduling
-- ✅ **Separate Tasks List** view with advanced filtering
+### **🎯 Goals Refinements**
+- ✅ **Enhanced Goals System** with improved CRUD operations
+- ✅ **Visual Progress Tracking** with theme-based color coding
+- ✅ **Goals-Stories-Tasks Hierarchy** with better relationship management
+- ✅ **Priority and Status Management** with drag-and-drop reordering
 
-### **🆕 NEW: Personal Backlogs Manager** 
-- Steam games library management
-- Trakt movies and TV shows tracking  
-- Books and custom collection support
-- Grid/list views with status tracking
-- Search and filter capabilities
+### **🔧 Authentication Fixes**
+- ✅ **Google OAuth Enhancement** - Fixed account selection prompt
+- ✅ **Force Refresh Mechanism** - v3.5.2 prompts users to refresh for latest features
+- ✅ **Session Management** - Improved logout and cache clearing
 
-### **🆕 NEW: Mobile-Optimized Interface**
-- Auto-detected device-responsive design
-- Touch-friendly Priority Dashboard (`/mobile-priorities`)
-- One-tap task completion with priority filtering
-- Urgent task alerts and daily focus view
+### **� Comprehensive UI Scaffolding**
+- ✅ **Goals Visualization** - Interactive roadmap timeline with sprint markers
+- ✅ **Calendar Integration** - Google/Outlook sync with goal linking
+- ✅ **Sprint Management** - Complete Agile workflow with retrospectives
+- ✅ **Routes & Routines** - Daily optimization with efficiency tracking
 
-### **🆕 NEW: Visual Canvas**
-- Interactive goal-story-task mind mapping
-- SVG-based visualization with zoom/pan controls
-- Click-to-select nodes with relationship highlighting
-- Visual project organization and planning tool
+### **📱 Mobile & Accessibility**
+- ✅ **Responsive Design** - All new components work seamlessly on mobile
+- ✅ **Touch-Friendly Controls** - Optimized for tablet and phone interactions
+- ✅ **Dark Mode Support** - Consistent theming across all new components
 
-### **🔧 Enhanced Features**
-- **Dark Mode Fixes** - All tables properly styled for accessibility
-- **Improved Drag & Drop** - Enhanced mobile touch support
-- **Device Detection** - Responsive UI adaptation
-- **Better Mobile UX** - Touch-optimized interfaces throughout
+### **� Integration Ready**
+- ✅ **API Scaffolding** - Ready for backend integration
+- ✅ **Real-time Updates** - Firebase integration hooks prepared
+- ✅ **External Services** - Calendar, mapping, and optimization service stubs
 
 ## What this platform does
 - **Personal Productivity**: Goals ↔ Stories ↔ Tasks linkage with AI-powered prioritization
