@@ -335,7 +335,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 timestamp: new Date().toISOString()
               });
               
-              // 🎯 BOB v3.1.0: Enhanced Activity Tracking
+              // 🎯 BOB v3.2.4: Enhanced Activity Tracking
               await trackClick({
                 elementId: 'task-edit-btn',
                 elementType: 'edit',

@@ -11,7 +11,7 @@ export interface TrackingOptions {
 }
 
 /**
- * 🎯 BOB v3.1.0 Global Activity Tracking Hook
+ * 🎯 BOB v3.2.4 Global Activity Tracking Hook
  * 
  * Use this hook in any component to automatically track user interactions
  * and maintain a comprehensive audit trail.
@@ -34,7 +34,7 @@ export const useActivityTracking = () => {
 
   const trackClick = async (options: TrackingOptions) => {
     if (!currentUser) {
-      console.warn('🚫 BOB v3.1.0: Cannot track click - user not authenticated');
+      console.warn('🚫 BOB v3.2.4: Cannot track click - user not authenticated');
       return;
     }
 
@@ -49,7 +49,7 @@ export const useActivityTracking = () => {
         options.additionalData
       );
     } catch (error) {
-      console.error('❌ BOB v3.1.0: Failed to track click:', error, options);
+      console.error('❌ BOB v3.2.4: Failed to track click:', error, options);
     }
   };
 
@@ -61,7 +61,7 @@ export const useActivityTracking = () => {
     additionalData?: any
   ) => {
     if (!currentUser) {
-      console.warn('🚫 BOB v3.1.0: Cannot track view - user not authenticated');
+      console.warn('🚫 BOB v3.2.4: Cannot track view - user not authenticated');
       return;
     }
 
@@ -75,7 +75,7 @@ export const useActivityTracking = () => {
         referenceNumber
       );
     } catch (error) {
-      console.error('❌ BOB v3.1.0: Failed to track view:', error, { entityId, entityType, entityTitle });
+      console.error('❌ BOB v3.2.4: Failed to track view:', error, { entityId, entityType, entityTitle });
     }
   };
 
@@ -86,7 +86,7 @@ export const useActivityTracking = () => {
     referenceNumber?: string
   ) => {
     if (!currentUser) {
-      console.warn('🚫 BOB v3.1.0: Cannot add note - user not authenticated');
+      console.warn('🚫 BOB v3.2.4: Cannot add note - user not authenticated');
       return;
     }
 
@@ -100,7 +100,7 @@ export const useActivityTracking = () => {
         referenceNumber
       );
     } catch (error) {
-      console.error('❌ BOB v3.1.0: Failed to add note:', error, { entityId, entityType, noteContent });
+      console.error('❌ BOB v3.2.4: Failed to add note:', error, { entityId, entityType, noteContent });
     }
   };
 
@@ -110,7 +110,7 @@ export const useActivityTracking = () => {
     callback: (activities: any[]) => void
   ) => {
     if (!currentUser) {
-      console.warn('🚫 BOB v3.1.0: Cannot subscribe to activity - user not authenticated');
+      console.warn('🚫 BOB v3.2.4: Cannot subscribe to activity - user not authenticated');
       return () => {};
     }
 

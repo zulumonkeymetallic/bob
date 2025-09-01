@@ -51,9 +51,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       setEditForm({ ...selectedItem });
       setIsEditing(false);
       
-      console.log('🎯 BOB v3.1.0: GlobalSidebar - Setting up activity stream for', selectedType, selectedItem.id);
+      console.log('🎯 BOB v3.2.4: GlobalSidebar - Setting up activity stream for', selectedType, selectedItem.id);
       
-      // Track that user viewed this record
+      // Track that user viewed this record (only once per item change)
       trackView(
         selectedItem.id,
         selectedType as any,
@@ -68,11 +68,15 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         setActivities
       );
       
-      return unsubscribe;
+      return () => {
+        if (unsubscribe) {
+          unsubscribe();
+        }
+      };
     } else {
       setActivities([]);
     }
-  }, [selectedItem, currentUser, selectedType, trackView, subscribeToActivity]);
+  }, [selectedItem?.id, selectedType, currentUser?.uid]); // Only re-run when item ID or type changes
 
   // Apply margin to main content when sidebar is visible
   React.useEffect(() => {
@@ -97,7 +101,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const handleSave = async () => {
     try {
-      console.log('🎯 BOB v3.1.0: GlobalSidebar - Saving changes to', selectedType, selectedItem?.id);
+      console.log('🎯 BOB v3.2.4: GlobalSidebar - Saving changes to', selectedType, selectedItem?.id);
       
       // Track save button click
       await trackClick({
@@ -124,15 +128,15 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
       await updateItem(editForm);
       
-      console.log('✅ BOB v3.1.0: Changes saved successfully', { changesCount: changes.length });
+      console.log('✅ BOB v3.2.4: Changes saved successfully', { changesCount: changes.length });
       setIsEditing(false);
     } catch (error) {
-      console.error('❌ BOB v3.1.0: Error updating item:', error);
+      console.error('❌ BOB v3.2.4: Error updating item:', error);
     }
   };
 
   const handleEdit = async () => {
-    console.log('🎯 BOB v3.1.0: GlobalSidebar - Edit button clicked for', selectedType, selectedItem?.id);
+    console.log('🎯 BOB v3.2.4: GlobalSidebar - Edit button clicked for', selectedType, selectedItem?.id);
     
     await trackClick({
       elementId: 'sidebar-edit-btn',
@@ -151,7 +155,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const handleDelete = async () => {
-    console.log('🎯 BOB v3.1.0: GlobalSidebar - Delete button clicked for', selectedType, selectedItem?.id);
+    console.log('🎯 BOB v3.2.4: GlobalSidebar - Delete button clicked for', selectedType, selectedItem?.id);
     
     await trackClick({
       elementId: 'sidebar-delete-btn',
@@ -174,7 +178,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const handleAddNote = async () => {
-    console.log('🎯 BOB v3.1.0: GlobalSidebar - Add note initiated', { 
+    console.log('🎯 BOB v3.2.4: GlobalSidebar - Add note initiated', { 
       hasNote: !!newNote.trim(), 
       hasItem: !!selectedItem, 
       hasType: !!selectedType, 
@@ -207,11 +211,11 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         referenceNumber
       );
       
-      console.log('✅ BOB v3.1.0: Note added successfully');
+      console.log('✅ BOB v3.2.4: Note added successfully');
       setNewNote('');
       setShowAddNote(false);
     } catch (error) {
-      console.error('❌ BOB v3.1.0: Error adding note:', error);
+      console.error('❌ BOB v3.2.4: Error adding note:', error);
       alert('Failed to add note: ' + (error as Error).message);
     }
   };

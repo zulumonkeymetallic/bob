@@ -344,7 +344,7 @@ export class ActivityStreamService {
 
     const description = `🖱️ UI Click: ${elementType} on ${entityType} (${elementId})`;
     
-    console.log(`🎯 BOB v3.1.0 UI TRACKING: ${description}`, {
+    console.log(`🎯 BOB v3.2.4 UI TRACKING: ${description}`, {
       elementId,
       elementType, 
       entityId,
@@ -385,7 +385,7 @@ export class ActivityStreamService {
   ): Promise<void> {
     const description = `📝 User Note: ${noteContent.substring(0, 100)}${noteContent.length > 100 ? '...' : ''}`;
     
-    console.log(`📝 BOB v3.1.0 USER NOTE ADDED:`, {
+    console.log(`📝 BOB v3.2.4 USER NOTE ADDED:`, {
       entityId,
       entityType,
       noteContent,
@@ -425,7 +425,7 @@ export class ActivityStreamService {
   ): Promise<void> {
     const description = `👁️ Viewed ${entityType}: ${entityTitle}`;
     
-    console.log(`👁️ BOB v3.1.0 RECORD VIEW:`, {
+    console.log(`👁️ BOB v3.2.4 RECORD VIEW:`, {
       entityId,
       entityType,
       entityTitle,
@@ -488,7 +488,7 @@ export class ActivityStreamService {
       orderBy('timestamp', 'desc')
     );
 
-    console.log(`🔄 BOB v3.1.0 ACTIVITY STREAM: Subscribing to ${entityType} ${entityId}`, {
+    console.log(`🔄 BOB v3.2.4 ACTIVITY STREAM: Subscribing to ${entityType} ${entityId}`, {
       entityId,
       entityType,
       userId,
@@ -501,10 +501,10 @@ export class ActivityStreamService {
         ...doc.data()
       })) as ActivityEntry[];
       
-      console.log(`✅ BOB v3.1.0 ACTIVITY STREAM: Received ${activities.length} activities for ${entityType} ${entityId}`);
+      console.log(`✅ BOB v3.2.4 ACTIVITY STREAM: Received ${activities.length} activities for ${entityType} ${entityId}`);
       callback(activities);
     }, (error) => {
-      console.error('❌ BOB v3.1.0 ACTIVITY STREAM ERROR:', error, {
+      console.error('❌ BOB v3.2.4 ACTIVITY STREAM ERROR:', error, {
         entityId,
         entityType,
         userId,
