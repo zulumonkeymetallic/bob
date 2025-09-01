@@ -65,12 +65,16 @@ const GoalsManagement: React.FC = () => {
   // Handler functions for ModernGoalsTable
   const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
     try {
+      console.log(`🔄 Updating goal ${goalId} with:`, updates);
+      
       await updateDoc(doc(db, 'goals', goalId), {
         ...updates,
         updatedAt: serverTimestamp()
       });
+      
+      console.log(`✅ Goal ${goalId} updated successfully`);
     } catch (error) {
-      console.error('Error updating goal:', error);
+      console.error('❌ Error updating goal:', error);
     }
   };
 

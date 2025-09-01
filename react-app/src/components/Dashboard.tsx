@@ -21,6 +21,13 @@ interface DashboardStats {
 const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  
+  // Debug logging for authentication
+  console.log('🔍 Dashboard: currentUser:', currentUser);
+  console.log('🔍 Dashboard: currentUser type:', typeof currentUser);
+  console.log('🔍 Dashboard: currentUser uid:', currentUser?.uid);
+  console.log('🔍 Dashboard: currentUser email:', currentUser?.email);
+  
   const [stats, setStats] = useState<DashboardStats>({
     activeGoals: 0,
     activeStories: 0,
@@ -35,8 +42,13 @@ const Dashboard: React.FC = () => {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
   useEffect(() => {
-    if (!currentUser) return;
+    console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
+    if (!currentUser) {
+      console.log('🔍 Dashboard: No currentUser, returning early');
+      return;
+    }
     
+    console.log('🔍 Dashboard: Loading dashboard data for user:', currentUser.uid);
     loadDashboardData();
   }, [currentUser, currentPersona]);
 
@@ -249,11 +261,13 @@ const Dashboard: React.FC = () => {
             </Col>
 
             <Col md={4}>
-              <QuickActionsPanel onAction={(type, data) => {
-                console.log('✨ Quick action completed:', type, data);
-                // Refresh dashboard data when new items are created
-                loadDashboardData();
-              }} />
+              <QuickActionsPanel 
+                onAction={(type, data) => {
+                  console.log('✨ Quick action completed:', type, data);
+                  // Refresh dashboard data when new items are created
+                  loadDashboardData();
+                }} 
+              />
             </Col>
           </Row>
 

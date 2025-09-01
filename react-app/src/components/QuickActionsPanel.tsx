@@ -7,6 +7,7 @@ import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import AddGoalModal from './AddGoalModal';
 
 interface QuickActionsProps {
   onAction?: (type: string, data: any) => void;
@@ -15,8 +16,14 @@ interface QuickActionsProps {
 const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  
+  // Debug logging for QuickActionsPanel
+  console.log('🔍 QuickActionsPanel: currentUser:', !!currentUser);
+  console.log('🔍 QuickActionsPanel: currentPersona:', currentPersona);
+  
   const [showModal, setShowModal] = useState(false);
-  const [modalType, setModalType] = useState<'goal' | 'story' | 'task' | 'sprint'>('goal');
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [modalType, setModalType] = useState<'story' | 'task' | 'sprint'>('story');
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -57,14 +64,23 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
     }
   ];
 
-  const handleQuickAction = (type: 'goal' | 'story' | 'task' | 'sprint') => {
-    setModalType(type);
+    const handleQuickAction = (type: 'goal' | 'story' | 'task' | 'sprint') => {
+    console.log('🚀 QuickActionsPanel: Quick action triggered:', type);
+    
+    if (type === 'goal') {
+      // Use enhanced AddGoalModal for goals
+      setShowGoalModal(true);
+      return;
+    }
+    
+    // For other types, use the existing modal
+    setModalType(type as 'story' | 'task' | 'sprint');
     setFormData({
       title: '',
       description: '',
       theme: 1,
       priority: 'P2',
-      status: type === 'goal' ? 'new' : 'backlog'
+      status: 'backlog'
     });
     setShowModal(true);
   };
@@ -89,10 +105,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
       };
 
       // Add specific fields based on type
-      if (modalType === 'goal') {
-        entityData.goalTitle = formData.title;
-        entityData.themeId = formData.theme;
-      } else if (modalType === 'story') {
+      if (modalType === 'story') {
         entityData.storyTitle = formData.title;
       } else if (modalType === 'task') {
         entityData.taskTitle = formData.title;
@@ -142,7 +155,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
 
   return (
     <>
-      <Card className="mb-3 shadow-sm">
+      <Card className="mb-3 shadow-sm" data-testid="quick-actions-panel">
         <Card.Header className="d-flex align-items-center">
           <Zap size={16} className="me-2" style={{ color: '#f59e0b' }} />
           <strong>Quick Actions</strong>
@@ -157,6 +170,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
                     variant="outline-light"
                     size="sm"
                     className="w-100 d-flex flex-column align-items-center p-2"
+                    data-testid={`create-${action.type}-button`}
                     style={{
                       borderColor: action.color,
                       color: action.color,
@@ -213,22 +227,6 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
               />
             </Form.Group>
 
-            {modalType === 'goal' && (
-              <Form.Group className="mb-3">
-                <Form.Label>Theme</Form.Label>
-                <Form.Select
-                  value={formData.theme}
-                  onChange={(e) => setFormData({ ...formData, theme: parseInt(e.target.value) })}
-                >
-                  {themes.map(theme => (
-                    <option key={theme.id} value={theme.id}>
-                      {theme.name}
-                    </option>
-                  ))}
-                </Form.Select>
-              </Form.Group>
-            )}
-
             {(modalType === 'story' || modalType === 'task') && (
               <Form.Group className="mb-3">
                 <Form.Label>Priority</Form.Label>
@@ -258,6 +256,12 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {/* Enhanced Goal Creation Modal */}
+      <AddGoalModal
+        show={showGoalModal}
+        onClose={() => setShowGoalModal(false)}
+      />
     </>
   );
 };

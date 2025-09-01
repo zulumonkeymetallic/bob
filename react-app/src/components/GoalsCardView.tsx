@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Badge, Button, Dropdown, Modal } from 'react-bootstrap';
-import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus } from 'lucide-react';
+import { Card, Row, Col, Badge, Button, Dropdown, Modal, Alert } from 'react-bootstrap';
+import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, limit, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import ModernStoriesTable from './ModernStoriesTable';
+import EditGoalModal from './EditGoalModal';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
@@ -30,9 +32,13 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
+  const [showEditModal, setShowEditModal] = useState<Goal | null>(null);
   const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
   const [goalStories, setGoalStories] = useState<{ [goalId: string]: Story[] }>({});
   const [latestActivities, setLatestActivities] = useState<{ [goalId: string]: any }>({});
+  const [calendarSyncStatus, setCalendarSyncStatus] = useState<{ [goalId: string]: string }>({});
+  const [isSchedulingGoal, setIsSchedulingGoal] = useState<string | null>(null);
+  const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
 
   // Theme colors mapping
   const themeColors = {
@@ -79,7 +85,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
         where('entityId', '==', goalId),
         where('ownerUid', '==', currentUser.uid),
         orderBy('timestamp', 'desc'),
-        limit(5)
+        limit(10)
       );
       
       const snapshot = await getDocs(q);
@@ -88,9 +94,18 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
         ...doc.data()
       })) as any[];
       
-      const latestStatusChange = activities.find(activity => activity.activityType === 'status_changed');
-      const latestComment = activities.find(activity => activity.activityType === 'note_added' && activity.noteContent);
-      const latestActivity = latestStatusChange || latestComment;
+      // Filter out UI activities that aren't meaningful
+      const meaningfulActivities = activities.filter(activity => 
+        !['clicked', 'viewed', 'exported', 'imported'].includes(activity.activityType)
+      );
+      
+      // Get the most recent meaningful activity (comment, status change, or field update)
+      const latestActivity = meaningfulActivities.find(activity => 
+        (activity.activityType === 'note_added' && activity.noteContent) ||
+        activity.activityType === 'status_changed' ||
+        (activity.activityType === 'updated' && activity.fieldName) ||
+        activity.activityType === 'created'
+      );
       
       if (latestActivity) {
         setLatestActivities(prev => ({
@@ -187,6 +202,114 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       });
     }
   }, [currentUser, goals]);
+
+  // Fetch time allocations for goals from calendar blocks
+  useEffect(() => {
+    if (!currentUser || !goals.length) return;
+
+    const fetchTimeAllocations = async () => {
+      try {
+        const now = new Date();
+        const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+        const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+        const allocations: { [goalId: string]: number } = {};
+
+        for (const goal of goals) {
+          // Query calendar blocks for this goal this week
+          const blocksQuery = query(
+            collection(db, 'calendar_blocks'),
+            where('ownerUid', '==', currentUser.uid),
+            where('goalId', '==', goal.id),
+            where('start', '>=', weekStart.getTime()),
+            where('start', '<=', weekEnd.getTime())
+          );
+
+          const blocksSnapshot = await getDocs(blocksQuery);
+          let totalMinutes = 0;
+
+          blocksSnapshot.docs.forEach(doc => {
+            const block = doc.data();
+            if (block.start && block.end) {
+              totalMinutes += (block.end - block.start) / (1000 * 60);
+            }
+          });
+
+          allocations[goal.id] = totalMinutes;
+        }
+
+        setGoalTimeAllocations(allocations);
+      } catch (error) {
+        console.error('Failed to fetch time allocations:', error);
+      }
+    };
+
+    fetchTimeAllocations();
+  }, [currentUser, goals]);
+
+  // Schedule time for a specific goal
+  const scheduleGoalTime = async (goal: Goal) => {
+    if (!currentUser) return;
+
+    try {
+      setIsSchedulingGoal(goal.id);
+      setCalendarSyncStatus(prev => ({ 
+        ...prev, 
+        [goal.id]: '🤖 AI is analyzing and scheduling time for this goal...' 
+      }));
+
+      // Call the calendar planning function with goal focus
+      const planCalendar = httpsCallable(functions, 'planCalendar');
+      const result = await planCalendar({
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        persona: currentPersona || 'personal',
+        focusGoalId: goal.id, // Focus planning on this specific goal
+        goalTimeRequest: goal.timeToMasterHours ? Math.min(goal.timeToMasterHours * 60, 300) : 120 // Request 2-5 hours per week
+      });
+
+      const planResult = result.data as any;
+      
+      if (planResult.blocksCreated > 0) {
+        setCalendarSyncStatus(prev => ({ 
+          ...prev, 
+          [goal.id]: `✅ Scheduled ${planResult.blocksCreated} time blocks for "${goal.title}"` 
+        }));
+
+        // Track activity
+        await addDoc(collection(db, 'activity_stream'), {
+          entityType: 'goal',
+          entityId: goal.id,
+          ownerUid: currentUser.uid,
+          activityType: 'calendar_scheduled',
+          description: `Scheduled ${planResult.blocksCreated} time blocks`,
+          metadata: { blocksCreated: planResult.blocksCreated, timeRequested: goal.timeToMasterHours },
+          timestamp: serverTimestamp()
+        });
+      } else {
+        setCalendarSyncStatus(prev => ({ 
+          ...prev, 
+          [goal.id]: '⚠️ No available time slots found for scheduling' 
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to schedule goal time:', error);
+      setCalendarSyncStatus(prev => ({ 
+        ...prev, 
+        [goal.id]: '❌ Failed to schedule time: ' + (error as Error).message 
+      }));
+    } finally {
+      setIsSchedulingGoal(null);
+      // Clear status after 5 seconds
+      setTimeout(() => {
+        setCalendarSyncStatus(prev => {
+          const newStatus = { ...prev };
+          delete newStatus[goal.id];
+          return newStatus;
+        });
+      }, 5000);
+    }
+  };
 
   const handleStoryPriorityChange = async (storyId: string, newPriority: number) => {
     try {
@@ -316,6 +439,20 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       <ChevronDown size={16} />
                     </Dropdown.Toggle>
                     <Dropdown.Menu>
+                      <Dropdown.Item 
+                        onClick={() => setShowEditModal(goal)}
+                      >
+                        <Edit3 size={14} className="me-2" />
+                        Edit Goal
+                      </Dropdown.Item>
+                      <Dropdown.Item 
+                        onClick={() => scheduleGoalTime(goal)}
+                        disabled={isSchedulingGoal === goal.id}
+                      >
+                        <CalendarPlus size={14} className="me-2" />
+                        {isSchedulingGoal === goal.id ? 'Scheduling...' : 'Schedule Time Blocks'}
+                      </Dropdown.Item>
+                      <Dropdown.Divider />
                       <Dropdown.Header>Change Status</Dropdown.Header>
                       <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'New')}>
                         New
@@ -388,9 +525,13 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       textTransform: 'uppercase',
                       letterSpacing: '0.5px'
                     }}>
-                      {latestActivities[goal.id].activityType === 'status_changed' 
-                        ? 'Latest Status' 
-                        : 'Latest Comment'}
+                      {latestActivities[goal.id].activityType === 'note_added' 
+                        ? 'Latest Comment'
+                        : latestActivities[goal.id].activityType === 'status_changed'
+                        ? 'Latest Status'
+                        : latestActivities[goal.id].activityType === 'updated'
+                        ? 'Latest Update'
+                        : 'Latest Activity'}
                     </div>
                     <div style={{ 
                       fontSize: '12px', 
@@ -398,9 +539,15 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       fontStyle: 'italic',
                       lineHeight: '1.4'
                     }}>
-                      {latestActivities[goal.id].activityType === 'status_changed'
+                      {latestActivities[goal.id].activityType === 'note_added'
+                        ? `"${latestActivities[goal.id].noteContent}"`
+                        : latestActivities[goal.id].activityType === 'status_changed'
                         ? `Status changed to: ${ChoiceHelper.getLabel('goal', 'status', parseInt(latestActivities[goal.id].newValue) || latestActivities[goal.id].newValue)}`
-                        : `"${latestActivities[goal.id].noteContent}"`}
+                        : latestActivities[goal.id].activityType === 'updated' && latestActivities[goal.id].fieldName
+                        ? `${latestActivities[goal.id].fieldName} changed to: ${latestActivities[goal.id].newValue}`
+                        : latestActivities[goal.id].activityType === 'created'
+                        ? 'Goal created'
+                        : latestActivities[goal.id].description || 'Activity logged'}
                     </div>
                     <div style={{ 
                       fontSize: '10px', 
@@ -426,10 +573,17 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     <span>{goal.priority}</span>
                   </div>
                   {goal.confidence && (
-                    <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: '#6b7280' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
                       <User size={14} style={{ marginRight: '8px' }} />
                       <span style={{ fontWeight: '500', marginRight: '8px' }}>Confidence:</span>
                       <span>{goal.confidence}/10</span>
+                    </div>
+                  )}
+                  {goalTimeAllocations[goal.id] !== undefined && (
+                    <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: '#059669' }}>
+                      <Clock size={14} style={{ marginRight: '8px' }} />
+                      <span style={{ fontWeight: '500', marginRight: '8px' }}>This Week:</span>
+                      <span>{Math.round(goalTimeAllocations[goal.id])} minutes allocated</span>
                     </div>
                   )}
                 </div>
@@ -444,9 +598,17 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   fontSize: '12px',
                   color: '#9ca3af'
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <Calendar size={12} style={{ marginRight: '4px' }} />
-                    {goal.createdAt && new Date(goal.createdAt.toDate()).toLocaleDateString()}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <Calendar size={12} style={{ marginRight: '4px' }} />
+                      Created: {goal.createdAt && new Date(goal.createdAt.toDate()).toLocaleDateString()}
+                    </div>
+                    {goal.updatedAt && goal.updatedAt.toDate && (
+                      <div style={{ display: 'flex', alignItems: 'center', color: '#059669', fontWeight: '500' }}>
+                        <Calendar size={12} style={{ marginRight: '4px' }} />
+                        Updated: {new Date(goal.updatedAt.toDate()).toLocaleDateString()} at {new Date(goal.updatedAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Button
@@ -490,6 +652,29 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 </div>
               </Card.Body>
             </Card>
+
+            {/* Calendar Sync Status */}
+            {calendarSyncStatus[goal.id] && (
+              <Alert 
+                variant={calendarSyncStatus[goal.id].startsWith('✅') ? 'success' : 
+                        calendarSyncStatus[goal.id].startsWith('❌') ? 'danger' : 
+                        calendarSyncStatus[goal.id].startsWith('⚠️') ? 'warning' : 'info'}
+                style={{ 
+                  marginTop: '8px',
+                  fontSize: '12px',
+                  padding: '8px 12px',
+                  marginBottom: 0
+                }}
+                dismissible
+                onClose={() => setCalendarSyncStatus(prev => {
+                  const newStatus = { ...prev };
+                  delete newStatus[goal.id];
+                  return newStatus;
+                })}
+              >
+                {calendarSyncStatus[goal.id]}
+              </Alert>
+            )}
 
             {/* Expanded Stories Section */}
             {expandedGoalId === goal.id && (
@@ -580,6 +765,14 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {/* Edit Goal Modal */}
+      <EditGoalModal
+        goal={showEditModal}
+        show={!!showEditModal}
+        onClose={() => setShowEditModal(null)}
+        currentUserId={currentUser?.uid || ''}
+      />
     </div>
   );
 };

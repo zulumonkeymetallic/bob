@@ -94,11 +94,19 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
 });
 
 // ===== AI Planning Function
-exports.planCalendar = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (request) => {
+exports.planCalendar = functionsV2.https.onCall(async (request) => {
   const uid = request.auth?.uid;
-  if (!uid) throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
+  if (!uid) {
+    throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
+  }
 
-  const { persona = "personal", horizonDays = 7, applyIfScoreGe = 0.8 } = request.data;
+  const { 
+    persona = "personal", 
+    horizonDays = 7, 
+    applyIfScoreGe = 0.8,
+    focusGoalId = null,
+    goalTimeRequest = null
+  } = request.data;
   
   try {
     const db = admin.firestore();
@@ -108,15 +116,16 @@ exports.planCalendar = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (requ
     
     // 2. Generate AI plan
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const aiResponse = await generateAIPlan(openai, context);
+    const aiResponse = await generateAIPlan(openai, context, { focusGoalId, goalTimeRequest });
     
     // 3. Validate proposed blocks
     const validationResult = await validateCalendarBlocks(aiResponse.blocks, context);
     
     // 4. Apply if score is high enough
     let applied = false;
+    let blocksCreated = 0;
     if (validationResult.score >= applyIfScoreGe && validationResult.errors.length === 0) {
-      await applyCalendarBlocks(uid, persona, aiResponse.blocks);
+      blocksCreated = await applyCalendarBlocks(uid, persona, aiResponse.blocks);
       applied = true;
     }
     
@@ -125,7 +134,9 @@ exports.planCalendar = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (requ
       rationale: aiResponse.rationale,
       validator: validationResult,
       applied,
-      score: validationResult.score
+      blocksCreated,
+      score: validationResult.score,
+      focusGoalId: focusGoalId || null
     };
     
   } catch (error) {
@@ -192,14 +203,35 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
   };
 }
 
-async function generateAIPlan(openai, context) {
-  const systemPrompt = `You are an AI planning assistant for BOB, a personal productivity system.
+async function generateAIPlan(openai, context, options = {}) {
+  const { focusGoalId, goalTimeRequest } = options;
+  
+  let systemPrompt = `You are an AI planning assistant for BOB, a personal productivity system.
 
 CONTEXT:
 - Persona: ${context.persona}
 - Tasks: ${context.tasks.length} pending
 - Goals: ${context.goals.length} active
-- Time window: ${Math.ceil((context.timeWindow.end - context.timeWindow.start) / (1000 * 60 * 60 * 24))} days
+- Time window: ${Math.ceil((context.timeWindow.end - context.timeWindow.start) / (1000 * 60 * 60 * 24))} days`;
+
+  if (focusGoalId) {
+    const focusGoal = context.goals.find(g => g.id === focusGoalId);
+    if (focusGoal) {
+      systemPrompt += `
+
+🎯 FOCUS MODE: GOAL-SPECIFIC SCHEDULING
+Primary Goal: "${focusGoal.title}"
+- Theme: ${focusGoal.theme}
+- Status: ${focusGoal.status}
+- Priority: ${focusGoal.priority}
+- Time to Master: ${focusGoal.timeToMasterHours || 'Not specified'} hours
+- Requested Weekly Time: ${goalTimeRequest || 120} minutes
+
+PRIORITY: Create time blocks specifically for this goal and related tasks.`;
+    }
+  }
+
+  systemPrompt += `
 
 PLANNING PREFERENCES:
 - Wake time: ${context.prefs.wakeTime || '07:00'}
@@ -207,23 +239,37 @@ PLANNING PREFERENCES:
 - Quiet hours: ${JSON.stringify(context.prefs.quietHours || [])}
 - Weekly theme targets: ${JSON.stringify(context.prefs.weeklyThemeTargets || {})}
 
+GOALS TO CONSIDER:
+${context.goals.map(goal => `- ${goal.title} (${goal.theme}, ${goal.status}, ${goal.priority}${goal.id === focusGoalId ? ' ⭐ FOCUS GOAL' : ''})`).join('\n')}
+
 TASKS TO SCHEDULE:
-${context.tasks.map(task => `- ${task.title} (${task.effort}, ${task.priority}, ${task.theme || 'No theme'})`).join('\n')}
+${context.tasks.map(task => `- ${task.title} (${task.effort}, ${task.priority}, ${task.theme || 'No theme'}${task.goalId === focusGoalId ? ' ⭐ FOCUS TASK' : ''})`).join('\n')}
 
 CONSTRAINTS:
 1. Only schedule between wake and sleep times
 2. Avoid quiet hours
 3. Respect existing calendar events
 4. Balance weekly theme targets
-5. Consider task effort and priority
+5. Consider task effort and priority`;
+
+  if (focusGoalId) {
+    systemPrompt += `
+6. 🎯 PRIORITIZE blocks for the focus goal and its related tasks
+7. Create dedicated goal work sessions of 25-90 minutes
+8. Include goal-themed activities (reading, planning, skill building)`;
+  }
+
+  systemPrompt += `
 
 Generate a plan as JSON with:
 {
   "blocks": [
     {
-      "taskId": "task_id",
+      "taskId": "task_id_or_null",
+      "goalId": "${focusGoalId || 'goal_id_or_null'}",
       "theme": "Health|Growth|Wealth|Tribe|Home",
-      "category": "Task Work",
+      "category": "Task Work|Goal Focus|Skill Building|Planning",
+      "title": "Block title",
       "start": timestamp,
       "end": timestamp,
       "rationale": "Why this time slot"
@@ -236,7 +282,9 @@ Generate a plan as JSON with:
     model: "gpt-4",
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: "Please generate an optimal schedule for these tasks." }
+      { role: "user", content: focusGoalId ? 
+        `Please generate an optimal schedule focused on the goal "${context.goals.find(g => g.id === focusGoalId)?.title}". Create specific time blocks for goal work, skill building, and related tasks.` :
+        "Please generate an optimal schedule for these tasks and goals." }
     ],
     temperature: 0.3
   });
@@ -317,6 +365,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
   }
   
   await batch.commit();
+  return blocks.length; // Return count of blocks created
 }
 
 function getDefaultPlanningPrefs() {
