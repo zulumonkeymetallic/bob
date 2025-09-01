@@ -33,6 +33,12 @@ import { useDeviceInfo } from './utils/deviceDetection';
 import { checkForUpdates, VERSION } from './version';
 import ComprehensiveTest from './components/ComprehensiveTest';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
+
+// BOB v3.5.2 - New Scaffolding Components
+import GoalsVisualizationView from './components/visualization/GoalsVisualizationView';
+import CalendarIntegrationView from './components/calendar/CalendarIntegrationView';
+import SprintManagementView from './components/sprints/SprintManagementView';
+import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
@@ -188,6 +194,18 @@ function AppContent() {
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/visualization" element={<GoalVizPage />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
+            
+            {/* BOB v3.5.2 - New Scaffolding Components */}
+            <Route path="/goals/roadmap" element={<GoalsVisualizationView />} />
+            <Route path="/goals/timeline" element={<GoalsVisualizationView />} />
+            <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
+            <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
+            <Route path="/sprints/management" element={<SprintManagementView />} />
+            <Route path="/sprints/board" element={<SprintManagementView />} />
+            <Route path="/routes" element={<RoutesManagementView />} />
+            <Route path="/routines" element={<RoutesManagementView />} />
+            <Route path="/routes/optimization" element={<RoutesManagementView />} />
+            
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
             <Route path="/calendar" element={<Calendar />} />

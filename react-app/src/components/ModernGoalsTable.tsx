@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form } from 'react-bootstrap';
 import {
   DndContext,
@@ -21,18 +21,23 @@ import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { db } from '../firebase';
 import { 
   Settings, 
   GripVertical, 
   Eye, 
   EyeOff,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Plus
 } from 'lucide-react';
-import { Goal } from '../types';
+import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { getStatusName, getThemeName } from '../utils/statusHelpers';
+import ModernStoriesTable from './ModernStoriesTable';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -127,23 +132,37 @@ const defaultColumns: Column[] = [
 ];
 
 interface SortableRowProps {
-  goal: GoalTableRow;
+  goal: Goal;
   columns: Column[];
   index: number;
-  onGoalUpdate: (goalId: string, updates: Partial<Goal>) => Promise<void>;
-  onGoalDelete: (goalId: string) => Promise<void>;
-  onEditModal?: (goal: Goal) => void;
+  onGoalUpdate: (goalId: string, updates: Partial<Goal>) => void;
+  onGoalDelete: (goalId: string) => void;
+  onEditModal: (goal: Goal) => void;
   onRowClick: (goal: Goal) => void;
+  expandedGoalId: string | null;
+  goalStories: { [goalId: string]: Story[] };
+  onGoalExpand: (goalId: string) => void;
+  onStoryUpdate: (storyId: string, updates: Partial<Story>) => Promise<void>;
+  onStoryDelete: (storyId: string) => Promise<void>;
+  onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
+  onStoryAdd: (goalId: string) => (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
   goal, 
   columns, 
-  index, 
+  index,
+  expandedGoalId,
+  goalStories,
   onGoalUpdate, 
   onGoalDelete,
   onEditModal,
-  onRowClick
+  onRowClick,
+  onGoalExpand,
+  onStoryUpdate,
+  onStoryDelete,
+  onStoryPriorityChange,
+  onStoryAdd
 }) => {
   const {
     attributes,
@@ -181,8 +200,14 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleEditClick = () => {
+    console.log('✏️ ModernGoalsTable: Edit button clicked');
+    console.log('✏️ Goal:', goal.id, goal.title);
+    console.log('✏️ Has onEditModal prop:', !!onEditModal);
     if (onEditModal) {
+      console.log('✏️ Calling onEditModal handler');
       onEditModal(goal);
+    } else {
+      console.log('✏️ No onEditModal handler - this is an issue');
     }
   };
 
@@ -394,7 +419,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   return (
-    <tr
+    <>
+      <tr
       ref={setNodeRef}
       style={{
         ...style,
@@ -456,7 +482,32 @@ const SortableRow: React.FC<SortableRowProps> = ({
         textAlign: 'center',
         width: '96px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+          <button
+            onClick={() => onGoalExpand(goal.id)}
+            style={{
+              color: '#059669',
+              padding: '4px',
+              borderRadius: '4px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              fontSize: '12px',
+              fontWeight: '500',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#d1fae5';
+              e.currentTarget.style.color = '#047857';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.color = '#059669';
+            }}
+            title="View stories"
+          >
+            {expandedGoalId === goal.id ? '▼' : '▶'}
+          </button>
           <button
             onClick={() => handleEditClick()}
             style={{
@@ -510,6 +561,41 @@ const SortableRow: React.FC<SortableRowProps> = ({
         </div>
       </td>
     </tr>
+    {/* Expanded row for stories */}
+    {expandedGoalId === goal.id && (
+      <tr>
+        <td colSpan={columns.filter(col => col.visible).length + 2} style={{ padding: 0, borderTop: 'none' }}>
+          <div style={{ 
+            backgroundColor: '#f8fafc', 
+            padding: '16px',
+            borderLeft: '4px solid #059669',
+            borderBottom: '1px solid #e5e7eb'
+          }}>
+            <h4 style={{ 
+              margin: '0 0 12px 0', 
+              fontSize: '14px', 
+              fontWeight: '600', 
+              color: '#374151',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}>
+              📚 Stories for: {goal.title}
+            </h4>
+            <ModernStoriesTable
+              stories={goalStories[goal.id] || []}
+              goals={[]}
+              goalId={goal.id}
+              onStoryUpdate={onStoryUpdate}
+              onStoryDelete={onStoryDelete}
+              onStoryPriorityChange={onStoryPriorityChange}
+              onStoryAdd={onStoryAdd(goal.id)}
+            />
+          </div>
+        </td>
+      </tr>
+    )}
+    </>
   );
 };
 
@@ -529,8 +615,62 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   });
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+  const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
+  const [goalStories, setGoalStories] = useState<{ [goalId: string]: Story[] }>({});
   const { trackClick } = useActivityTracking();
   const { showSidebar } = useSidebar();
+  const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
+
+  // Load stories for expanded goals
+  useEffect(() => {
+    if (!currentUser || !expandedGoalId) {
+      console.log('📚 ModernGoalsTable: Story loading skipped', {
+        hasUser: !!currentUser,
+        expandedGoalId,
+        reason: !currentUser ? 'No user' : 'No expanded goal'
+      });
+      return;
+    }
+
+    console.log('📚 ModernGoalsTable: Starting story load');
+    console.log('📚 Goal ID:', expandedGoalId);
+    console.log('📚 User:', currentUser.email);
+    console.log('📚 Persona:', currentPersona);
+
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('goalId', '==', expandedGoalId),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc')
+    );
+
+    console.log('📚 ModernGoalsTable: Query created, setting up listener');
+
+    const unsubscribe = onSnapshot(storiesQuery, (snapshot) => {
+      const storiesData = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      } as Story));
+      
+      console.log(`📚 ModernGoalsTable: Query result received`);
+      console.log(`📚 Stories found: ${storiesData.length}`);
+      console.log(`📚 Goal: ${expandedGoalId}`);
+      if (storiesData.length > 0) {
+        console.log(`📚 First story:`, storiesData[0]);
+      }
+      
+      setGoalStories(prev => ({
+        ...prev,
+        [expandedGoalId]: storiesData
+      }));
+    }, (error) => {
+      console.error('📚 ModernGoalsTable: Query error:', error);
+    });
+
+    return unsubscribe;
+  }, [currentUser, expandedGoalId, currentPersona]);
 
   const handleEditModal = (goal: Goal) => {
     trackClick({
@@ -555,6 +695,39 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       additionalData: { action: 'open_sidebar', source: 'goals_table' }
     });
     showSidebar(goal, 'goal');
+  };
+
+  // Story management handlers
+  const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
+    // Implementation will be passed from parent component or handled here
+    console.log('Story update:', storyId, updates);
+  };
+
+  const handleStoryDelete = async (storyId: string) => {
+    // Implementation will be passed from parent component or handled here
+    console.log('Story delete:', storyId);
+  };
+
+  const handleStoryPriorityChange = async (storyId: string, newPriority: number) => {
+    // Implementation will be passed from parent component or handled here
+    console.log('Story priority change:', storyId, newPriority);
+  };
+
+  const handleStoryAdd = (goalId: string) => async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
+    // Implementation will be passed from parent component or handled here
+    console.log('Story add:', goalId, storyData);
+  };
+
+  const handleGoalExpand = (goalId: string) => {
+    const isExpanding = expandedGoalId !== goalId;
+    console.log('🎯 ModernGoalsTable: Goal expansion click');
+    console.log('🎯 Goal ID:', goalId);
+    console.log('🎯 Action:', isExpanding ? 'EXPANDING' : 'COLLAPSING');
+    console.log('🎯 Current expanded goal:', expandedGoalId);
+    console.log('🎯 User:', currentUser?.email);
+    console.log('🎯 Persona:', currentPersona);
+    
+    setExpandedGoalId(expandedGoalId === goalId ? null : goalId);
   };
 
   const sensors = useSensors(
@@ -737,10 +910,17 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       goal={goal}
                       columns={columns}
                       index={index}
+                      expandedGoalId={expandedGoalId}
+                      goalStories={goalStories}
                       onGoalUpdate={onGoalUpdate}
                       onGoalDelete={onGoalDelete}
                       onEditModal={handleEditModal}
                       onRowClick={handleRowClick}
+                      onGoalExpand={handleGoalExpand}
+                      onStoryUpdate={handleStoryUpdate}
+                      onStoryDelete={handleStoryDelete}
+                      onStoryPriorityChange={handleStoryPriorityChange}
+                      onStoryAdd={handleStoryAdd}
                     />
                   ))}
                 </SortableContext>

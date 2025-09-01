@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -18,6 +18,10 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { db } from '../firebase';
 import { 
   Settings, 
   GripVertical, 
@@ -26,7 +30,7 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Story, Goal } from '../types';
+import { Story, Goal, Sprint } from '../types';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -113,12 +117,22 @@ const defaultColumns: Column[] = [
     type: 'select',
     options: ['XS', 'S', 'M', 'L', 'XL']
   },
+  { 
+    key: 'sprintId', 
+    label: 'Sprint', 
+    width: '12%', 
+    visible: true, 
+    editable: true, 
+    type: 'select',
+    options: [] // Will be populated dynamically with sprint names
+  },
 ];
 
 interface SortableRowProps {
   story: StoryTableRow;
   columns: Column[];
   index: number;
+  sprints: Sprint[];
   onStoryUpdate: (storyId: string, updates: Partial<Story>) => Promise<void>;
   onStoryDelete: (storyId: string) => Promise<void>;
 }
@@ -127,6 +141,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   story, 
   columns, 
   index, 
+  sprints,
   onStoryUpdate, 
   onStoryDelete 
 }) => {
@@ -191,6 +206,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
+    if (key === 'sprintId' && value) {
+      const sprint = sprints.find(s => s.id === value);
+      return sprint ? sprint.name : value;
+    }
     return value || '';
   };
 
@@ -219,9 +238,18 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 }}
                 autoFocus
               >
-                {column.options.map(option => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
+                {column.key === 'sprintId' ? (
+                  <>
+                    <option value="">No Sprint</option>
+                    {sprints.map(sprint => (
+                      <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+                    ))}
+                  </>
+                ) : (
+                  column.options.map(option => (
+                    <option key={option} value={option}>{option}</option>
+                  ))
+                )}
               </select>
             </div>
           </td>
@@ -413,6 +441,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onStoryAdd,
   goalId,
 }) => {
+  const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -420,6 +450,48 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     filters: false,
     display: false,
   });
+  const [sprints, setSprints] = useState<Sprint[]>([]);
+
+  // Enhanced logging for component mount and props
+  useEffect(() => {
+    console.log('📊 ModernStoriesTable: Component mounted/updated');
+    console.log('📊 Stories count:', stories?.length || 0);
+    console.log('📊 Goal ID:', goalId);
+    console.log('📊 Goals passed:', goals?.length || 0);
+    console.log('📊 User:', currentUser?.email || 'Not logged in');
+    console.log('📊 Persona:', currentPersona);
+  }, [stories, goalId, goals, currentUser, currentPersona]);
+
+  // Load sprints for the sprint dropdown
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('startDate', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(sprintsQuery, (snapshot) => {
+      const sprintsData = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      } as Sprint));
+      setSprints(sprintsData);
+      
+      // Update the sprint column options
+      setColumns(prev => prev.map(col => 
+        col.key === 'sprintId' 
+          ? { 
+              ...col, 
+              options: ['', ...sprintsData.map(sprint => sprint.id)]
+            }
+          : col
+      ));
+    });
+
+    return unsubscribe;
+  }, [currentUser]);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -605,6 +677,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                       story={story}
                       columns={columns}
                       index={index}
+                      sprints={sprints}
                       onStoryUpdate={onStoryUpdate}
                       onStoryDelete={onStoryDelete}
                     />
