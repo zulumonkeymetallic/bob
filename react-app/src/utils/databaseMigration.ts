@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, query, where } from 'firebase/firestore';
 import { ChoiceMigration } from '../config/migration';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 
@@ -41,22 +41,22 @@ export class DatabaseMigration {
   ): Promise<void> {
     console.log(`Migrating ${collectionName}...`);
     
+    // Query only documents that belong to this user
     const collectionRef = collection(db, collectionName);
-    const snapshot = await getDocs(collectionRef);
+    const userQuery = query(collectionRef, where('ownerUid', '==', userId));
+    const snapshot = await getDocs(userQuery);
     
     const updatePromises = snapshot.docs.map(async (docSnapshot) => {
       const data = docSnapshot.data();
       
-      // Only migrate data that belongs to this user/persona
-      if (data.userId === userId && data.personaId === personaId) {
-        const migratedData = migrationFn(data);
-        
-        // Only update if data actually changed
-        if (JSON.stringify(data) !== JSON.stringify(migratedData)) {
-          const docRef = doc(db, collectionName, docSnapshot.id);
-          await updateDoc(docRef, migratedData);
-          console.log(`Migrated ${collectionName} document: ${docSnapshot.id}`);
-        }
+      // Apply migration to the data
+      const migratedData = migrationFn(data);
+      
+      // Only update if data actually changed
+      if (JSON.stringify(data) !== JSON.stringify(migratedData)) {
+        const docRef = doc(db, collectionName, docSnapshot.id);
+        await updateDoc(docRef, migratedData);
+        console.log(`Migrated ${collectionName} document: ${docSnapshot.id}`);
       }
     });
     
@@ -71,27 +71,25 @@ export class DatabaseMigration {
     try {
       // Check Goals for string status values
       const goalsRef = collection(db, 'goals');
-      const goalsSnapshot = await getDocs(goalsRef);
+      const goalsQuery = query(goalsRef, where('ownerUid', '==', userId));
+      const goalsSnapshot = await getDocs(goalsQuery);
       
       for (const doc of goalsSnapshot.docs) {
         const data = doc.data();
-        if (data.userId === userId && data.personaId === personaId) {
-          if (typeof data.status === 'string' || typeof data.theme === 'string') {
-            return true;
-          }
+        if (typeof data.status === 'string' || typeof data.theme === 'string') {
+          return true;
         }
       }
       
       // Check Tasks for string values
       const tasksRef = collection(db, 'tasks');
-      const tasksSnapshot = await getDocs(tasksRef);
+      const tasksQuery = query(tasksRef, where('ownerUid', '==', userId));
+      const tasksSnapshot = await getDocs(tasksQuery);
       
       for (const doc of tasksSnapshot.docs) {
         const data = doc.data();
-        if (data.userId === userId && data.personaId === personaId) {
-          if (typeof data.status === 'string' || typeof data.priority === 'string' || typeof data.theme === 'string') {
-            return true;
-          }
+        if (typeof data.status === 'string' || typeof data.priority === 'string' || typeof data.theme === 'string') {
+          return true;
         }
       }
       
