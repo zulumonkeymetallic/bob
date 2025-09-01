@@ -29,6 +29,8 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { Goal } from '../types';
+import { ChoiceHelper } from '../config/choices';
+import { getStatusName, getThemeName } from '../utils/statusHelpers';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -50,6 +52,7 @@ interface ModernGoalsTableProps {
   onGoalUpdate: (goalId: string, updates: Partial<Goal>) => Promise<void>;
   onGoalDelete: (goalId: string) => Promise<void>;
   onGoalPriorityChange: (goalId: string, newPriority: number) => Promise<void>;
+  onEditModal?: (goal: Goal) => void;
 }
 
 const defaultColumns: Column[] = [
@@ -84,7 +87,7 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['Health', 'Growth', 'Wealth', 'Tribe', 'Home']
+    options: ChoiceHelper.getChoices('goal', 'theme').map(choice => choice.label)
   },
   { 
     key: 'status', 
@@ -93,7 +96,7 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['New', 'Work in Progress', 'Complete', 'Blocked', 'Deferred']
+    options: ChoiceHelper.getChoices('goal', 'status').map(choice => choice.label)
   },
   { 
     key: 'storiesCount', 
@@ -127,7 +130,7 @@ interface SortableRowProps {
   index: number;
   onGoalUpdate: (goalId: string, updates: Partial<Goal>) => Promise<void>;
   onGoalDelete: (goalId: string) => Promise<void>;
-  onEditModal: (goal: Goal) => void;
+  onEditModal?: (goal: Goal) => void;
   onRowClick: (goal: Goal) => void;
 }
 
@@ -178,12 +181,25 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleEditClick = () => {
-    onEditModal(goal);
+    if (onEditModal) {
+      onEditModal(goal);
+    }
   };
 
   const handleCellSave = async (key: string) => {
     try {
-      const updates: Partial<Goal> = { [key]: editValue };
+      let valueToSave: string | number = editValue;
+      
+      // Convert choice labels back to integer values for ServiceNow choice system
+      if (key === 'status') {
+        const statusChoice = ChoiceHelper.getChoices('goal', 'status').find(choice => choice.label === editValue);
+        valueToSave = statusChoice ? statusChoice.value : editValue;
+      } else if (key === 'theme') {
+        const themeChoice = ChoiceHelper.getChoices('goal', 'theme').find(choice => choice.label === editValue);
+        valueToSave = themeChoice ? themeChoice.value : editValue;
+      }
+      
+      const updates: Partial<Goal> = { [key]: valueToSave };
       await onGoalUpdate(goal.id, updates);
       
       trackClick({
@@ -194,13 +210,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
         entityTitle: goal.title,
         additionalData: { 
           field: key, 
-          newValue: editValue,
+          newValue: valueToSave,
           action: 'inline_edit_save'
         }
       });
       
       setEditingCell(null);
-      console.log(`🎯 Goal inline edit saved: ${key} = "${editValue}" for goal ${goal.id}`);
+      console.log(`🎯 Goal inline edit saved: ${key} = "${valueToSave}" for goal ${goal.id}`);
     } catch (error) {
       console.error('❌ Error saving goal cell edit:', error);
     }
@@ -215,6 +231,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
     if (key === 'sprintStoriesCount') {
       return `${value || 0} in sprint`;
+    }
+    if (key === 'status') {
+      return getStatusName(value);
+    }
+    if (key === 'theme') {
+      return getThemeName(value);
     }
     return value || '';
   };
@@ -458,6 +480,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   onGoalUpdate,
   onGoalDelete,
   onGoalPriorityChange,
+  onEditModal,
 }) => {
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);

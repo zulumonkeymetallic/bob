@@ -73,7 +73,8 @@ export class ActivityStreamService {
   ): Promise<void> {
     const description = `Changed ${fieldName} from "${oldValue}" to "${newValue}"`;
     
-    await this.addActivity({
+    // Prepare activity data, excluding undefined values
+    const activityData: any = {
       entityId,
       entityType,
       activityType: 'updated',
@@ -82,10 +83,18 @@ export class ActivityStreamService {
       fieldName,
       oldValue,
       newValue,
-      description,
-      persona,
-      referenceNumber,
-    });
+      description
+    };
+
+    // Only include optional fields if they're defined
+    if (persona !== undefined && persona !== null) {
+      activityData.persona = persona;
+    }
+    if (referenceNumber !== undefined && referenceNumber !== null) {
+      activityData.referenceNumber = referenceNumber;
+    }
+
+    await this.addActivity(activityData);
   }
 
   // Log status change
@@ -101,7 +110,8 @@ export class ActivityStreamService {
   ): Promise<void> {
     const description = `Status changed from "${oldStatus}" to "${newStatus}"`;
     
-    await this.addActivity({
+    // Prepare activity data, excluding undefined values
+    const activityData: any = {
       entityId,
       entityType,
       activityType: 'status_changed',
@@ -110,16 +120,24 @@ export class ActivityStreamService {
       fieldName: 'status',
       oldValue: oldStatus,
       newValue: newStatus,
-      description,
-      persona,
-      referenceNumber,
-    });
+      description
+    };
+
+    // Only include optional fields if they're defined
+    if (persona !== undefined && persona !== null) {
+      activityData.persona = persona;
+    }
+    if (referenceNumber !== undefined && referenceNumber !== null) {
+      activityData.referenceNumber = referenceNumber;
+    }
+
+    await this.addActivity(activityData);
   }
 
   // Log sprint change
   static async logSprintChange(
     entityId: string,
-    entityType: 'story' | 'task',
+    entityType: 'goal' | 'story' | 'task',
     oldSprint: string,
     newSprint: string,
     userId: string,
@@ -129,7 +147,8 @@ export class ActivityStreamService {
   ): Promise<void> {
     const description = `Sprint changed from "${oldSprint}" to "${newSprint}"`;
     
-    await this.addActivity({
+    // Prepare activity data, excluding undefined values
+    const activityData: any = {
       entityId,
       entityType,
       activityType: 'sprint_changed',
@@ -138,10 +157,18 @@ export class ActivityStreamService {
       fieldName: 'sprint',
       oldValue: oldSprint,
       newValue: newSprint,
-      description,
-      persona,
-      referenceNumber,
-    });
+      description
+    };
+
+    // Only include optional fields if they're defined
+    if (persona !== undefined && persona !== null) {
+      activityData.persona = persona;
+    }
+    if (referenceNumber !== undefined && referenceNumber !== null) {
+      activityData.referenceNumber = referenceNumber;
+    }
+
+    await this.addActivity(activityData);
   }
 
   // Add note
@@ -156,17 +183,26 @@ export class ActivityStreamService {
   ): Promise<void> {
     const description = `Added note: ${noteContent.substring(0, 100)}${noteContent.length > 100 ? '...' : ''}`;
     
-    await this.addActivity({
+    // Prepare activity data, excluding undefined values
+    const activityData: any = {
       entityId,
       entityType,
       activityType: 'note_added',
       userId,
       userEmail,
       noteContent,
-      description,
-      persona,
-      referenceNumber,
-    });
+      description
+    };
+
+    // Only include optional fields if they're defined
+    if (persona !== undefined && persona !== null) {
+      activityData.persona = persona;
+    }
+    if (referenceNumber !== undefined && referenceNumber !== null) {
+      activityData.referenceNumber = referenceNumber;
+    }
+
+    await this.addActivity(activityData);
   }
 
   // Log creation
@@ -181,16 +217,25 @@ export class ActivityStreamService {
   ): Promise<void> {
     const description = `Created ${entityType}: ${entityTitle}`;
     
-    await this.addActivity({
+    // Prepare activity data, excluding undefined values
+    const activityData: any = {
       entityId,
       entityType,
       activityType: 'created',
       userId,
       userEmail,
-      description,
-      persona,
-      referenceNumber,
-    });
+      description
+    };
+
+    // Only include optional fields if they're defined
+    if (persona !== undefined && persona !== null) {
+      activityData.persona = persona;
+    }
+    if (referenceNumber !== undefined && referenceNumber !== null) {
+      activityData.referenceNumber = referenceNumber;
+    }
+
+    await this.addActivity(activityData);
   }
 
   // Get activity stream for entity
@@ -318,14 +363,14 @@ export class ActivityStreamService {
       entityType,
       activityType: 'clicked',
       userId,
-      userEmail,
+      userEmail: userEmail || undefined,
       description,
       clickType: elementType,
       elementId,
       uiComponent: elementId,
       userAgent: navigator.userAgent,
       sessionId,
-      ...additionalData
+      ...(additionalData || {})
     });
   }
 
@@ -350,16 +395,23 @@ export class ActivityStreamService {
       timestamp: new Date().toISOString()
     });
 
-    await this.addActivity({
+    // Prepare activity data, excluding undefined values
+    const activityData: any = {
       entityId,
       entityType,
       activityType: 'note_added',
       userId,
       userEmail,
       noteContent,
-      description,
-      referenceNumber
-    });
+      description
+    };
+
+    // Only include referenceNumber if it's defined
+    if (referenceNumber !== undefined && referenceNumber !== null) {
+      activityData.referenceNumber = referenceNumber;
+    }
+
+    await this.addActivity(activityData);
   }
 
   // Log record views for audit trail
@@ -384,16 +436,23 @@ export class ActivityStreamService {
       url: window.location.href
     });
 
-    await this.addActivity({
+    // Prepare activity data, excluding undefined values
+    const activityData: any = {
       entityId,
       entityType,
       activityType: 'viewed',
       userId,
       userEmail,
       description,
-      entityTitle,
-      referenceNumber
-    });
+      entityTitle
+    };
+
+    // Only include referenceNumber if it's defined
+    if (referenceNumber !== undefined && referenceNumber !== null) {
+      activityData.referenceNumber = referenceNumber;
+    }
+
+    await this.addActivity(activityData);
   }
 
   // Enhanced format activity icon for new activity types
