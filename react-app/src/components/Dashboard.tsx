@@ -47,7 +47,7 @@ const Dashboard: React.FC = () => {
     // Load stories
     const storiesQuery = query(
       collection(db, 'stories'),
-      where('userId', '==', currentUser.uid),
+      where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona),
       orderBy('updatedAt', 'desc'),
       limit(5)
@@ -56,7 +56,7 @@ const Dashboard: React.FC = () => {
     // Load tasks
     const tasksQuery = query(
       collection(db, 'tasks'),
-      where('userId', '==', currentUser.uid),
+      where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona),
       where('status', '!=', 'done'),
       orderBy('priority', 'desc'),

@@ -54,7 +54,7 @@ const CalendarBlockManager: React.FC = () => {
         const blocksQuery = query(collection(db, 'calendar_blocks'), where('ownerUid', '==', currentUser.uid));
         const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
         const tasksQuery = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid));
-        const habitsQuery = query(collection(db, 'habits'), where('userId', '==', currentUser.uid));
+        const habitsQuery = query(collection(db, 'habits'), where('ownerUid', '==', currentUser.uid));
 
         const unsubscribeBlocks = onSnapshot(blocksQuery, snapshot => {
             const blocksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CalendarBlock));

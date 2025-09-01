@@ -688,10 +688,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   </Button>
                 </div>
 
-                {/* Latest Comment */}
+                {/* Latest Status/Comment */}
                 {activities.length > 0 && (() => {
+                  // Find latest status change or comment
+                  const latestStatusChange = activities.find(activity => 
+                    activity.activityType === 'status_changed'
+                  );
                   const latestComment = activities.find(activity => activity.activityType === 'note_added' && activity.noteContent);
-                  return latestComment ? (
+                  const latestActivity = latestStatusChange || latestComment;
+                  
+                  return latestActivity ? (
                     <div style={{ 
                       marginBottom: '16px',
                       padding: '12px',
@@ -707,7 +713,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                         textTransform: 'uppercase',
                         letterSpacing: '0.5px'
                       }}>
-                        Latest Comment
+                        {latestActivity.activityType === 'status_changed' 
+                          ? 'Latest Status' 
+                          : 'Latest Comment'}
                       </div>
                       <div style={{ 
                         fontSize: '13px', 
@@ -715,16 +723,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                         fontStyle: 'italic',
                         lineHeight: '1.4'
                       }}>
-                        "{latestComment.noteContent}"
+                        {latestActivity.activityType === 'status_changed'
+                          ? `Status changed to: ${ChoiceHelper.getLabel(selectedType as any, 'status', parseInt(latestActivity.newValue) || latestActivity.newValue)}`
+                          : `"${latestActivity.noteContent}"`}
                       </div>
                       <div style={{ 
                         fontSize: '11px', 
                         color: '#6b7280', 
                         marginTop: '6px'
                       }}>
-                        {ActivityStreamService.formatTimestamp(latestComment.timestamp)}
-                        {latestComment.userEmail && ` • ${latestComment.userEmail.split('@')[0]}`}
-                        {latestComment.referenceNumber && ` • Ref: ${latestComment.referenceNumber}`}
+                        {ActivityStreamService.formatTimestamp(latestActivity.timestamp)}
+                        {latestActivity.userEmail && ` • ${latestActivity.userEmail.split('@')[0]}`}
+                        {latestActivity.referenceNumber && ` • Ref: ${latestActivity.referenceNumber}`}
                       </div>
                     </div>
                   ) : null;
