@@ -39,7 +39,7 @@ const MobileView: React.FC = () => {
 
         const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
         const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
-        const habitsQuery = query(collection(db, 'habits'), where('userId', '==', currentUser.uid), where('isActive', '==', true));
+        const habitsQuery = query(collection(db, 'habits'), where('ownerUid', '==', currentUser.uid), where('isActive', '==', true));
         
         const habitEntriesQuery = query(
             collection(db, 'habit_entries'),

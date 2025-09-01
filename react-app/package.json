@@ -1,7 +1,7 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.2.5",
-  "description": "AI-Powered Personal Productivity Platform with Activity Tracking & Choice System Fixes",
+  "version": "3.2.6",
+  "description": "AI-Powered Personal Productivity Platform with Firestore Permission Fixes & Activity Tracking",
   "private": true,
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^1.7.4",

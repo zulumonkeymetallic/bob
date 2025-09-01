@@ -5,12 +5,13 @@ import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, limit, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import ModernStoriesTable from './ModernStoriesTable';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
+import { ActivityStreamService } from '../services/ActivityStreamService';
 
 interface GoalsCardViewProps {
   goals: Goal[];
@@ -31,6 +32,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
   const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
   const [goalStories, setGoalStories] = useState<{ [goalId: string]: Story[] }>({});
+  const [latestActivities, setLatestActivities] = useState<{ [goalId: string]: any }>({});
 
   // Theme colors mapping
   const themeColors = {
@@ -63,6 +65,41 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     } else {
       setExpandedGoalId(goal.id);
       loadStoriesForGoal(goal.id);
+    }
+  };
+
+  
+  const loadLatestActivityForGoal = async (goalId: string) => {
+    if (!currentUser) return;
+    
+    try {
+      // Query latest activities directly from Firestore
+      const q = query(
+        collection(db, 'activity_stream'),
+        where('entityId', '==', goalId),
+        where('ownerUid', '==', currentUser.uid),
+        orderBy('timestamp', 'desc'),
+        limit(5)
+      );
+      
+      const snapshot = await getDocs(q);
+      const activities = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as any[];
+      
+      const latestStatusChange = activities.find(activity => activity.activityType === 'status_changed');
+      const latestComment = activities.find(activity => activity.activityType === 'note_added' && activity.noteContent);
+      const latestActivity = latestStatusChange || latestComment;
+      
+      if (latestActivity) {
+        setLatestActivities(prev => ({
+          ...prev,
+          [goalId]: latestActivity
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading latest activity for goal:', goalId, error);
     }
   };
 
@@ -141,6 +178,15 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       console.error('❌ Error deleting story:', error);
     }
   };
+
+  // Load latest activities when goals change
+  useEffect(() => {
+    if (currentUser && goals.length > 0) {
+      goals.forEach(goal => {
+        loadLatestActivityForGoal(goal.id);
+      });
+    }
+  }, [currentUser, goals]);
 
   const handleStoryPriorityChange = async (storyId: string, newPriority: number) => {
     try {
@@ -323,6 +369,48 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   }}>
                     {goal.description}
                   </p>
+                )}
+
+                {/* Latest Status/Comment */}
+                {latestActivities[goal.id] && (
+                  <div style={{ 
+                    marginBottom: '16px',
+                    padding: '12px',
+                    backgroundColor: '#f0f9ff',
+                    border: '1px solid #0ea5e9',
+                    borderRadius: '6px'
+                  }}>
+                    <div style={{ 
+                      fontSize: '11px', 
+                      fontWeight: '600', 
+                      color: '#0ea5e9', 
+                      marginBottom: '6px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px'
+                    }}>
+                      {latestActivities[goal.id].activityType === 'status_changed' 
+                        ? 'Latest Status' 
+                        : 'Latest Comment'}
+                    </div>
+                    <div style={{ 
+                      fontSize: '12px', 
+                      color: '#374151', 
+                      fontStyle: 'italic',
+                      lineHeight: '1.4'
+                    }}>
+                      {latestActivities[goal.id].activityType === 'status_changed'
+                        ? `Status changed to: ${ChoiceHelper.getLabel('goal', 'status', parseInt(latestActivities[goal.id].newValue) || latestActivities[goal.id].newValue)}`
+                        : `"${latestActivities[goal.id].noteContent}"`}
+                    </div>
+                    <div style={{ 
+                      fontSize: '10px', 
+                      color: '#6b7280', 
+                      marginTop: '6px'
+                    }}>
+                      {ActivityStreamService.formatTimestamp(latestActivities[goal.id].timestamp)}
+                      {latestActivities[goal.id].userEmail && ` • ${latestActivities[goal.id].userEmail.split('@')[0]}`}
+                    </div>
+                  </div>
                 )}
 
                 {/* Goal Details */}
