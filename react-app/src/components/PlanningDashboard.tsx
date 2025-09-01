@@ -6,6 +6,7 @@ import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { CalendarBlock, Task } from '../types';
+import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
 
 const PlanningDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -140,12 +141,12 @@ const PlanningDashboard: React.FC = () => {
                           <Badge bg="outline-secondary">{task.effort}</Badge>
                         </td>
                         <td>
-                          <Badge bg={task.priority === 'high' ? 'danger' : task.priority === 'med' ? 'warning' : 'info'}>
+                          <Badge bg={isPriority(task.priority, 'high') ? 'danger' : isPriority(task.priority, 'med') ? 'warning' : 'info'}>
                             {task.priority}
                           </Badge>
                         </td>
                         <td>
-                          {task.theme && getThemeBadge(task.theme)}
+                          {task.theme && getThemeBadge(getThemeName(task.theme))}
                         </td>
                       </tr>
                     ))}

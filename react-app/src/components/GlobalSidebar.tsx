@@ -7,6 +7,9 @@ import { useTestMode } from '../contexts/TestModeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { ChoiceHelper, GoalStatus, StoryStatus, StoryPriority, TaskPriority } from '../config/choices';
+import { ChoiceMigration } from '../config/migration';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface GlobalSidebarProps {
   goals: Goal[];
@@ -34,13 +37,13 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [showAddNote, setShowAddNote] = useState(false);
   const [newNote, setNewNote] = useState('');
 
-  // Theme colors mapping
+  // Theme colors mapping - now using integer keys
   const themeColors = {
-    'Health': '#ef4444',
-    'Growth': '#8b5cf6', 
-    'Wealth': '#059669',
-    'Tribe': '#f59e0b',
-    'Home': '#3b82f6'
+    1: '#ef4444', // Health
+    2: '#8b5cf6', // Growth
+    3: '#059669', // Wealth
+    4: '#f59e0b', // Tribe
+    5: '#3b82f6'  // Home
   };
 
   React.useEffect(() => {
@@ -237,7 +240,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const goal = getGoalForItem();
   const story = selectedType === 'task' ? getStoryForTask() : (selectedType === 'story' ? selectedItem as Story : null);
-  const themeColor = goal?.theme ? themeColors[goal.theme] : '#6b7280';
+  const themeColor = goal?.theme ? (themeColors[goal.theme as keyof typeof themeColors] || '#6b7280') : '#6b7280';
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return 'Not set';
@@ -248,10 +251,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const generateReferenceNumber = () => {
     if (selectedType === 'goal') {
       const goalItem = selectedItem as Goal;
-      return `${goalItem.theme.substring(0, 2).toUpperCase()}-${goalItem.id.substring(0, 6).toUpperCase()}`;
+      const themeLabel = ChoiceHelper.getLabel('goal', 'theme', goalItem.theme);
+      return `${themeLabel.substring(0, 2).toUpperCase()}-${goalItem.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'story') {
       const storyItem = selectedItem as Story;
-      const goalPrefix = goal?.theme ? goal.theme.substring(0, 2).toUpperCase() : 'ST';
+      const themeLabel = goal?.theme ? ChoiceHelper.getLabel('goal', 'theme', goal.theme) : 'ST';
+      const goalPrefix = themeLabel.substring(0, 2).toUpperCase();
       return `${goalPrefix}-${storyItem.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'task') {
       const taskItem = selectedItem as Task;
@@ -500,11 +505,11 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     >
                       {selectedType === 'goal' && (
                         <>
-                          <option value="new">New</option>
-                          <option value="active">Active</option>
-                          <option value="paused">Paused</option>
-                          <option value="done">Done</option>
-                          <option value="dropped">Dropped</option>
+                          <option value="New">New</option>
+                          <option value="Work in Progress">Work in Progress</option>
+                          <option value="Complete">Complete</option>
+                          <option value="Blocked">Blocked</option>
+                          <option value="Deferred">Deferred</option>
                         </>
                       )}
                       {selectedType === 'story' && (
@@ -528,13 +533,30 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   ) : (
                     <Badge 
                       bg={
-                        selectedItem.status === 'done' ? 'success' : 
-                        selectedItem.status === 'active' || selectedItem.status === 'in-progress' ? 'primary' : 
-                        'secondary'
+                        // Status badge color based on type and value
+                        selectedType === 'story' ? (
+                          selectedItem.status === StoryStatus.DONE ? 'success' :
+                          selectedItem.status === StoryStatus.IN_PROGRESS || selectedItem.status === StoryStatus.PLANNED ? 'primary' :
+                          'secondary'
+                        ) : selectedType === 'task' ? (
+                          selectedItem.status === 2 ? 'success' : // Task Done
+                          selectedItem.status === 1 ? 'primary' : // Task In Progress
+                          'secondary'
+                        ) : selectedType === 'goal' ? (
+                          selectedItem.status === GoalStatus.COMPLETE ? 'success' :
+                          selectedItem.status === GoalStatus.WORK_IN_PROGRESS ? 'primary' :
+                          selectedItem.status === GoalStatus.BLOCKED ? 'danger' :
+                          'secondary'
+                        ) : 'secondary'
                       }
                       style={{ fontSize: '12px', padding: '6px 12px' }}
                     >
-                      {selectedItem.status}
+                      {
+                        selectedType === 'goal' ? ChoiceHelper.getLabel('goal', 'status', selectedItem.status) :
+                        selectedType === 'story' ? ChoiceHelper.getLabel('story', 'status', selectedItem.status) :
+                        selectedType === 'task' ? ChoiceHelper.getLabel('task', 'status', selectedItem.status) :
+                        selectedItem.status
+                      }
                     </Badge>
                   )}
                 </Col>
@@ -570,13 +592,23 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   ) : selectedItem.priority ? (
                     <Badge 
                       bg={
-                        (selectedItem.priority === 'P1' || selectedItem.priority === 'high') ? 'danger' :
-                        (selectedItem.priority === 'P2' || selectedItem.priority === 'med' || selectedItem.priority === 'medium') ? 'warning' : 
-                        'secondary'
+                        selectedType === 'story' ? (
+                          selectedItem.priority === StoryPriority.P1 ? 'danger' :
+                          selectedItem.priority === StoryPriority.P2 ? 'warning' : 
+                          'secondary'
+                        ) : selectedType === 'task' ? (
+                          selectedItem.priority === TaskPriority.HIGH ? 'danger' :
+                          selectedItem.priority === TaskPriority.MEDIUM ? 'warning' : 
+                          'secondary'
+                        ) : 'secondary'
                       }
                       style={{ fontSize: '12px', padding: '6px 12px' }}
                     >
-                      {selectedItem.priority}
+                      {
+                        selectedType === 'story' ? ChoiceHelper.getLabel('story', 'priority', selectedItem.priority) :
+                        selectedType === 'task' ? ChoiceHelper.getLabel('task', 'priority', selectedItem.priority) :
+                        selectedItem.priority
+                      }
                     </Badge>
                   ) : (
                     <span style={{ color: '#9ca3af' }}>Not set</span>
@@ -598,7 +630,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                       padding: '6px 12px'
                     }}
                   >
-                    {(selectedItem as Goal).theme}
+                    {ChoiceHelper.getLabel('goal', 'theme', (selectedItem as Goal).theme)}
                   </Badge>
                 </div>
               )}

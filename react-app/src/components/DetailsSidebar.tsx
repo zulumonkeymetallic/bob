@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Card, Button, Badge, Form, Row, Col } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, User, Target, BookOpen, Clock, AlertCircle, Hash } from 'lucide-react';
 import { Story, Goal, Task, Sprint } from '../types';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 
 interface DetailsSidebarProps {
   item: Story | Task | null;
@@ -86,7 +87,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   const generateReferenceNumber = () => {
     if (type === 'story') {
       const story = item as Story;
-      const goalPrefix = goal?.theme ? goal.theme.substring(0, 2).toUpperCase() : 'ST';
+      const goalPrefix = goal?.theme ? getThemeClass(goal.theme).substring(0, 2).toUpperCase() : 'ST';
       return `${goalPrefix}-${story.id.substring(0, 6).toUpperCase()}`;
     } else if (type === 'task') {
       const task = item as Task;
@@ -231,7 +232,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
               </Form.Select>
             ) : (
               <Badge 
-                bg={item.status === 'done' ? 'success' : item.status === 'active' || item.status === 'in-progress' ? 'primary' : 'secondary'}
+                bg={isStatus(item.status, 'done') ? 'success' : isStatus(item.status, 'active') || isStatus(item.status, 'in-progress') ? 'primary' : 'secondary'}
                 style={{ fontSize: '12px', padding: '6px 12px' }}
               >
                 {item.status}
@@ -263,13 +264,10 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
               </Form.Select>
             ) : (
               <Badge 
-                bg={
-                  (item.priority === 'P1' || item.priority === 'high') ? 'danger' :
-                  (item.priority === 'P2' || item.priority === 'med') ? 'warning' : 'secondary'
-                }
+                bg={getPriorityBadge(item.priority).bg}
                 style={{ fontSize: '12px', padding: '6px 12px' }}
               >
-                {item.priority}
+                {getPriorityBadge(item.priority).text}
               </Badge>
             )}
           </Col>

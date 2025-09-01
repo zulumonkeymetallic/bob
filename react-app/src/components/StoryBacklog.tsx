@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Sprint } from '../types';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 
 const StoryBacklog: React.FC = () => {
   const { currentUser } = useAuth();
@@ -73,7 +74,7 @@ const StoryBacklog: React.FC = () => {
 
   const getGoalTheme = (goalId: string) => {
     const goal = goals.find(g => g.id === goalId);
-    return goal ? goal.theme : 'Growth';
+    return goal ? getThemeName(goal.theme) : 'Growth';
   };
 
   const getThemeColor = (theme: string) => {
@@ -109,9 +110,9 @@ const StoryBacklog: React.FC = () => {
 
   // Filter stories based on current filters
   const filteredStories = stories.filter(story => {
-    if (filters.status && story.status !== filters.status) return false;
+    if (filters.status && !isStatus(story.status, filters.status)) return false;
     if (filters.goal && story.goalId !== filters.goal) return false;
-    if (filters.priority && story.priority !== filters.priority) return false;
+    if (filters.priority && !isPriority(story.priority, filters.priority)) return false;
     if (filters.sprint) {
       if (filters.sprint === 'no-sprint' && story.sprintId) return false;
       if (filters.sprint !== 'no-sprint' && story.sprintId !== filters.sprint) return false;
@@ -131,7 +132,7 @@ const StoryBacklog: React.FC = () => {
                 {filteredStories.length} Total Stories
               </Badge>
               <Badge bg="secondary">
-                {filteredStories.filter(s => s.status === 'backlog').length} In Backlog
+                {filteredStories.filter(s => isStatus(s.status, 'backlog')).length} In Backlog
               </Badge>
             </div>
           </div>
@@ -248,7 +249,7 @@ const StoryBacklog: React.FC = () => {
                             <div className="small text-muted">{getGoalTitle(story.goalId)}</div>
                           </td>
                           <td>
-                            <Badge bg={getPriorityColor(story.priority)}>
+                            <Badge bg={getPriorityColor(getPriorityName(story.priority))}>
                               {story.priority}
                             </Badge>
                           </td>
@@ -266,9 +267,9 @@ const StoryBacklog: React.FC = () => {
                           </td>
                           <td onClick={(e) => e.stopPropagation()}>
                             <Dropdown>
-                              <Dropdown.Toggle as={Badge} bg={story.status === 'done' ? 'success' : 
-                                  story.status === 'active' ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
-                                {story.status.replace('_', ' ').toUpperCase()}
+                              <Dropdown.Toggle as={Badge} bg={isStatus(story.status, 'done') ? 'success' : 
+                                  isStatus(story.status, 'active') ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                                {getStatusName(story.status).replace('_', ' ').toUpperCase()}
                               </Dropdown.Toggle>
                               <Dropdown.Menu>
                                 <Dropdown.Item onClick={() => updateStoryStatus(story.id, 'backlog')}>
@@ -293,7 +294,7 @@ const StoryBacklog: React.FC = () => {
                               >
                                 <i className="fas fa-edit"></i>
                               </Button>
-                              {story.status !== 'backlog' && (
+                              {!isStatus(story.status, 'backlog') && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-secondary"
@@ -302,7 +303,7 @@ const StoryBacklog: React.FC = () => {
                                   → Backlog
                                 </Button>
                               )}
-                              {story.status !== 'active' && (
+                              {!isStatus(story.status, 'active') && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-warning"
@@ -311,7 +312,7 @@ const StoryBacklog: React.FC = () => {
                                   → Active
                                 </Button>
                               )}
-                              {story.status !== 'done' && (
+                              {!isStatus(story.status, 'done') && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-success"

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { Container, Row, Col, Nav, Tab } from 'react-bootstrap';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import ChoiceManager from './ChoiceManager';
 
 interface ThemeColors {
   Health: string;
@@ -12,9 +14,7 @@ interface ThemeColors {
   Home: string;
 }
 
-interface SettingsPageProps {}
-
-const SettingsPage: React.FC<SettingsPageProps> = () => {
+const SettingsPage: React.FC = () => {
   const { theme, setTheme } = useTheme();
   const { currentUser } = useAuth();
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
@@ -50,25 +50,24 @@ const SettingsPage: React.FC<SettingsPageProps> = () => {
           const docSnap = await getDoc(docRef);
           
           if (docSnap.exists()) {
-            const data = docSnap.data();
-            setThemeColors(prev => ({ ...prev, ...data.colors }));
+            const colors = docSnap.data() as ThemeColors;
+            setThemeColors(colors);
           }
         } catch (error) {
           console.error('Error loading theme colors:', error);
         }
       };
+      
       loadThemeColors();
     }
   }, [currentUser]);
 
-  // Save settings to localStorage
   const saveSettings = () => {
     const settings = {
       notifications,
       autoSync,
       googleCalendarConnected,
-      steamConnected,
-      theme,
+      steamConnected
     };
     localStorage.setItem('bobSettings', JSON.stringify(settings));
   };
@@ -78,18 +77,20 @@ const SettingsPage: React.FC<SettingsPageProps> = () => {
     saveSettings();
   };
 
-  const handleColorChange = async (colorTheme: keyof ThemeColors, newColor: string) => {
-    const updatedColors = { ...themeColors, [colorTheme]: newColor };
-    setThemeColors(updatedColors);
-
+  const handleColorChange = async (themeName: keyof ThemeColors, color: string) => {
+    const newColors = { ...themeColors, [themeName]: color };
+    setThemeColors(newColors);
+    
     // Save to Firebase
     if (currentUser) {
       try {
         const docRef = doc(db, 'theme_colors', currentUser.uid);
         await setDoc(docRef, {
-          colors: updatedColors,
-          updatedAt: serverTimestamp()
+          ...newColors,
+          updatedAt: serverTimestamp(),
+          userId: currentUser.uid
         });
+        console.log('Theme colors saved successfully');
       } catch (error) {
         console.error('Error saving theme colors:', error);
       }
@@ -97,14 +98,12 @@ const SettingsPage: React.FC<SettingsPageProps> = () => {
   };
 
   const handleGoogleCalendarConnect = async () => {
-    // TODO: Implement Google Calendar OAuth flow
     console.log('Google Calendar OAuth flow will be implemented here');
     setGoogleCalendarConnected(!googleCalendarConnected);
     saveSettings();
   };
 
   const handleSteamConnect = async () => {
-    // TODO: Implement Steam OpenID authentication
     console.log('Steam authentication flow will be implemented here');
     setSteamConnected(!steamConnected);
     saveSettings();
@@ -121,170 +120,208 @@ const SettingsPage: React.FC<SettingsPageProps> = () => {
   };
 
   return (
-    <div className="container-fluid py-4">
-      <div className="row justify-content-center">
-        <div className="col-md-8 col-lg-6">
-          <div className="card">
-            <div className="card-header">
-              <h2 className="card-title mb-0">Settings</h2>
-            </div>
-            <div className="card-body">
+    <Container fluid className="py-4">
+      <h2 className="mb-4">Settings</h2>
+      
+      <Tab.Container defaultActiveKey="general">
+        <Row>
+          <Col sm={3}>
+            <Nav variant="pills" className="flex-column">
+              <Nav.Item>
+                <Nav.Link eventKey="general">General</Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link eventKey="themes">Theme & Colors</Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link eventKey="choices">Choice Management</Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link eventKey="integrations">Integrations</Nav.Link>
+              </Nav.Item>
+            </Nav>
+          </Col>
+          <Col sm={9}>
+            <Tab.Content>
               
-              {/* Theme Settings */}
-              <div className="settings-section mb-4">
-                <h4 className="mb-3">Theme & Appearance</h4>
-                <div className="mb-3">
-                  <label className="form-label">Light/Dark Mode</label>
-                  <select 
-                    className="form-select"
-                    value={theme}
-                    onChange={(e) => handleThemeChange(e.target.value as 'light' | 'dark' | 'system')}
-                  >
-                    <option value="light">Light Mode</option>
-                    <option value="dark">Dark Mode</option>
-                    <option value="system">System Preference</option>
-                  </select>
-                  <div className="form-text">
-                    Choose your preferred light/dark mode setting
+              {/* General Settings */}
+              <Tab.Pane eventKey="general">
+                <div className="card">
+                  <div className="card-header">
+                    <h4 className="mb-0">General Settings</h4>
                   </div>
-                </div>
-                
-                {/* Color Theme Settings */}
-                <div className="mb-3">
-                  <label className="form-label">Color Themes</label>
-                  <div className="row g-2">
-                    {Object.entries(themeColors).map(([themeName, color]) => (
-                      <div key={themeName} className="col-md-6">
-                        <div className="d-flex align-items-center gap-2">
-                          <input
-                            type="color"
-                            className="form-control form-control-color"
-                            value={color}
-                            onChange={(e) => handleColorChange(themeName as keyof ThemeColors, e.target.value)}
-                            title={`Choose ${themeName} color`}
-                          />
-                          <label className="form-label mb-0">{themeName}</label>
+                  <div className="card-body">
+                    {/* Theme Settings */}
+                    <div className="settings-section mb-4">
+                      <h5 className="mb-3">Theme & Appearance</h5>
+                      <div className="mb-3">
+                        <label className="form-label">Light/Dark Mode</label>
+                        <select 
+                          className="form-select"
+                          value={theme}
+                          onChange={(e) => handleThemeChange(e.target.value as 'light' | 'dark' | 'system')}
+                        >
+                          <option value="light">Light Mode</option>
+                          <option value="dark">Dark Mode</option>
+                          <option value="system">System Preference</option>
+                        </select>
+                        <div className="form-text">
+                          Choose your preferred light/dark mode setting
                         </div>
                       </div>
-                    ))}
-                  </div>
-                  <div className="form-text">
-                    Customize colors for your goal themes
-                  </div>
-                </div>
-              </div>
+                    </div>
 
-              {/* Integration Settings */}
-              <div className="settings-section mb-4">
-                <h4 className="mb-3">Integrations</h4>
-                
-                {/* Google Calendar */}
-                <div className="d-flex justify-content-between align-items-center mb-3 p-3 border rounded">
-                  <div>
-                    <h6 className="mb-1">Google Calendar</h6>
-                    <small className="text-muted">
-                      Sync your tasks and deadlines with Google Calendar
-                    </small>
-                    {googleCalendarConnected && (
-                      <div>
-                        <span className="badge bg-success mt-1">Connected</span>
+                    {/* Notification Settings */}
+                    <div className="settings-section mb-4">
+                      <h5 className="mb-3">Notifications</h5>
+                      <div className="form-check form-switch mb-3">
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id="notifications"
+                          checked={notifications}
+                          onChange={handleNotificationToggle}
+                        />
+                        <label className="form-check-label" htmlFor="notifications">
+                          Enable Notifications
+                        </label>
+                        <div className="form-text">
+                          Receive browser notifications for important updates
+                        </div>
                       </div>
-                    )}
-                  </div>
-                  <button
-                    className={`btn ${googleCalendarConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`}
-                    onClick={handleGoogleCalendarConnect}
-                  >
-                    {googleCalendarConnected ? 'Disconnect' : 'Connect'}
-                  </button>
-                </div>
+                    </div>
 
-                {/* Steam Library */}
-                <div className="d-flex justify-content-between align-items-center mb-3 p-3 border rounded">
-                  <div>
-                    <h6 className="mb-1">Steam Library</h6>
-                    <small className="text-muted">
-                      Import games from your Steam library to personal backlog
-                    </small>
-                    {steamConnected && (
-                      <div>
-                        <span className="badge bg-success mt-1">Connected</span>
+                    {/* Auto Sync */}
+                    <div className="settings-section mb-4">
+                      <h5 className="mb-3">Data Synchronization</h5>
+                      <div className="form-check form-switch mb-3">
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id="autoSync"
+                          checked={autoSync}
+                          onChange={handleAutoSyncToggle}
+                        />
+                        <label className="form-check-label" htmlFor="autoSync">
+                          Auto Sync
+                        </label>
+                        <div className="form-text">
+                          Automatically sync data across devices
+                        </div>
                       </div>
-                    )}
-                  </div>
-                  <button
-                    className={`btn ${steamConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`}
-                    onClick={handleSteamConnect}
-                  >
-                    {steamConnected ? 'Disconnect' : 'Connect'}
-                  </button>
-                </div>
-              </div>
+                    </div>
 
-              {/* General Settings */}
-              <div className="settings-section mb-4">
-                <h4 className="mb-3">General</h4>
-                
-                <div className="form-check form-switch mb-3">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    id="notificationsToggle"
-                    checked={notifications}
-                    onChange={handleNotificationToggle}
-                  />
-                  <label className="form-check-label" htmlFor="notificationsToggle">
-                    <strong>Enable Notifications</strong>
-                    <br />
-                    <small className="text-muted">
-                      Get notified about task deadlines and sprint updates
-                    </small>
-                  </label>
-                </div>
-
-                <div className="form-check form-switch mb-3">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    id="autoSyncToggle"
-                    checked={autoSync}
-                    onChange={handleAutoSyncToggle}
-                  />
-                  <label className="form-check-label" htmlFor="autoSyncToggle">
-                    <strong>Auto-sync Integrations</strong>
-                    <br />
-                    <small className="text-muted">
-                      Automatically sync with connected services every 15 minutes
-                    </small>
-                  </label>
-                </div>
-              </div>
-
-              {/* Account Settings */}
-              <div className="settings-section">
-                <h4 className="mb-3">Account</h4>
-                <div className="alert alert-info">
-                  <h6>Data Export & Import</h6>
-                  <p className="mb-2">Export your data or import from backup files.</p>
-                  <div className="d-flex gap-2">
-                    <button className="btn btn-sm btn-outline-primary">
-                      Export Data
-                    </button>
-                    <button className="btn btn-sm btn-outline-secondary">
-                      Import Data
-                    </button>
+                    {/* Profile Information */}
+                    <div className="settings-section mb-4">
+                      <h5 className="mb-3">Profile</h5>
+                      <div className="mb-3">
+                        <strong>Email:</strong> {currentUser?.email || 'Not signed in'}
+                      </div>
+                      <div className="mb-3">
+                        <strong>User ID:</strong> <code>{currentUser?.uid || 'N/A'}</code>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </Tab.Pane>
 
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+              {/* Theme & Colors */}
+              <Tab.Pane eventKey="themes">
+                <div className="card">
+                  <div className="card-header">
+                    <h4 className="mb-0">Theme & Color Settings</h4>
+                  </div>
+                  <div className="card-body">
+                    <div className="mb-3">
+                      <label className="form-label">Color Themes</label>
+                      <div className="row g-2">
+                        {Object.entries(themeColors).map(([themeName, color]) => (
+                          <div key={themeName} className="col-md-6">
+                            <div className="d-flex align-items-center gap-2">
+                              <label htmlFor={`color-${themeName}`} className="form-label mb-0">{themeName}</label>
+                              <input
+                                type="color"
+                                className="form-control form-control-color"
+                                id={`color-${themeName}`}
+                                value={color}
+                                onChange={(e) => handleColorChange(themeName as keyof ThemeColors, e.target.value)}
+                                title={`Choose ${themeName} color`}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="form-text">
+                        Customize colors for your goal themes
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Tab.Pane>
+
+              {/* Choice Management */}
+              <Tab.Pane eventKey="choices">
+                <ChoiceManager />
+              </Tab.Pane>
+
+              {/* Integrations */}
+              <Tab.Pane eventKey="integrations">
+                <div className="card">
+                  <div className="card-header">
+                    <h4 className="mb-0">External Integrations</h4>
+                  </div>
+                  <div className="card-body">
+                    {/* Google Calendar */}
+                    <div className="d-flex justify-content-between align-items-center mb-3 p-3 border rounded">
+                      <div>
+                        <h6 className="mb-1">Google Calendar</h6>
+                        <small className="text-muted">
+                          Sync your tasks and deadlines with Google Calendar
+                        </small>
+                        {googleCalendarConnected && (
+                          <div>
+                            <span className="badge bg-success mt-1">Connected</span>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        className={`btn ${googleCalendarConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`}
+                        onClick={handleGoogleCalendarConnect}
+                      >
+                        {googleCalendarConnected ? 'Disconnect' : 'Connect'}
+                      </button>
+                    </div>
+
+                    {/* Steam Library */}
+                    <div className="d-flex justify-content-between align-items-center mb-3 p-3 border rounded">
+                      <div>
+                        <h6 className="mb-1">Steam Library</h6>
+                        <small className="text-muted">
+                          Import games from your Steam library to personal backlog
+                        </small>
+                        {steamConnected && (
+                          <div>
+                            <span className="badge bg-success mt-1">Connected</span>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        className={`btn ${steamConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`}
+                        onClick={handleSteamConnect}
+                      >
+                        {steamConnected ? 'Disconnect' : 'Connect'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </Tab.Pane>
+
+            </Tab.Content>
+          </Col>
+        </Row>
+      </Tab.Container>
+    </Container>
   );
 };
 
 export default SettingsPage;
-
-export {};

@@ -28,6 +28,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../types';
+import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import { DnDMutationHandler } from '../utils/dndMutations';
 
@@ -152,7 +153,7 @@ const SortableStoryCard: React.FC<{
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <Badge 
-                bg={story.priority === 'P1' ? 'danger' : story.priority === 'P2' ? 'warning' : 'secondary'}
+                bg={isPriority(story.priority, 'High') ? 'danger' : isPriority(story.priority, 'Medium') ? 'warning' : 'secondary'}
                 style={{ fontSize: '10px' }}
               >
                 {story.priority}
@@ -267,7 +268,7 @@ const SortableTaskCard: React.FC<{
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
               <Badge 
-                bg={task.priority === 'high' ? 'danger' : task.priority === 'med' ? 'warning' : 'secondary'}
+                bg={isPriority(task.priority, 'high') ? 'danger' : isPriority(task.priority, 'med') ? 'warning' : 'secondary'}
                 style={{ fontSize: '9px' }}
               >
                 {task.priority}
@@ -357,12 +358,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   };
 
   const getStoriesForLane = (status: string): Story[] => {
-    return stories.filter(story => story.status === status);
+    return stories.filter(story => isStatus(story.status, status));
   };
 
   const getTasksForLane = (status: string): Task[] => {
     const taskStatus = status === 'active' ? 'in-progress' : status;
-    return tasks.filter(task => task.status === taskStatus);
+    return tasks.filter(task => isStatus(task.status, taskStatus));
   };
 
   // Data loading effect
@@ -489,7 +490,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       if (itemType === 'stories') {
         const story = stories.find(s => s.id === activeId);
         console.log('Found story:', story);
-        if (story && story.status !== newStatus) {
+        if (story && !isStatus(story.status, newStatus)) {
           console.log('Updating story status from', story.status, 'to', newStatus);
           await updateDoc(doc(db, 'stories', activeId), {
             status: newStatus,
@@ -501,7 +502,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         const taskStatus = newStatus === 'active' ? 'in-progress' : newStatus;
         const task = tasks.find(t => t.id === activeId);
         console.log('Found task:', task);
-        if (task && task.status !== taskStatus) {
+        if (task && !isStatus(task.status, taskStatus)) {
           console.log('Updating task status from', task.status, 'to', taskStatus);
           await updateDoc(doc(db, 'tasks', activeId), {
             status: taskStatus,
@@ -760,7 +761,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#2563eb' }}>
-                  {stories.filter(s => s.status === 'active').length}
+                  {stories.filter(s => isStatus(s.status, 'active')).length}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
                   Active Stories
@@ -772,7 +773,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#059669' }}>
-                  {stories.filter(s => s.status === 'done').length}
+                  {stories.filter(s => isStatus(s.status, 'done')).length}
                 </h3>
                 <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
                   Done Stories

@@ -1,5 +1,6 @@
 import { db } from '../firebase';
 import { collection, query, where, getDocs, doc, getDoc, deleteDoc } from 'firebase/firestore';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 export interface ProjectStats {
   totalCriticalDefects: number;

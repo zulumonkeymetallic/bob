@@ -5,6 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { Story, Sprint, Task, Goal } from '../types';
 import { Container, Row, Col, Card, Dropdown, Button } from 'react-bootstrap';
 import ModernTaskTable from './ModernTaskTable';
+import { ChoiceHelper } from '../config/choices';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const CurrentSprintKanban: React.FC = () => {
     const { currentUser } = useAuth();
@@ -17,17 +19,17 @@ const CurrentSprintKanban: React.FC = () => {
     const [loading, setLoading] = useState(true);
 
     const kanbanLanes = [
-        { id: 'backlog', title: 'Backlog' },
-        { id: 'active', title: 'In Progress' },
-        { id: 'done', title: 'Done' }
+        { id: 0, title: 'Backlog', stringId: 'backlog' },
+        { id: 2, title: 'In Progress', stringId: 'active' }, // Story IN_PROGRESS = 2
+        { id: 4, title: 'Done', stringId: 'done' } // Story DONE = 4
     ];
 
     const themeColors = {
-        'Health': '#22c55e',
-        'Growth': '#3b82f6', 
-        'Wealth': '#eab308',
-        'Tribe': '#8b5cf6',
-        'Home': '#f97316'
+        1: '#22c55e', // Health
+        2: '#3b82f6', // Growth
+        3: '#eab308', // Wealth
+        4: '#8b5cf6', // Tribe
+        5: '#f97316'  // Home
     };
 
     useEffect(() => {
@@ -39,7 +41,7 @@ const CurrentSprintKanban: React.FC = () => {
         const unsubscribeSprints = onSnapshot(sprintsQuery, snapshot => {
             const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
             setSprints(sprintsData);
-            const currentSprint = sprintsData.find(s => s.status === 'active');
+            const currentSprint = sprintsData.find(s => s.status === 1); // Sprint Active = 1
             setActiveSprint(currentSprint || null);
         });
 
@@ -114,9 +116,8 @@ const CurrentSprintKanban: React.FC = () => {
     };
 
     const handleTaskPriorityChange = async (taskId: string, newPriority: number) => {
-        // Convert priority number to string format expected by Task interface
-        const priorityMap: Record<number, 'high' | 'med' | 'low'> = { 1: 'high', 2: 'med', 3: 'low' };
-        await handleTaskUpdate(taskId, { priority: priorityMap[newPriority] });
+        // Priority is now numeric: 1=High, 2=Medium, 3=Low
+        await handleTaskUpdate(taskId, { priority: newPriority });
     };
 
     const getGoalForStory = (story: Story) => {
@@ -191,7 +192,7 @@ const CurrentSprintKanban: React.FC = () => {
                                                 const goal = getGoalForStory(story);
                                                 const themeColor = goal?.theme ? themeColors[goal.theme] : '#6b7280';
                                                 const taskCount = getTasksForStory(story.id).length;
-                                                const doneTaskCount = getTasksForStory(story.id).filter(t => t.status === 'done').length;
+                                                const doneTaskCount = getTasksForStory(story.id).filter(t => t.status === 2).length; // Task Done = 2
                                                 
                                                 return (
                                                     <Card 

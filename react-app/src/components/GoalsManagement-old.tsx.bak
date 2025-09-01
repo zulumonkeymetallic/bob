@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTim
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Story } from '../types';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 
 const GoalsManagement: React.FC = () => {
@@ -118,7 +119,7 @@ const GoalsManagement: React.FC = () => {
     const goalStories = stories.filter(story => story.goalId === goalId);
     if (goalStories.length === 0) return { percentage: 0, completed: 0, total: 0 };
     
-    const completed = goalStories.filter(story => story.status === 'done').length;
+    const completed = goalStories.filter(story => isStatus(story.status, 'done')).length;
     const total = goalStories.length;
     const percentage = Math.round((completed / total) * 100);
     

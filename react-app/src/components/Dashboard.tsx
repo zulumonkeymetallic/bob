@@ -5,6 +5,8 @@ import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Task } from '../types';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
+import { ChoiceHelper } from '../config/choices';
 
 interface DashboardStats {
   activeGoals: number;
@@ -69,8 +71,8 @@ const Dashboard: React.FC = () => {
       setRecentStories(storiesData);
       
       // Calculate stats from stories
-      const activeStories = storiesData.filter(s => s.status === 'active').length;
-      const doneStories = storiesData.filter(s => s.status === 'done').length;
+      const activeStories = storiesData.filter(s => isStatus(s.status, 'active')).length;
+      const doneStories = storiesData.filter(s => isStatus(s.status, 'done')).length;
       
       setStats(prev => ({
         ...prev,
@@ -87,9 +89,9 @@ const Dashboard: React.FC = () => {
       setUpcomingTasks(tasksData);
       
       // Calculate task stats
-      const pendingTasks = tasksData.filter(t => t.status !== 'done').length;
+      const pendingTasks = tasksData.filter(t => !isStatus(t.status, 'done')).length;
       const todayCompleted = tasksData.filter(t => {
-        if (t.status === 'done' && t.updatedAt) {
+        if (isStatus(t.status, 'done') && t.updatedAt) {
           try {
             const taskDate = typeof t.updatedAt === 'object' && t.updatedAt && 'seconds' in t.updatedAt 
               ? new Date((t.updatedAt as any).seconds * 1000)
@@ -230,9 +232,9 @@ const Dashboard: React.FC = () => {
                               <p className="mb-1 text-muted small">{story.description}</p>
                             </div>
                             <div className="text-end">
-                              <Badge bg={getStatusColor(story.status)}>{story.status}</Badge>
+                              <Badge bg={ChoiceHelper.getColor('story', 'status', story.status)}>{ChoiceHelper.getLabel('story', 'status', story.status)}</Badge>
                               <br />
-                              <Badge bg={getPriorityColor(story.priority)} className="mt-1">{story.priority}</Badge>
+                              <Badge bg={ChoiceHelper.getColor('story', 'priority', story.priority)} className="mt-1">{ChoiceHelper.getLabel('story', 'priority', story.priority)}</Badge>
                             </div>
                           </div>
                         </div>
@@ -267,9 +269,9 @@ const Dashboard: React.FC = () => {
                               <p className="mb-1 text-muted small">{task.description}</p>
                             </div>
                             <div className="text-end">
-                              <Badge bg={getStatusColor(task.status)}>{task.status}</Badge>
+                              <Badge bg={ChoiceHelper.getColor('task', 'status', task.status)}>{ChoiceHelper.getLabel('task', 'status', task.status)}</Badge>
                               <br />
-                              <Badge bg={getPriorityColor(task.priority)} className="mt-1">{task.priority}</Badge>
+                              <Badge bg={ChoiceHelper.getColor('task', 'priority', task.priority)} className="mt-1">{ChoiceHelper.getLabel('task', 'priority', task.priority)}</Badge>
                             </div>
                           </div>
                         </div>

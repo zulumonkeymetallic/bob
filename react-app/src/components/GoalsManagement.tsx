@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -83,8 +84,8 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    if (filterStatus !== 'all' && goal.status !== filterStatus) return false;
-    if (filterTheme !== 'all' && goal.theme !== filterTheme) return false;
+    if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
+    if (filterTheme !== 'all' && !isTheme(goal.theme, filterTheme)) return false;
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -92,9 +93,9 @@ const GoalsManagement: React.FC = () => {
   // Get counts for dashboard cards
   const goalCounts = {
     total: filteredGoals.length,
-    active: filteredGoals.filter(g => g.status === 'Work in Progress').length,
-    done: filteredGoals.filter(g => g.status === 'Complete').length,
-    paused: filteredGoals.filter(g => g.status === 'Paused').length
+    active: filteredGoals.filter(g => isStatus(g.status, 'Work in Progress')).length,
+    done: filteredGoals.filter(g => isStatus(g.status, 'Complete')).length,
+    paused: filteredGoals.filter(g => isStatus(g.status, 'Paused')).length
   };
 
   return (

@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Task, Story, Goal, IHabit, IHabitEntry } from '../types';
 import { Container, Card, Button, Badge, ProgressBar, Alert } from 'react-bootstrap';
+import { isStatus, isTheme, isPriority } from '../utils/statusHelpers';
 
 const MobileView: React.FC = () => {
     const { currentUser } = useAuth();
@@ -54,7 +55,7 @@ const MobileView: React.FC = () => {
                 const isDueToday = task.dueDate && task.dueDate >= startOfDay.getTime() && task.dueDate < endOfDay.getTime();
                 const isOverdue = task.dueDate && task.dueDate < startOfDay.getTime();
                 const isHighImportance = task.isImportant || task.importanceScore && task.importanceScore > 70;
-                const isHighPriority = task.priority === 'high';
+                const isHighPriority = isPriority(task.priority, 'high');
                 
                 return isDueToday || isOverdue || isHighImportance || isHighPriority;
             }).sort((a, b) => {
@@ -69,8 +70,8 @@ const MobileView: React.FC = () => {
                 
                 if (aDueToday !== bDueToday) return bDueToday - aDueToday;
                 
-                const aImportance = a.importanceScore || (a.priority === 'high' ? 80 : a.priority === 'med' ? 50 : 20);
-                const bImportance = b.importanceScore || (b.priority === 'high' ? 80 : b.priority === 'med' ? 50 : 20);
+                const aImportance = a.importanceScore || (isPriority(a.priority, 'high') ? 80 : isPriority(a.priority, 'med') ? 50 : 20);
+                const bImportance = b.importanceScore || (isPriority(b.priority, 'high') ? 80 : isPriority(b.priority, 'med') ? 50 : 20);
                 
                 return bImportance - aImportance;
             }).slice(0, 8); // Limit to top 8 for mobile
@@ -156,7 +157,7 @@ const MobileView: React.FC = () => {
         if (task.isImportant || task.importanceScore && task.importanceScore > 70) {
             return { label: 'IMPORTANT', variant: 'info' };
         }
-        if (task.priority === 'high') {
+        if (isPriority(task.priority, 'high')) {
             return { label: 'HIGH PRIORITY', variant: 'primary' };
         }
         return { label: 'FOCUS', variant: 'secondary' };

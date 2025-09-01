@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTim
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject } from '../types';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 
 const TasksList: React.FC = () => {
   const { currentUser } = useAuth();
@@ -114,10 +115,10 @@ const TasksList: React.FC = () => {
     let filtered = tasks;
 
     if (filters.status) {
-      filtered = filtered.filter(task => task.status === filters.status);
+      filtered = filtered.filter(task => isStatus(task.status, filters.status));
     }
     if (filters.priority) {
-      filtered = filtered.filter(task => task.priority === filters.priority);
+      filtered = filtered.filter(task => isPriority(task.priority, filters.priority));
     }
     if (filters.effort) {
       filtered = filtered.filter(task => task.effort === filters.effort);
@@ -243,11 +244,11 @@ const TasksList: React.FC = () => {
     setNewTask({
       title: task.title,
       description: task.description || '',
-      priority: task.priority,
+      priority: getPriorityName(task.priority) as 'low' | 'med' | 'high',
       effort: task.effort,
       parentType: task.parentType,
       parentId: task.parentId,
-      theme: task.theme
+      theme: getThemeName(task.theme) as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home'
     });
     setShowEditTask(true);
   };
@@ -369,16 +370,16 @@ const TasksList: React.FC = () => {
               </td>
               <td>
                 <Badge bg={
-                  task.status === 'done' ? 'success' : 
-                  task.status === 'in_progress' ? 'warning' : 'secondary'
+                  isStatus(task.status, 'done') ? 'success' : 
+                  isStatus(task.status, 'in_progress') ? 'warning' : 'secondary'
                 }>
-                  {task.status.replace('_', ' ')}
+                  {getStatusName(task.status).replace('_', ' ')}
                 </Badge>
               </td>
               <td>
                 <Badge bg={
-                  task.priority === 'high' ? 'danger' :
-                  task.priority === 'med' ? 'warning' : 'info'
+                  isPriority(task.priority, 'high') ? 'danger' :
+                  isPriority(task.priority, 'med') ? 'warning' : 'info'
                 }>
                   {task.priority}
                 </Badge>

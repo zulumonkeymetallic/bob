@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Story, Goal } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -98,9 +99,18 @@ const StoriesManagement: React.FC = () => {
     }
   };
 
+  const handleStoryAdd = async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
+    try {
+      // Add story logic would go here - for now just log
+      console.log('Adding story:', storyData);
+    } catch (error) {
+      console.error('Error adding story:', error);
+    }
+  };
+
   // Apply filters to stories
   const filteredStories = stories.filter(story => {
-    if (filterStatus !== 'all' && story.status !== filterStatus) return false;
+    if (filterStatus !== 'all' && !isStatus(story.status, filterStatus)) return false;
     if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
     if (searchTerm && !story.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
@@ -109,9 +119,9 @@ const StoriesManagement: React.FC = () => {
   // Get counts for dashboard cards
   const storyCounts = {
     total: filteredStories.length,
-    backlog: filteredStories.filter(s => s.status === 'backlog').length,
-    active: filteredStories.filter(s => s.status === 'active').length,
-    done: filteredStories.filter(s => s.status === 'done').length
+    backlog: filteredStories.filter(s => isStatus(s.status, 'backlog')).length,
+    active: filteredStories.filter(s => isStatus(s.status, 'active')).length,
+    done: filteredStories.filter(s => isStatus(s.status, 'done')).length
   };
 
   return (
@@ -294,6 +304,8 @@ const StoriesManagement: React.FC = () => {
                   onStoryUpdate={handleStoryUpdate}
                   onStoryDelete={handleStoryDelete}
                   onStoryPriorityChange={handleStoryPriorityChange}
+                  onStoryAdd={handleStoryAdd}
+                  goalId="all"
                 />
               </div>
             )}

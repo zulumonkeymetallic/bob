@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 type Theme = 'light' | 'dark' | 'system';
 

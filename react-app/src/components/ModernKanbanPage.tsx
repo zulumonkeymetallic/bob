@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 
 const ModernKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -243,7 +244,7 @@ const ModernKanbanPage: React.FC = () => {
       title: story.title,
       description: story.description || '',
       goalId: story.goalId || '',
-      priority: story.priority,
+      priority: getPriorityName(story.priority) as 'P1' | 'P2' | 'P3',
       points: story.points || 1
     });
     setSelectedStory(story);
@@ -258,7 +259,7 @@ const ModernKanbanPage: React.FC = () => {
         title: editStory.title,
         description: editStory.description,
         goalId: editStory.goalId,
-        priority: editStory.priority,
+        priority: editStory.priority === "P1" ? 1 : editStory.priority === "P2" ? 2 : 3,
         points: editStory.points,
         updatedAt: serverTimestamp()
       });
@@ -375,12 +376,12 @@ const ModernKanbanPage: React.FC = () => {
                 <Card.Header className="bg-light">
                   <h5 className="mb-0">{lane.title}</h5>
                   <small className="text-muted">
-                    {stories.filter(s => s.status === lane.status).length} stories
+                    {stories.filter(s => isStatus(s.status, lane.status)).length} stories
                   </small>
                 </Card.Header>
                 <Card.Body style={{ maxHeight: '60vh', overflowY: 'auto' }}>
                   {stories
-                    .filter(story => story.status === lane.status)
+                    .filter(story => isStatus(story.status, lane.status))
                     .map((story) => {
                       const goalTheme = getGoalTheme(story.goalId);
                       const taskCount = getTaskCount(story.id);
@@ -483,7 +484,7 @@ const ModernKanbanPage: React.FC = () => {
                       );
                     })}
 
-                  {stories.filter(s => s.status === lane.status).length === 0 && (
+                  {stories.filter(s => isStatus(s.status, lane.status)).length === 0 && (
                     <div className="text-center text-muted py-4">
                       <p>No stories in {lane.title.toLowerCase()}</p>
                     </div>
@@ -547,13 +548,13 @@ const ModernKanbanPage: React.FC = () => {
                           </td>
                           <td onClick={(e) => e.stopPropagation()}>
                             <Dropdown>
-                              <Dropdown.Toggle as={Badge} bg={task.status === 'done' ? 'success' : 
-                                  task.status === 'in-progress' ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
-                                {task.status === 'in-progress' ? 'In Progress' : 
-                                 task.status === 'done' ? 'Done' : 
-                                 task.status === 'planned' ? 'Planned' :
-                                 task.status === 'todo' ? 'To Do' :
-                                 task.status === 'blocked' ? 'Blocked' : 'Unknown'}
+                              <Dropdown.Toggle as={Badge} bg={isStatus(task.status, 'done') ? 'success' : 
+                                  isStatus(task.status, 'in-progress') ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                                {isStatus(task.status, 'in-progress') ? 'In Progress' : 
+                                 isStatus(task.status, 'done') ? 'Done' : 
+                                 isStatus(task.status, 'planned') ? 'Planned' :
+                                 isStatus(task.status, 'todo') ? 'To Do' :
+                                 isStatus(task.status, 'blocked') ? 'Blocked' : 'Unknown'}
                               </Dropdown.Toggle>
                               <Dropdown.Menu>
                                 <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'todo')}>
@@ -580,9 +581,9 @@ const ModernKanbanPage: React.FC = () => {
                             </Badge>
                           </td>
                           <td>
-                            <Badge bg={task.priority === 'high' ? 'danger' : 
-                                task.priority === 'med' ? 'warning' : 'secondary'}>
-                              {task.priority === 'med' ? 'medium' : task.priority}
+                            <Badge bg={isPriority(task.priority, 'high') ? 'danger' : 
+                                isPriority(task.priority, 'med') ? 'warning' : 'secondary'}>
+                              {isPriority(task.priority, 'med') ? 'medium' : task.priority}
                             </Badge>
                           </td>
                           <td>

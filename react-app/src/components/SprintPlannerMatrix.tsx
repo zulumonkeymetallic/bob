@@ -14,6 +14,7 @@ import { EnhancedStory, SubGoal } from '../types/v3.0.8-types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useThemeColors, getThemeColorById } from '../hooks/useThemeColor';
+import { getThemeName } from '../utils/statusHelpers';
 import StoryCard from './StoryCard';
 import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -320,7 +321,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
                     {themeGoals.map(goal => {
                       const goalSubGoals = subGoalsByGoal[goal.id] || [];
                       const isExpanded = rowExpansion[themeId]?.[goal.id] || false;
-                      const goalColor = getThemeColorById(goal.theme || 'Health', themes);
+                      const goalColor = getThemeColorById(getThemeName(goal.theme) || 'Health', themes);
 
                       return (
                         <div key={goal.id} className="goal-section mb-3">

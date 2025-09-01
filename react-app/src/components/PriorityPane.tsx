@@ -5,6 +5,7 @@ import { collection, addDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task } from '../types';
+import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
 
 interface PriorityPaneProps {
   tasks: Task[];
@@ -31,7 +32,7 @@ const PriorityPane: React.FC<PriorityPaneProps> = ({ tasks }) => {
       const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
       
       const scoredTasks = tasks
-        .filter(task => task.status !== 'done')
+        .filter(task => !isStatus(task.status, 'done'))
         .map(task => {
           let score = 0;
           const reasonCodes: string[] = [];
@@ -63,9 +64,9 @@ const PriorityPane: React.FC<PriorityPaneProps> = ({ tasks }) => {
 
           // Priority scoring (30% weight)
           const priorityScores = { high: 30, med: 20, low: 10 };
-          const priorityScore = priorityScores[task.priority as keyof typeof priorityScores] || 10;
+          const priorityScore = priorityScores[getPriorityName(task.priority) as keyof typeof priorityScores] || 10;
           score += priorityScore;
-          if (task.priority === 'high') {
+          if (isPriority(task.priority, 'high')) {
             reasonCodes.push('high_priority');
             rationale = rationale ? `${rationale}, high priority` : 'High priority task';
           }
@@ -87,7 +88,7 @@ const PriorityPane: React.FC<PriorityPaneProps> = ({ tasks }) => {
           }
 
           // In progress bonus
-          if (task.status === 'in_progress') {
+          if (isStatus(task.status, 'in_progress')) {
             score += 5;
             reasonCodes.push('in_progress');
             rationale = rationale ? `${rationale}, already started` : 'Task in progress';

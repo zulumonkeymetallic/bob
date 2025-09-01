@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { CalendarBlock, Story, Task, IHabit } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form, Alert } from 'react-bootstrap';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface CalendarEvent {
     id: string;

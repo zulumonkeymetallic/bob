@@ -19,6 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useSidebar } from '../contexts/SidebarContext';
 import { 
   Settings, 
   GripVertical, 
@@ -92,7 +93,7 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['Not Started', 'Work in Progress', 'Complete', 'Paused']
+    options: ['New', 'Work in Progress', 'Complete', 'Blocked', 'Deferred']
   },
   { 
     key: 'storiesCount', 
@@ -127,6 +128,7 @@ interface SortableRowProps {
   onGoalUpdate: (goalId: string, updates: Partial<Goal>) => Promise<void>;
   onGoalDelete: (goalId: string) => Promise<void>;
   onEditModal: (goal: Goal) => void;
+  onRowClick: (goal: Goal) => void;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -135,7 +137,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   index, 
   onGoalUpdate, 
   onGoalDelete,
-  onEditModal
+  onEditModal,
+  onRowClick
 }) => {
   const {
     attributes,
@@ -338,8 +341,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
         backgroundColor: 'white',
         borderBottom: '1px solid #f3f4f6',
         transition: 'background-color 0.15s ease',
+        cursor: 'pointer',
       }}
       {...attributes}
+      onClick={(e) => {
+        // Only handle row click if not clicking on editable cells or buttons
+        const target = e.target as HTMLElement;
+        if (!target.closest('button') && !target.closest('input') && !target.closest('select')) {
+          onRowClick(goal);
+        }
+      }}
       onMouseEnter={(e) => {
         if (!isDragging) {
           e.currentTarget.style.backgroundColor = '#f9fafb';
@@ -458,6 +469,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const { trackClick } = useActivityTracking();
+  const { showSidebar } = useSidebar();
 
   const handleEditModal = (goal: Goal) => {
     trackClick({
@@ -470,6 +482,18 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     });
     setEditingGoal(goal);
     setShowEditModal(true);
+  };
+
+  const handleRowClick = (goal: Goal) => {
+    trackClick({
+      elementId: 'goal-row-click',
+      elementType: 'button',
+      entityId: goal.id,
+      entityType: 'goal',
+      entityTitle: goal.title,
+      additionalData: { action: 'open_sidebar', source: 'goals_table' }
+    });
+    showSidebar(goal, 'goal');
   };
 
   const sensors = useSensors(
@@ -655,6 +679,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       onGoalUpdate={onGoalUpdate}
                       onGoalDelete={onGoalDelete}
                       onEditModal={handleEditModal}
+                      onRowClick={handleRowClick}
                     />
                   ))}
                 </SortableContext>
@@ -884,10 +909,11 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                   defaultValue={editingGoal.status}
                   onChange={(e) => setEditingGoal({...editingGoal, status: e.target.value as any})}
                 >
-                  <option value="Not Started">Not Started</option>
+                  <option value="New">New</option>
                   <option value="Work in Progress">Work in Progress</option>
                   <option value="Complete">Complete</option>
-                  <option value="Paused">Paused</option>
+                  <option value="Blocked">Blocked</option>
+                  <option value="Deferred">Deferred</option>
                 </Form.Select>
               </Form.Group>
             </Form>
