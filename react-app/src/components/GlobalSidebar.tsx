@@ -743,7 +743,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     </div>
                   ) : (
                     <ListGroup variant="flush">
-                      {activities.map((activity, index) => (
+                      {activities
+                        .filter(activity => 
+                          // Filter out UI activities that aren't meaningful
+                          !['clicked', 'viewed', 'exported', 'imported'].includes(activity.activityType)
+                        )
+                        .map((activity, index) => (
                         <ListGroup.Item 
                           key={activity.id || index}
                           style={{ 

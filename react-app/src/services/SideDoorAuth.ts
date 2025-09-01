@@ -173,13 +173,27 @@ export class SideDoorAuth {
       // Verify test mode was enabled
       console.log('🧪 Test mode active after enable:', this.isTestModeActive());
       
-      // Clean URL after a delay to allow state to settle
+      // Set immediate authentication state for testing
+      console.log('🧪 Setting immediate authentication state...');
+      (window as any).__BOB_TEST_AUTH_STATE = {
+        authenticated: true,
+        user: this.getCurrentTestUser(),
+        timestamp: Date.now()
+      };
+      
+      // Dispatch custom event to notify React components
+      console.log('🧪 Dispatching test auth ready event...');
+      window.dispatchEvent(new CustomEvent('bobTestAuthReady', {
+        detail: (window as any).__BOB_TEST_AUTH_STATE
+      }));
+      
+      // DON'T clean URL immediately - wait for app to fully initialize
       setTimeout(() => {
         const cleanUrl = window.location.origin + window.location.pathname;
         window.history.replaceState({}, document.title, cleanUrl);
-        console.log('🧪 URL cleaned, test mode should be active');
+        console.log('🧪 URL cleaned after 5 seconds, test mode should remain active');
         console.log('🧪 Final test mode status:', this.isTestModeActive());
-      }, 100);
+      }, 5000); // Increased delay to allow full app initialization
       
       return true;
     }

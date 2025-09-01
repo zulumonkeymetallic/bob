@@ -48,29 +48,79 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     
     let unsubscribe: (() => void) | undefined;
     
-    // Give a moment for SideDoorAuth module initialization
-    const initTimeout = setTimeout(() => {
-      // Check if test mode was initialized from URL parameters
-      if (SideDoorAuth.isTestModeActive()) {
-        const testUser = SideDoorAuth.mockAuthState();
-        if (testUser) {
-          console.log('🧪 Using test user:', testUser.email);
-          setCurrentUser(testUser as User);
-          setIsTestUser(true);
-          return;
-        }
-      }
+    // STEP 1: Check URL parameters immediately for test mode
+    const urlParams = new URLSearchParams(window.location.search);
+    const testLogin = urlParams.get('test-login');
+    const testMode = urlParams.get('test-mode');
+    
+    console.log('🧪 URL Parameters:', { testLogin, testMode });
+    
+    if (testLogin && testMode === 'true') {
+      console.log('🧪 ✅ Test parameters detected - enabling test authentication immediately');
       
-      // If not in test mode, use regular Firebase auth
-      unsubscribe = onAuthStateChanged(auth, user => {
-        console.log('🔐 Auth state changed:', user ? user.email : 'null');
-        setCurrentUser(user);
-        setIsTestUser(false);
-      });
-    }, 50);
+      // Initialize SideDoorAuth with URL parameters
+      SideDoorAuth.initializeFromUrl();
+      
+      // Create test user immediately
+      const testUser = {
+        uid: 'ai-test-user-12345abcdef',
+        email: 'ai-test-agent@bob.local',
+        displayName: 'AI Test Agent',
+        emailVerified: true,
+        isTestUser: true,
+        metadata: {
+          creationTime: new Date().toISOString(),
+          lastSignInTime: new Date().toISOString()
+        },
+        providerData: [{
+          uid: 'ai-test-user-12345abcdef',
+          email: 'ai-test-agent@bob.local',
+          displayName: 'AI Test Agent',
+          providerId: 'test'
+        }],
+        accessToken: 'mock-test-access-token',
+        refreshToken: 'mock-test-refresh-token',
+        getIdToken: async () => 'mock-test-id-token',
+      };
+      
+      console.log('🧪 Setting test user immediately:', testUser.email);
+      setCurrentUser(testUser as unknown as User);
+      setIsTestUser(true);
+      
+      // Clean URL after a delay
+      setTimeout(() => {
+        const cleanUrl = window.location.origin + window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+        console.log('🧪 URL cleaned, test authentication active');
+      }, 2000);
+      
+      return () => {
+        console.log('🧪 Test auth cleanup');
+      };
+    }
+    
+    // STEP 2: Check if test mode is already active from previous session
+    if (SideDoorAuth.isTestModeActive()) {
+      const testUser = SideDoorAuth.mockAuthState();
+      if (testUser) {
+        console.log('🧪 Using existing test session:', testUser.email);
+        setCurrentUser(testUser as unknown as User);
+        setIsTestUser(true);
+        return () => {
+          console.log('🧪 Existing test auth cleanup');
+        };
+      }
+    }
+    
+    // STEP 3: Use regular Firebase auth for production
+    console.log('🔐 Initializing Firebase authentication');
+    unsubscribe = onAuthStateChanged(auth, user => {
+      console.log('🔐 Auth state changed:', user ? user.email : 'null');
+      setCurrentUser(user);
+      setIsTestUser(false);
+    });
 
     return () => {
-      clearTimeout(initTimeout);
       if (unsubscribe) {
         unsubscribe();
       }

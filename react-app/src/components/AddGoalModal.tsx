@@ -21,10 +21,34 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     size: 'M',
     timeToMasterHours: 40,
     confidence: 0.5,
-    targetDate: ''
+    targetDate: '',
+    status: 'New',
+    priority: 2,
+    kpis: [] as Array<{name: string; target: number; unit: string}>
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
+
+  // KPI Management functions
+  const addKPI = () => {
+    setFormData({
+      ...formData,
+      kpis: [...formData.kpis, { name: '', target: 1, unit: '' }]
+    });
+  };
+
+  const removeKPI = (index: number) => {
+    setFormData({
+      ...formData,
+      kpis: formData.kpis.filter((_, i) => i !== index)
+    });
+  };
+
+  const updateKPI = (index: number, field: 'name' | 'target' | 'unit', value: string | number) => {
+    const updatedKPIs = [...formData.kpis];
+    updatedKPIs[index] = { ...updatedKPIs[index], [field]: value };
+    setFormData({ ...formData, kpis: updatedKPIs });
+  };
 
   const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
   const sizes = [
@@ -33,6 +57,17 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     { value: 'M', label: 'M - Medium (40-100 hours)', hours: 70 },
     { value: 'L', label: 'L - Large (100-250 hours)', hours: 175 },
     { value: 'XL', label: 'XL - Epic (250+ hours)', hours: 400 }
+  ];
+  const statuses = ['New', 'Work in Progress', 'Complete', 'Blocked', 'Deferred'];
+  const priorities = [
+    { value: 1, label: 'High Priority (1)' },
+    { value: 2, label: 'Medium Priority (2)' },
+    { value: 3, label: 'Low Priority (3)' }
+  ];
+  const confidenceLevels = [
+    { value: 1, label: 'High Confidence (100%)' },
+    { value: 2, label: 'Medium Confidence (70%)' },
+    { value: 3, label: 'Low Confidence (40%)' }
   ];
 
   const handleSubmit = async () => {
@@ -76,19 +111,25 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       
       const selectedSize = sizes.find(s => s.value === formData.size);
       
+      // Map theme names to numbers for database
+      const themeMap = { 'Health': 1, 'Growth': 2, 'Wealth': 3, 'Tribe': 4, 'Home': 5 };
+      const sizeMap = { 'XS': 1, 'S': 2, 'M': 3, 'L': 4, 'XL': 5 };
+      const statusMap = { 'New': 0, 'Work in Progress': 1, 'Complete': 2, 'Blocked': 3, 'Deferred': 4 };
+      
       const goalData = {
         ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
-        theme: formData.theme,
-        size: formData.size,
+        theme: themeMap[formData.theme as keyof typeof themeMap] || 2,
+        size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
         targetDate: formData.targetDate ? new Date(formData.targetDate) : null,
-        status: 'Not Started',
+        status: statusMap[formData.status as keyof typeof statusMap] || 0,
+        priority: formData.priority,
+        kpis: formData.kpis,
         persona: 'personal',
         ownerUid: currentUser.uid, // Ensure ownerUid is included
-        kpis: [],
         createdAt: new Date(),
         updatedAt: new Date()
       };
@@ -116,7 +157,10 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         size: 'M',
         timeToMasterHours: 40,
         confidence: 0.5,
-        targetDate: ''
+        targetDate: '',
+        status: 'New',
+        priority: 2,
+        kpis: []
       });
       
       // Auto-close after success
@@ -145,7 +189,10 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       size: 'M',
       timeToMasterHours: 40,
       confidence: 0.5,
-      targetDate: ''
+      targetDate: '',
+      status: 'New',
+      priority: 2,
+      kpis: []
     });
     setSubmitResult(null);
     onClose();
@@ -257,6 +304,37 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
             </div>
           </div>
 
+          <div className="row">
+            <div className="col-md-6">
+              <Form.Group className="mb-3">
+                <Form.Label>Initial Status</Form.Label>
+                <Form.Select
+                  value={formData.status}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  disabled={currentPersona !== 'personal'}
+                >
+                  {statuses.map(status => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+            </div>
+            <div className="col-md-6">
+              <Form.Group className="mb-3">
+                <Form.Label>Priority</Form.Label>
+                <Form.Select
+                  value={formData.priority}
+                  onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) })}
+                  disabled={currentPersona !== 'personal'}
+                >
+                  {priorities.map(priority => (
+                    <option key={priority.value} value={priority.value}>{priority.label}</option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+            </div>
+          </div>
+
           <Form.Group className="mb-3">
             <Form.Label>Estimated Hours to Master</Form.Label>
             <Form.Control
@@ -269,6 +347,67 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
             />
             <Form.Text className="text-muted">
               Total time you expect to invest in this goal
+            </Form.Text>
+          </Form.Group>
+
+          {/* KPIs Section */}
+          <Form.Group className="mb-3">
+            <div className="d-flex justify-content-between align-items-center mb-2">
+              <Form.Label>Key Performance Indicators (KPIs)</Form.Label>
+              <Button
+                variant="outline-primary"
+                size="sm"
+                onClick={addKPI}
+                disabled={currentPersona !== 'personal'}
+              >
+                + Add KPI
+              </Button>
+            </div>
+            {formData.kpis.map((kpi, index) => (
+              <div key={index} className="border rounded p-3 mb-2">
+                <div className="row">
+                  <div className="col-md-4">
+                    <Form.Control
+                      type="text"
+                      placeholder="KPI Name (e.g., Weight Lost)"
+                      value={kpi.name}
+                      onChange={(e) => updateKPI(index, 'name', e.target.value)}
+                      disabled={currentPersona !== 'personal'}
+                    />
+                  </div>
+                  <div className="col-md-3">
+                    <Form.Control
+                      type="number"
+                      placeholder="Target"
+                      value={kpi.target}
+                      onChange={(e) => updateKPI(index, 'target', parseFloat(e.target.value))}
+                      disabled={currentPersona !== 'personal'}
+                    />
+                  </div>
+                  <div className="col-md-3">
+                    <Form.Control
+                      type="text"
+                      placeholder="Unit (e.g., lbs, books)"
+                      value={kpi.unit}
+                      onChange={(e) => updateKPI(index, 'unit', e.target.value)}
+                      disabled={currentPersona !== 'personal'}
+                    />
+                  </div>
+                  <div className="col-md-2">
+                    <Button
+                      variant="outline-danger"
+                      size="sm"
+                      onClick={() => removeKPI(index)}
+                      disabled={currentPersona !== 'personal'}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <Form.Text className="text-muted">
+              Add measurable metrics to track progress toward this goal
             </Form.Text>
           </Form.Group>
         </Form>

@@ -1,11 +1,11 @@
-// Version tracking for cache busting - v3.2.8 Goals Card View Default, Migration Bypass, Auto-Generated IDs, Side Door Access
-export const VERSION = 'v3.2.8';
+// Version tracking for cache busting - v3.5.1 Goals Refinements Implementation
+export const VERSION = 'v3.5.1';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Goals Card View Default, Migration Bypass, Auto-Generated IDs, Side Door Access`);
-console.log(`🎯 Features: Card View Default, Migration Optimized, Auto-Generated Reference IDs, AI Testing Support`);
-console.log(`🚀 Architecture: v3.2.8 with Enhanced UX & Testing Capabilities`);
+console.log(`✅ Status: Goals Refinements Implementation Complete`);
+console.log(`🎯 Features: Enhanced Latest Comments, Activity Stream Filtering, Modal Consistency, Modern Stories Integration`);
+console.log(`🚀 Architecture: v3.5.1 with Goals System User Experience Refinements`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force browser cache refresh and version notification
@@ -17,7 +17,7 @@ export const checkForUpdates = () => {
     console.log(`🔄 VERSION UPDATE DETECTED: ${lastVersion} → ${currentVersion}`);
     
     // Show user notification
-    if (window.confirm(`🚀 BOB has been updated to ${currentVersion}!\n\nNew features:\n• Goals default to card view for better visual experience\n• Database migration system optimized (bypassed for performance)\n• Auto-generated reference IDs with modern format (GR-26LGIP)\n• Side door authentication for AI testing capabilities\n• Comprehensive test script for automated validation\n\nReload to ensure you have the latest version?`)) {
+    if (window.confirm(`🚀 BOB has been updated to ${currentVersion}!\n\nNew features:\n• Enhanced latest comment display on goals cards\n• Activity stream filtering removes UI noise\n• Status change debugging improvements\n• Modal consistency between create/edit\n• Modern stories table integration verified\n\nReload to ensure you have the latest version?`)) {
       // Clear all caches
       if ('caches' in window) {
         caches.keys().then(names => {
