@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Alert } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
@@ -39,50 +39,143 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
 
-  // Load goals and sprints for the current persona
+  // Log modal open/close state changes
+  useEffect(() => {
+    if (show) {
+      console.log('📱 AddStoryModal: Modal opened', {
+        action: 'modal_opened',
+        element: 'add_story_modal',
+        user: currentUser?.uid,
+        persona: currentPersona,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      console.log('📱 AddStoryModal: Modal closed', {
+        action: 'modal_closed',
+        element: 'add_story_modal',
+        timestamp: new Date().toISOString()
+      });
+    }
+  }, [show, currentUser, currentPersona]);
+
+    // Load goals and sprints when modal opens
   useEffect(() => {
     if (show && currentUser) {
       const loadData = async () => {
         try {
-          // Load goals for current persona
+          console.log('🔄 AddStoryModal: Starting data load for modal', {
+            action: 'modal_data_load_start',
+            user: currentUser.uid,
+            persona: currentPersona,
+            timestamp: new Date().toISOString()
+          });
+
+          // Load goals for all personas
           const goalsQuery = query(
             collection(db, 'goals'),
-            where('persona', '==', currentPersona),
             where('ownerUid', '==', currentUser.uid),
-            where('status', '!=', 'dropped')
+            orderBy('priority', 'desc')
           );
+          
+          console.log('📊 AddStoryModal: Loading goals...', {
+            action: 'goals_query_start',
+            user: currentUser.uid
+          });
+          
           const goalsSnapshot = await getDocs(goalsQuery);
           const goalsData = goalsSnapshot.docs.map(doc => ({
             id: doc.id,
             title: doc.data().title,
             theme: doc.data().theme
           }));
+          
+          console.log('✅ AddStoryModal: Goals loaded successfully', {
+            action: 'goals_loaded',
+            count: goalsData.length,
+            goals: goalsData.map(g => ({ id: g.id, title: g.title }))
+          });
+          
           setGoals(goalsData);
 
-          // Load active sprints for current persona
+          // Load all sprints for current user (simplified query to avoid index issues)
           const sprintsQuery = query(
             collection(db, 'sprints'),
-            where('persona', '==', currentPersona),
             where('ownerUid', '==', currentUser.uid),
-            where('status', 'in', ['active', 'planned'])
+            orderBy('startDate', 'desc')
           );
+          
+          console.log('📊 AddStoryModal: Loading sprints...', {
+            action: 'sprints_query_start',
+            user: currentUser.uid
+          });
+          
           const sprintsSnapshot = await getDocs(sprintsQuery);
           const sprintsData = sprintsSnapshot.docs.map(doc => ({
             id: doc.id,
             name: doc.data().name,
             status: doc.data().status
           }));
+          
+          console.log('✅ AddStoryModal: Sprints loaded successfully', {
+            action: 'sprints_loaded',
+            count: sprintsData.length,
+            sprints: sprintsData.map(s => ({ id: s.id, name: s.name, status: s.status }))
+          });
+          
           setSprints(sprintsData);
+          
+          console.log('🎉 AddStoryModal: All data loaded successfully', {
+            action: 'modal_data_load_complete',
+            goalsCount: goalsData.length,
+            sprintsCount: sprintsData.length
+          });
+          
         } catch (error) {
-          console.error('Error loading data:', error);
+          console.error('❌ AddStoryModal: Error loading data', {
+            action: 'modal_data_load_error',
+            error: error.message,
+            stack: error.stack,
+            user: currentUser?.uid,
+            persona: currentPersona
+          });
         }
       };
       loadData();
     }
   }, [show, currentUser, currentPersona]);
 
+  const handleClose = () => {
+    console.log('🖱️ AddStoryModal: Cancel button clicked', {
+      action: 'cancel_button_click',
+      element: 'cancel_button',
+      formData: formData,
+      timestamp: new Date().toISOString()
+    });
+    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3 });
+    setSubmitResult(null);
+    onClose();
+  };
+
   const handleSubmit = async () => {
-    if (!currentUser || !formData.title.trim()) return;
+    console.log('🖱️ AddStoryModal: Create Story button clicked', {
+      action: 'create_story_button_click',
+      element: 'create_button',
+      formData: formData,
+      selectedGoal: goals.find(g => g.id === formData.goalId),
+      selectedSprint: sprints.find(s => s.id === formData.sprintId),
+      timestamp: new Date().toISOString()
+    });
+
+    if (!currentUser || !formData.title.trim()) {
+      console.log('⚠️ AddStoryModal: Create Story validation failed', {
+        action: 'create_story_validation_failed',
+        hasUser: !!currentUser,
+        hasTitle: !!formData.title.trim(),
+        formData: formData,
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
 
     setIsSubmitting(true);
     setSubmitResult(null);
@@ -171,12 +264,6 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
     setIsSubmitting(false);
   };
 
-  const handleClose = () => {
-    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3 });
-    setSubmitResult(null);
-    onClose();
-  };
-
   return (
     <Modal show={show} onHide={handleClose} centered>
       <Modal.Header closeButton>
@@ -210,7 +297,27 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
             <Form.Label>Link to Goal</Form.Label>
             <Form.Select
               value={formData.goalId}
-              onChange={(e) => setFormData({ ...formData, goalId: e.target.value })}
+              onChange={(e) => {
+                console.log('🎯 AddStoryModal: Goal selection changed', {
+                  action: 'goal_select_change',
+                  element: 'goal_dropdown',
+                  previousValue: formData.goalId,
+                  newValue: e.target.value,
+                  selectedGoal: goals.find(g => g.id === e.target.value),
+                  availableGoals: goals.length,
+                  timestamp: new Date().toISOString()
+                });
+                setFormData({ ...formData, goalId: e.target.value });
+              }}
+              onClick={() => {
+                console.log('🖱️ AddStoryModal: Goal dropdown clicked', {
+                  action: 'goal_dropdown_click',
+                  element: 'goal_select',
+                  currentValue: formData.goalId,
+                  availableOptions: goals.length,
+                  timestamp: new Date().toISOString()
+                });
+              }}
             >
               <option value="">Select a goal (optional)</option>
               {goals.map(goal => (
@@ -228,7 +335,27 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
             <Form.Label>Assign to Sprint</Form.Label>
             <Form.Select
               value={formData.sprintId}
-              onChange={(e) => setFormData({ ...formData, sprintId: e.target.value })}
+              onChange={(e) => {
+                console.log('🏃‍♂️ AddStoryModal: Sprint selection changed', {
+                  action: 'sprint_select_change',
+                  element: 'sprint_dropdown',
+                  previousValue: formData.sprintId,
+                  newValue: e.target.value,
+                  selectedSprint: sprints.find(s => s.id === e.target.value),
+                  availableSprints: sprints.length,
+                  timestamp: new Date().toISOString()
+                });
+                setFormData({ ...formData, sprintId: e.target.value });
+              }}
+              onClick={() => {
+                console.log('🖱️ AddStoryModal: Sprint dropdown clicked', {
+                  action: 'sprint_dropdown_click',
+                  element: 'sprint_select',
+                  currentValue: formData.sprintId,
+                  availableOptions: sprints.length,
+                  timestamp: new Date().toISOString()
+                });
+              }}
             >
               <option value="">No sprint (backlog)</option>
               {sprints.map(sprint => (

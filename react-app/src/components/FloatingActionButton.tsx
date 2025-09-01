@@ -389,7 +389,28 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                   <Form.Label>Link to Goal</Form.Label>
                   <Form.Select
                     value={quickAddData.goalId}
-                    onChange={(e) => setQuickAddData({ ...quickAddData, goalId: e.target.value })}
+                    onChange={(e) => {
+                      console.log('🎯 FloatingActionButton: Goal selection changed', {
+                        action: 'fab_goal_select_change',
+                        element: 'fab_goal_dropdown',
+                        quickAddType: quickAddType,
+                        previousValue: quickAddData.goalId,
+                        newValue: e.target.value,
+                        selectedGoal: goals.find(g => g.id === e.target.value),
+                        availableGoals: goals.length,
+                        timestamp: new Date().toISOString()
+                      });
+                      setQuickAddData({ ...quickAddData, goalId: e.target.value });
+                    }}
+                    onClick={() => {
+                      console.log('🖱️ FloatingActionButton: Goal dropdown clicked', {
+                        action: 'fab_goal_dropdown_click',
+                        element: 'fab_goal_select',
+                        currentValue: quickAddData.goalId,
+                        availableOptions: goals.length,
+                        timestamp: new Date().toISOString()
+                      });
+                    }}
                   >
                     <option value="">Select a goal (optional)</option>
                     {goals.map(goal => (
@@ -407,7 +428,28 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                   <Form.Label>Assign to Sprint</Form.Label>
                   <Form.Select
                     value={quickAddData.sprintId}
-                    onChange={(e) => setQuickAddData({ ...quickAddData, sprintId: e.target.value })}
+                    onChange={(e) => {
+                      console.log('🏃‍♂️ FloatingActionButton: Sprint selection changed', {
+                        action: 'fab_sprint_select_change',
+                        element: 'fab_sprint_dropdown',
+                        quickAddType: quickAddType,
+                        previousValue: quickAddData.sprintId,
+                        newValue: e.target.value,
+                        selectedSprint: sprints.find(s => s.id === e.target.value),
+                        availableSprints: sprints.length,
+                        timestamp: new Date().toISOString()
+                      });
+                      setQuickAddData({ ...quickAddData, sprintId: e.target.value });
+                    }}
+                    onClick={() => {
+                      console.log('🖱️ FloatingActionButton: Sprint dropdown clicked', {
+                        action: 'fab_sprint_dropdown_click',
+                        element: 'fab_sprint_select',
+                        currentValue: quickAddData.sprintId,
+                        availableOptions: sprints.length,
+                        timestamp: new Date().toISOString()
+                      });
+                    }}
                   >
                     <option value="">No sprint (backlog)</option>
                     {sprints.map(sprint => (
