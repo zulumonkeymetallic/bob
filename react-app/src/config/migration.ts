@@ -60,6 +60,21 @@ export class ChoiceMigration {
     return mapping[stringValue] ?? 2; // Default to 'Medium'
   }
 
+  // Goal confidence migration
+  static migrateGoalConfidence(value: any): number {
+    if (typeof value === 'number') return value;
+    
+    const stringValue = String(value).toLowerCase();
+    const mapping: Record<string, number> = {
+      'low': 1,
+      'medium': 2,
+      'high': 3,
+      'very high': 3
+    };
+    
+    return mapping[stringValue] ?? 2; // Default to 'Medium'
+  }
+
   // Story status migration
   static migrateStoryStatus(value: any): number {
     if (typeof value === 'number') return value;
@@ -163,69 +178,84 @@ export class ChoiceMigration {
     return mapping[stringValue] ?? 0; // Default to 'Planning'
   }
 
-  // Generic migration function
-  static migrateChoiceValue(table: string, field: string, value: any): number {
-    const methodName = `migrate${table.charAt(0).toUpperCase() + table.slice(1)}${field.charAt(0).toUpperCase() + field.slice(1)}`;
+  // Pre-defined object migrations
+  static migrateGoal(goal: any): any {
+    const migrated = { ...goal };
     
-    // Try to call specific migration method
-    if (typeof (this as any)[methodName] === 'function') {
-      return (this as any)[methodName](value);
+    // Migrate status field
+    if (goal.status !== undefined) {
+      migrated.status = this.migrateGoalStatus(goal.status);
     }
     
-    // Fallback: try to find by label
-    if (typeof value === 'string') {
-      const numericValue = ChoiceHelper.getValueByLabel(table, field, value);
-      if (numericValue !== undefined) {
-        return numericValue;
-      }
+    // Migrate theme field
+    if (goal.theme !== undefined) {
+      migrated.theme = this.migrateGoalTheme(goal.theme);
     }
     
-    // Last resort: return as-is if already a number, or 0
-    return typeof value === 'number' ? value : 0;
-  }
-
-  // Migrate an entire object's choice fields
-  static migrateObject(obj: any, fieldMappings: Record<string, {table: string, field: string}>): any {
-    const migrated = { ...obj };
+    // Migrate size field
+    if (goal.size !== undefined) {
+      migrated.size = this.migrateGoalSize(goal.size);
+    }
     
-    for (const [objField, {table, field}] of Object.entries(fieldMappings)) {
-      if (obj[objField] !== undefined) {
-        migrated[objField] = this.migrateChoiceValue(table, field, obj[objField]);
-      }
+    // Migrate confidence field
+    if (goal.confidence !== undefined) {
+      migrated.confidence = this.migrateGoalConfidence(goal.confidence);
     }
     
     return migrated;
   }
 
-  // Pre-defined object migrations
-  static migrateGoal(goal: any): any {
-    return this.migrateObject(goal, {
-      status: { table: 'goal', field: 'status' },
-      theme: { table: 'goal', field: 'theme' },
-      size: { table: 'goal', field: 'size' }
-    });
-  }
-
   static migrateStory(story: any): any {
-    return this.migrateObject(story, {
-      status: { table: 'story', field: 'status' },
-      priority: { table: 'story', field: 'priority' },
-      theme: { table: 'goal', field: 'theme' }
-    });
+    const migrated = { ...story };
+    
+    // Migrate status field
+    if (story.status !== undefined) {
+      migrated.status = this.migrateStoryStatus(story.status);
+    }
+    
+    // Migrate priority field
+    if (story.priority !== undefined) {
+      migrated.priority = this.migrateStoryPriority(story.priority);
+    }
+    
+    // Migrate theme field (stories use goal theme)
+    if (story.theme !== undefined) {
+      migrated.theme = this.migrateGoalTheme(story.theme);
+    }
+    
+    return migrated;
   }
 
   static migrateTask(task: any): any {
-    return this.migrateObject(task, {
-      status: { table: 'task', field: 'status' },
-      priority: { table: 'task', field: 'priority' },
-      theme: { table: 'goal', field: 'theme' }
-    });
+    const migrated = { ...task };
+    
+    // Migrate status field
+    if (task.status !== undefined) {
+      migrated.status = this.migrateTaskStatus(task.status);
+    }
+    
+    // Migrate priority field
+    if (task.priority !== undefined) {
+      migrated.priority = this.migrateTaskPriority(task.priority);
+    }
+    
+    // Migrate theme field (tasks use goal theme)
+    if (task.theme !== undefined) {
+      migrated.theme = this.migrateGoalTheme(task.theme);
+    }
+    
+    return migrated;
   }
 
   static migrateSprint(sprint: any): any {
-    return this.migrateObject(sprint, {
-      status: { table: 'sprint', field: 'status' }
-    });
+    const migrated = { ...sprint };
+    
+    // Migrate status field
+    if (sprint.status !== undefined) {
+      migrated.status = this.migrateSprintStatus(sprint.status);
+    }
+    
+    return migrated;
   }
 }
 
