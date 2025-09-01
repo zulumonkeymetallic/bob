@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth } from '../firebase';
+import { db, auth, functions } from '../firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import { User } from 'firebase/auth';
@@ -57,7 +57,6 @@ const Admin = () => {
       return;
     }
 
-    const functions = getFunctions();
     const importItems = httpsCallable(functions, 'importItems');
 
     const reader = new FileReader();
@@ -103,7 +102,6 @@ const Admin = () => {
   };
 
   const handleSyncTrakt = () => {
-    const functions = getFunctions();
     const syncTrakt = httpsCallable(functions, 'syncTrakt');
     logMessage('Syncing Trakt...');
     syncTrakt()
@@ -116,7 +114,6 @@ const Admin = () => {
   };
 
   const handleSyncSteam = () => {
-    const functions = getFunctions();
     const syncSteam = httpsCallable(functions, 'syncSteam');
     logMessage('Syncing Steam...');
     syncSteam()

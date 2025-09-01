@@ -143,10 +143,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const [editValue, setEditValue] = useState<string>('');
   const { trackFieldChange, trackView } = useActivityTracking();
 
-  // Track story view when component mounts
+  // Track story view when component mounts (only once per story)
   React.useEffect(() => {
-    trackView(story.id, 'story', story.title, story.ref, { viewContext: 'stories_table' });
-  }, [story.id, story.title, story.ref, trackView]);
+    // Remove automatic view tracking to prevent infinite loops
+    // View tracking should only happen on explicit user interactions
+  }, [story.id]); // Only re-run when story ID changes
 
   const style = {
     transform: CSS.Transform.toString(transform),

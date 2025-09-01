@@ -54,17 +54,27 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       console.log('🎯 BOB v3.2.4: GlobalSidebar - Setting up activity stream for', selectedType, selectedItem.id);
       
       // Track that user viewed this record (only once per item change)
-      trackView(
-        selectedItem.id,
-        selectedType as any,
-        selectedItem.title || 'Unknown',
-        (selectedItem as any).referenceNumber
-      );
+      // Use an IIFE to avoid dependency on trackView function
+      (async () => {
+        try {
+          await ActivityStreamService.logRecordView(
+            selectedItem.id,
+            selectedType as any,
+            selectedItem.title || 'Unknown',
+            currentUser.uid,
+            currentUser.email,
+            (selectedItem as any).referenceNumber || generateReferenceNumber()
+          );
+        } catch (error) {
+          console.error('❌ BOB v3.2.4: Failed to track view:', error);
+        }
+      })();
       
       // Subscribe to activity stream using new global method
-      const unsubscribe = subscribeToActivity(
+      const unsubscribe = ActivityStreamService.subscribeToGlobalActivityStream(
         selectedItem.id,
         selectedType as any,
+        currentUser.uid,
         setActivities
       );
       
@@ -677,6 +687,48 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     Note
                   </Button>
                 </div>
+
+                {/* Latest Comment */}
+                {activities.length > 0 && (() => {
+                  const latestComment = activities.find(activity => activity.activityType === 'note_added' && activity.noteContent);
+                  return latestComment ? (
+                    <div style={{ 
+                      marginBottom: '16px',
+                      padding: '12px',
+                      backgroundColor: '#f0f9ff',
+                      border: '1px solid #0ea5e9',
+                      borderRadius: '6px'
+                    }}>
+                      <div style={{ 
+                        fontSize: '12px', 
+                        fontWeight: '600', 
+                        color: '#0ea5e9', 
+                        marginBottom: '6px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.5px'
+                      }}>
+                        Latest Comment
+                      </div>
+                      <div style={{ 
+                        fontSize: '13px', 
+                        color: '#374151', 
+                        fontStyle: 'italic',
+                        lineHeight: '1.4'
+                      }}>
+                        "{latestComment.noteContent}"
+                      </div>
+                      <div style={{ 
+                        fontSize: '11px', 
+                        color: '#6b7280', 
+                        marginTop: '6px'
+                      }}>
+                        {ActivityStreamService.formatTimestamp(latestComment.timestamp)}
+                        {latestComment.userEmail && ` • ${latestComment.userEmail.split('@')[0]}`}
+                        {latestComment.referenceNumber && ` • Ref: ${latestComment.referenceNumber}`}
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
                 
                 <div style={{ 
                   maxHeight: '300px', 
@@ -731,6 +783,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                               <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '4px' }}>
                                 {ActivityStreamService.formatTimestamp(activity.timestamp)}
                                 {activity.userEmail && ` • ${activity.userEmail.split('@')[0]}`}
+                                {activity.referenceNumber && ` • Ref: ${activity.referenceNumber}`}
+                                {!activity.referenceNumber && ` • Ref: ${generateReferenceNumber()}`}
                               </div>
                             </div>
                           </div>
