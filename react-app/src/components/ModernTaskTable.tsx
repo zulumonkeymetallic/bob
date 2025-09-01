@@ -134,7 +134,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onTaskDelete 
 }) => {
   const { showSidebar } = useSidebar();
-  const { trackClick } = useActivityTracking();
+  const { trackClick, trackFieldChange } = useActivityTracking();
   const {
     attributes,
     listeners,
@@ -159,9 +159,33 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleCellSave = async (key: string) => {
-    const updates: Partial<Task> = { [key]: editValue };
-    await onTaskUpdate(task.id, updates);
-    setEditingCell(null);
+    try {
+      const oldValue = (task as any)[key]; // Store the original value
+      
+      // Only proceed if the value actually changed
+      if (oldValue !== editValue) {
+        const updates: Partial<Task> = { [key]: editValue };
+        await onTaskUpdate(task.id, updates);
+        
+        // Track the field change for activity stream
+        trackFieldChange(
+          task.id,
+          'task',
+          key,
+          oldValue,
+          editValue,
+          task.title,
+          task.ref
+        );
+        
+        console.log(`🎯 Task field changed: ${key} from "${oldValue}" to "${editValue}" for task ${task.id}`);
+      }
+      
+      setEditingCell(null);
+    } catch (error) {
+      console.error('Error saving task field:', error);
+      setEditingCell(null);
+    }
   };
 
   const formatValue = (key: string, value: any): string => {

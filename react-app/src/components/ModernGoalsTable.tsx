@@ -154,7 +154,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
-  const { trackClick, trackView } = useActivityTracking();
+  const { trackClick, trackView, trackFieldChange } = useActivityTracking();
 
   // Track goal view when component mounts
   React.useEffect(() => {
@@ -189,6 +189,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const handleCellSave = async (key: string) => {
     try {
       let valueToSave: string | number = editValue;
+      const oldValue = (goal as any)[key]; // Store the original value
       
       // Convert choice labels back to integer values for ServiceNow choice system
       if (key === 'status') {
@@ -199,24 +200,40 @@ const SortableRow: React.FC<SortableRowProps> = ({
         valueToSave = themeChoice ? themeChoice.value : editValue;
       }
       
-      const updates: Partial<Goal> = { [key]: valueToSave };
-      await onGoalUpdate(goal.id, updates);
-      
-      trackClick({
-        elementId: `goal-cell-save-${key}`,
-        elementType: 'button',
-        entityId: goal.id,
-        entityType: 'goal',
-        entityTitle: goal.title,
-        additionalData: { 
-          field: key, 
-          newValue: valueToSave,
-          action: 'inline_edit_save'
-        }
-      });
+      // Only proceed if the value actually changed
+      if (oldValue !== valueToSave) {
+        const updates: Partial<Goal> = { [key]: valueToSave };
+        await onGoalUpdate(goal.id, updates);
+        
+        // Track the field change for activity stream
+        trackFieldChange(
+          goal.id,
+          'goal',
+          key,
+          oldValue,
+          valueToSave,
+          goal.title,
+          goal.id
+        );
+        
+        trackClick({
+          elementId: `goal-cell-save-${key}`,
+          elementType: 'button',
+          entityId: goal.id,
+          entityType: 'goal',
+          entityTitle: goal.title,
+          additionalData: { 
+            field: key, 
+            oldValue: oldValue,
+            newValue: valueToSave,
+            action: 'inline_edit_save'
+          }
+        });
+        
+        console.log(`🎯 Goal field changed: ${key} from "${oldValue}" to "${valueToSave}" for goal ${goal.id}`);
+      }
       
       setEditingCell(null);
-      console.log(`🎯 Goal inline edit saved: ${key} = "${valueToSave}" for goal ${goal.id}`);
     } catch (error) {
       console.error('❌ Error saving goal cell edit:', error);
     }
