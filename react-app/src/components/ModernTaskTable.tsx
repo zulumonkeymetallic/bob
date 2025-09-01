@@ -448,7 +448,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   onTaskDelete,
   onTaskPriorityChange,
 }) => {
-  const { trackClick, trackView } = useActivityTracking();
+  const { trackClick } = useActivityTracking();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({

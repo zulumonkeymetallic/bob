@@ -45,16 +45,110 @@ export interface ActivityEntry {
 }
 
 export class ActivityStreamService {
-  // Add activity entry
+  private static lastActivityCache = new Map<string, number>();
+  private static readonly DEBOUNCE_WINDOW = 2000; // 2 seconds
+  
+  // Activity payload validator to prevent undefined fields
+  static validateActivityPayload(activity: any): any {
+    const cleanPayload: any = {};
+    
+    // Required fields
+    cleanPayload.entityId = activity.entityId;
+    cleanPayload.entityType = activity.entityType;
+    cleanPayload.activityType = activity.activityType;
+    cleanPayload.userId = activity.userId;
+    cleanPayload.description = activity.description;
+    cleanPayload.ownerUid = activity.userId;
+    
+    // Handle ref/referenceNumber mapping
+    if (activity.ref) {
+      cleanPayload.ref = activity.ref;
+      cleanPayload.referenceNumber = activity.ref; // Dual write during transition
+    } else if (activity.referenceNumber) {
+      cleanPayload.referenceNumber = activity.referenceNumber;
+      cleanPayload.ref = activity.referenceNumber; // Reverse mapping
+    } else {
+      // Generate fallback reference
+      const fallbackRef = `${activity.entityType.toUpperCase()}-${Date.now()}`;
+      cleanPayload.ref = fallbackRef;
+      cleanPayload.referenceNumber = fallbackRef;
+    }
+    
+    // Optional fields - only include if defined and not null
+    if (activity.userEmail !== undefined && activity.userEmail !== null) {
+      cleanPayload.userEmail = activity.userEmail;
+    }
+    if (activity.persona !== undefined && activity.persona !== null) {
+      cleanPayload.persona = activity.persona;
+    }
+    if (activity.entityTitle !== undefined && activity.entityTitle !== null) {
+      cleanPayload.entityTitle = activity.entityTitle;
+    }
+    if (activity.fieldName !== undefined && activity.fieldName !== null) {
+      cleanPayload.fieldName = activity.fieldName;
+    }
+    if (activity.oldValue !== undefined && activity.oldValue !== null) {
+      cleanPayload.oldValue = activity.oldValue;
+    }
+    if (activity.newValue !== undefined && activity.newValue !== null) {
+      cleanPayload.newValue = activity.newValue;
+    }
+    if (activity.noteContent !== undefined && activity.noteContent !== null) {
+      cleanPayload.noteContent = activity.noteContent;
+    }
+    if (activity.uiComponent !== undefined && activity.uiComponent !== null) {
+      cleanPayload.uiComponent = activity.uiComponent;
+    }
+    if (activity.clickType !== undefined && activity.clickType !== null) {
+      cleanPayload.clickType = activity.clickType;
+    }
+    if (activity.elementId !== undefined && activity.elementId !== null) {
+      cleanPayload.elementId = activity.elementId;
+    }
+    
+    return cleanPayload;
+  }
+  
+  // Debounce duplicate activities (same entity, type, user within window)
+  static shouldSkipDuplicate(entityId: string, activityType: string, userId: string): boolean {
+    const key = `${entityId}-${activityType}-${userId}`;
+    const now = Date.now();
+    const lastTime = this.lastActivityCache.get(key);
+    
+    if (lastTime && (now - lastTime) < this.DEBOUNCE_WINDOW) {
+      return true; // Skip duplicate
+    }
+    
+    this.lastActivityCache.set(key, now);
+    return false;
+  }
+
+  // Add activity entry with validation and debouncing
   static async addActivity(activity: Omit<ActivityEntry, 'id' | 'timestamp'>): Promise<void> {
     try {
+      // Skip duplicate activities within debounce window
+      if (this.shouldSkipDuplicate(activity.entityId, activity.activityType, activity.userId)) {
+        return;
+      }
+      
+      // Validate and clean payload
+      const cleanPayload = this.validateActivityPayload(activity);
+      
       await addDoc(collection(db, 'activity_stream'), {
-        ...activity,
-        ownerUid: activity.userId, // Add ownerUid for Firestore security rules
+        ...cleanPayload,
         timestamp: serverTimestamp(),
       });
     } catch (error) {
-      console.error('Error adding activity:', error);
+      // Throttle error logging to prevent console flooding
+      const errorKey = `activity-error-${error.message}`;
+      const lastErrorTime = this.lastActivityCache.get(errorKey);
+      const now = Date.now();
+      
+      if (!lastErrorTime || (now - lastErrorTime) > 5000) { // Log error max once per 5 seconds
+        console.error('Error adding activity:', error);
+        this.lastActivityCache.set(errorKey, now);
+      }
+      
       throw error;
     }
   }
@@ -69,12 +163,12 @@ export class ActivityStreamService {
     userId: string,
     userEmail?: string,
     persona?: string,
-    referenceNumber?: string
+    referenceNumber?: string,
+    entityTitle?: string
   ): Promise<void> {
     const description = `Changed ${fieldName} from "${oldValue}" to "${newValue}"`;
     
-    // Prepare activity data, excluding undefined values
-    const activityData: any = {
+    await this.addActivity({
       entityId,
       entityType,
       activityType: 'updated',
@@ -83,18 +177,12 @@ export class ActivityStreamService {
       fieldName,
       oldValue,
       newValue,
-      description
-    };
-
-    // Only include optional fields if they're defined
-    if (persona !== undefined && persona !== null) {
-      activityData.persona = persona;
-    }
-    if (referenceNumber !== undefined && referenceNumber !== null) {
-      activityData.referenceNumber = referenceNumber;
-    }
-
-    await this.addActivity(activityData);
+      description,
+      persona,
+      referenceNumber,
+      entityTitle,
+      uiComponent: 'field-editor'
+    });
   }
 
   // Log status change
@@ -414,48 +502,7 @@ export class ActivityStreamService {
     await this.addActivity(activityData);
   }
 
-  // Log record views for audit trail
-  static async logRecordView(
-    entityId: string,
-    entityType: ActivityEntry['entityType'],
-    entityTitle: string,
-    userId: string,
-    userEmail?: string,
-    referenceNumber?: string
-  ): Promise<void> {
-    const description = `👁️ Viewed ${entityType}: ${entityTitle}`;
-    
-    console.log(`👁️ BOB v3.2.4 RECORD VIEW:`, {
-      entityId,
-      entityType,
-      entityTitle,
-      userId,
-      userEmail,
-      referenceNumber,
-      timestamp: new Date().toISOString(),
-      url: window.location.href
-    });
-
-    // Prepare activity data, excluding undefined values
-    const activityData: any = {
-      entityId,
-      entityType,
-      activityType: 'viewed',
-      userId,
-      userEmail,
-      description,
-      entityTitle
-    };
-
-    // Only include referenceNumber if it's defined
-    if (referenceNumber !== undefined && referenceNumber !== null) {
-      activityData.referenceNumber = referenceNumber;
-    }
-
-    await this.addActivity(activityData);
-  }
-
-  // Enhanced format activity icon for new activity types
+  // Enhanced format activity icon for meaningful activities only
   static formatActivityIconEnhanced(activityType: string): string {
     switch (activityType) {
       case 'created': return '🆕';
@@ -465,7 +512,6 @@ export class ActivityStreamService {
       case 'status_changed': return '🔄';
       case 'sprint_changed': return '🏃';
       case 'priority_changed': return '⚡';
-      case 'viewed': return '👁️';
       case 'clicked': return '🖱️';
       case 'edited': return '✏️';
       case 'exported': return '📤';

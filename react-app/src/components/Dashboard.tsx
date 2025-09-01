@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { Story, Task } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { ChoiceHelper } from '../config/choices';
+import QuickActionsPanel from './QuickActionsPanel';
 
 interface DashboardStats {
   activeGoals: number;
@@ -53,14 +54,13 @@ const Dashboard: React.FC = () => {
       limit(5)
     );
     
-    // Load tasks
+    // Load tasks (simplified query while indexes are building)
     const tasksQuery = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona),
-      where('status', '!=', 'done'),
       orderBy('priority', 'desc'),
-      limit(5)
+      limit(10)
     );
 
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -82,10 +82,13 @@ const Dashboard: React.FC = () => {
     });
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
+      const allTasks = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Task[];
+      
+      // Filter out 'done' tasks on client side while indexes are building
+      const tasksData = allTasks.filter(task => !isStatus(task.status, 'done')).slice(0, 5);
       setUpcomingTasks(tasksData);
       
       // Calculate task stats
@@ -207,9 +210,9 @@ const Dashboard: React.FC = () => {
             </Col>
           </Row>
 
-          {/* Recent Stories */}
+          {/* Recent Stories and Quick Actions */}
           <Row className="mb-4">
-            <Col md={6}>
+            <Col md={8}>
               <Card>
                 <Card.Header>
                   <h5 className="mb-0">Recent Stories</h5>
@@ -245,8 +248,18 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
 
-            {/* Upcoming Tasks */}
-            <Col md={6}>
+            <Col md={4}>
+              <QuickActionsPanel onAction={(type, data) => {
+                console.log('✨ Quick action completed:', type, data);
+                // Refresh dashboard data when new items are created
+                loadDashboardData();
+              }} />
+            </Col>
+          </Row>
+
+          {/* Upcoming Tasks */}
+          <Row className="mb-4">
+            <Col md={12}>
               <Card>
                 <Card.Header>
                   <h5 className="mb-0">Upcoming Tasks</h5>

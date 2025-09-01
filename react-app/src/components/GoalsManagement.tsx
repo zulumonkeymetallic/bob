@@ -22,7 +22,7 @@ const GoalsManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddGoalModal, setShowAddGoalModal] = useState(false);
-  const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'card'>('card');
 
   useEffect(() => {
     if (!currentUser) return;

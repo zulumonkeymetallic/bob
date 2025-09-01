@@ -156,28 +156,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
-  const { trackClick, trackView, trackFieldChange } = useActivityTracking();
+  const { trackClick, trackFieldChange } = useActivityTracking();
   const { currentUser } = useAuth();
 
-  // Track goal view when component mounts (only once per goal)
-  React.useEffect(() => {
-    if (currentUser) {
-      (async () => {
-        try {
-          await ActivityStreamService.logRecordView(
-            goal.id,
-            'goal',
-            goal.title,
-            currentUser.uid,
-            currentUser.email,
-            goal.id
-          );
-        } catch (error) {
-          console.error('❌ Failed to track goal view:', error);
-        }
-      })();
-    }
-  }, [goal.id, currentUser?.uid]); // Only re-run when goal ID or user changes
+  // Note: Removed view tracking to focus activity stream on meaningful changes only
 
   const style = {
     transform: CSS.Transform.toString(transform),

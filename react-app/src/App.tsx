@@ -38,6 +38,7 @@ import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
+import GoalVizPage from './components/visualization/GoalVizPage';
 
 function App() {
   return (
@@ -185,6 +186,8 @@ function AppContent() {
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
+            <Route path="/goals/visualization" element={<GoalVizPage />} />
+            <Route path="/goals/viz" element={<GoalVizPage />} />
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
             <Route path="/calendar" element={<Calendar />} />

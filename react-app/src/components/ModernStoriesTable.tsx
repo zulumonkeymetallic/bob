@@ -141,7 +141,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
-  const { trackFieldChange, trackView } = useActivityTracking();
+  const { trackFieldChange } = useActivityTracking();
 
   // Track story view when component mounts (only once per story)
   React.useEffect(() => {

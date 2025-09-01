@@ -1,11 +1,11 @@
-// Version tracking for cache busting - v3.2.6 Firestore Permission Fixes
-export const VERSION = 'v3.2.6';
+// Version tracking for cache busting - v3.2.8 Goals Card View Default, Migration Bypass, Auto-Generated IDs, Side Door Access
+export const VERSION = 'v3.2.8';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Critical Fixes Applied, Activity Stream Enhanced & Firestore Permissions Fixed`);
-console.log(`🎯 Features: Infinite Loop Fixed, Activity Stream with Latest Comments, Reference Number Parity, Permission Issues Resolved`);
-console.log(`🚀 Architecture: v3.2.6 with Stable Activity Tracking, Enhanced UI & Secure Database Access`);
+console.log(`✅ Status: Goals Card View Default, Migration Bypass, Auto-Generated IDs, Side Door Access`);
+console.log(`🎯 Features: Card View Default, Migration Optimized, Auto-Generated Reference IDs, AI Testing Support`);
+console.log(`🚀 Architecture: v3.2.8 with Enhanced UX & Testing Capabilities`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force browser cache refresh and version notification
@@ -14,10 +14,10 @@ export const checkForUpdates = () => {
   const currentVersion = VERSION;
   
   if (lastVersion && lastVersion !== currentVersion) {
-    console.log(`� VERSION UPDATE DETECTED: ${lastVersion} → ${currentVersion}`);
+    console.log(`🔄 VERSION UPDATE DETECTED: ${lastVersion} → ${currentVersion}`);
     
     // Show user notification
-    if (window.confirm(`🚀 BOB has been updated to ${currentVersion}!\n\nNew features:\n• Fixed infinite activity logging loops\n• Enhanced activity stream with latest comments\n• Reference number parity across views\n• Status saving improvements\n• Firestore permission issues resolved\n\nReload to ensure you have the latest version?`)) {
+    if (window.confirm(`🚀 BOB has been updated to ${currentVersion}!\n\nNew features:\n• Goals default to card view for better visual experience\n• Database migration system optimized (bypassed for performance)\n• Auto-generated reference IDs with modern format (GR-26LGIP)\n• Side door authentication for AI testing capabilities\n• Comprehensive test script for automated validation\n\nReload to ensure you have the latest version?`)) {
       // Clear all caches
       if ('caches' in window) {
         caches.keys().then(names => {

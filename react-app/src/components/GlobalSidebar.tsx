@@ -29,7 +29,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, toggleCollapse, updateItem } = useSidebar();
   const { isTestMode, testModeLabel } = useTestMode();
   const { currentUser } = useAuth();
-  const { trackClick, trackView, addNote, subscribeToActivity } = useActivityTracking();
+  const { trackClick, addNote, subscribeToActivity } = useActivityTracking();
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -53,22 +53,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       
       console.log('🎯 BOB v3.2.4: GlobalSidebar - Setting up activity stream for', selectedType, selectedItem.id);
       
-      // Track that user viewed this record (only once per item change)
-      // Use an IIFE to avoid dependency on trackView function
-      (async () => {
-        try {
-          await ActivityStreamService.logRecordView(
-            selectedItem.id,
-            selectedType as any,
-            selectedItem.title || 'Unknown',
-            currentUser.uid,
-            currentUser.email,
-            (selectedItem as any).referenceNumber || generateReferenceNumber()
-          );
-        } catch (error) {
-          console.error('❌ BOB v3.2.4: Failed to track view:', error);
-        }
-      })();
+      // Note: Removed view tracking to focus activity stream on meaningful changes only
       
       // Subscribe to activity stream using new global method
       const unsubscribe = ActivityStreamService.subscribeToGlobalActivityStream(
