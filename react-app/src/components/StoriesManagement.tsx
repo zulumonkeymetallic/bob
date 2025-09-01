@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Story, Goal } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
+import AddStoryModal from './AddStoryModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const StoriesManagement: React.FC = () => {
@@ -17,6 +18,7 @@ const StoriesManagement: React.FC = () => {
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showAddStoryModal, setShowAddStoryModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -147,7 +149,7 @@ const StoriesManagement: React.FC = () => {
               Manage user stories and their relationships to goals
             </p>
           </div>
-          <Button variant="primary" onClick={() => alert('Add new story - coming soon')}>
+          <Button variant="primary" onClick={() => setShowAddStoryModal(true)}>
             Add Story
           </Button>
         </div>
@@ -312,6 +314,16 @@ const StoriesManagement: React.FC = () => {
           </Card.Body>
         </Card>
       </div>
+
+      {/* Add Story Modal */}
+      <AddStoryModal 
+        show={showAddStoryModal} 
+        onClose={() => {
+          setShowAddStoryModal(false);
+          // Refresh stories data when modal closes
+          loadStoriesData();
+        }} 
+      />
     </div>
   );
 };

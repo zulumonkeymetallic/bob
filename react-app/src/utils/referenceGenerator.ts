@@ -1,38 +1,44 @@
 /**
  * Reference ID generator utility for BOB entities
+ * Updated to use auto-generated format like GR-26LGIP instead of GOAL-001
  */
 
 export const generateRef = (type: 'story' | 'task' | 'sprint' | 'goal', existingRefs: string[]): string => {
     const prefixes = {
-        story: 'STRY',
-        task: 'TASK',
-        sprint: 'SPR',
-        goal: 'GOAL'
+        story: 'ST',
+        task: 'TK', 
+        sprint: 'SP',
+        goal: 'GR'
     };
 
     const prefix = prefixes[type];
     
-    // Extract existing numbers for this type
-    const existingNumbers = existingRefs
-        .filter(ref => ref.startsWith(prefix + '-'))
-        .map(ref => parseInt(ref.replace(prefix + '-', '')))
-        .filter(num => !isNaN(num));
+    // Generate auto ID using timestamp and random characters
+    const timestamp = Date.now().toString(36).toUpperCase().slice(-4); // Last 4 chars of timestamp
+    const randomChars = Math.random().toString(36).toUpperCase().slice(2, 4); // 2 random chars
+    
+    let autoRef = `${prefix}-${timestamp}${randomChars}`;
+    
+    // Ensure uniqueness by checking against existing refs
+    let counter = 0;
+    while (existingRefs.includes(autoRef) && counter < 10) {
+        const extraChar = Math.random().toString(36).toUpperCase().slice(2, 3);
+        autoRef = `${prefix}-${timestamp}${randomChars}${extraChar}`;
+        counter++;
+    }
 
-    // Find the next available number
-    const maxNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
-    const nextNumber = maxNumber + 1;
-
-    return `${prefix}-${String(nextNumber).padStart(3, '0')}`;
+    return autoRef;
 };
 
 export const validateRef = (ref: string, type: 'story' | 'task' | 'sprint' | 'goal'): boolean => {
     const prefixes = {
-        story: 'STRY',
-        task: 'TASK', 
-        sprint: 'SPR',
-        goal: 'GOAL'
+        story: 'ST',
+        task: 'TK',
+        sprint: 'SP', 
+        goal: 'GR'
     };
 
-    const pattern = new RegExp(`^${prefixes[type]}-\\d{3}$`);
+    // Updated pattern for auto-generated format
+    const pattern = new RegExp(`^${prefixes[type]}-[A-Z0-9]{4,8}$`);
     return pattern.test(ref);
 };

@@ -53,32 +53,6 @@ export const useActivityTracking = () => {
     }
   };
 
-  const trackView = async (
-    entityId: string,
-    entityType: TrackingOptions['entityType'],
-    entityTitle: string,
-    referenceNumber?: string,
-    additionalData?: any
-  ) => {
-    if (!currentUser) {
-      console.warn('🚫 BOB v3.2.4: Cannot track view - user not authenticated');
-      return;
-    }
-
-    try {
-      await ActivityStreamService.logRecordView(
-        entityId,
-        entityType,
-        entityTitle,
-        currentUser.uid,
-        currentUser.email,
-        referenceNumber
-      );
-    } catch (error) {
-      console.error('❌ BOB v3.2.4: Failed to track view:', error, { entityId, entityType, entityTitle });
-    }
-  };
-
   const addNote = async (
     entityId: string,
     entityType: TrackingOptions['entityType'],
@@ -161,7 +135,6 @@ export const useActivityTracking = () => {
 
   return {
     trackClick,
-    trackView,
     addNote,
     trackFieldChange,
     subscribeToActivity,

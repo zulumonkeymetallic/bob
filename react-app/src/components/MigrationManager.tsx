@@ -27,14 +27,20 @@ export const MigrationManager: React.FC<MigrationManagerProps> = ({ children }) 
 
     try {
       setMigrationStatus('checking');
-      const needsMigration = await DatabaseMigration.checkMigrationNeeded(currentUser.uid, currentPersona);
       
-      if (needsMigration) {
-        setMigrationStatus('needed');
-        setShowMigrationModal(true);
-      } else {
-        setMigrationStatus('complete');
-      }
+      // Migration is completed - skip check and mark as complete
+      console.log('🎯 Migration system bypassed - database migration completed');
+      setMigrationStatus('complete');
+      
+      // Legacy code for reference - migration check disabled
+      // const needsMigration = await DatabaseMigration.checkMigrationNeeded(currentUser.uid, currentPersona);
+      
+      // if (needsMigration) {
+      //   setMigrationStatus('needed');
+      //   setShowMigrationModal(true);
+      // } else {
+      //   setMigrationStatus('complete');
+      // }
     } catch (error) {
       console.error('Error checking migration status:', error);
       setMigrationStatus('error');

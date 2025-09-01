@@ -9,6 +9,7 @@ import { useActivityTracking } from '../hooks/useActivityTracking';
 import { VERSION } from '../version';
 import SprintSelector from './SprintSelector';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { SideDoorAuth } from '../services/SideDoorAuth';
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -28,7 +29,7 @@ interface NavigationItem {
 }
 
 const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) => {
-  const { currentUser, signOut } = useAuth();
+  const { currentUser, signOut, isTestUser } = useAuth();
   const { currentPersona, setPersona } = usePersona();
   const { theme, toggleTheme } = useTheme();
   const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
@@ -38,6 +39,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
   const [selectedSprintId, setSelectedSprintId] = useState<string>('');
+  
+  // Check if side-door test mode is active
+  const isSideDoorActive = SideDoorAuth.isTestModeActive();
 
   const navigationGroups: NavigationGroup[] = [
     {
@@ -171,8 +175,26 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         }}>
           {/* Brand */}
           <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)' }}>
-            <h4 className="mb-1" style={{ color: 'var(--notion-text)', fontWeight: '600' }}>BOB</h4>
-            <small style={{ color: 'var(--notion-text-gray)' }}>Productivity Platform</small>
+            <div className="d-flex align-items-center justify-content-between">
+              <div>
+                <h4 className="mb-1" style={{ color: 'var(--notion-text)', fontWeight: '600' }}>BOB</h4>
+                <small style={{ color: 'var(--notion-text-gray)' }}>Productivity Platform</small>
+              </div>
+              {(isSideDoorActive || isTestUser) && (
+                <div 
+                  className="badge"
+                  style={{ 
+                    background: '#ff6b6b', 
+                    color: 'white',
+                    fontSize: '0.7rem',
+                    padding: '4px 8px'
+                  }}
+                  title="Test Mode Active - Side Door Authentication"
+                >
+                  🧪 TEST
+                </div>
+              )}
+            </div>
           </div>
 
           {/* User Info */}
