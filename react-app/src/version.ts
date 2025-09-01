@@ -1,11 +1,11 @@
-// Version tracking for cache busting - v3.5.4 Enhanced Story Management & Advanced Filtering
-export const VERSION = 'v3.5.4';
+// Version tracking for cache busting - v3.5.5 Enhanced Logging & Firestore Index Fixes
+export const VERSION = 'v3.5.5';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Enhanced Story Management & Advanced Filtering`);
-console.log(`🎯 Features: FloatingActionButton Goal/Sprint Linking, Advanced Story Table Filtering, Sortable Headers`);
-console.log(`🚀 Architecture: v3.5.4 with Comprehensive Story Management Enhancement`);
+console.log(`✅ Status: Enhanced Logging & Firestore Index Fixes`);
+console.log(`🎯 Features: Comprehensive UI Click Logging, Fixed Goal/Sprint Loading, Database Index Repairs`);
+console.log(`🚀 Architecture: v3.5.5 with Complete Debug Logging & Optimized Queries`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force browser cache refresh and version notification
