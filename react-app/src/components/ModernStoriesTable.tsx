@@ -451,6 +451,21 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     display: false,
   });
   const [sprints, setSprints] = useState<Sprint[]>([]);
+  
+  // Enhanced filtering and search state
+  const [filters, setFilters] = useState({
+    search: '',
+    status: '',
+    priority: '',
+    theme: '',
+    sprintId: '',
+    points: '',
+    hasGoal: ''
+  });
+  const [sortConfig, setSortConfig] = useState({
+    key: 'updatedAt',
+    direction: 'desc' as 'asc' | 'desc'
+  });
 
   // Enhanced logging for component mount and props
   useEffect(() => {
@@ -510,11 +525,95 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     };
   });
 
+  // Apply filtering and search
+  const filteredRows = tableRows.filter(story => {
+    // Search filter (searches title, description, ref, and goal title)
+    if (filters.search) {
+      const searchLower = filters.search.toLowerCase();
+      const matches = [
+        story.title?.toLowerCase(),
+        story.description?.toLowerCase(),
+        story.ref?.toLowerCase(),
+        story.goalTitle?.toLowerCase()
+      ].some(field => field?.includes(searchLower));
+      
+      if (!matches) return false;
+    }
+
+    // Status filter (convert string to number)
+    if (filters.status && story.status !== parseInt(filters.status)) return false;
+
+    // Priority filter (convert string to number)
+    if (filters.priority && story.priority !== parseInt(filters.priority)) return false;
+
+    // Theme filter (convert string to number)
+    if (filters.theme && story.theme !== parseInt(filters.theme)) return false;
+
+    // Sprint filter
+    if (filters.sprintId && story.sprintId !== filters.sprintId) return false;
+
+    // Points filter
+    if (filters.points && story.points?.toString() !== filters.points) return false;
+
+    // Has Goal filter
+    if (filters.hasGoal) {
+      const hasGoal = story.goalId && story.goalId.trim() !== '';
+      if (filters.hasGoal === 'yes' && !hasGoal) return false;
+      if (filters.hasGoal === 'no' && hasGoal) return false;
+    }
+
+    return true;
+  });
+
+  // Apply sorting
+  const sortedRows = [...filteredRows].sort((a, b) => {
+    const { key, direction } = sortConfig;
+    let aValue = a[key as keyof StoryTableRow];
+    let bValue = b[key as keyof StoryTableRow];
+
+    // Handle different data types
+    if (key === 'updatedAt' || key === 'createdAt') {
+      aValue = new Date(aValue as string).getTime();
+      bValue = new Date(bValue as string).getTime();
+    } else if (key === 'points') {
+      aValue = Number(aValue) || 0;
+      bValue = Number(bValue) || 0;
+    } else if (typeof aValue === 'string') {
+      aValue = aValue.toLowerCase();
+      bValue = (bValue as string).toLowerCase();
+    }
+
+    if (aValue < bValue) return direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // Handle column sorting
+  const handleSort = (key: string) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  // Reset filters
+  const resetFilters = () => {
+    setFilters({
+      search: '',
+      status: '',
+      priority: '',
+      theme: '',
+      sprintId: '',
+      points: '',
+      hasGoal: ''
+    });
+  };
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
     if (over && active.id !== over.id) {
-      const newIndex = tableRows.findIndex(item => item.id === over.id);
+      const newIndex = sortedRows.findIndex(item => item.id === over.id);
       
       // Update priority based on new position (1-indexed)
       await onStoryPriorityChange(active.id as string, newIndex + 1);
@@ -564,7 +663,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             color: '#6b7280', 
             margin: 0 
           }}>
-            {stories.length} stories • {visibleColumnsCount} columns visible
+            {sortedRows.length} of {stories.length} stories • {visibleColumnsCount} columns visible
           </p>
         </div>
         <button
@@ -597,6 +696,194 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           <Settings size={16} />
           {showConfig ? 'Hide Configuration' : 'Configure Table'}
         </button>
+      </div>
+
+      {/* Enhanced Filter Controls */}
+      <div style={{
+        padding: '16px',
+        borderBottom: '1px solid #e5e7eb',
+        backgroundColor: '#f8fafc',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: '12px',
+        alignItems: 'end'
+      }}>
+        {/* Search Input */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            fontSize: '12px', 
+            fontWeight: '500', 
+            color: '#374151', 
+            marginBottom: '4px' 
+          }}>
+            Search Stories
+          </label>
+          <input
+            type="text"
+            placeholder="Search title, description, ref..."
+            value={filters.search}
+            onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid #d1d5db',
+              borderRadius: '4px',
+              backgroundColor: 'white'
+            }}
+          />
+        </div>
+
+        {/* Status Filter */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            fontSize: '12px', 
+            fontWeight: '500', 
+            color: '#374151', 
+            marginBottom: '4px' 
+          }}>
+            Status
+          </label>
+          <select
+            value={filters.status}
+            onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid #d1d5db',
+              borderRadius: '4px',
+              backgroundColor: 'white'
+            }}
+          >
+            <option value="">All Statuses</option>
+            <option value="0">Backlog</option>
+            <option value="1">Planned</option>
+            <option value="2">In Progress</option>
+            <option value="3">Testing</option>
+            <option value="4">Done</option>
+          </select>
+        </div>
+
+        {/* Priority Filter */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            fontSize: '12px', 
+            fontWeight: '500', 
+            color: '#374151', 
+            marginBottom: '4px' 
+          }}>
+            Priority
+          </label>
+          <select
+            value={filters.priority}
+            onChange={(e) => setFilters(prev => ({ ...prev, priority: e.target.value }))}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid #d1d5db',
+              borderRadius: '4px',
+              backgroundColor: 'white'
+            }}
+          >
+            <option value="">All Priorities</option>
+            <option value="1">P1 (High)</option>
+            <option value="2">P2 (Medium)</option>
+            <option value="3">P3 (Low)</option>
+          </select>
+        </div>
+
+        {/* Sprint Filter */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            fontSize: '12px', 
+            fontWeight: '500', 
+            color: '#374151', 
+            marginBottom: '4px' 
+          }}>
+            Sprint
+          </label>
+          <select
+            value={filters.sprintId}
+            onChange={(e) => setFilters(prev => ({ ...prev, sprintId: e.target.value }))}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid #d1d5db',
+              borderRadius: '4px',
+              backgroundColor: 'white'
+            }}
+          >
+            <option value="">All Sprints</option>
+            <option value="unassigned">Unassigned</option>
+            {sprints.map(sprint => (
+              <option key={sprint.id} value={sprint.id}>
+                {sprint.name} ({sprint.status})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Has Goal Filter */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            fontSize: '12px', 
+            fontWeight: '500', 
+            color: '#374151', 
+            marginBottom: '4px' 
+          }}>
+            Goal Link
+          </label>
+          <select
+            value={filters.hasGoal}
+            onChange={(e) => setFilters(prev => ({ ...prev, hasGoal: e.target.value }))}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid #d1d5db',
+              borderRadius: '4px',
+              backgroundColor: 'white'
+            }}
+          >
+            <option value="">All Stories</option>
+            <option value="yes">Linked to Goal</option>
+            <option value="no">Not Linked</option>
+          </select>
+        </div>
+
+        {/* Reset Filters Button */}
+        <div>
+          <button
+            onClick={resetFilters}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: '500',
+              border: '1px solid #d1d5db',
+              borderRadius: '4px',
+              backgroundColor: 'white',
+              color: '#374151',
+              cursor: 'pointer',
+              width: '100%'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#f9fafb';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'white';
+            }}
+          >
+            Reset Filters
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'flex' }}>
@@ -647,9 +934,26 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         letterSpacing: '0.05em',
                         borderRight: '1px solid #f3f4f6',
                         width: column.width,
+                        cursor: 'pointer',
+                        position: 'relative',
+                        userSelect: 'none'
+                      }}
+                      onClick={() => handleSort(column.key)}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
                       }}
                     >
-                      {column.label}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        {column.label}
+                        {sortConfig.key === column.key && (
+                          <span style={{ fontSize: '10px', color: '#374151' }}>
+                            {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
                     </th>
                   ))}
                   <th style={{
@@ -668,10 +972,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
               </thead>
               <tbody>
                 <SortableContext 
-                  items={tableRows.map(row => row.id)}
+                  items={sortedRows.map(row => row.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  {tableRows.map((story, index) => (
+                  {sortedRows.map((story, index) => (
                     <SortableRow
                       key={story.id}
                       story={story}

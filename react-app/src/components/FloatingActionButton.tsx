@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Alert, ButtonGroup } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
@@ -9,6 +9,18 @@ import '../styles/MaterialDesign.css';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
+}
+
+interface Goal {
+  id: string;
+  title: string;
+  theme: string;
+}
+
+interface Sprint {
+  id: string;
+  name: string;
+  status: string;
 }
 
 const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportClick }) => {
@@ -22,10 +34,14 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     description: '',
     theme: 'Growth',
     effort: 'M',
-    priority: 'med'
+    priority: 'med',
+    goalId: '',
+    sprintId: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [sprints, setSprints] = useState<Sprint[]>([]);
 
   const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
   const efforts = [
@@ -33,6 +49,64 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     { value: 'M', label: 'Medium (30-60 min)', minutes: 45 },
     { value: 'L', label: 'Large (1-2 hours)', minutes: 90 }
   ];
+
+  // Load goals and sprints when component mounts or when quickAddType changes to 'story'
+  useEffect(() => {
+    const loadGoalsAndSprints = async () => {
+      if (!currentUser || quickAddType !== 'story') return;
+
+      try {
+        console.log('📊 FloatingActionButton: Loading goals and sprints for story creation', {
+          action: 'load_goals_sprints_start',
+          user: currentUser.uid,
+          persona: currentPersona
+        });
+
+        // Load goals
+        const goalsQuery = query(
+          collection(db, 'goals'),
+          where('ownerUid', '==', currentUser.uid),
+          orderBy('priority', 'desc')
+        );
+        const goalsSnapshot = await getDocs(goalsQuery);
+        const goalsData = goalsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          title: doc.data().title,
+          theme: doc.data().theme
+        }));
+
+        // Load sprints
+        const sprintsQuery = query(
+          collection(db, 'sprints'),
+          where('ownerUid', '==', currentUser.uid),
+          orderBy('startDate', 'desc')
+        );
+        const sprintsSnapshot = await getDocs(sprintsQuery);
+        const sprintsData = sprintsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name,
+          status: doc.data().status
+        }));
+
+        setGoals(goalsData);
+        setSprints(sprintsData);
+
+        console.log('✅ FloatingActionButton: Goals and sprints loaded successfully', {
+          action: 'load_goals_sprints_success',
+          goalsCount: goalsData.length,
+          sprintsCount: sprintsData.length
+        });
+
+      } catch (error) {
+        console.error('❌ FloatingActionButton: Failed to load goals and sprints', {
+          action: 'load_goals_sprints_error',
+          error: error.message
+        });
+      }
+    };
+
+    loadGoalsAndSprints();
+  }, [currentUser, currentPersona, quickAddType]);
 
   const handleQuickAdd = async () => {
     if (!currentUser || !quickAddData.title.trim()) return;
@@ -116,7 +190,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         const storyData = {
           ...baseData,
           ref: storyRef,
-          goalId: '', // Will need to be linked later
+          goalId: quickAddData.goalId || '',
+          sprintId: quickAddData.sprintId || '',
           priority: quickAddData.priority,
           points: 3,
           status: 'backlog',
@@ -185,7 +260,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       }
 
       setSubmitResult(`✅ ${quickAddType.charAt(0).toUpperCase() + quickAddType.slice(1)} created successfully!`);
-      setQuickAddData({ title: '', description: '', theme: 'Growth', effort: 'M', priority: 'med' });
+      setQuickAddData({ title: '', description: '', theme: 'Growth', effort: 'M', priority: 'med', goalId: '', sprintId: '' });
       
       // Auto-close after success
       setTimeout(() => {
@@ -306,6 +381,46 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                   ))}
                 </Form.Select>
               </Form.Group>
+            )}
+
+            {quickAddType === 'story' && (
+              <>
+                <Form.Group className="mb-3">
+                  <Form.Label>Link to Goal</Form.Label>
+                  <Form.Select
+                    value={quickAddData.goalId}
+                    onChange={(e) => setQuickAddData({ ...quickAddData, goalId: e.target.value })}
+                  >
+                    <option value="">Select a goal (optional)</option>
+                    {goals.map(goal => (
+                      <option key={goal.id} value={goal.id}>
+                        {goal.title} ({goal.theme})
+                      </option>
+                    ))}
+                  </Form.Select>
+                  <Form.Text className="text-muted">
+                    Stories linked to goals contribute to goal progress
+                  </Form.Text>
+                </Form.Group>
+
+                <Form.Group className="mb-3">
+                  <Form.Label>Assign to Sprint</Form.Label>
+                  <Form.Select
+                    value={quickAddData.sprintId}
+                    onChange={(e) => setQuickAddData({ ...quickAddData, sprintId: e.target.value })}
+                  >
+                    <option value="">No sprint (backlog)</option>
+                    {sprints.map(sprint => (
+                      <option key={sprint.id} value={sprint.id}>
+                        {sprint.name} ({sprint.status})
+                      </option>
+                    ))}
+                  </Form.Select>
+                  <Form.Text className="text-muted">
+                    Assign to a sprint for sprint planning
+                  </Form.Text>
+                </Form.Group>
+              </>
             )}
 
             {quickAddType === 'task' && (

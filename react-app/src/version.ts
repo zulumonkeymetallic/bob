@@ -1,11 +1,11 @@
-// Version tracking for cache busting - v3.5.3 Enhanced Story Table Integration & Console Logging
-export const VERSION = 'v3.5.3';
+// Version tracking for cache busting - v3.5.4 Enhanced Story Management & Advanced Filtering
+export const VERSION = 'v3.5.4';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Story Table Integration & Enhanced Logging`);
-console.log(`🎯 Features: Modern Stories Table Consistency, Enhanced Console Logging, Edit Modal Parity`);
-console.log(`🚀 Architecture: v3.5.3 with Complete Goals-Stories Integration`);
+console.log(`✅ Status: Enhanced Story Management & Advanced Filtering`);
+console.log(`🎯 Features: FloatingActionButton Goal/Sprint Linking, Advanced Story Table Filtering, Sortable Headers`);
+console.log(`🚀 Architecture: v3.5.4 with Comprehensive Story Management Enhancement`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force browser cache refresh and version notification
