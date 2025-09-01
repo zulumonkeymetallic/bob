@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const TaskListView: React.FC = () => {
   const { currentUser } = useAuth();
@@ -132,7 +133,7 @@ const TaskListView: React.FC = () => {
 
   // Apply filters to tasks
   const filteredTasks = tasks.filter(task => {
-    if (filterStatus !== 'all' && task.status !== filterStatus) return false;
+    if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -140,9 +141,9 @@ const TaskListView: React.FC = () => {
   // Get counts for dashboard cards
   const taskCounts = {
     total: filteredTasks.length,
-    planned: filteredTasks.filter(t => t.status === 'planned').length,
-    inProgress: filteredTasks.filter(t => t.status === 'in_progress').length,
-    done: filteredTasks.filter(t => t.status === 'done').length
+    planned: filteredTasks.filter(t => isStatus(t.status, 'planned')).length,
+    inProgress: filteredTasks.filter(t => isStatus(t.status, 'in_progress')).length,
+    done: filteredTasks.filter(t => isStatus(t.status, 'done')).length
   };
 
   return (

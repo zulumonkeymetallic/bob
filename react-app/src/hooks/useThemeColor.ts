@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import type { ThemeSettings } from '../types/v3.0.8-types';
 import { Goal, Story, Task } from '../types';
+import { getThemeName } from '../utils/statusHelpers';
 
 // Default theme colors following the v3.0.8 spec
 const DEFAULT_THEMES: ThemeSettings['themes'] = {
@@ -148,7 +149,7 @@ async function resolveThemeId(entity: UseThemeColorProps['entity'], currentUser:
         
         if (storyDoc.exists()) {
           const storyData = storyDoc.data() as Story;
-          if (storyData.theme) return storyData.theme;
+          if (storyData.theme) return getThemeName(storyData.theme);
           if (storyData.goalId) {
             // Get the goal
             const goalDoc = await import('firebase/firestore').then(({ getDoc, doc }) => 
@@ -157,7 +158,7 @@ async function resolveThemeId(entity: UseThemeColorProps['entity'], currentUser:
             
             if (goalDoc.exists()) {
               const goalData = goalDoc.data() as Goal;
-              if (goalData.theme) return goalData.theme;
+              if (goalData.theme) return getThemeName(goalData.theme);
             }
           }
         }
@@ -171,7 +172,7 @@ async function resolveThemeId(entity: UseThemeColorProps['entity'], currentUser:
         
         if (goalDoc.exists()) {
           const goalData = goalDoc.data() as Goal;
-          if (goalData.theme) return goalData.theme;
+          if (goalData.theme) return getThemeName(goalData.theme);
         }
       }
     } catch (error) {

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, ProgressBar, Badge, Button, Alert } from 'react-bootstrap';
 import { fetchProjectStatus, ProjectStats } from '../services/dataService';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 export interface FeatureStatus {
   category: string;

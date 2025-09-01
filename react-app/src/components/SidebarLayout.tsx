@@ -8,6 +8,7 @@ import { useTestMode } from '../contexts/TestModeContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { VERSION } from '../version';
 import SprintSelector from './SprintSelector';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -97,8 +98,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     }
   ];
 
-  const handleNavigation = (path: string) => {
-    console.log('🔀 BOB v3.1.2: Navigating to:', path);
+    const handleNavigation = (path: string) => {
+    console.log('🔀 BOB v3.1.4: COMPLETE NAVIGATION REBUILD - Navigating to:', path);
     console.log('🔀 Current URL:', window.location.pathname);
     console.log('🔀 React Router location:', location.pathname);
     
@@ -112,40 +113,43 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       additionalData: { 
         from: location.pathname,
         to: path,
-        action: 'sidebar_navigation'
+        action: 'sidebar_navigation',
+        timestamp: new Date().toISOString()
       }
     });
     
-    // FORCE NAVIGATION - Always clear cache and reload component
-    console.log('🔀 FORCE NAVIGATION: Clearing location state and forcing navigation');
+    // COMPLETE NAVIGATION REBUILD - Multiple fallback strategies
+    console.log('🔀 STRATEGY 1: React Router navigate with state reset');
     
-    // Force a hard navigation by going to a different route first then to target
-    if (location.pathname === path) {
-      console.log('🔀 Same path - using dummy redirect to force reload');
-      navigate('/');
-      setTimeout(() => {
-        navigate(path, { replace: true });
-      }, 10);
-    } else {
-      // Force a complete navigation refresh
+    // Close sidebar immediately
+    setShowSidebar(false);
+    
+    // Strategy 1: Try React Router with forced state
+    try {
       navigate(path, { 
-        replace: false,
-        state: { forceRefresh: Date.now() }
+        replace: true,
+        state: { 
+          forceRefresh: Date.now(),
+          timestamp: new Date().toISOString(),
+          source: 'sidebar_navigation'
+        }
       });
+      
+      // Strategy 2: If same path, use window location
+      setTimeout(() => {
+        if (window.location.pathname !== path) {
+          console.log('🔀 STRATEGY 2: Window location redirect');
+          window.location.href = window.location.origin + path;
+        }
+      }, 100);
+      
+    } catch (error) {
+      console.error('🔀 Navigation error, using fallback:', error);
+      // Strategy 3: Direct window location as fallback
+      window.location.href = window.location.origin + path;
     }
     
-    setShowSidebar(false);
-    console.log('🔀 Navigation triggered, sidebar closed, force refresh initiated');
-    
-    // Extended delay to ensure navigation completes with state clearing
-    setTimeout(() => {
-      console.log('🔀 Post-navigation check:', window.location.pathname);
-      // Force a page refresh if navigation seems stuck
-      if (window.location.pathname !== path && location.pathname !== path) {
-        console.log('🔀 Navigation appears stuck, forcing window reload');
-        window.location.href = window.location.origin + path;
-      }
-    }, 200);
+    console.log('🔀 Navigation triggered with multi-strategy approach');
   };
 
   const toggleGroup = (groupLabel: string) => {

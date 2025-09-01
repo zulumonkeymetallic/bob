@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
 import { collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface CalendarEvent {
   id: string;

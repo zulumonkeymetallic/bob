@@ -6,6 +6,8 @@ import { db } from '../firebase';
 import { Goal, Story, Task, Sprint } from '../types';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { ChoiceHelper } from '../config/choices';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 
 interface TestData {
   goals: Goal[];
@@ -416,8 +418,8 @@ const ComprehensiveTest: React.FC = () => {
                             <h6 className="mb-0">To Do</h6>
                           </div>
                           <div className="card-body">
-                            <SortableContext items={testData.tasks.filter(t => t.status === 'todo').map(t => t.id)} strategy={verticalListSortingStrategy}>
-                              {testData.tasks.filter(t => t.status === 'todo').map(task => (
+                            <SortableContext items={testData.tasks.filter(t => t.status === 0).map(t => t.id)} strategy={verticalListSortingStrategy}>
+                              {testData.tasks.filter(t => t.status === 0).map(task => (
                                 <div key={task.id} className="card mb-2">
                                   <div className="card-body p-2">
                                     <small>{task.title}</small>
@@ -434,8 +436,8 @@ const ComprehensiveTest: React.FC = () => {
                             <h6 className="mb-0">In Progress</h6>
                           </div>
                           <div className="card-body">
-                            <SortableContext items={testData.tasks.filter(t => t.status === 'in-progress').map(t => t.id)} strategy={verticalListSortingStrategy}>
-                              {testData.tasks.filter(t => t.status === 'in-progress').map(task => (
+                            <SortableContext items={testData.tasks.filter(t => t.status === 1).map(t => t.id)} strategy={verticalListSortingStrategy}>
+                              {testData.tasks.filter(t => t.status === 1).map(task => (
                                 <div key={task.id} className="card mb-2">
                                   <div className="card-body p-2">
                                     <small>{task.title}</small>
@@ -452,8 +454,8 @@ const ComprehensiveTest: React.FC = () => {
                             <h6 className="mb-0">Done</h6>
                           </div>
                           <div className="card-body">
-                            <SortableContext items={testData.tasks.filter(t => t.status === 'done').map(t => t.id)} strategy={verticalListSortingStrategy}>
-                              {testData.tasks.filter(t => t.status === 'done').map(task => (
+                            <SortableContext items={testData.tasks.filter(t => t.status === 2).map(t => t.id)} strategy={verticalListSortingStrategy}>
+                              {testData.tasks.filter(t => t.status === 2).map(task => (
                                 <div key={task.id} className="card mb-2">
                                   <div className="card-body p-2">
                                     <small>{task.title}</small>

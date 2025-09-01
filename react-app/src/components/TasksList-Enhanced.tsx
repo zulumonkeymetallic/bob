@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTim
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 
 interface TaskWithContext extends Task {
   referenceNumber?: string;
@@ -169,11 +170,11 @@ const TasksList: React.FC = () => {
     let filtered = tasks;
 
     if (filters.status) {
-      filtered = filtered.filter(task => task.status === filters.status);
+      filtered = filtered.filter(task => isStatus(task.status, filters.status));
     }
 
     if (filters.priority) {
-      filtered = filtered.filter(task => task.priority === filters.priority);
+      filtered = filtered.filter(task => isPriority(task.priority, filters.priority));
     }
 
     if (filters.effort) {
@@ -477,8 +478,8 @@ const TasksList: React.FC = () => {
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
                   <Dropdown>
-                    <Dropdown.Toggle as={Badge} bg={getBadgeVariant(task.status)} style={{ cursor: 'pointer' }}>
-                      {task.status.replace('-', ' ').toUpperCase()}
+                    <Dropdown.Toggle as={Badge} bg={getBadgeVariant(getStatusName(task.status))} style={{ cursor: 'pointer' }}>
+                      {getStatusName(task.status).replace('-', ' ').toUpperCase()}
                     </Dropdown.Toggle>
                     <Dropdown.Menu>
                       <Dropdown.Item onClick={() => handleQuickStatusChange(task.id, 'todo')}>
@@ -498,8 +499,8 @@ const TasksList: React.FC = () => {
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
                   <Dropdown>
-                    <Dropdown.Toggle as={Badge} bg={getPriorityColor(task.priority)} style={{ cursor: 'pointer' }}>
-                      {task.priority.toUpperCase()}
+                    <Dropdown.Toggle as={Badge} bg={getPriorityColor(getPriorityName(task.priority))} style={{ cursor: 'pointer' }}>
+                      {getPriorityName(task.priority).toUpperCase()}
                     </Dropdown.Toggle>
                     <Dropdown.Menu>
                       <Dropdown.Item onClick={() => handleQuickPriorityChange(task.id, 'high')}>

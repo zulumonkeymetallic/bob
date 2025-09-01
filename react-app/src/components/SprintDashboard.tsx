@@ -5,6 +5,8 @@ import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Task, Goal, Sprint } from '../types';
+import { ChoiceHelper, StoryStatus } from '../config/choices';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface SprintMetrics {
   totalStories: number;
@@ -147,9 +149,9 @@ const SprintDashboard: React.FC = () => {
       
       // Calculate sprint metrics
       const totalStories = storiesData.length;
-      const activeStories = storiesData.filter(s => s.status === 'active').length;
-      const doneStories = storiesData.filter(s => s.status === 'done').length;
-      const defectStories = storiesData.filter(s => s.status === 'defect').length;
+      const activeStories = storiesData.filter(s => s.status === StoryStatus.IN_PROGRESS || s.status === StoryStatus.PLANNED).length;
+      const doneStories = storiesData.filter(s => s.status === StoryStatus.DONE).length;
+      const defectStories = 0; // No defect status in new system
       
       // Calculate theme progress
       const themeProgress: { [theme: string]: { completed: number; total: number } } = {};
@@ -159,7 +161,7 @@ const SprintDashboard: React.FC = () => {
             themeProgress[story.theme] = { completed: 0, total: 0 };
           }
           themeProgress[story.theme].total++;
-          if (story.status === 'done') {
+          if (story.status === StoryStatus.DONE) {
             themeProgress[story.theme].completed++;
           }
         }
@@ -177,7 +179,7 @@ const SprintDashboard: React.FC = () => {
       
       Object.keys(goalStories).forEach(goalId => {
         const stories = goalStories[goalId];
-        const completed = stories.filter(s => s.status === 'done').length;
+        const completed = stories.filter(s => s.status === StoryStatus.DONE).length;
         goalProgress[goalId] = stories.length > 0 ? (completed / stories.length) * 100 : 0;
       });
       
@@ -223,7 +225,7 @@ const SprintDashboard: React.FC = () => {
       );
       
       const totalTasks = sprintTasks.length;
-      const completedTasks = sprintTasks.filter(t => t.status === 'done').length;
+      const completedTasks = sprintTasks.filter(t => t.status === 2).length; // Task Done = 2
       
       setStats(prev => ({
         ...prev,
@@ -282,7 +284,20 @@ const SprintDashboard: React.FC = () => {
     }
   };
 
-  const getThemeColor = (theme: string): string => {
+  const getThemeColor = (theme: string | number): string => {
+    // Handle both legacy string themes and new numeric themes
+    if (typeof theme === 'number') {
+      switch (theme) {
+        case 1: return 'success'; // Health
+        case 2: return 'primary'; // Growth
+        case 3: return 'warning'; // Wealth
+        case 4: return 'info';    // Tribe
+        case 5: return 'secondary'; // Home
+        default: return 'light';
+      }
+    }
+    
+    // Legacy string support
     switch (theme) {
       case 'Health': return 'success';
       case 'Growth': return 'primary';
@@ -293,7 +308,20 @@ const SprintDashboard: React.FC = () => {
     }
   };
 
-  const getStatusColor = (status: string): string => {
+  const getStatusColor = (status: string | number): string => {
+    // Handle both legacy string status and new numeric status
+    if (typeof status === 'number') {
+      switch (status) {
+        case 0: return 'secondary'; // Backlog
+        case 1: return 'info';      // Planned
+        case 2: return 'warning';   // In Progress
+        case 3: return 'primary';   // Testing
+        case 4: return 'success';   // Done
+        default: return 'secondary';
+      }
+    }
+    
+    // Legacy string support
     switch (status) {
       case 'done': return 'success';
       case 'active': return 'warning';
@@ -487,14 +515,14 @@ const SprintDashboard: React.FC = () => {
                                 {goal && (
                                   <div className="mb-1">
                                     <Badge bg={getThemeColor(goal.theme)} className="me-1">
-                                      {goal.theme}
+                                      {ChoiceHelper.getLabel('goal', 'theme', goal.theme)}
                                     </Badge>
                                     <small className="text-muted">{goal.title}</small>
                                   </div>
                                 )}
                               </div>
                               <div className="text-end">
-                                <Badge bg={getStatusColor(story.status)}>{story.status}</Badge>
+                                <Badge bg={ChoiceHelper.getColor('story', 'status', story.status)}>{ChoiceHelper.getLabel('story', 'status', story.status)}</Badge>
                                 <br />
                                 <Badge bg="secondary" className="mt-1">{story.points} pts</Badge>
                                 {stats.sprints.length > 1 && (
@@ -554,7 +582,7 @@ const SprintDashboard: React.FC = () => {
                               style={{ height: '8px' }}
                             />
                             <Badge bg={getThemeColor(goal.theme)} className="mt-1">
-                              {goal.theme}
+                              {ChoiceHelper.getLabel('goal', 'theme', goal.theme)}
                             </Badge>
                           </div>
                         );

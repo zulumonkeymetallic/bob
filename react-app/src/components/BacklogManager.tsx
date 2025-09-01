@@ -6,6 +6,8 @@ import { usePersona } from '../contexts/PersonaContext';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Goal, Sprint } from '../types';
+import { ChoiceHelper } from '../config/choices';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 
 
 interface BacklogItem {
@@ -189,8 +191,8 @@ const BacklogManager: React.FC = () => {
         description: item.description || '',
         goalId: goalId,
         status: 'backlog' as const,
-        priority: item.priority === 'high' ? 'P1' as const : 
-                 item.priority === 'medium' ? 'P2' as const : 'P3' as const,
+        priority: isPriority(item.priority, 'high') ? 3 : 
+                 isPriority(item.priority, 'medium') ? 2 : 1,
         points: 3, // Default points
         wipLimit: 3,
         orderIndex: Date.now(),
@@ -212,7 +214,20 @@ const BacklogManager: React.FC = () => {
     }
   };
 
-  const getThemeColor = (theme?: string): string => {
+  const getThemeColor = (theme?: string | number): string => {
+    // Handle both legacy string themes and new numeric themes
+    if (typeof theme === 'number') {
+      switch (theme) {
+        case 1: return 'success'; // Health
+        case 2: return 'primary'; // Growth
+        case 3: return 'warning'; // Wealth
+        case 4: return 'info';    // Tribe
+        case 5: return 'secondary'; // Home
+        default: return 'light';
+      }
+    }
+    
+    // Legacy string support
     switch (theme) {
       case 'Health': return 'success';
       case 'Growth': return 'primary';
@@ -265,7 +280,7 @@ const BacklogManager: React.FC = () => {
     const items = backlogs[type];
     return {
       total: items.length,
-      active: items.filter(i => i.status === 'active').length,
+      active: items.filter(i => isStatus(i.status, 'active')).length,
       completed: items.filter(i => i.status === 'completed').length,
       wishlist: items.filter(i => i.status === 'wishlist').length
     };
@@ -479,7 +494,7 @@ const BacklogManager: React.FC = () => {
                                       <div className="d-flex justify-content-between align-items-center">
                                         <span>{goal.title}</span>
                                         <Badge bg={getThemeColor(goal.theme)} className="ms-1">
-                                          {goal.theme}
+                                          {ChoiceHelper.getLabel('goal', 'theme', goal.theme)}
                                         </Badge>
                                       </div>
                                     </div>
@@ -585,7 +600,7 @@ const BacklogManager: React.FC = () => {
                                       <div className="d-flex justify-content-between align-items-center">
                                         <span>{goal.title}</span>
                                         <Badge bg={getThemeColor(goal.theme)} className="ms-1">
-                                          {goal.theme}
+                                          {ChoiceHelper.getLabel('goal', 'theme', goal.theme)}
                                         </Badge>
                                       </div>
                                     </Dropdown.Item>

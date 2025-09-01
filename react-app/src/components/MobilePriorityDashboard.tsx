@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/f
 import { useAuth } from '../contexts/AuthContext';
 import { useDeviceInfo } from '../utils/deviceDetection';
 import { Task, Story } from '../types';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 
 interface MobilePriorityDashboardProps {
   selectedDate?: Date;
@@ -56,9 +57,9 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
     };
   }, [currentUser]);
 
-  const toggleTaskComplete = async (taskId: string, currentStatus: string) => {
+  const toggleTaskComplete = async (taskId: string, currentStatus: number) => {
     try {
-      const newStatus = currentStatus === 'done' ? 'planned' : 'done';
+      const newStatus = isStatus(currentStatus, 'done') ? 0 : 4; // 0=planned, 4=done
       await updateDoc(doc(db, 'tasks', taskId), {
         status: newStatus,
         updatedAt: new Date()
@@ -96,18 +97,18 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
     switch (filter) {
       case 'today':
         const today = new Date().toDateString();
-        return task.status !== 'done' && (task.dueDate ? new Date(task.dueDate).toDateString() === today : true);
+        return !isStatus(task.status, 'done') && (task.dueDate ? new Date(task.dueDate).toDateString() === today : true);
       case 'urgent':
-        return task.status !== 'done' && task.priority === 'high';
+        return !isStatus(task.status, 'done') && isPriority(task.priority, 'high');
       case 'completed':
-        return task.status === 'done';
+        return isStatus(task.status, 'done');
       default:
         return true;
     }
   });
 
   const urgentStories = stories.filter(story => 
-    story.priority === 'P1' && story.status === 'active'
+    isPriority(story.priority, 'High') && isStatus(story.status, 'active')
   );
 
   if (!deviceInfo.isMobile) {
@@ -191,12 +192,12 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
             {filteredTasks.map(task => (
               <ListGroup.Item
                 key={task.id}
-                className={`mobile-task-item d-flex align-items-start ${task.status === 'done' ? 'completed-task' : ''}`}
+                className={`mobile-task-item d-flex align-items-start ${isStatus(task.status, 'done') ? 'completed-task' : ''}`}
                 action
                 onClick={() => toggleTaskComplete(task.id!, task.status)}
               >
                 <div className="me-3 mt-1">
-                  {task.status === 'done' ? (
+                  {isStatus(task.status, 'done') ? (
                     <Check2Square className="text-success" size={20} />
                   ) : (
                     <Square className="text-muted" size={20} />
@@ -205,7 +206,7 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
                 
                 <div className="flex-grow-1">
                   <div className="d-flex align-items-center mb-1">
-                    <span className={`task-title ${task.status === 'done' ? 'text-decoration-line-through text-muted' : ''}`}>
+                    <span className={`task-title ${isStatus(task.status, 'done') ? 'text-decoration-line-through text-muted' : ''}`}>
                       {task.title}
                     </span>
                   </div>
@@ -220,11 +221,11 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
                   
                   <div className="d-flex align-items-center">
                     <Badge 
-                      bg={getPriorityColor(task.priority)} 
+                      bg={getPriorityColor(getPriorityName(task.priority))} 
                       className="me-2"
                       style={{ fontSize: '0.7rem' }}
                     >
-                      {getPriorityIcon(task.priority)}
+                      {getPriorityIcon(getPriorityName(task.priority))}
                       {task.priority}
                     </Badge>
                     
@@ -246,15 +247,15 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
         <Card.Body className="p-2">
           <div className="row text-center">
             <div className="col-4">
-              <div className="text-primary fw-bold">{tasks.filter(t => t.status !== 'done').length}</div>
+              <div className="text-primary fw-bold">{tasks.filter(t => !isStatus(t.status, 'done')).length}</div>
               <small className="text-muted">Pending</small>
             </div>
             <div className="col-4">
-              <div className="text-success fw-bold">{tasks.filter(t => t.status === 'done').length}</div>
+              <div className="text-success fw-bold">{tasks.filter(t => isStatus(t.status, 'done')).length}</div>
               <small className="text-muted">Done</small>
             </div>
             <div className="col-4">
-              <div className="text-warning fw-bold">{tasks.filter(t => t.priority === 'high' && t.status !== 'done').length}</div>
+              <div className="text-warning fw-bold">{tasks.filter(t => isPriority(t.priority, 'high') && !isStatus(t.status, 'done')).length}</div>
               <small className="text-muted">Urgent</small>
             </div>
           </div>

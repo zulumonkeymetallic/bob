@@ -27,12 +27,10 @@ import {
 } from 'lucide-react';
 import { Task, Story, Goal, Sprint } from '../types';
 
-interface TaskTableRow extends Omit<Task, 'priority'> {
+interface TaskTableRow extends Task {
   storyTitle?: string;
   goalTitle?: string;
   sprintName?: string;
-  theme?: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
-  priority: 'low' | 'med' | 'high';
   sortOrder: number;
 }
 
@@ -396,7 +394,6 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   // Convert tasks to table rows with sort order
   const tableRows: TaskTableRow[] = tasks.map((task, index) => ({
     ...task,
-    priority: task.priority as 'low' | 'med' | 'high',
     sortOrder: index,
   }));
 

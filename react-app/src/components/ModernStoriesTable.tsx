@@ -48,6 +48,8 @@ interface ModernStoriesTableProps {
   onStoryUpdate: (storyId: string, updates: Partial<Story>) => Promise<void>;
   onStoryDelete: (storyId: string) => Promise<void>;
   onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
+  onStoryAdd: (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
+  goalId: string;
 }
 
 const defaultColumns: Column[] = [
@@ -376,6 +378,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onStoryUpdate,
   onStoryDelete,
   onStoryPriorityChange,
+  onStoryAdd,
+  goalId,
 }) => {
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);

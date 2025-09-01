@@ -4,6 +4,7 @@ import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestor
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Sprint } from '../types';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
@@ -47,7 +48,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
 
         // Auto-select active sprint if none selected
         if (!selectedSprintId && sprintData.length > 0) {
-          const activeSprint = sprintData.find(sprint => sprint.status === 'active');
+          const activeSprint = sprintData.find(sprint => isStatus(sprint.status, 'active'));
           if (activeSprint) {
             onSprintChange(activeSprint.id);
           }
@@ -132,8 +133,8 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
                     {new Date(sprint.endDate).toLocaleDateString()}
                   </small>
                   <span className={`badge ${
-                    sprint.status === 'active' ? 'bg-success' : 
-                    sprint.status === 'planned' ? 'bg-warning' : 'bg-secondary'
+                    isStatus(sprint.status, 'active') ? 'bg-success' : 
+                    isStatus(sprint.status, 'planned') ? 'bg-warning' : 'bg-secondary'
                   }`}>
                     {sprint.status}
                   </span>

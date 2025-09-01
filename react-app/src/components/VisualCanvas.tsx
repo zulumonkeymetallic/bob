@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Goal, Story, Task } from '../types';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface CanvasNode {
   id: string;
@@ -103,15 +104,15 @@ const VisualCanvas: React.FC = () => {
 
     // Filter data based on view mode
     const filteredGoals = viewMode === 'active-only' 
-      ? goals.filter(g => g.status === 'Work in Progress')
+      ? goals.filter(g => isStatus(g.status, 'Work in Progress'))
       : goals;
 
     const filteredStories = viewMode === 'active-only'
-      ? stories.filter(s => s.status === 'active')
+      ? stories.filter(s => isStatus(s.status, 'active'))
       : stories;
 
     const filteredTasks = viewMode === 'active-only'
-      ? tasks.filter(t => t.status === 'in_progress')
+      ? tasks.filter(t => isStatus(t.status, 'in_progress'))
       : tasks;
 
     // Create goal nodes
@@ -226,10 +227,10 @@ const VisualCanvas: React.FC = () => {
         return themeColors[goal.theme] || '#6c757d';
       case 'story':
         const story = node.data as Story;
-        return story.status === 'done' ? '#28a745' : story.status === 'active' ? '#007bff' : '#6c757d';
+        return isStatus(story.status, 'done') ? '#28a745' : isStatus(story.status, 'active') ? '#007bff' : '#6c757d';
       case 'task':
         const task = node.data as Task;
-        return task.status === 'done' ? '#28a745' : task.status === 'in_progress' ? '#007bff' : '#6c757d';
+        return isStatus(task.status, 'done') ? '#28a745' : isStatus(task.status, 'in_progress') ? '#007bff' : '#6c757d';
       default:
         return '#6c757d';
     }
@@ -398,9 +399,9 @@ const VisualCanvas: React.FC = () => {
                 height: '8px', 
                 borderRadius: '50%',
                 backgroundColor: (() => {
-                  if (node.type === 'goal') return (node.data as Goal).status === 'Work in Progress' ? '#00ff00' : '#ffff00';
-                  if (node.type === 'story') return (node.data as Story).status === 'done' ? '#00ff00' : '#ffff00';
-                  return (node.data as Task).status === 'done' ? '#00ff00' : '#ffff00';
+                  if (node.type === 'goal') return isStatus((node.data as Goal).status, 'Work in Progress') ? '#00ff00' : '#ffff00';
+                  if (node.type === 'story') return isStatus((node.data as Story).status, 'done') ? '#00ff00' : '#ffff00';
+                  return isStatus((node.data as Task).status, 'done') ? '#00ff00' : '#ffff00';
                 })()
               }} />
             </div>

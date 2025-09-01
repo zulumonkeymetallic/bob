@@ -5,6 +5,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import ModernPersonalListsTable from './ModernPersonalListsTable';
+import { isStatus, isTheme } from '../utils/statusHelpers';
 
 // Define PersonalItem interface locally
 interface PersonalItem {
@@ -107,9 +108,9 @@ const PersonalListsManagement: React.FC = () => {
   // Get counts for dashboard cards
   const itemCounts = {
     total: filteredItems.length,
-    todo: filteredItems.filter(i => i.status === 'todo').length,
-    inProgress: filteredItems.filter(i => i.status === 'in-progress').length,
-    done: filteredItems.filter(i => i.status === 'done').length
+    todo: filteredItems.filter(i => isStatus(i.status, 'todo')).length,
+    inProgress: filteredItems.filter(i => isStatus(i.status, 'in-progress')).length,
+    done: filteredItems.filter(i => isStatus(i.status, 'done')).length
   };
 
   return (

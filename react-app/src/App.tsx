@@ -17,7 +17,7 @@ import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
 import PersonalListsManagement from './components/PersonalListsManagement';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
-import ModernTableDemo from './components/ModernTableDemo';
+// import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
@@ -37,6 +37,7 @@ import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
+import MigrationManager from './components/MigrationManager';
 
 function App() {
   return (
@@ -142,6 +143,7 @@ function AppContent() {
   };
 
   return (
+    <MigrationManager>
       <SidebarLayout onSignOut={handleSignOut}>
         {/* Debug current route */}
         <div style={{
@@ -167,7 +169,7 @@ function AppContent() {
             <Route path="/tasks" element={<TasksList />} />
             <Route path="/task-list" element={<TaskListView />} />
             <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
-            <Route path="/modern-table" element={<ModernTableDemo />} />
+            {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
             <Route path="/kanban" element={<ModernKanbanPage />} />
             <Route path="/kanban-old" element={<KanbanPage />} />
             <Route path="/sprint-planning" element={<SprintPlannerMatrix />} />
@@ -210,6 +212,7 @@ function AppContent() {
           sprints={sprints}
         />
       </SidebarLayout>
+    </MigrationManager>
   );
 }
 

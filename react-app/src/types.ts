@@ -3,20 +3,20 @@ export interface Goal {
   persona: 'personal'; // Goals are personal-only per requirements
   title: string;
   description?: string;
-  theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
-  size: 'XS' | 'S' | 'M' | 'L' | 'XL';
+  theme: number; // 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
+  size: number; // 1=Small, 2=Medium, 3=Large
   timeToMasterHours: number;
   targetDate?: string;
-  confidence: number;
+  confidence: number; // 1=Low, 2=Medium, 3=High
   kpis?: Array<{name: string; target: number; unit: string}>;
-  status: 'Not Started' | 'Work in Progress' | 'Complete' | 'Paused';
+  status: number; // 0=New, 1=Work in Progress, 2=Complete, 3=Blocked, 4=Deferred
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
   // Legacy fields for backward compatibility
   dueDate?: number;
   category?: string;
-  priority?: 'low' | 'medium' | 'high';
+  priority?: number;
 }
 
 export interface Story {
@@ -26,9 +26,9 @@ export interface Story {
   title: string;
   description?: string;
   goalId: string;
-  theme?: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home'; // Inherited from goal
-  status: 'backlog' | 'active' | 'done' | 'defect';
-  priority: 'P1' | 'P2' | 'P3';
+  theme?: number; // Inherited from goal: 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
+  status: number; // 0=Backlog, 1=Planned, 2=In Progress, 3=Testing, 4=Done
+  priority: number; // 1=P1, 2=P2, 3=P3
   points: number;
   wipLimit: number;
   tags?: string[];
@@ -49,7 +49,7 @@ export interface Sprint {
   name: string;
   objective?: string;
   notes?: string;
-  status: 'planned' | 'active' | 'closed';
+  status: number; // 0=Planning, 1=Active, 2=Complete, 3=Cancelled
   startDate: number;
   endDate: number;
   planningDate: number;
@@ -66,7 +66,7 @@ export interface WorkProject {
   client?: string;
   team?: string;
   tags?: string[];
-  status: 'backlog' | 'active' | 'done';
+  status: number; // 0=Backlog, 1=Active, 2=Done
   wipLimit: number;
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
@@ -81,8 +81,8 @@ export interface Task {
   parentId: string;
   title: string;
   description?: string;
-  status: 'todo' | 'planned' | 'in-progress' | 'in_progress' | 'blocked' | 'done';
-  priority: 'low' | 'med' | 'high';
+  status: number; // 0=To Do, 1=In Progress, 2=Done, 3=Blocked
+  priority: number; // 1=High, 2=Medium, 3=Low
   effort: 'S' | 'M' | 'L';
   estimateMin: number;
   startDate?: number;
@@ -93,7 +93,7 @@ export interface Task {
   checklist?: Array<{text: string; done: boolean}>;
   attachments?: Array<{name: string; url: string}>;
   alignedToGoal: boolean;
-  theme?: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
+  theme?: number; // 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
   source: 'ios_reminder' | 'web' | 'ai' | 'gmail' | 'sheets';
   sourceRef?: string;
   aiSuggestedLinks?: Array<{goalId: string; storyId?: string; confidence: number; rationale: string}>;

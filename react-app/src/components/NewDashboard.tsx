@@ -8,6 +8,7 @@ import { Task, Goal, Story } from '../types';
 import FloatingActionButton from './FloatingActionButton';
 import ImportExportModal from './ImportExportModal';
 import '../styles/MaterialDesign.css';
+import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 
 const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -79,9 +80,9 @@ const Dashboard: React.FC = () => {
 
   const getTaskStats = () => {
     const total = tasks.length;
-    const inProgress = tasks.filter(t => t.status === 'in_progress').length;
-    const completed = tasks.filter(t => t.status === 'done').length;
-    const planned = tasks.filter(t => t.status === 'planned').length;
+    const inProgress = tasks.filter(t => isStatus(t.status, 'in_progress')).length;
+    const completed = tasks.filter(t => isStatus(t.status, 'done')).length;
+    const planned = tasks.filter(t => isStatus(t.status, 'planned')).length;
     
     return { total, inProgress, completed, planned };
   };
@@ -89,8 +90,8 @@ const Dashboard: React.FC = () => {
   const getThemeStats = () => {
     const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
     return themes.map(theme => {
-      const themeTasks = tasks.filter(t => t.theme === theme);
-      const completed = themeTasks.filter(t => t.status === 'done').length;
+      const themeTasks = tasks.filter(t => isTheme(t.theme, theme));
+      const completed = themeTasks.filter(t => isStatus(t.status, 'done')).length;
       const total = themeTasks.length;
       const progress = total > 0 ? (completed / total) * 100 : 0;
       
@@ -100,7 +101,7 @@ const Dashboard: React.FC = () => {
 
   const getGoalProgress = (goalId: string) => {
     const goalStories = stories.filter(s => s.goalId === goalId);
-    const completedStories = goalStories.filter(s => s.status === 'done').length;
+    const completedStories = goalStories.filter(s => isStatus(s.status, 'done')).length;
     const totalStories = goalStories.length;
     
     return totalStories > 0 ? (completedStories / totalStories) * 100 : 0;
@@ -108,12 +109,12 @@ const Dashboard: React.FC = () => {
 
   const getRecentTasks = () => {
     return tasks
-      .filter(t => t.status !== 'done')
+      .filter(t => !isStatus(t.status, 'done'))
       .sort((a, b) => {
         // Sort by priority and due date
         const priorityOrder = { high: 3, med: 2, low: 1 };
-        const aPriority = priorityOrder[a.priority as keyof typeof priorityOrder] || 1;
-        const bPriority = priorityOrder[b.priority as keyof typeof priorityOrder] || 1;
+        const aPriority = priorityOrder[getPriorityName(a.priority) as keyof typeof priorityOrder] || 1;
+        const bPriority = priorityOrder[getPriorityName(b.priority) as keyof typeof priorityOrder] || 1;
         
         if (aPriority !== bPriority) return bPriority - aPriority;
         
@@ -216,7 +217,7 @@ const Dashboard: React.FC = () => {
                     <div className="d-flex justify-content-between align-items-start mb-2">
                       <div>
                         <h6 className="md-subtitle-2 mb-1">{goal.title}</h6>
-                        <Badge className={`md-chip ${goal.theme.toLowerCase()}`}>
+                        <Badge className={`md-chip ${getThemeClass(goal.theme)}`}>
                           {goal.theme}
                         </Badge>
                       </div>
@@ -248,7 +249,7 @@ const Dashboard: React.FC = () => {
                       <div className="d-flex justify-content-between align-items-start mb-1">
                         <h6 className="md-subtitle-2 mb-0">{task.title}</h6>
                         <Badge 
-                          bg={task.priority === 'high' ? 'danger' : task.priority === 'med' ? 'warning' : 'secondary'}
+                          bg={isPriority(task.priority, 'high') ? 'danger' : isPriority(task.priority, 'med') ? 'warning' : 'secondary'}
                           className="ms-2"
                         >
                           {task.priority}
@@ -256,7 +257,7 @@ const Dashboard: React.FC = () => {
                       </div>
                       <div className="d-flex gap-2 align-items-center">
                         {task.theme && (
-                          <Badge className={`md-chip ${task.theme.toLowerCase()}`}>
+                          <Badge className={`md-chip ${getThemeClass(task.theme)}`}>
                             {task.theme}
                           </Badge>
                         )}
