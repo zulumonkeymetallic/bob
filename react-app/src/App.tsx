@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Button } from 'react-bootstrap';
 import { Routes, Route, BrowserRouter as Router, Navigate, useLocation } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import SprintDashboard from './components/SprintDashboard';
@@ -27,10 +26,9 @@ import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { TestModeProvider } from './contexts/TestModeContext';
-import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
-import { checkForUpdates, VERSION } from './version';
+import { checkForUpdates } from './version';
 import ComprehensiveTest from './components/ComprehensiveTest';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
 
@@ -45,6 +43,7 @@ import MobileView from './components/MobileView';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
+import TestLoginPanel from './components/TestLoginPanel';
 
 function App() {
   return (
@@ -129,12 +128,16 @@ function AppContent() {
   if (!currentUser) {
     return (
       <div className={`app-container ${theme} vh-100 d-flex justify-content-center align-items-center`}>
-        <div className="text-center">
-          <h1>Welcome to BOB</h1>
-          <p>Your personal productivity assistant.</p>
-          <Button variant="primary" size="lg" onClick={handleSignIn}>
-            Sign in with Google
-          </Button>
+        <div className="container">
+          <div className="row justify-content-center">
+            <div className="col-md-8 col-lg-6">
+              <div className="text-center mb-4">
+                <h1 className="mb-3">Welcome to BOB</h1>
+                <p className="text-muted">Your personal productivity assistant.</p>
+              </div>
+              <TestLoginPanel />
+            </div>
+          </div>
         </div>
       </div>
     );

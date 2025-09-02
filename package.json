@@ -1,7 +1,15 @@
 {
   "version": "3.1.3",
   "dependencies": {
+    "firebase-admin": "^13.5.0",
     "react-dnd": "^16.0.1",
     "react-dnd-html5-backend": "^16.0.1"
+  },
+  "devDependencies": {
+    "commander": "^12.0.0",
+    "chalk": "^4.1.2"
+  },
+  "scripts": {
+    "create-test-users": "node create-secure-test-users.js"
   }
 }

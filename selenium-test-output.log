@@ -1,53 +1,45 @@
-/Users/jim/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
-  warnings.warn(
 🚀 Starting BOB v3.5.0 Comprehensive Selenium Testing...
 📍 Test URL: https://bob20250810.web.app?test-login=ai-agent-token&test-mode=true
 🌐 Browser: Firefox (Headless)
 ✅ Firefox driver initialized successfully
 🔐 Phase 1: Testing Authentication...
-🐛 LOW DEFECT: CONSOLE_ACCESS_ERROR - Could not access console logs: Message: HTTP method not allowed
-
+🐛 LOW DEFECT: CONSOLE_ACCESS_ERROR - Could not access console logs: 'WebDriver' object has no attribute 'get_log'
 🐛 CRITICAL DEFECT: AUTHENTICATION_FAILURE - No authenticated user found - side door authentication failed
 🎯 Phase 2: Testing Goals Creation...
+🐛 HIGH DEFECT: ELEMENT_NOT_FOUND - Element not found: ('xpath', "//a[contains(@href, 'dashboard') or contains(text(), 'Dashboard')]")
 🐛 HIGH DEFECT: QUICK_ACTIONS_MISSING - QuickActionsPanel "Create Goal" button not found on Dashboard
 📖 Phase 3: Testing Stories Creation (P1 Fix Validation)...
-🐛 CRITICAL DEFECT: STORIES_CREATION_ERROR - Stories creation test failed: Message: Element <a class="w-100 btn btn-primary" href="/kanban"> could not be scrolled into view
-Stacktrace:
-RemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8
-WebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5
-ElementNotInteractableError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:368:5
-webdriverClickElement@chrome://remote/content/marionette/interaction.sys.mjs:165:11
-interaction.clickElement@chrome://remote/content/marionette/interaction.sys.mjs:134:11
-clickElement@chrome://remote/content/marionette/actors/MarionetteCommandsChild.sys.mjs:327:29
-receiveMessage@chrome://remote/content/marionette/actors/MarionetteCommandsChild.sys.mjs:210:31
-
+🐛 MEDIUM DEFECT: NAVIGATION_MISSING - Stories navigation link not found
 ✅ Phase 4: Testing Tasks Creation...
+🐛 HIGH DEFECT: ELEMENT_NOT_FOUND - Element not found: ('xpath', "//a[contains(@href, 'dashboard') or contains(text(), 'Dashboard')]")
 🐛 MEDIUM DEFECT: TASKS_BUTTON_MISSING - Create Task button not found in QuickActionsPanel
 🧭 Phase 5: Testing Navigation and UI...
    🔗 Testing navigation to Goals...
+🐛 MEDIUM DEFECT: NAVIGATION_MISSING - Navigation link for Goals not found
    🔗 Testing navigation to Stories...
 🐛 MEDIUM DEFECT: NAVIGATION_MISSING - Navigation link for Stories not found
    🔗 Testing navigation to Tasks...
 🐛 MEDIUM DEFECT: NAVIGATION_MISSING - Navigation link for Tasks not found
    🔗 Testing navigation to Dashboard...
+🐛 MEDIUM DEFECT: NAVIGATION_MISSING - Navigation link for Dashboard not found
 ⚡ Phase 6: Testing Performance...
-   ✅ Performance acceptable - Load: 883ms, DOM: 1ms
+   ✅ Performance acceptable - Load: 886ms, DOM: 0ms
 🎯 Phase 7: Testing New Features (v3.5.0)...
 🐛 HIGH DEFECT: NEW_FEATURE_MISSING_QUICKACTIONS - QuickActionsPanel not found on Dashboard - v3.5.0 feature missing
 🐛 MEDIUM DEFECT: NEW_FEATURE_MISSING_GOALVIZ - Goal Visualization link not found in navigation
 
 📋 Reports generated:
-   JSON: ./test-results/BOB_v3.5.0_SELENIUM_DEFECT_REPORT_2025-09-01T16-08-21.json
-   Markdown: ./test-results/BOB_v3.5.0_SELENIUM_DEFECT_REPORT_2025-09-01T16-08-21.md
+   JSON: ./test-results/BOB_v3.5.0_SELENIUM_DEFECT_REPORT_2025-09-02T10-25-28.json
+   Markdown: ./test-results/BOB_v3.5.0_SELENIUM_DEFECT_REPORT_2025-09-02T10-25-28.md
 
 📋 Test Results Summary:
    Tests Run: 7
    Tests Pass: 2
    Tests Fail: 5
-   Total Defects: 9
-   Critical: 2 🔴
-   High: 2 🟠
-   Medium: 4 🟡
+   Total Defects: 13
+   Critical: 1 🔴
+   High: 4 🟠
+   Medium: 7 🟡
    Low: 1 🟢
 
-❌ Testing completed with 2 critical defects
+❌ Testing completed with 1 critical defects
