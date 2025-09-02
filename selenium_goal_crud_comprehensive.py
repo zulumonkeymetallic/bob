@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class GoalCRUDTestSuite:
     """Comprehensive Goal CRUD Testing Suite with Enhanced Validation"""
     
-    def __init__(self, base_url: str = "http://localhost:3000", headless: bool = True):
+    def __init__(self, base_url: str = "https://bob20250810.web.app", headless: bool = True):
         self.base_url = base_url
         self.headless = headless
         self.driver = None
