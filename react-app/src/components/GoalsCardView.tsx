@@ -8,7 +8,6 @@ import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, limit, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
-import ModernStoriesTable from './ModernStoriesTable';
 import EditGoalModal from './EditGoalModal';
 import AddStoryModal from './AddStoryModal';
 import { ChoiceMigration } from '../config/migration';
@@ -35,8 +34,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState<Goal | null>(null);
   const [showAddStoryModal, setShowAddStoryModal] = useState<string | null>(null); // Store goalId
-  const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
-  const [goalStories, setGoalStories] = useState<{ [goalId: string]: Story[] }>({});
   const [latestActivities, setLatestActivities] = useState<{ [goalId: string]: any }>({});
   const [calendarSyncStatus, setCalendarSyncStatus] = useState<{ [goalId: string]: string }>({});
   const [isSchedulingGoal, setIsSchedulingGoal] = useState<string | null>(null);
@@ -58,22 +55,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     'Complete': '#2563eb',
     'Blocked': '#ef4444',
     'Deferred': '#f59e0b'
-  };
-
-  const handleGoalClick = (goal: Goal, event: React.MouseEvent) => {
-    // Don't expand if clicking on dropdown or other interactive elements
-    if ((event.target as HTMLElement).closest('.dropdown') || 
-        (event.target as HTMLElement).closest('button')) {
-      return;
-    }
-    
-    console.log('🎯 Toggling goal expansion:', goal.id);
-    if (expandedGoalId === goal.id) {
-      setExpandedGoalId(null);
-    } else {
-      setExpandedGoalId(goal.id);
-      loadStoriesForGoal(goal.id);
-    }
   };
 
   
@@ -117,82 +98,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       }
     } catch (error) {
       console.error('Error loading latest activity for goal:', goalId, error);
-    }
-  };
-
-  const loadStoriesForGoal = async (goalId: string) => {
-    if (!currentUser || goalStories[goalId]) return; // Don't reload if already loaded
-    
-    console.log('📚 Loading stories for goal:', goalId);
-    
-    const storiesQuery = query(
-      collection(db, 'stories'),
-      where('goalId', '==', goalId),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('orderIndex', 'asc')
-    );
-    
-    onSnapshot(storiesQuery, (snapshot) => {
-      const stories = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Story[];
-      
-      console.log(`📚 Loaded ${stories.length} stories for goal ${goalId}`);
-      setGoalStories(prev => ({
-        ...prev,
-        [goalId]: stories
-      }));
-    });
-  };
-
-  // Story CRUD operations
-  const handleStoryAdd = (goalId: string) => async (storyData: Omit<Story, 'id' | 'ref' | 'createdAt' | 'updatedAt'>) => {
-    if (!currentUser) return;
-    
-    try {
-      // Generate next reference number
-      const existingStories = goalStories[goalId] || [];
-      const existingRefs = existingStories.map(s => parseInt(s.ref.replace('ST', '')) || 0);
-      const nextRef = existingRefs.length > 0 ? Math.max(...existingRefs) + 1 : 1;
-      
-      const newStory = {
-        ...storyData,
-        ref: `ST${nextRef.toString().padStart(3, '0')}`,
-        ownerUid: currentUser.uid,
-        persona: 'personal' as const,
-        goalId: goalId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        orderIndex: (goalStories[goalId]?.length || 0) + 1,
-      };
-      
-      await addDoc(collection(db, 'stories'), newStory);
-      console.log('✅ Story added successfully');
-    } catch (error) {
-      console.error('❌ Error adding story:', error);
-    }
-  };
-
-  const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
-    try {
-      await updateDoc(doc(db, 'stories', storyId), {
-        ...updates,
-        updatedAt: new Date()
-      });
-      console.log('✅ Story updated successfully');
-    } catch (error) {
-      console.error('❌ Error updating story:', error);
-    }
-  };
-
-  const handleStoryDelete = async (storyId: string) => {
-    try {
-      await deleteDoc(doc(db, 'stories', storyId));
-      console.log('✅ Story deleted successfully');
-    } catch (error) {
-      console.error('❌ Error deleting story:', error);
     }
   };
 
@@ -389,7 +294,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 e.currentTarget.style.transform = 'translateY(0)';
                 e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
               }}
-              onClick={(e) => handleGoalClick(goal, e)}
             >
               {/* Theme Bar */}
               <div 
@@ -639,35 +543,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       <MessageCircle size={12} />
                       Activity
                     </Button>
-                    <Button
-                      variant="outline-secondary"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const isExpanding = expandedGoalId !== goal.id;
-                        console.log('🎯 GoalsCardView: Stories button clicked');
-                        console.log('🎯 Goal:', goal.id, goal.title);
-                        console.log('🎯 Action:', isExpanding ? 'EXPANDING' : 'COLLAPSING');
-                        console.log('🎯 Current stories count:', goalStories[goal.id]?.length || 0);
-                        console.log('🎯 User:', currentUser?.email);
-                        
-                        setExpandedGoalId(expandedGoalId === goal.id ? null : goal.id);
-                        if (expandedGoalId !== goal.id) {
-                          console.log('🎯 GoalsCardView: Loading stories for goal:', goal.id);
-                          loadStoriesForGoal(goal.id);
-                        }
-                      }}
-                      style={{ 
-                        fontSize: '12px',
-                        padding: '4px 8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}
-                    >
-                      {expandedGoalId === goal.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                      Stories ({goalStories[goal.id]?.length || 0})
-                    </Button>
                   </div>
                 </div>
               </Card.Body>
@@ -696,55 +571,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               </Alert>
             )}
 
-            {/* Expanded Stories Section */}
-            {expandedGoalId === goal.id && (
-              <Card style={{ 
-                marginTop: '8px',
-                border: 'none',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-                borderLeft: `4px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || '#6b7280'}`
-              }}>
-                <Card.Header style={{ 
-                  backgroundColor: '#f9fafb', 
-                  borderBottom: '1px solid #e5e7eb', 
-                  padding: '12px 20px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <h6 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#374151' }}>
-                    Stories for "{goal.title}"
-                  </h6>
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    style={{ 
-                      fontSize: '12px',
-                      padding: '4px 8px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                  >
-                    <Plus size={12} />
-                    Add Story
-                  </Button>
-                </Card.Header>
-                <Card.Body style={{ padding: 0 }}>
-                  <div style={{ maxHeight: '400px', overflow: 'auto' }}>
-                    <ModernStoriesTable
-                      stories={goalStories[goal.id] || []}
-                      goals={[goal]}
-                      onStoryUpdate={handleStoryUpdate}
-                      onStoryDelete={handleStoryDelete}
-                      onStoryPriorityChange={handleStoryPriorityChange}
-                      onStoryAdd={handleStoryAdd(goal.id)}
-                      goalId={goal.id}
-                    />
-                  </div>
-                </Card.Body>
-              </Card>
-            )}
           </Col>
         ))}
       </Row>
