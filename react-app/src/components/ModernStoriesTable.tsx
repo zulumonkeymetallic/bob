@@ -88,7 +88,8 @@ const defaultColumns: Column[] = [
     width: '15%', 
     visible: true, 
     editable: true, 
-    type: 'text' 
+    type: 'select',
+    options: [] // Will be populated dynamically with goal titles
   },
   { 
     key: 'status', 
@@ -305,6 +306,7 @@ interface SortableRowProps {
   columns: Column[];
   index: number;
   sprints: Sprint[];
+  goals: Goal[];
   onStoryUpdate: (storyId: string, updates: Partial<Story>) => Promise<void>;
   onStoryDelete: (storyId: string) => Promise<void>;
 }
@@ -314,6 +316,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   columns, 
   index, 
   sprints,
+  goals,
   onStoryUpdate, 
   onStoryDelete 
 }) => {
@@ -344,30 +347,37 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const handleCellEdit = (key: string, value: string) => {
     setEditingCell(key);
-    setEditValue(value || '');
+    // For goalTitle, we want to edit the goalId, so set editValue to the current goalId
+    if (key === 'goalTitle') {
+      setEditValue(story.goalId || '');
+    } else {
+      setEditValue(value || '');
+    }
   };
 
   const handleCellSave = async (key: string) => {
     try {
-      const oldValue = (story as any)[key]; // Store the original value
+      // For goalTitle editing, we're actually editing goalId
+      const actualKey = key === 'goalTitle' ? 'goalId' : key;
+      const oldValue = (story as any)[actualKey]; // Store the original value
       
       // Only proceed if the value actually changed
       if (oldValue !== editValue) {
-        const updates: Partial<Story> = { [key]: editValue };
+        const updates: Partial<Story> = { [actualKey]: editValue };
         await onStoryUpdate(story.id, updates);
         
         // Track the field change for activity stream
         trackFieldChange(
           story.id,
           'story',
-          key,
+          actualKey,
           oldValue,
           editValue,
           story.title,
           story.ref
         );
         
-        console.log(`🎯 Story field changed: ${key} from "${oldValue}" to "${editValue}" for story ${story.id}`);
+        console.log(`🎯 Story field changed: ${actualKey} from "${oldValue}" to "${editValue}" for story ${story.id}`);
       }
       
       setEditingCell(null);
@@ -415,6 +425,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
                     <option value="">No Sprint</option>
                     {sprints.map(sprint => (
                       <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+                    ))}
+                  </>
+                ) : column.key === 'goalTitle' ? (
+                  <>
+                    <option value="">Select Goal</option>
+                    {goals.map(goal => (
+                      <option key={goal.id} value={goal.id}>{goal.title}</option>
                     ))}
                   </>
                 ) : (
@@ -764,9 +781,24 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   console.log('🔍 ModernStoriesTable FILTERING:');
   console.log('📊 Input stories count:', stories.length);
   console.log('🎯 Goal ID filter:', goalId);
-  console.log('📝 All story goalIds:', stories.map(s => ({ id: s.id, goalId: s.goalId, title: s.title })));
+  console.log('🎯 Goal ID filter type:', typeof goalId);
+  console.log('📝 All story goalIds with types:', stories.map(s => ({ 
+    id: s.id, 
+    goalId: s.goalId, 
+    goalIdType: typeof s.goalId,
+    title: s.title,
+    matches: s.goalId === goalId
+  })));
   console.log('✅ After goalId filter:', filteredStories.length);
   console.log('📝 Filtered story details:', filteredStories.map(s => ({ id: s.id, goalId: s.goalId, title: s.title })));
+  
+  // Debug: Check if any stories have the matching goalId
+  const hasMatchingStories = stories.some(story => story.goalId === goalId);
+  console.log('🔍 Has stories with matching goalId:', hasMatchingStories);
+  
+  // Debug: Show all unique goalIds in stories
+  const uniqueGoalIds = [...new Set(stories.map(s => s.goalId))];
+  console.log('🎯 All unique goalIds in stories:', uniqueGoalIds);
   
   const tableRows: StoryTableRow[] = filteredStories.map((story, index) => {
     const goal = goals.find(g => g.id === story.goalId);
@@ -1250,6 +1282,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                       columns={columns}
                       index={index}
                       sprints={sprints}
+                      goals={goals}
                       onStoryUpdate={onStoryUpdate}
                       onStoryDelete={onStoryDelete}
                     />

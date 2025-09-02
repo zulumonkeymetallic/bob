@@ -119,6 +119,12 @@ const GoalsManagement: React.FC = () => {
   // Handler functions for ModernGoalsTable
   const handleGoalSelect = (goalId: string) => {
     console.log('🎯 Goal selected:', goalId);
+    console.log('🎯 Goal selected type:', typeof goalId);
+    console.log('🎯 Previous selectedGoalId:', selectedGoalId);
+    console.log('🎯 Previous selectedGoalId type:', typeof selectedGoalId);
+    console.log('🎯 Are they equal?:', goalId === selectedGoalId);
+    console.log('📊 Available stories for this goal:', stories.filter(s => s.goalId === goalId).length);
+    
     setSelectedGoalId(goalId === selectedGoalId ? null : goalId); // Toggle selection
   };
 
