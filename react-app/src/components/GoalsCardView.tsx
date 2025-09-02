@@ -218,22 +218,24 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
         const allocations: { [goalId: string]: number } = {};
 
         for (const goal of goals) {
-          // Query calendar blocks for this goal this week
+          // Query calendar blocks for this goal - simplified to avoid complex index
           const blocksQuery = query(
             collection(db, 'calendar_blocks'),
             where('ownerUid', '==', currentUser.uid),
-            where('goalId', '==', goal.id),
-            where('start', '>=', weekStart.getTime()),
-            where('start', '<=', weekEnd.getTime())
+            where('goalId', '==', goal.id)
           );
 
           const blocksSnapshot = await getDocs(blocksQuery);
           let totalMinutes = 0;
 
+          // Filter by date range in JavaScript to avoid complex Firestore index
           blocksSnapshot.docs.forEach(doc => {
             const block = doc.data();
             if (block.start && block.end) {
-              totalMinutes += (block.end - block.start) / (1000 * 60);
+              const blockStart = block.start;
+              if (blockStart >= weekStart.getTime() && blockStart <= weekEnd.getTime()) {
+                totalMinutes += (block.end - block.start) / (1000 * 60);
+              }
             }
           });
 
