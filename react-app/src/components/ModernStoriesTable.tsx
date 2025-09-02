@@ -20,7 +20,6 @@ import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import AddStoryModal from './AddStoryModal';
 import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -378,7 +377,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <button
-            onClick={() => {/* Handle edit modal */}}
+            onClick={() => handleCellEdit('title', story.title)}
             style={{
               color: '#2563eb',
               padding: '4px',
@@ -398,7 +397,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = '#2563eb';
             }}
-            title="Edit story"
+            title="Edit story title"
           >
             Edit
           </button>
@@ -446,7 +445,6 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentPersona } = usePersona();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
-  const [showAddStoryModal, setShowAddStoryModal] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
     columns: true,
     filters: false,
@@ -671,39 +669,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             {sortedRows.length} of {stories.length} stories • {visibleColumnsCount} columns visible
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {/* Add Story Button */}
-          <button
-            onClick={() => setShowAddStoryModal(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '8px 12px',
-              borderRadius: '6px',
-              fontSize: '14px',
-              fontWeight: '500',
-              transition: 'all 0.15s ease',
-              cursor: 'pointer',
-              border: '1px solid #059669',
-              backgroundColor: '#059669',
-              color: 'white',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#047857';
-              e.currentTarget.style.borderColor = '#047857';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = '#059669';
-              e.currentTarget.style.borderColor = '#059669';
-            }}
-          >
-            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add Story
-          </button>
-          <button
+        <button
           onClick={() => setShowConfig(!showConfig)}
           style={{
             display: 'flex',
@@ -733,7 +699,6 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           <Settings size={16} />
           {showConfig ? 'Hide Configuration' : 'Configure Table'}
         </button>
-        </div>
       </div>
 
       {/* Enhanced Filter Controls */}
@@ -1206,12 +1171,6 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           </div>
         </div>
       </div>
-      
-      {/* Add Story Modal */}
-      <AddStoryModal
-        show={showAddStoryModal}
-        onClose={() => setShowAddStoryModal(false)}
-      />
     </div>
   );
 };
