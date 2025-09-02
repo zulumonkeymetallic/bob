@@ -9,6 +9,7 @@ import { generateRef } from '../utils/referenceGenerator';
 interface AddStoryModalProps {
   onClose: () => void;
   show: boolean;
+  goalId?: string; // Optional goalId to pre-select the goal
 }
 
 interface Goal {
@@ -23,7 +24,7 @@ interface Sprint {
   status: string;
 }
 
-const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
+const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -31,13 +32,23 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show }) => {
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    goalId: '',
+    goalId: goalId || '', // Pre-select goal if provided
     sprintId: '',
     priority: 'P2',
     points: 3
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
+
+  // Update goalId when prop changes
+  useEffect(() => {
+    if (goalId) {
+      setFormData(prev => ({
+        ...prev,
+        goalId: goalId
+      }));
+    }
+  }, [goalId]);
 
   // Log modal open/close state changes
   useEffect(() => {
