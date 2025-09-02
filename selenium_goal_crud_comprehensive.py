@@ -90,7 +90,7 @@ class GoalCRUDTestSuite:
             except Exception as firefox_error:
                 logger.warning(f"Firefox setup failed: {firefox_error}")
                 
-                # Fallback to Chrome
+                # Fallback to Chrome with macOS support
                 chrome_options = ChromeOptions()
                 if self.headless:
                     chrome_options.add_argument('--headless')
@@ -98,6 +98,12 @@ class GoalCRUDTestSuite:
                 chrome_options.add_argument('--disable-dev-shm-usage')
                 chrome_options.add_argument('--window-size=1920,1080')
                 chrome_options.add_argument('--disable-gpu')
+                
+                # Set Chrome binary path for macOS if it exists
+                chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                if os.path.exists(chrome_path):
+                    chrome_options.binary_location = chrome_path
+                    logger.info(f"Using Chrome at: {chrome_path}")
                 
                 self.driver = webdriver.Chrome(options=chrome_options)
                 logger.info("✅ Chrome WebDriver initialized successfully")
