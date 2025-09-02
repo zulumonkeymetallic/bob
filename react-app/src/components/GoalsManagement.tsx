@@ -6,9 +6,10 @@ import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Goal } from '../types';
+import { Goal, Story } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import GoalsCardView from './GoalsCardView';
+import ModernStoriesTable from './ModernStoriesTable';
 import AddGoalModal from './AddGoalModal';
 import EditGoalModal from './EditGoalModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
@@ -18,10 +19,12 @@ const GoalsManagement: React.FC = () => {
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [storiesLoading, setStoriesLoading] = useState(true);
   const [showAddGoalModal, setShowAddGoalModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState<Goal | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'card'>('card');
@@ -36,6 +39,7 @@ const GoalsManagement: React.FC = () => {
     
     console.log('🎯 Loading goals data for user:', currentUser.email);
     setLoading(true);
+    setStoriesLoading(true);
     
     // Load goals data
     const goalsQuery = query(
@@ -45,7 +49,15 @@ const GoalsManagement: React.FC = () => {
       orderBy('createdAt', 'desc')
     );
     
-    // Subscribe to real-time updates
+    // Load stories data
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc')
+    );
+    
+    // Subscribe to real-time updates for goals
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       console.log('🎯 Goals data received:', snapshot.docs.length, 'goals');
       const goalsData = snapshot.docs.map(doc => ({
@@ -53,14 +65,29 @@ const GoalsManagement: React.FC = () => {
         ...doc.data()
       })) as Goal[];
       setGoals(goalsData);
-      setLoading(false); // Set loading false when data arrives
+      setLoading(false);
     }, (error) => {
       console.error('❌ Error loading goals:', error);
-      setLoading(false); // Set loading false on error too
+      setLoading(false);
+    });
+
+    // Subscribe to real-time updates for stories
+    const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+      console.log('📚 Stories data received:', snapshot.docs.length, 'stories');
+      const storiesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Story[];
+      setStories(storiesData);
+      setStoriesLoading(false);
+    }, (error) => {
+      console.error('❌ Error loading stories:', error);
+      setStoriesLoading(false);
     });
 
     return () => {
       unsubscribeGoals();
+      unsubscribeStories();
     };
   };
 
@@ -96,6 +123,52 @@ const GoalsManagement: React.FC = () => {
       });
     } catch (error) {
       console.error('Error updating goal priority:', error);
+    }
+  };
+
+  // Story handlers
+  const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
+    try {
+      console.log(`🔄 Updating story ${storyId} with:`, updates);
+      
+      await updateDoc(doc(db, 'stories', storyId), {
+        ...updates,
+        updatedAt: serverTimestamp()
+      });
+      
+      console.log(`✅ Story ${storyId} updated successfully`);
+    } catch (error) {
+      console.error('❌ Error updating story:', error);
+    }
+  };
+
+  const handleStoryDelete = async (storyId: string) => {
+    try {
+      await deleteDoc(doc(db, 'stories', storyId));
+      console.log(`✅ Story ${storyId} deleted successfully`);
+    } catch (error) {
+      console.error('❌ Error deleting story:', error);
+    }
+  };
+
+  const handleStoryPriorityChange = async (storyId: string, newPriority: number) => {
+    try {
+      await updateDoc(doc(db, 'stories', storyId), {
+        priority: newPriority,
+        updatedAt: serverTimestamp()
+      });
+      console.log(`✅ Story ${storyId} priority updated to P${newPriority}`);
+    } catch (error) {
+      console.error('❌ Error updating story priority:', error);
+    }
+  };
+
+  const handleStoryAdd = async (storyData: Omit<Story, 'id' | 'ref' | 'createdAt' | 'updatedAt'>) => {
+    try {
+      console.log('📚 Adding new story:', storyData);
+      // This will be handled by the ModernStoriesTable component
+    } catch (error) {
+      console.error('❌ Error adding story:', error);
     }
   };
 
@@ -384,6 +457,50 @@ const GoalsManagement: React.FC = () => {
             </Card.Body>
           </Card>
         )}
+
+        {/* Stories Table Section */}
+        <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px', marginTop: '20px' }}>
+          <Card.Header style={{ 
+            backgroundColor: '#fff', 
+            borderBottom: '1px solid #e5e7eb', 
+            padding: '20px 24px' 
+          }}>
+            <div className="d-flex justify-content-between align-items-center">
+              <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
+                Stories Management ({stories.length})
+              </h5>
+              <small className="text-muted">
+                Manage all stories across your goals
+              </small>
+            </div>
+          </Card.Header>
+          <Card.Body style={{ padding: 0 }}>
+            {storiesLoading ? (
+              <div style={{ 
+                textAlign: 'center', 
+                padding: '60px 20px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <div className="spinner-border" style={{ marginBottom: '16px' }} />
+                <p style={{ margin: 0, color: '#6b7280' }}>Loading stories...</p>
+              </div>
+            ) : (
+              <div style={{ height: '600px', overflow: 'auto' }}>
+                <ModernStoriesTable
+                  stories={stories}
+                  goals={goals}
+                  onStoryUpdate={handleStoryUpdate}
+                  onStoryDelete={handleStoryDelete}
+                  onStoryPriorityChange={handleStoryPriorityChange}
+                  onStoryAdd={handleStoryAdd}
+                />
+              </div>
+            )}
+          </Card.Body>
+        </Card>
       </div>
 
       {/* Add Goal Modal */}

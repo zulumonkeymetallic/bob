@@ -8,8 +8,9 @@ import { useTestMode } from '../contexts/TestModeContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { VERSION } from '../version';
 import SprintSelector from './SprintSelector';
+import TestAuthPanel from './TestAuthPanel';
 import { isStatus, isTheme } from '../utils/statusHelpers';
-import { SideDoorAuth } from '../services/SideDoorAuth';
+import { sideDoorAuth } from '../services/SideDoorAuth';
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -39,9 +40,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
   const [selectedSprintId, setSelectedSprintId] = useState<string>('');
+  const [showTestAuth, setShowTestAuth] = useState(false);
   
   // Check if side-door test mode is active
-  const isSideDoorActive = SideDoorAuth.isTestModeActive();
+  const isSideDoorActive = sideDoorAuth.isTestModeEnabled();
 
   const navigationGroups: NavigationGroup[] = [
     {
@@ -351,6 +353,24 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 {isTestMode ? '🧪 TEST' : '🏭 PROD'}
               </Button>
             </div>
+
+            {/* Test Authentication Button */}
+            {sideDoorAuth.isTestModeEnabled() && (
+              <Button 
+                size="sm" 
+                onClick={() => setShowTestAuth(true)}
+                className="w-100 mb-2"
+                style={{
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  border: 'none',
+                  color: 'white',
+                  borderRadius: '6px'
+                }}
+              >
+                🔑 Test Login
+              </Button>
+            )}
+
             <Button 
               size="sm" 
               onClick={onSignOut || signOut}
@@ -372,6 +392,15 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               padding: '4px 0'
             }}>
               {VERSION}
+              {isTestUser && (
+                <div style={{ 
+                  fontSize: '0.65rem', 
+                  color: '#ff6b6b',
+                  fontWeight: 'bold'
+                }}>
+                  TEST USER
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -562,6 +591,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           {children}
         </main>
       </div>
+
+      {/* Test Authentication Panel */}
+      {showTestAuth && (
+        <TestAuthPanel onClose={() => setShowTestAuth(false)} />
+      )}
     </div>
   );
 };

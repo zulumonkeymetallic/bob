@@ -1,605 +1,450 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Card, Button, Modal, Form, Table } from 'react-bootstrap';
-import { 
-  Calendar, 
-  Share, 
-  Printer, 
-  Download, 
-  ZoomIn, 
-  ZoomOut,
-  Settings,
-  Filter,
-  Search,
-  ChevronLeft,
-  ChevronRight
-} from 'lucide-react';
+import { Card, Row, Col, Badge, Button } from 'react-bootstrap';
+import { Calendar, Target, TrendingUp, ChevronDown, ChevronRight, Plus, Settings, ZoomIn, ZoomOut, Search } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
+import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { db } from '../../firebase';
+import { Goal, Sprint, Story, Task } from '../../types';
+import { getThemeName, getStatusName } from '../../utils/statusHelpers';
+import EditGoalModal from '../EditGoalModal';
 
-// BOB v3.5.2 - Goals Visualization (Roadmap Timeline)
-// FTR-03 Implementation - Scaffold with dummy data
-
-interface Goal {
-  id: string;
-  title: string;
-  theme: string;
-  startDate: Date;
-  endDate: Date;
-  status: string;
-  progress: number;
-  stories: Story[];
+interface GoalsVisualizationViewProps {
+  goals?: Goal[];
+  onEditGoal?: (goal: Goal) => void;
+  onDeleteGoal?: (goalId: string) => void;
 }
 
-interface Story {
-  id: string;
-  title: string;
-  sprintId?: string;
-  status: string;
-  tasks: Task[];
-}
-
-interface Task {
-  id: string;
-  title: string;
-  status: string;
-  assignee?: string;
-}
-
-interface Sprint {
-  id: string;
-  name: string;
-  startDate: Date;
-  endDate: Date;
-}
-
-const GoalsVisualizationView: React.FC = () => {
+const GoalsVisualizationView: React.FC<GoalsVisualizationViewProps> = ({
+  goals: propGoals = [],
+  onEditGoal,
+  onDeleteGoal
+}) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   
-  // State management
-  const [goals, setGoals] = useState<Goal[]>([]);
+  const [goals, setGoals] = useState<Goal[]>(propGoals);
   const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
-  const [showSidebar, setShowSidebar] = useState(false);
+  
+  // UI state
+  const [showSidebar, setShowSidebar] = useState(true);
   const [zoomLevel, setZoomLevel] = useState(1);
-  const [visibleThemes, setVisibleThemes] = useState<string[]>(['Health', 'Growth', 'Wealth', 'Tribe', 'Home']);
-  const [collapsedGoals, setCollapsedGoals] = useState<string[]>([]);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [dragOperation, setDragOperation] = useState<any>(null);
-  
-  // Timeline configuration
-  const [timelineStart, setTimelineStart] = useState(new Date());
-  const [timelineEnd, setTimelineEnd] = useState(new Date(Date.now() + 90 * 24 * 60 * 60 * 1000)); // 90 days
-  
-  // Load dummy data
+  const [collapsedGoals, setCollapsedGoals] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+
   useEffect(() => {
-    loadDummyData();
-  }, []);
-  
-  const loadDummyData = () => {
-    // Dummy goals data
-    const dummyGoals: Goal[] = [
-      {
-        id: 'goal-1',
-        title: 'Complete Marathon Training',
-        theme: 'Health',
-        startDate: new Date('2025-09-01'),
-        endDate: new Date('2025-12-15'),
-        status: 'Work in Progress',
-        progress: 35,
-        stories: [
-          {
-            id: 'story-1',
-            title: 'Build base mileage',
-            sprintId: 'sprint-1',
-            status: 'In Progress',
-            tasks: [
-              { id: 'task-1', title: 'Run 3x per week', status: 'In Progress' },
-              { id: 'task-2', title: 'Track weekly mileage', status: 'Done' }
-            ]
-          },
-          {
-            id: 'story-2', 
-            title: 'Peak training phase',
-            sprintId: 'sprint-2',
-            status: 'Not Started',
-            tasks: [
-              { id: 'task-3', title: 'Long runs 18+ miles', status: 'Not Started' },
-              { id: 'task-4', title: 'Speed work sessions', status: 'Not Started' }
-            ]
-          }
-        ]
-      },
-      {
-        id: 'goal-2',
-        title: 'Launch Side Business',
-        theme: 'Wealth',
-        startDate: new Date('2025-09-15'),
-        endDate: new Date('2025-11-30'),
-        status: 'New',
-        progress: 10,
-        stories: [
-          {
-            id: 'story-3',
-            title: 'Market research',
-            sprintId: 'sprint-1',
-            status: 'Done',
-            tasks: [
-              { id: 'task-5', title: 'Competitor analysis', status: 'Done' },
-              { id: 'task-6', title: 'Customer interviews', status: 'Done' }
-            ]
-          }
-        ]
+    if (currentUser && currentPersona) {
+      loadData();
+    }
+  }, [currentUser, currentPersona]);
+
+  const loadData = async () => {
+    if (!currentUser || !currentPersona) return;
+
+    setLoading(true);
+    setError(null);
+    
+    try {
+      console.log('🎯 [GoalsVisualizationView] Loading data for persona:', currentPersona);
+      
+      // Load goals if not provided via props
+      if (propGoals.length === 0) {
+        const goalsQuery = query(
+          collection(db, 'goals'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          orderBy('createdAt', 'desc')
+        );
+        const goalsSnapshot = await getDocs(goalsQuery);
+        const goalsData = goalsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Goal[];
+        setGoals(goalsData);
+        console.log('📊 [GoalsVisualizationView] Loaded goals:', goalsData.length);
+      } else {
+        setGoals(propGoals);
       }
-    ];
-    
-    // Dummy sprints data
-    const dummySprints: Sprint[] = [
-      {
-        id: 'sprint-1',
-        name: 'Sprint 1',
-        startDate: new Date('2025-09-01'),
-        endDate: new Date('2025-09-14')
-      },
-      {
-        id: 'sprint-2', 
-        name: 'Sprint 2',
-        startDate: new Date('2025-09-15'),
-        endDate: new Date('2025-09-28')
-      },
-      {
-        id: 'sprint-3',
-        name: 'Sprint 3', 
-        startDate: new Date('2025-09-29'),
-        endDate: new Date('2025-10-12')
-      }
-    ];
-    
-    setGoals(dummyGoals);
-    setSprints(dummySprints);
-  };
-  
-  // Theme colors
-  const themeColors = {
-    Health: '#ef4444',
-    Growth: '#10b981', 
-    Wealth: '#f59e0b',
-    Tribe: '#8b5cf6',
-    Home: '#06b6d4'
-  };
-  
-  // Handle goal drag (mock)
-  const handleGoalDrag = (goalId: string, newStartDate: Date, newEndDate: Date) => {
-    const goal = goals.find(g => g.id === goalId);
-    if (!goal) return;
-    
-    // Check if >= 3 stories would change sprint
-    const affectedStories = goal.stories.filter(story => {
-      // Mock logic: stories planned for sprints that would shift
-      return story.sprintId && Math.random() > 0.5;
-    });
-    
-    if (affectedStories.length >= 3) {
-      setDragOperation({ goalId, newStartDate, newEndDate, affectedStories });
-      setShowConfirmModal(true);
-    } else {
-      // Direct update
-      executeGoalDateChange(goalId, newStartDate, newEndDate);
+
+      // Load sprints
+      const sprintsQuery = query(
+        collection(db, 'sprints'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        orderBy('startDate', 'asc')
+      );
+      const sprintsSnapshot = await getDocs(sprintsQuery);
+      const sprintsData = sprintsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Sprint[];
+      setSprints(sprintsData);
+
+      // Load stories
+      const storiesQuery = query(
+        collection(db, 'stories'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        orderBy('createdAt', 'desc')
+      );
+      const storiesSnapshot = await getDocs(storiesQuery);
+      const storiesData = storiesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Story[];
+      setStories(storiesData);
+
+      // Load tasks
+      const tasksQuery = query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        orderBy('createdAt', 'desc')
+      );
+      const tasksSnapshot = await getDocs(tasksQuery);
+      const tasksData = tasksSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Task[];
+      setTasks(tasksData);
+
+      console.log('✅ [GoalsVisualizationView] Data loaded successfully');
+      
+    } catch (error) {
+      console.error('❌ [GoalsVisualizationView] Error loading data:', error);
+      setError('Failed to load visualization data');
+    } finally {
+      setLoading(false);
     }
   };
-  
-  const executeGoalDateChange = (goalId: string, newStartDate: Date, newEndDate: Date) => {
+
+  const handleGoalEdit = (goal: Goal) => {
+    console.log('✏️ [GoalsVisualizationView] Edit goal clicked:', goal.id);
+    setSelectedGoal(goal);
+    setShowEditModal(true);
+  };
+
+  const handleGoalDelete = (goalId: string) => {
+    console.log('🗑️ [GoalsVisualizationView] Delete goal clicked:', goalId);
+    if (onDeleteGoal) {
+      onDeleteGoal(goalId);
+    }
+  };
+
+  const handleGoalUpdate = (goalId: string, updates: Partial<Goal>) => {
+    console.log('🔄 [GoalsVisualizationView] Goal updated:', goalId, updates);
     setGoals(prev => prev.map(goal => 
-      goal.id === goalId 
-        ? { ...goal, startDate: newStartDate, endDate: newEndDate }
-        : goal
+      goal.id === goalId ? { ...goal, ...updates } : goal
     ));
-    
-    // Log activity
-    console.log('📅 Goal dates changed:', { goalId, newStartDate, newEndDate });
+    setShowEditModal(false);
+    setSelectedGoal(null);
   };
-  
-  // Share functionality
-  const generateShareLink = () => {
-    const shareData = {
-      goals: goals.filter(g => visibleThemes.includes(g.theme)),
-      sprints,
-      filters: { themes: visibleThemes, collapsed: collapsedGoals },
-      timestamp: new Date().toISOString()
-    };
-    
-    // Mock share link generation
-    const shareToken = btoa(JSON.stringify(shareData));
-    return `${window.location.origin}/goals/visualization/shared/${shareToken}`;
-  };
-  
-  // Print functionality  
-  const handlePrint = () => {
-    window.print();
-  };
-  
-  // Generate calendar dates for timeline
-  const generateTimelineDates = () => {
-    const dates = [];
-    const current = new Date(timelineStart);
-    
-    while (current <= timelineEnd) {
-      dates.push(new Date(current));
-      current.setDate(current.getDate() + 7); // Weekly intervals
+
+  const toggleGoalCollapse = (goalId: string) => {
+    console.log('🔽 [GoalsVisualizationView] Toggle goal collapse:', goalId);
+    const newCollapsed = new Set(collapsedGoals);
+    if (newCollapsed.has(goalId)) {
+      newCollapsed.delete(goalId);
+    } else {
+      newCollapsed.add(goalId);
     }
-    
-    return dates;
+    setCollapsedGoals(newCollapsed);
   };
-  
+
+  const getGoalProgress = (goal: Goal) => {
+    const goalStories = stories.filter(story => story.goalId === goal.id);
+    const goalTasks = tasks.filter(task => task.goalId === goal.id);
+    
+    const completedStories = goalStories.filter(story => story.status === 4).length; // 4 = Done
+    const completedTasks = goalTasks.filter(task => task.status === 2).length; // 2 = Complete
+    
+    const totalItems = goalStories.length + goalTasks.length;
+    const completedItems = completedStories + completedTasks;
+    
+    return totalItems > 0 ? (completedItems / totalItems) * 100 : 0;
+  };
+
+  const getStatusBadgeVariant = (status: number) => {
+    switch (status) {
+      case 2: return 'success'; // Complete
+      case 1: return 'primary'; // Work in Progress
+      case 3: return 'warning'; // Blocked
+      case 4: return 'secondary'; // Deferred
+      default: return 'light'; // New
+    }
+  };
+
+  const getPriorityBorder = (size: number) => {
+    switch (size) {
+      case 3: return 'border-danger'; // Large
+      case 2: return 'border-warning'; // Medium
+      case 1: return 'border-success'; // Small
+      default: return 'border-secondary';
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="p-4">
+        <div className="d-flex justify-content-center align-items-center" style={{ height: '300px' }}>
+          <div className="text-center">
+            <div className="spinner-border text-primary mb-3" role="status">
+              <span className="visually-hidden">Loading...</span>
+            </div>
+            <div>Loading goals visualization...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-4">
+        <div className="alert alert-danger">
+          <h5 className="alert-heading">Error Loading Visualization</h5>
+          <p className="mb-3">{error}</p>
+          <Button variant="outline-danger" size="sm" onClick={loadData}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <Container fluid className="goals-visualization">
-      <Row className="mb-3">
-        <Col>
-          <div className="d-flex justify-content-between align-items-center">
-            <h2>Goals Roadmap Timeline</h2>
-            <div className="d-flex gap-2">
-              <Button 
-                variant="outline-secondary" 
+    <div className="h-100 d-flex flex-column">
+      {/* Header */}
+      <div className="border-bottom bg-white p-3 flex-shrink-0">
+        <Row className="align-items-center">
+          <Col>
+            <div className="d-flex align-items-center">
+              <Target className="me-2 text-primary" size={24} />
+              <h2 className="mb-0">Goals Roadmap</h2>
+            </div>
+          </Col>
+          <Col xs="auto">
+            <div className="d-flex align-items-center gap-2">
+              <Button
+                variant="outline-secondary"
                 size="sm"
-                onClick={() => setZoomLevel(prev => Math.max(0.5, prev - 0.1))}
+                onClick={() => setShowSidebar(!showSidebar)}
+              >
+                <Settings size={16} />
+              </Button>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => setZoomLevel(Math.max(0.5, zoomLevel - 0.1))}
               >
                 <ZoomOut size={16} />
               </Button>
-              <Button 
-                variant="outline-secondary" 
+              <span className="text-muted small">{Math.round(zoomLevel * 100)}%</span>
+              <Button
+                variant="outline-secondary"
                 size="sm"
-                onClick={() => setZoomLevel(prev => Math.min(2, prev + 0.1))}
+                onClick={() => setZoomLevel(Math.min(2, zoomLevel + 0.1))}
               >
                 <ZoomIn size={16} />
               </Button>
-              <Button variant="outline-secondary" size="sm">
-                <Filter size={16} />
-              </Button>
-              <Button 
-                variant="outline-secondary" 
-                size="sm"
-                onClick={() => setShowShareModal(true)}
-              >
-                <Share size={16} />
-              </Button>
-              <Button 
-                variant="outline-secondary" 
-                size="sm"
-                onClick={handlePrint}
-              >
-                <Printer size={16} />
-              </Button>
+            </div>
+          </Col>
+        </Row>
+      </div>
+
+      <div className="flex-fill d-flex overflow-hidden">
+        {/* Sidebar */}
+        {showSidebar && (
+          <div className="border-end bg-light p-3" style={{ width: '300px', overflowY: 'auto' }}>
+            <div className="mb-3">
+              <label className="form-label small text-muted fw-bold">
+                Search Goals
+              </label>
+              <div className="position-relative">
+                <Search className="position-absolute top-50 start-0 translate-middle-y ms-2 text-muted" size={16} />
+                <input
+                  type="text"
+                  className="form-control ps-4"
+                  placeholder="Search goals..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mb-3">
+              <label className="form-label small text-muted fw-bold">
+                Quick Stats
+              </label>
+              <div className="small">
+                <div className="d-flex justify-content-between">
+                  <span>Total Goals:</span>
+                  <span className="fw-bold">{goals.length}</span>
+                </div>
+                <div className="d-flex justify-content-between">
+                  <span>Active Sprints:</span>
+                  <span className="fw-bold">
+                    {sprints.filter(s => s.status === 1).length}
+                  </span>
+                </div>
+                <div className="d-flex justify-content-between">
+                  <span>Total Stories:</span>
+                  <span className="fw-bold">{stories.length}</span>
+                </div>
+                <div className="d-flex justify-content-between">
+                  <span>Total Tasks:</span>
+                  <span className="fw-bold">{tasks.length}</span>
+                </div>
+              </div>
             </div>
           </div>
-        </Col>
-      </Row>
-      
-      <Row>
-        <Col>
-          <Card>
-            <Card.Header>
-              <div className="d-flex justify-content-between align-items-center">
-                <div className="d-flex align-items-center gap-3">
-                  <Button variant="outline-secondary" size="sm">
-                    <ChevronLeft size={16} />
-                  </Button>
-                  <span>
-                    {timelineStart.toLocaleDateString()} - {timelineEnd.toLocaleDateString()}
-                  </span>
-                  <Button variant="outline-secondary" size="sm">
-                    <ChevronRight size={16} />
-                  </Button>
-                </div>
-                <div className="d-flex gap-2">
-                  {Object.entries(themeColors).map(([theme, color]) => (
-                    <div 
-                      key={theme}
-                      className="d-flex align-items-center gap-1"
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => {
-                        if (visibleThemes.includes(theme)) {
-                          setVisibleThemes(prev => prev.filter(t => t !== theme));
-                        } else {
-                          setVisibleThemes(prev => [...prev, theme]);
-                        }
-                      }}
-                    >
-                      <div 
-                        style={{
-                          width: 12,
-                          height: 12,
-                          backgroundColor: visibleThemes.includes(theme) ? color : '#ccc',
-                          borderRadius: 2
-                        }}
-                      />
-                      <small>{theme}</small>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </Card.Header>
-            
-            <Card.Body style={{ padding: 0, overflowX: 'auto' }}>
-              {/* Timeline Header with Sprint Markers */}
-              <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', minWidth: '1200px' }}>
-                <div style={{ width: '200px', padding: '10px', backgroundColor: '#f9fafb', borderRight: '1px solid #e5e7eb' }}>
-                  <strong>Goals</strong>
-                </div>
-                <div style={{ flex: 1, position: 'relative' }}>
-                  {/* Date Headers */}
-                  <div style={{ display: 'flex', height: '40px' }}>
-                    {generateTimelineDates().map((date, index) => (
-                      <div 
-                        key={index}
-                        style={{
-                          flex: 1,
-                          padding: '8px',
-                          borderRight: '1px solid #e5e7eb',
-                          fontSize: '12px',
-                          textAlign: 'center'
-                        }}
-                      >
-                        {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      </div>
-                    ))}
-                  </div>
-                  
-                  {/* Sprint Markers */}
-                  <div style={{ display: 'flex', height: '30px', backgroundColor: '#f0f9ff' }}>
-                    {sprints.map(sprint => (
-                      <div
-                        key={sprint.id}
-                        style={{
-                          position: 'absolute',
-                          top: '40px',
-                          left: '10%', // Mock positioning
-                          width: '15%', // Mock width
-                          height: '30px',
-                          backgroundColor: '#0ea5e9',
-                          color: 'white',
-                          fontSize: '11px',
-                          padding: '4px 8px',
-                          borderRadius: '4px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                      >
-                        {sprint.name}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              
-              {/* Goal Bars */}
-              <div style={{ minWidth: '1200px' }}>
-                {goals
-                  .filter(goal => visibleThemes.includes(goal.theme))
-                  .map((goal, index) => (
-                  <div key={goal.id} style={{ display: 'flex', borderBottom: '1px solid #e5e7eb' }}>
-                    {/* Goal Info Column */}
-                    <div 
-                      style={{ 
-                        width: '200px', 
-                        padding: '15px 10px', 
-                        borderRight: '1px solid #e5e7eb',
-                        cursor: 'pointer'
-                      }}
-                      onClick={() => {
-                        setSelectedGoal(goal);
-                        setShowSidebar(true);
-                      }}
-                    >
-                      <div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '4px' }}>
-                        {goal.title}
-                      </div>
-                      <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                        {goal.theme} • {goal.status}
-                      </div>
-                      <div style={{ 
-                        marginTop: '6px',
-                        height: '4px',
-                        backgroundColor: '#e5e7eb',
-                        borderRadius: '2px',
-                        overflow: 'hidden'
-                      }}>
-                        <div 
-                          style={{
-                            width: `${goal.progress}%`,
-                            height: '100%',
-                            backgroundColor: themeColors[goal.theme as keyof typeof themeColors],
-                            transition: 'width 0.3s ease'
-                          }}
-                        />
-                      </div>
-                    </div>
-                    
-                    {/* Goal Timeline Bar */}
-                    <div style={{ flex: 1, position: 'relative', padding: '15px 0' }}>
-                      <div
-                        style={{
-                          position: 'absolute',
-                          left: '15%', // Mock positioning based on dates
-                          width: '40%', // Mock width based on duration
-                          height: '20px',
-                          backgroundColor: themeColors[goal.theme as keyof typeof themeColors],
-                          borderRadius: '10px',
-                          opacity: 0.8,
-                          cursor: 'move',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: 'white',
-                          fontSize: '11px',
-                          fontWeight: '600'
-                        }}
-                        onClick={() => {
-                          setSelectedGoal(goal);
-                          setShowSidebar(true);
-                        }}
-                      >
-                        {goal.progress}%
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              
-              {/* Expanded Goal Details */}
-              {selectedGoal && !collapsedGoals.includes(selectedGoal.id) && (
-                <div style={{ backgroundColor: '#f9fafb', borderTop: '2px solid #e5e7eb' }}>
-                  <div style={{ padding: '20px' }}>
-                    <h5>Stories for "{selectedGoal.title}"</h5>
-                    <Table striped bordered hover size="sm">
-                      <thead>
-                        <tr>
-                          <th>Story</th>
-                          <th>Sprint</th>
-                          <th>Status</th>
-                          <th>Tasks</th>
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedGoal.stories.map(story => (
-                          <tr key={story.id}>
-                            <td>{story.title}</td>
-                            <td>
-                              <Form.Select size="sm" defaultValue={story.sprintId || ''}>
-                                <option value="">No Sprint</option>
-                                {sprints.map(sprint => (
-                                  <option key={sprint.id} value={sprint.id}>
-                                    {sprint.name}
-                                  </option>
-                                ))}
-                              </Form.Select>
-                            </td>
-                            <td>
-                              <span className={`badge ${story.status === 'Done' ? 'bg-success' : story.status === 'In Progress' ? 'bg-warning' : 'bg-secondary'}`}>
-                                {story.status}
-                              </span>
-                            </td>
-                            <td>{story.tasks.length} tasks</td>
-                            <td>
-                              <Button variant="outline-secondary" size="sm">Edit</Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </Table>
-                    
-                    <h6 className="mt-4">Tasks</h6>
-                    <Table striped bordered hover size="sm">
-                      <thead>
-                        <tr>
-                          <th>Task</th>
-                          <th>Story</th>
-                          <th>Status</th>
-                          <th>Assignee</th>
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedGoal.stories.flatMap(story => 
-                          story.tasks.map(task => (
-                            <tr key={task.id}>
-                              <td>{task.title}</td>
-                              <td>{story.title}</td>
-                              <td>
-                                <span className={`badge ${task.status === 'Done' ? 'bg-success' : task.status === 'In Progress' ? 'bg-warning' : 'bg-secondary'}`}>
-                                  {task.status}
-                                </span>
-                              </td>
-                              <td>{task.assignee || 'Unassigned'}</td>
-                              <td>
-                                <Button variant="outline-secondary" size="sm">Edit</Button>
-                              </td>
-                            </tr>
-                          ))
+        )}
+
+        {/* Main Content */}
+        <div className="flex-fill overflow-auto p-3" style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left' }}>
+          {goals.length === 0 ? (
+            <div className="text-center py-5">
+              <Target className="text-muted mb-3" size={48} />
+              <h4 className="text-muted">No Goals Found</h4>
+              <p className="text-muted mb-4">Get started by creating your first goal</p>
+              <Button variant="primary">
+                <Plus size={16} className="me-1" />
+                Create Goal
+              </Button>
+            </div>
+          ) : (
+            <Row className="g-3">
+              {goals
+                .filter(goal => 
+                  searchQuery === '' || 
+                  goal.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                  goal.description?.toLowerCase().includes(searchQuery.toLowerCase())
+                )
+                .map((goal) => {
+                  const progress = getGoalProgress(goal);
+                  const isCollapsed = collapsedGoals.has(goal.id);
+                  const goalStories = stories.filter(story => story.goalId === goal.id);
+                  const goalTasks = tasks.filter(task => task.goalId === goal.id);
+
+                  return (
+                    <Col xs={12} key={goal.id}>
+                      <Card className={`h-100 ${getPriorityBorder(goal.size)} border-2 shadow-sm`}>
+                        <Card.Header className="d-flex justify-content-between align-items-start">
+                          <div className="d-flex align-items-center flex-fill">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => toggleGoalCollapse(goal.id)}
+                              className="p-1 me-2"
+                            >
+                              {isCollapsed ? (
+                                <ChevronRight size={16} />
+                              ) : (
+                                <ChevronDown size={16} />
+                              )}
+                            </Button>
+                            <div className="flex-fill">
+                              <h5 className="card-title mb-1">{goal.title}</h5>
+                              <div className="d-flex align-items-center gap-2 mb-0">
+                                <Badge bg={getStatusBadgeVariant(goal.status)}>
+                                  {getStatusName(goal.status)}
+                                </Badge>
+                                <small className="text-muted">
+                                  {Math.round(progress)}% Complete
+                                </small>
+                                <small className="text-muted">
+                                  {goalStories.length} stories, {goalTasks.length} tasks
+                                </small>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="d-flex gap-1">
+                            <Button
+                              variant="outline-primary"
+                              size="sm"
+                              onClick={() => handleGoalEdit(goal)}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="outline-danger"
+                              size="sm"
+                              onClick={() => handleGoalDelete(goal.id)}
+                            >
+                              Delete
+                            </Button>
+                          </div>
+                        </Card.Header>
+                        
+                        {!isCollapsed && (
+                          <Card.Body>
+                            {goal.description && (
+                              <p className="text-muted mb-3">{goal.description}</p>
+                            )}
+                            
+                            {/* Progress Bar */}
+                            <div className="mb-3">
+                              <div className="d-flex justify-content-between small text-muted mb-1">
+                                <span>Progress</span>
+                                <span>{Math.round(progress)}%</span>
+                              </div>
+                              <div className="progress" style={{ height: '6px' }}>
+                                <div
+                                  className="progress-bar"
+                                  style={{ width: `${progress}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Goal Details */}
+                            <Row className="small text-muted">
+                              <Col md={3}>
+                                <strong>Theme:</strong><br />
+                                {getThemeName(goal.theme)}
+                              </Col>
+                              <Col md={3}>
+                                <strong>Size:</strong><br />
+                                {goal.size === 1 ? 'Small' : goal.size === 2 ? 'Medium' : 'Large'}
+                              </Col>
+                              <Col md={3}>
+                                <strong>Confidence:</strong><br />
+                                {goal.confidence === 1 ? 'Low' : goal.confidence === 2 ? 'Medium' : 'High'}
+                              </Col>
+                              <Col md={3}>
+                                <strong>Created:</strong><br />
+                                {new Date(goal.createdAt.seconds * 1000).toLocaleDateString()}
+                              </Col>
+                            </Row>
+                          </Card.Body>
                         )}
-                      </tbody>
-                    </Table>
-                  </div>
-                </div>
-              )}
-            </Card.Body>
-          </Card>
-        </Col>
-      </Row>
-      
-      {/* Confirmation Modal for Bulk Changes */}
-      <Modal show={showConfirmModal} onHide={() => setShowConfirmModal(false)}>
-        <Modal.Header closeButton>
-          <Modal.Title>Confirm Goal Date Change</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          {dragOperation && (
-            <>
-              <p>Changing this goal's dates will affect <strong>{dragOperation.affectedStories.length}</strong> stories:</p>
-              <ul>
-                {dragOperation.affectedStories.map((story: any) => (
-                  <li key={story.id}>{story.title}</li>
-                ))}
-              </ul>
-              <p>These stories will be reassigned to different sprints. Continue?</p>
-            </>
+                      </Card>
+                    </Col>
+                  );
+                })}
+            </Row>
           )}
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>
-            Cancel
-          </Button>
-          <Button 
-            variant="primary" 
-            onClick={() => {
-              if (dragOperation) {
-                executeGoalDateChange(
-                  dragOperation.goalId, 
-                  dragOperation.newStartDate, 
-                  dragOperation.newEndDate
-                );
-              }
-              setShowConfirmModal(false);
-              setDragOperation(null);
-            }}
-          >
-            Confirm Changes
-          </Button>
-        </Modal.Footer>
-      </Modal>
-      
-      {/* Share Modal */}
-      <Modal show={showShareModal} onHide={() => setShowShareModal(false)}>
-        <Modal.Header closeButton>
-          <Modal.Title>Share Roadmap</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <Form.Group className="mb-3">
-            <Form.Label>Share Link (Read-only)</Form.Label>
-            <Form.Control 
-              type="text" 
-              value={generateShareLink()}
-              readOnly
-              onClick={(e) => (e.target as HTMLInputElement).select()}
-            />
-          </Form.Group>
-          <div className="d-flex gap-2">
-            <Button 
-              variant="outline-secondary"
-              onClick={() => navigator.clipboard.writeText(generateShareLink())}
-            >
-              Copy Link
-            </Button>
-            <Button variant="outline-secondary">
-              <Download size={16} className="me-2" />
-              Download PDF
-            </Button>
-          </div>
-        </Modal.Body>
-      </Modal>
-    </Container>
+        </div>
+      </div>
+
+      {/* Edit Goal Modal */}
+      {selectedGoal && (
+        <EditGoalModal
+          show={showEditModal}
+          onClose={() => {
+            setShowEditModal(false);
+            setSelectedGoal(null);
+          }}
+          goal={selectedGoal}
+          currentUserId={currentUser?.uid || ''}
+        />
+      )}
+    </div>
   );
 };
 

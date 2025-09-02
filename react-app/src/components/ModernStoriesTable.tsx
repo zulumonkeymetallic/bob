@@ -20,6 +20,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import AddStoryModal from './AddStoryModal';
 import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -54,7 +55,7 @@ interface ModernStoriesTableProps {
   onStoryDelete: (storyId: string) => Promise<void>;
   onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
   onStoryAdd: (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
-  goalId: string;
+  goalId?: string; // Made optional for full stories table
 }
 
 const defaultColumns: Column[] = [
@@ -445,6 +446,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentPersona } = usePersona();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
+  const [showAddStoryModal, setShowAddStoryModal] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
     columns: true,
     filters: false,
@@ -471,7 +473,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   useEffect(() => {
     console.log('📊 ModernStoriesTable: Component mounted/updated');
     console.log('📊 Stories count:', stories?.length || 0);
-    console.log('📊 Goal ID:', goalId);
+    console.log('📊 Goal ID filter:', goalId || 'None (showing all stories)');
     console.log('📊 Goals passed:', goals?.length || 0);
     console.log('📊 User:', currentUser?.email || 'Not logged in');
     console.log('📊 Persona:', currentPersona);
@@ -516,7 +518,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   );
 
   // Convert stories to table rows with goal titles and sort order
-  const tableRows: StoryTableRow[] = stories.map((story, index) => {
+  // Filter by goalId if provided, otherwise show all stories
+  const filteredStories = goalId ? stories.filter(story => story.goalId === goalId) : stories;
+  
+  const tableRows: StoryTableRow[] = filteredStories.map((story, index) => {
     const goal = goals.find(g => g.id === story.goalId);
     return {
       ...story,
@@ -666,7 +671,39 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             {sortedRows.length} of {stories.length} stories • {visibleColumnsCount} columns visible
           </p>
         </div>
-        <button
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {/* Add Story Button */}
+          <button
+            onClick={() => setShowAddStoryModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontWeight: '500',
+              transition: 'all 0.15s ease',
+              cursor: 'pointer',
+              border: '1px solid #059669',
+              backgroundColor: '#059669',
+              color: 'white',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#047857';
+              e.currentTarget.style.borderColor = '#047857';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = '#059669';
+              e.currentTarget.style.borderColor = '#059669';
+            }}
+          >
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Add Story
+          </button>
+          <button
           onClick={() => setShowConfig(!showConfig)}
           style={{
             display: 'flex',
@@ -696,6 +733,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           <Settings size={16} />
           {showConfig ? 'Hide Configuration' : 'Configure Table'}
         </button>
+        </div>
       </div>
 
       {/* Enhanced Filter Controls */}
@@ -1168,6 +1206,12 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           </div>
         </div>
       </div>
+      
+      {/* Add Story Modal */}
+      <AddStoryModal
+        show={showAddStoryModal}
+        onClose={() => setShowAddStoryModal(false)}
+      />
     </div>
   );
 };
