@@ -3,7 +3,7 @@
 # BOB v3.5.0+ Comprehensive Deployment Script with Selenium Testing
 # This script includes automated testing and validation
 
-VERSION="v3.5.0"
+VERSION="v3.5.5"
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 DEPLOY_LOG="./deployment-logs/deploy-${VERSION}-${TIMESTAMP}.log"
 
