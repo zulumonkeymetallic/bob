@@ -471,15 +471,49 @@ fi
 
 # Check if Chrome/Chromium is available
 if command -v google-chrome >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; then
-    print_status "Running Selenium E2E tests..."
-    if node selenium-e2e-test.js; then
-        track_test_result "Selenium E2E Tests" "PASS"
+    print_status "Running Comprehensive Goal CRUD Selenium tests..."
+    
+    # Install Python Selenium if not already installed
+    pip3 install selenium >/dev/null 2>&1
+    
+    # Run comprehensive Goal CRUD tests
+    if python3 selenium_goal_crud_comprehensive.py; then
+        print_success "✅ Comprehensive Goal CRUD Tests: PASSED"
+        track_test_result "Goal CRUD Selenium Tests" "PASS"
     else
-        track_test_result "Selenium E2E Tests" "FAIL"
+        print_error "❌ Comprehensive Goal CRUD Tests: FAILED"
+        track_test_result "Goal CRUD Selenium Tests" "FAIL"
     fi
+    
+    # Also run the JavaScript E2E tests for additional coverage
+    print_status "Running additional JavaScript E2E tests..."
+    if node selenium-e2e-test.js; then
+        print_success "✅ JavaScript E2E Tests: PASSED"
+        track_test_result "JavaScript E2E Tests" "PASS"
+    else
+        print_error "❌ JavaScript E2E Tests: FAILED"
+        track_test_result "JavaScript E2E Tests" "FAIL"
+    fi
+    
+elif command -v firefox >/dev/null 2>&1; then
+    print_status "Firefox detected, running Goal CRUD tests with Firefox..."
+    
+    # Install Python Selenium if not already installed
+    pip3 install selenium >/dev/null 2>&1
+    
+    # Run comprehensive Goal CRUD tests with Firefox
+    if python3 selenium_goal_crud_comprehensive.py; then
+        print_success "✅ Comprehensive Goal CRUD Tests (Firefox): PASSED"
+        track_test_result "Goal CRUD Selenium Tests" "PASS"
+    else
+        print_error "❌ Comprehensive Goal CRUD Tests (Firefox): FAILED"
+        track_test_result "Goal CRUD Selenium Tests" "FAIL"
+    fi
+    
 else
-    print_warning "Chrome/Chromium not found. Skipping Selenium tests."
+    print_warning "Chrome/Chromium and Firefox not found. Skipping Selenium tests."
     print_warning "Install Chrome for full E2E testing: brew install --cask google-chrome"
+    print_warning "Or install Firefox: brew install --cask firefox"
     track_test_result "Selenium E2E Tests" "SKIP"
 fi
 

@@ -3,11 +3,12 @@
   "dependencies": {
     "firebase-admin": "^13.5.0",
     "react-dnd": "^16.0.1",
-    "react-dnd-html5-backend": "^16.0.1"
+    "react-dnd-html5-backend": "^16.0.1",
+    "selenium-webdriver": "^4.35.0"
   },
   "devDependencies": {
-    "commander": "^12.0.0",
-    "chalk": "^4.1.2"
+    "chalk": "^4.1.2",
+    "commander": "^12.0.0"
   },
   "scripts": {
     "create-test-users": "node create-secure-test-users.js"
