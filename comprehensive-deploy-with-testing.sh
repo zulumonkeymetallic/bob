@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# BOB v3.5.5 Comprehensive Deploy with Selenium Testing Gate
+# BOB v3.5.6 Comprehensive Deploy with Selenium Testing Gate
 # This script performs comprehensive testing as a mandatory gate before deployment
 # No deployment occurs unless ALL tests pass
 
 set -e  # Exit on any error
 
-echo "🚀 BOB v3.5.5 Comprehensive Deploy with Testing Gate"
+echo "🚀 BOB v3.5.6 Comprehensive Deploy with Testing Gate"
 echo "=================================================="
 echo "⚠️  DEPLOYMENT GATE: All tests must pass before deployment"
 echo ""
