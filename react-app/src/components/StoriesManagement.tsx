@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Goal } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
@@ -19,6 +19,27 @@ const StoriesManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
+
+  // 📍 PAGE TRACKING
+  useEffect(() => {
+    console.log('🏠 PAGE NAVIGATION: Stories Management component mounted');
+    console.log('🌐 Current URL:', window.location.href);
+    console.log('📍 Current pathname:', window.location.pathname);
+    console.log('👤 Current user:', currentUser?.email);
+    console.log('🎭 Current persona:', currentPersona);
+    
+    return () => {
+      console.log('🏠 PAGE NAVIGATION: Stories Management component unmounted');
+    };
+  }, []);
+
+  // 🔧 FILTER TRACKING
+  useEffect(() => {
+    console.log('🔧 FILTER CHANGE - Stories Management:');
+    console.log('📋 Filter Status:', filterStatus);
+    console.log('🎯 Filter Goal:', filterGoal);
+    console.log('🔍 Search Term:', searchTerm || '(empty)');
+  }, [filterStatus, filterGoal, searchTerm]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -47,18 +68,23 @@ const StoriesManagement: React.FC = () => {
     
     // Subscribe to real-time updates
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+      console.log('🔄 Stories snapshot received, docs count:', snapshot.docs.length);
       const storiesData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Story[];
+      console.log('📊 Setting stories state with:', storiesData.length, 'stories');
       setStories(storiesData);
     });
     
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      console.log('🎯 Goals snapshot received, docs count:', snapshot.docs.length);
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Goal[];
+      console.log('📊 Setting goals state with:', goalsData.length, 'goals');
+      console.log('🎯 Goals details:', goalsData.map(g => ({ id: g.id, title: g.title })));
       setGoals(goalsData);
     });
 
@@ -103,10 +129,44 @@ const StoriesManagement: React.FC = () => {
 
   const handleStoryAdd = async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
     try {
-      // Add story logic would go here - for now just log
-      console.log('Adding story:', storyData);
+      console.log('📚 Adding new story:', storyData);
+      console.log('👤 Current user:', currentUser?.email);
+      console.log('🎭 Current persona:', currentPersona);
+      
+      // Generate reference number
+      const refNumber = `STY-${Date.now()}`;
+      
+      // Create the story document
+      const newStory = {
+        ...storyData,
+        ref: refNumber,
+        ownerUid: currentUser!.uid,
+        persona: 'personal' as const, // Explicitly set to 'personal' to match Story type
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        // Default values if not provided
+        status: storyData.status || 0, // 0=Backlog
+        priority: storyData.priority || 3, // 3=P3
+        theme: storyData.theme || 1, // 1=Health
+        points: storyData.points || 1,
+        wipLimit: storyData.wipLimit || 3,
+        orderIndex: storyData.orderIndex || 0
+      };
+
+      console.log('💾 Story data being saved:', newStory);
+
+      // Add to Firestore
+      const docRef = await addDoc(collection(db, 'stories'), newStory);
+      
+      console.log('✅ Story created successfully with ID:', docRef.id);
+      console.log('🔄 Real-time listener should pick this up automatically...');
+      
+      // Small delay to ensure Firestore processes the write
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
     } catch (error) {
-      console.error('Error adding story:', error);
+      console.error('❌ Error adding story:', error);
+      throw error;
     }
   };
 
@@ -117,6 +177,15 @@ const StoriesManagement: React.FC = () => {
     if (searchTerm && !story.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
+
+  // Debug filtering
+  console.log('🔍 FILTER DEBUG:');
+  console.log('📊 Total stories:', stories.length);
+  console.log('🎯 Filter goal:', filterGoal);
+  console.log('📋 Filter status:', filterStatus);
+  console.log('🔍 Search term:', searchTerm);
+  console.log('✅ Filtered stories:', filteredStories.length);
+  console.log('📝 Stories being passed to table:', filteredStories.map(s => ({ id: s.id, title: s.title, goalId: s.goalId })));
 
   // Get counts for dashboard cards
   const storyCounts = {
@@ -299,7 +368,7 @@ const StoriesManagement: React.FC = () => {
                 <p style={{ margin: 0, color: '#6b7280' }}>Loading stories...</p>
               </div>
             ) : (
-              <div style={{ height: '600px', overflow: 'auto' }}>
+              <div style={{ height: '600px', overflow: 'auto' }} data-component="StoriesManagement">
                 <ModernStoriesTable
                   stories={filteredStories}
                   goals={goals}

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>BOB Cache Clear</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 40px 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 500px;
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 2.2em;
+        }
+        .emoji {
+            font-size: 3em;
+            margin-bottom: 20px;
+            display: block;
+        }
+        p {
+            color: #7f8c8d;
+            line-height: 1.6;
+            margin-bottom: 30px;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.2s;
+            margin: 10px;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .progress {
+            display: none;
+            margin-top: 20px;
+        }
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .log {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: left;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 20px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <span class="emoji">🧹</span>
+        <h1>BOB Cache Cleaner</h1>
+        <p>Clear all cached files and force a fresh load of the latest BOB version. This will resolve JavaScript errors and ensure you have the newest features.</p>
+        
+        <button class="btn" onclick="clearAllCaches()">🚀 Clear Cache & Reload BOB</button>
+        <button class="btn" onclick="redirectToBob()" style="background: #27ae60;">📱 Go to BOB (No Clear)</button>
+        
+        <div class="progress" id="progress">
+            <div class="spinner"></div>
+            <p>Clearing caches and preparing fresh load...</p>
+        </div>
+        
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        function log(message) {
+            const logEl = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logEl.innerHTML += `[${timestamp}] ${message}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+            logEl.style.display = 'block';
+            console.log(message);
+        }
+
+        async function clearAllCaches() {
+            const progressEl = document.getElementById('progress');
+            progressEl.style.display = 'block';
+            
+            try {
+                log('🧹 Starting comprehensive cache clearing...');
+                
+                // Clear all browser caches
+                if ('caches' in window) {
+                    const cacheNames = await caches.keys();
+                    log(`Found ${cacheNames.length} cache(s) to clear`);
+                    await Promise.all(cacheNames.map(async name => {
+                        await caches.delete(name);
+                        log(`✅ Cleared cache: ${name}`);
+                    }));
+                } else {
+                    log('⚠️ Cache API not available');
+                }
+                
+                // Clear service workers
+                if ('serviceWorker' in navigator) {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    log(`Found ${registrations.length} service worker(s) to unregister`);
+                    await Promise.all(registrations.map(async registration => {
+                        await registration.unregister();
+                        log(`✅ Unregistered service worker: ${registration.scope}`);
+                    }));
+                } else {
+                    log('⚠️ Service Worker API not available');
+                }
+                
+                // Clear localStorage (preserve auth if exists)
+                const authKeys = Object.keys(localStorage).filter(key => 
+                    key.includes('firebase:authUser') || key === 'userPreferences'
+                );
+                const preservedData = {};
+                authKeys.forEach(key => {
+                    preservedData[key] = localStorage.getItem(key);
+                });
+                
+                localStorage.clear();
+                Object.entries(preservedData).forEach(([key, value]) => {
+                    localStorage.setItem(key, value);
+                });
+                log(`✅ Cleared localStorage (preserved ${authKeys.length} auth items)`);
+                
+                // Clear sessionStorage
+                sessionStorage.clear();
+                log('✅ Cleared sessionStorage');
+                
+                log('🎉 Cache clearing completed successfully!');
+                log('🚀 Redirecting to BOB with fresh cache...');
+                
+                // Wait a moment then redirect with cache-busting parameters
+                setTimeout(() => {
+                    const timestamp = Date.now();
+                    const random = Math.random().toString(36).substring(2);
+                    window.location.href = `https://bob20250810.web.app/?nocache=${timestamp}&fresh=${random}`;
+                }, 2000);
+                
+            } catch (error) {
+                log(`❌ Error during cache clearing: ${error.message}`);
+                log('🔄 Attempting fallback redirect...');
+                setTimeout(() => {
+                    window.location.href = 'https://bob20250810.web.app/';
+                }, 1000);
+            }
+        }
+
+        function redirectToBob() {
+            log('📱 Redirecting to BOB without cache clearing...');
+            window.location.href = 'https://bob20250810.web.app/';
+        }
+
+        // Auto-clear if 'auto' parameter is present
+        if (window.location.search.includes('auto=true')) {
+            setTimeout(() => {
+                clearAllCaches();
+            }, 1000);
+        }
+    </script>
+</body>
+</html>

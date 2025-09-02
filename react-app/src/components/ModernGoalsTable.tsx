@@ -765,14 +765,17 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const visibleColumnsCount = columns.filter(col => col.visible).length;
 
   return (
-    <div style={{ 
-      position: 'relative', 
-      backgroundColor: 'white', 
-      borderRadius: '8px', 
-      border: '1px solid #e5e7eb', 
-      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
-      overflow: 'hidden' 
-    }}>
+    <div 
+      data-component="ModernGoalsTable"
+      style={{ 
+        position: 'relative', 
+        backgroundColor: 'white', 
+        borderRadius: '8px', 
+        border: '1px solid #e5e7eb', 
+        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+        overflow: 'hidden' 
+      }}
+    >
       {/* Header with controls */}
       <div style={{
         display: 'flex',

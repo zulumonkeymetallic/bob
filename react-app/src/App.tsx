@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Button } from 'react-bootstrap';
 import { Routes, Route, BrowserRouter as Router, Navigate, useLocation } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import SprintDashboard from './components/SprintDashboard';
@@ -21,16 +22,19 @@ import FloatingActionButton from './components/FloatingActionButton';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
 import ThemeColorManager from './components/ThemeColorManager';
+import LoginPage from './components/LoginPage';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { TestModeProvider } from './contexts/TestModeContext';
+import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
-import { checkForUpdates } from './version';
+import { checkForUpdates, VERSION } from './version';
 import ComprehensiveTest from './components/ComprehensiveTest';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
+import { clickTrackingService } from './services/ClickTrackingService';
 
 // BOB v3.5.2 - New Scaffolding Components
 import GoalsVisualizationView from './components/visualization/GoalsVisualizationView';
@@ -43,7 +47,6 @@ import MobileView from './components/MobileView';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
-import TestLoginPanel from './components/TestLoginPanel';
 
 function App() {
   return (
@@ -72,6 +75,17 @@ function AppContent() {
   const [goals, setGoals] = useState([]);
   const [stories, setStories] = useState([]);
   const [sprints, setSprints] = useState([]);
+
+  // 🖱️ Initialize global click tracking service
+  useEffect(() => {
+    console.log('🖱️ CLICK TRACKING: Initializing global interaction tracking');
+    clickTrackingService.initialize();
+    
+    return () => {
+      console.log('🖱️ CLICK TRACKING: Cleaning up interaction tracking');
+      clickTrackingService.destroy();
+    };
+  }, []);
 
   // Debug location changes and force re-render
   useEffect(() => {
@@ -114,33 +128,8 @@ function AppContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const handleSignIn = async () => {
-    try {
-      console.log('Attempting to sign in...');
-      await signInWithGoogle();
-      console.log('Sign in successful');
-    } catch (error) {
-      console.error('Sign in failed:', error);
-      alert('Sign in failed: ' + error.message);
-    }
-  };
-
   if (!currentUser) {
-    return (
-      <div className={`app-container ${theme} vh-100 d-flex justify-content-center align-items-center`}>
-        <div className="container">
-          <div className="row justify-content-center">
-            <div className="col-md-8 col-lg-6">
-              <div className="text-center mb-4">
-                <h1 className="mb-3">Welcome to BOB</h1>
-                <p className="text-muted">Your personal productivity assistant.</p>
-              </div>
-              <TestLoginPanel />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+    return <LoginPage />;
   }
 
   const handleSignOut = async () => {
