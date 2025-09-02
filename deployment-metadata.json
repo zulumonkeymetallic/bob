@@ -1,0 +1,16 @@
+{
+  "deployment": {
+    "version": "v3.5.5",
+    "timestamp": "20250902-113006",
+    "commit_hash": "15ea4019ff6a3fc4404a0b8cfcf59b3f9fb34da9",
+    "branch": "main",
+    "author": "zulumonkeymetallic",
+    "email": "94960648+zulumonkeymetallic@users.noreply.github.com",
+    "build_environment": {
+      "node_version": "v24.1.0",
+      "npm_version": "11.3.0",
+      "os": "Darwin",
+      "hostname": "jims-Mac-mini.local"
+    }
+  }
+}
