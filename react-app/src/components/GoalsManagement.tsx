@@ -20,7 +20,7 @@ const GoalsManagement: React.FC = () => {
   const { showSidebar } = useSidebar();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
-  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterStatus, setFilterStatus] = useState<string>('active'); // Default to active (hide completed)
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
@@ -28,6 +28,31 @@ const GoalsManagement: React.FC = () => {
   const [showAddGoalModal, setShowAddGoalModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState<Goal | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'card'>('card');
+
+  // 📍 PAGE TRACKING
+  useEffect(() => {
+    console.log('🏠 PAGE NAVIGATION: Goals Management component mounted');
+    console.log('🌐 Current URL:', window.location.href);
+    console.log('📍 Current pathname:', window.location.pathname);
+    console.log('👤 Current user:', currentUser?.email);
+    console.log('🎭 Current persona:', currentPersona);
+    console.log('👁️ Sidebar visible:', showSidebar);
+    console.log('📊 View mode:', viewMode);
+    
+    return () => {
+      console.log('🏠 PAGE NAVIGATION: Goals Management component unmounted');
+    };
+  }, []);
+
+  // 🔧 FILTER TRACKING
+  useEffect(() => {
+    console.log('🔧 FILTER CHANGE - Goals Management:');
+    console.log('📋 Filter Status:', filterStatus);
+    console.log('🎨 Filter Theme:', filterTheme);
+    console.log('🔍 Search Term:', searchTerm || '(empty)');
+    console.log('📊 View Mode:', viewMode);
+  }, [filterStatus, filterTheme, searchTerm, viewMode]);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null); // New state for goal selection
 
   useEffect(() => {
     if (!currentUser) return;
@@ -92,6 +117,11 @@ const GoalsManagement: React.FC = () => {
   };
 
   // Handler functions for ModernGoalsTable
+  const handleGoalSelect = (goalId: string) => {
+    console.log('🎯 Goal selected:', goalId);
+    setSelectedGoalId(goalId === selectedGoalId ? null : goalId); // Toggle selection
+  };
+
   const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
     try {
       console.log(`🔄 Updating goal ${goalId} with:`, updates);
@@ -181,7 +211,9 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
+    // Handle 'active' filter to hide completed goals
+    if (filterStatus === 'active' && isStatus(goal.status, 'Complete')) return false;
+    if (filterStatus !== 'all' && filterStatus !== 'active' && !isStatus(goal.status, filterStatus)) return false;
     if (filterTheme !== 'all' && !isTheme(goal.theme, filterTheme)) return false;
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
@@ -340,6 +372,7 @@ const GoalsManagement: React.FC = () => {
                     style={{ border: '1px solid #d1d5db' }}
                   >
                     <option value="all">All Status</option>
+                    <option value="active">Active (Hide Completed)</option>
                     <option value="New">New</option>
                     <option value="Work in Progress">Work in Progress</option>
                     <option value="Complete">Complete</option>
@@ -415,6 +448,8 @@ const GoalsManagement: React.FC = () => {
                   onGoalUpdate={handleGoalUpdate}
                   onGoalDelete={handleGoalDelete}
                   onGoalPriorityChange={handleGoalPriorityChange}
+                  onGoalSelect={handleGoalSelect}
+                  selectedGoalId={selectedGoalId}
                 />
               )}
             </Card.Body>
@@ -444,7 +479,7 @@ const GoalsManagement: React.FC = () => {
                   <p style={{ margin: 0, color: '#6b7280' }}>Loading goals...</p>
                 </div>
               ) : (
-                <div style={{ height: '600px', overflow: 'auto' }}>
+                <div style={{ height: '600px', overflow: 'auto' }} data-component="GoalsManagement">
                   <ModernGoalsTable
                     goals={filteredGoals}
                     onGoalUpdate={handleGoalUpdate}
@@ -466,12 +501,27 @@ const GoalsManagement: React.FC = () => {
             padding: '20px 24px' 
           }}>
             <div className="d-flex justify-content-between align-items-center">
-              <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
-                Stories Management ({stories.length})
-              </h5>
-              <small className="text-muted">
-                Manage all stories across your goals
-              </small>
+              <div>
+                <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
+                  Stories Management ({selectedGoalId ? stories.filter(s => s.goalId === selectedGoalId).length : stories.length})
+                </h5>
+                <small className="text-muted">
+                  {selectedGoalId 
+                    ? `Showing stories for goal: ${goals.find(g => g.id === selectedGoalId)?.title || 'Unknown Goal'}`
+                    : 'Manage all stories across your goals'
+                  }
+                </small>
+              </div>
+              {selectedGoalId && (
+                <Button 
+                  variant="outline-secondary" 
+                  size="sm"
+                  onClick={() => setSelectedGoalId(null)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                >
+                  <span>×</span> Clear Filter
+                </Button>
+              )}
             </div>
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
@@ -496,6 +546,7 @@ const GoalsManagement: React.FC = () => {
                   onStoryDelete={handleStoryDelete}
                   onStoryPriorityChange={handleStoryPriorityChange}
                   onStoryAdd={handleStoryAdd}
+                  goalId={selectedGoalId || undefined}
                 />
               </div>
             )}

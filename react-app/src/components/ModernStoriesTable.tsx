@@ -87,7 +87,7 @@ const defaultColumns: Column[] = [
     label: 'Goal', 
     width: '15%', 
     visible: true, 
-    editable: false, 
+    editable: true, 
     type: 'text' 
   },
   { 
@@ -127,6 +127,178 @@ const defaultColumns: Column[] = [
     options: [] // Will be populated dynamically with sprint names
   },
 ];
+
+// New Story Row Component
+interface NewStoryRowProps {
+  columns: Column[];
+  goals: Goal[];
+  sprints: Sprint[];
+  newStoryData: Partial<Story>;
+  onFieldChange: (field: string, value: any) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}
+
+const NewStoryRow: React.FC<NewStoryRowProps> = ({ 
+  columns, 
+  goals, 
+  sprints, 
+  newStoryData, 
+  onFieldChange, 
+  onSave, 
+  onCancel 
+}) => {
+  const renderNewCell = (column: Column) => {
+    const value = newStoryData[column.key as keyof Story];
+
+    if (!column.editable || column.key === 'ref') {
+      return (
+        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: '1px solid #f3f4f6' }}>
+          <div style={{ fontSize: '14px', color: '#9ca3af', fontStyle: 'italic' }}>
+            {column.key === 'ref' ? 'Auto-generated' : 'Auto'}
+          </div>
+        </td>
+      );
+    }
+
+    if (column.key === 'goalTitle') {
+      // Show goal selector instead of goalTitle
+      return (
+        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: '1px solid #f3f4f6' }}>
+          <select
+            value={newStoryData.goalId || ''}
+            onChange={(e) => onFieldChange('goalId', e.target.value)}
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              border: '2px solid #3b82f6',
+              borderRadius: '4px',
+              fontSize: '14px',
+              backgroundColor: 'white',
+              outline: 'none',
+            }}
+          >
+            <option value="">Select Goal</option>
+            {goals.map(goal => (
+              <option key={goal.id} value={goal.id}>{goal.title}</option>
+            ))}
+          </select>
+        </td>
+      );
+    }
+
+    if (column.type === 'select' && column.options) {
+      return (
+        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: '1px solid #f3f4f6' }}>
+          <select
+            value={value || ''}
+            onChange={(e) => onFieldChange(column.key, e.target.value)}
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              border: '2px solid #3b82f6',
+              borderRadius: '4px',
+              fontSize: '14px',
+              backgroundColor: 'white',
+              outline: 'none',
+            }}
+          >
+            {column.key === 'sprintId' ? (
+              <>
+                <option value="">No Sprint</option>
+                {sprints.map(sprint => (
+                  <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+                ))}
+              </>
+            ) : (
+              column.options.map(option => (
+                <option key={option} value={option}>{option}</option>
+              ))
+            )}
+          </select>
+        </td>
+      );
+    }
+
+    return (
+      <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: '1px solid #f3f4f6' }}>
+        <input
+          type={column.type === 'number' ? 'number' : 'text'}
+          value={value || ''}
+          onChange={(e) => onFieldChange(column.key, column.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value)}
+          placeholder={`Enter ${column.label.toLowerCase()}...`}
+          style={{
+            width: '100%',
+            padding: '6px 8px',
+            border: '2px solid #3b82f6',
+            borderRadius: '4px',
+            fontSize: '14px',
+            backgroundColor: 'white',
+            outline: 'none',
+          }}
+        />
+      </td>
+    );
+  };
+
+  return (
+    <tr style={{
+      backgroundColor: '#f0f9ff',
+      borderBottom: '2px solid #3b82f6',
+      border: '2px solid #3b82f6',
+    }}>
+      <td style={{
+        padding: '12px 8px',
+        textAlign: 'center',
+        borderRight: '1px solid #f3f4f6',
+        width: '48px',
+      }}>
+        <div style={{ color: '#3b82f6', fontSize: '12px', fontWeight: '600' }}>NEW</div>
+      </td>
+      {columns.filter(col => col.visible).map(renderNewCell)}
+      <td style={{
+        padding: '12px 8px',
+        textAlign: 'center',
+        width: '96px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+          <button
+            onClick={onSave}
+            style={{
+              color: 'white',
+              backgroundColor: '#059669',
+              padding: '4px 8px',
+              borderRadius: '4px',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '500',
+            }}
+            title="Save new story"
+          >
+            Save
+          </button>
+          <button
+            onClick={onCancel}
+            style={{
+              color: 'white',
+              backgroundColor: '#dc2626',
+              padding: '4px 8px',
+              borderRadius: '4px',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '500',
+            }}
+            title="Cancel"
+          >
+            Cancel
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+};
 
 interface SortableRowProps {
   story: StoryTableRow;
@@ -452,6 +624,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   });
   const [sprints, setSprints] = useState<Sprint[]>([]);
   
+  // New story row state
+  const [isAddingNewStory, setIsAddingNewStory] = useState(false);
+  const [newStoryData, setNewStoryData] = useState<Partial<Story>>({});
+  
   // Enhanced filtering and search state
   const [filters, setFilters] = useState({
     search: '',
@@ -508,6 +684,72 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     return unsubscribe;
   }, [currentUser]);
 
+  // Handle adding new story row
+  const handleAddNewStory = () => {
+    setIsAddingNewStory(true);
+    
+    // Auto-link goal only if we're filtering by a specific goal (Goals Management page context)
+    // If goalId is 'all' or undefined, don't auto-select (Stories Management page context)
+    const autoGoalId = (goalId && goalId !== 'all') ? goalId : '';
+    
+    console.log('🎯 New Story Creation Context:');
+    console.log('📊 Goal ID prop:', goalId);
+    console.log('🎯 Auto-selected goal:', autoGoalId);
+    console.log('📝 Available goals:', goals.length);
+    
+    setNewStoryData({
+      title: '',
+      description: '',
+      goalId: autoGoalId,
+      status: 0, // Backlog
+      priority: 3, // P3
+      points: 1,
+      wipLimit: 3,
+      orderIndex: 0,
+      theme: 1, // Health
+      tags: [],
+      acceptanceCriteria: []
+    });
+  };
+
+  const handleSaveNewStory = async () => {
+    if (!newStoryData.title || !newStoryData.goalId) {
+      alert('Please provide at least a title and select a goal');
+      return;
+    }
+
+    try {
+      console.log('🎯 ModernStoriesTable: Starting new story save...');
+      await onStoryAdd(newStoryData as Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>);
+      console.log('✅ ModernStoriesTable: Story add completed, clearing form...');
+      
+      // Clear the form data but keep the add row visible briefly
+      setNewStoryData({});
+      
+      // Hide the add row after a short delay to allow real-time update to show
+      setTimeout(() => {
+        console.log('🎯 ModernStoriesTable: Hiding add row after successful creation');
+        setIsAddingNewStory(false);
+      }, 500);
+      
+    } catch (error) {
+      console.error('❌ ModernStoriesTable: Error saving new story:', error);
+      alert('Failed to save story. Please try again.');
+    }
+  };
+
+  const handleCancelNewStory = () => {
+    setIsAddingNewStory(false);
+    setNewStoryData({});
+  };
+
+  const handleNewStoryFieldChange = (field: string, value: any) => {
+    setNewStoryData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -517,7 +759,14 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
   // Convert stories to table rows with goal titles and sort order
   // Filter by goalId if provided, otherwise show all stories
-  const filteredStories = goalId ? stories.filter(story => story.goalId === goalId) : stories;
+  const filteredStories = (goalId && goalId !== 'all') ? stories.filter(story => story.goalId === goalId) : stories;
+  
+  console.log('🔍 ModernStoriesTable FILTERING:');
+  console.log('📊 Input stories count:', stories.length);
+  console.log('🎯 Goal ID filter:', goalId);
+  console.log('📝 All story goalIds:', stories.map(s => ({ id: s.id, goalId: s.goalId, title: s.title })));
+  console.log('✅ After goalId filter:', filteredStories.length);
+  console.log('📝 Filtered story details:', filteredStories.map(s => ({ id: s.id, goalId: s.goalId, title: s.title })));
   
   const tableRows: StoryTableRow[] = filteredStories.map((story, index) => {
     const goal = goals.find(g => g.id === story.goalId);
@@ -634,14 +883,17 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const visibleColumnsCount = columns.filter(col => col.visible).length;
 
   return (
-    <div style={{ 
-      position: 'relative', 
-      backgroundColor: 'white', 
-      borderRadius: '8px', 
-      border: '1px solid #e5e7eb', 
-      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
-      overflow: 'hidden' 
-    }}>
+    <div 
+      data-component="ModernStoriesTable"
+      style={{ 
+        position: 'relative', 
+        backgroundColor: 'white', 
+        borderRadius: '8px', 
+        border: '1px solid #e5e7eb', 
+        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+        overflow: 'hidden' 
+      }}
+    >
       {/* Header with controls */}
       <div style={{
         display: 'flex',
@@ -974,6 +1226,19 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                 </tr>
               </thead>
               <tbody>
+                {/* Add New Story Row */}
+                {isAddingNewStory && (
+                  <NewStoryRow
+                    columns={columns}
+                    goals={goals}
+                    sprints={sprints}
+                    newStoryData={newStoryData}
+                    onFieldChange={handleNewStoryFieldChange}
+                    onSave={handleSaveNewStory}
+                    onCancel={handleCancelNewStory}
+                  />
+                )}
+                
                 <SortableContext 
                   items={sortedRows.map(row => row.id)}
                   strategy={verticalListSortingStrategy}
@@ -990,6 +1255,43 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                     />
                   ))}
                 </SortableContext>
+                
+                {/* Add New Story Button Row */}
+                {!isAddingNewStory && (
+                  <tr>
+                    <td colSpan={columns.filter(col => col.visible).length + 2} style={{ 
+                      padding: '16px', 
+                      textAlign: 'center',
+                      borderTop: '2px dashed #d1d5db',
+                      backgroundColor: '#f9fafb'
+                    }}>
+                      <button
+                        onClick={handleAddNewStory}
+                        style={{
+                          color: '#2563eb',
+                          backgroundColor: 'transparent',
+                          border: '2px dashed #2563eb',
+                          borderRadius: '8px',
+                          padding: '8px 16px',
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#dbeafe';
+                          e.currentTarget.style.borderColor = '#1d4ed8';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                          e.currentTarget.style.borderColor = '#2563eb';
+                        }}
+                      >
+                        + Add New Story
+                      </button>
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </DndContext>

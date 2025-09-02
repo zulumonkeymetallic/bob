@@ -20,13 +20,17 @@ interface GoalsCardViewProps {
   onGoalUpdate: (goalId: string, updates: Partial<Goal>) => void;
   onGoalDelete: (goalId: string) => void;
   onGoalPriorityChange: (goalId: string, newPriority: number) => void;
+  onGoalSelect?: (goalId: string) => void; // New prop for goal selection
+  selectedGoalId?: string | null; // New prop for highlighting selected goal
 }
 
 const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   goals,
   onGoalUpdate,
   onGoalDelete,
-  onGoalPriorityChange
+  onGoalPriorityChange,
+  onGoalSelect,
+  selectedGoalId
 }) => {
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
@@ -278,21 +282,29 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             <Card 
               style={{ 
                 height: '100%',
-                border: 'none',
-                boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                border: selectedGoalId === goal.id ? '3px solid #3b82f6' : 'none',
+                boxShadow: selectedGoalId === goal.id 
+                  ? '0 8px 20px rgba(59, 130, 246, 0.3)' 
+                  : '0 4px 6px rgba(0,0,0,0.1)',
                 borderRadius: '12px',
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                backgroundColor: selectedGoalId === goal.id ? '#f8faff' : '#fff'
               }}
               className="h-100"
+              onClick={() => onGoalSelect?.(goal.id)}
               onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = '0 8px 12px rgba(0,0,0,0.15)';
+                if (selectedGoalId !== goal.id) {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 8px 12px rgba(0,0,0,0.15)';
+                }
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+                if (selectedGoalId !== goal.id) {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+                }
               }}
             >
               {/* Theme Bar */}
