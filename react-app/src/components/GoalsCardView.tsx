@@ -527,12 +527,25 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                       <Calendar size={12} style={{ marginRight: '4px' }} />
-                      Created: {goal.createdAt && new Date(goal.createdAt.toDate()).toLocaleDateString()}
+                      Created: {goal.createdAt && (() => {
+                        try {
+                          return new Date(goal.createdAt.toDate()).toLocaleDateString();
+                        } catch (error) {
+                          return 'Unknown';
+                        }
+                      })()}
                     </div>
                     {goal.updatedAt && goal.updatedAt.toDate && (
                       <div style={{ display: 'flex', alignItems: 'center', color: '#059669', fontWeight: '500' }}>
                         <Calendar size={12} style={{ marginRight: '4px' }} />
-                        Updated: {new Date(goal.updatedAt.toDate()).toLocaleDateString()} at {new Date(goal.updatedAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        Updated: {(() => {
+                          try {
+                            const date = new Date(goal.updatedAt.toDate());
+                            return `${date.toLocaleDateString()} at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                          } catch (error) {
+                            return 'Unknown';
+                          }
+                        })()}
                       </div>
                     )}
                   </div>
