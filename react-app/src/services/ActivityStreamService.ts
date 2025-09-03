@@ -14,7 +14,7 @@ export interface ActivityEntry {
   id?: string;
   entityId: string;
   entityType: 'goal' | 'story' | 'task' | 'sprint' | 'calendar_block' | 'digest' | 'habit' | 'personal_list' | 'okr' | 'resource' | 'trip' | 'work_project';
-  activityType: 'created' | 'updated' | 'deleted' | 'note_added' | 'status_changed' | 'sprint_changed' | 'priority_changed' | 'viewed' | 'clicked' | 'edited' | 'exported' | 'imported';
+  activityType: 'created' | 'updated' | 'deleted' | 'note_added' | 'status_changed' | 'sprint_changed' | 'priority_changed' | 'viewed' | 'clicked' | 'edited' | 'exported' | 'imported' | 'ai_call_initiated' | 'ai_call_completed' | 'ai_call_failed' | 'calendar_scheduled' | 'calendar_updated' | 'calendar_block_created' | 'calendar_sync';
   userId: string;
   userEmail?: string;
   timestamp: Timestamp;
@@ -42,6 +42,30 @@ export interface ActivityEntry {
   clickType?: 'button' | 'link' | 'dropdown' | 'checkbox' | 'edit' | 'delete' | 'view' | 'drag' | 'drop';
   elementId?: string;
   elementClass?: string;
+
+  // 🤖 AI Call Tracking Fields
+  aiCallId?: string;
+  aiFunction?: string;
+  aiParameters?: string; // JSON stringified parameters
+  aiResults?: string; // JSON stringified results
+  aiError?: string; // Error message for failed calls
+  aiContext?: string; // Additional context (e.g., "goal scheduling")
+  aiExecutionTime?: number; // Execution time in milliseconds
+
+  // 📅 Calendar Integration Fields
+  calendarStartTime?: string; // ISO string
+  calendarEndTime?: string; // ISO string
+  calendarTitle?: string;
+  calendarDescription?: string;
+  isAiGenerated?: boolean; // Whether calendar block was AI-generated
+  blocksCreated?: number; // Number of calendar blocks created
+  timeRequested?: number; // Minutes of time requested
+  schedulingType?: 'goal_focus' | 'general' | 'habit' | 'project';
+  dateRange?: string; // Date range for scheduling
+  syncAction?: 'import' | 'export' | 'bidirectional';
+  itemsProcessed?: number; // For sync operations
+  conflicts?: number; // Number of conflicts during sync
+  syncSource?: string; // Source of sync (e.g., "Google Calendar")
 }
 
 export class ActivityStreamService {
@@ -516,8 +540,267 @@ export class ActivityStreamService {
       case 'edited': return '✏️';
       case 'exported': return '📤';
       case 'imported': return '📥';
+      case 'ai_call_initiated': return '🤖';
+      case 'ai_call_completed': return '✅';
+      case 'ai_call_failed': return '❌';
+      case 'calendar_scheduled': return '📅';
+      case 'calendar_updated': return '🗓️';
+      case 'calendar_block_created': return '⏰';
+      case 'calendar_sync': return '🔄';
       default: return '📋';
     }
+  }
+
+  // 🤖 AI CALL TRACKING METHODS FOR ENHANCED ACTIVITY LOGGING
+
+  // Log AI call initiation with detailed parameters
+  static async logAICallInitiated(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    aiFunction: string,
+    parameters: any,
+    userId: string,
+    userEmail?: string,
+    context?: string
+  ): Promise<string> {
+    const callId = `ai_call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const description = `🤖 AI Call Started: ${aiFunction}${context ? ` (${context})` : ''}`;
+    
+    console.log(`🤖 BOB AI CALL INITIATED:`, {
+      callId,
+      aiFunction,
+      entityId,
+      entityType,
+      parameters,
+      userId,
+      userEmail,
+      context,
+      timestamp: new Date().toISOString()
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'ai_call_initiated',
+      userId,
+      userEmail: userEmail || undefined,
+      description,
+      aiCallId: callId,
+      aiFunction,
+      aiParameters: JSON.stringify(parameters),
+      aiContext: context,
+      uiComponent: 'ai-scheduler'
+    });
+
+    return callId;
+  }
+
+  // Log AI call completion with results
+  static async logAICallCompleted(
+    callId: string,
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    aiFunction: string,
+    results: any,
+    userId: string,
+    userEmail?: string,
+    executionTimeMs?: number
+  ): Promise<void> {
+    const description = `✅ AI Call Completed: ${aiFunction} (${executionTimeMs ? `${executionTimeMs}ms` : 'unknown duration'})`;
+    
+    console.log(`✅ BOB AI CALL COMPLETED:`, {
+      callId,
+      aiFunction,
+      entityId,
+      entityType,
+      results,
+      userId,
+      userEmail,
+      executionTimeMs,
+      timestamp: new Date().toISOString()
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'ai_call_completed',
+      userId,
+      userEmail: userEmail || undefined,
+      description,
+      aiCallId: callId,
+      aiFunction,
+      aiResults: JSON.stringify(results),
+      aiExecutionTime: executionTimeMs,
+      uiComponent: 'ai-scheduler'
+    });
+  }
+
+  // Log AI call failure with error details
+  static async logAICallFailed(
+    callId: string,
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    aiFunction: string,
+    error: any,
+    userId: string,
+    userEmail?: string,
+    executionTimeMs?: number
+  ): Promise<void> {
+    const errorMessage = error?.message || error?.toString() || 'Unknown error';
+    const description = `❌ AI Call Failed: ${aiFunction} - ${errorMessage}`;
+    
+    console.log(`❌ BOB AI CALL FAILED:`, {
+      callId,
+      aiFunction,
+      entityId,
+      entityType,
+      error,
+      userId,
+      userEmail,
+      executionTimeMs,
+      timestamp: new Date().toISOString()
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'ai_call_failed',
+      userId,
+      userEmail: userEmail || undefined,
+      description,
+      aiCallId: callId,
+      aiFunction,
+      aiError: errorMessage,
+      aiExecutionTime: executionTimeMs,
+      uiComponent: 'ai-scheduler'
+    });
+  }
+
+  // 📅 CALENDAR INTEGRATION TRACKING METHODS
+
+  // Log calendar block creation
+  static async logCalendarBlockCreated(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    blockDetails: {
+      startTime: string;
+      endTime: string;
+      title: string;
+      description?: string;
+      isAiGenerated?: boolean;
+    },
+    userId: string,
+    userEmail?: string,
+    aiCallId?: string
+  ): Promise<void> {
+    const description = `⏰ Calendar Block Created: ${blockDetails.title} (${new Date(blockDetails.startTime).toLocaleString()} - ${new Date(blockDetails.endTime).toLocaleTimeString()})`;
+    
+    console.log(`⏰ BOB CALENDAR BLOCK CREATED:`, {
+      entityId,
+      entityType,
+      blockDetails,
+      userId,
+      userEmail,
+      aiCallId,
+      timestamp: new Date().toISOString()
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'calendar_block_created',
+      userId,
+      userEmail: userEmail || undefined,
+      description,
+      calendarStartTime: blockDetails.startTime,
+      calendarEndTime: blockDetails.endTime,
+      calendarTitle: blockDetails.title,
+      calendarDescription: blockDetails.description,
+      isAiGenerated: blockDetails.isAiGenerated || false,
+      aiCallId: aiCallId || undefined,
+      uiComponent: 'calendar-scheduler'
+    });
+  }
+
+  // Log bulk calendar scheduling results
+  static async logCalendarSchedulingResult(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    schedulingResult: {
+      blocksCreated: number;
+      timeRequested?: number;
+      schedulingType: 'goal_focus' | 'general' | 'habit' | 'project';
+      dateRange?: string;
+    },
+    userId: string,
+    userEmail?: string,
+    aiCallId?: string
+  ): Promise<void> {
+    const description = `📅 Calendar Scheduling: ${schedulingResult.blocksCreated} blocks created for ${schedulingResult.schedulingType}${schedulingResult.timeRequested ? ` (${schedulingResult.timeRequested} minutes requested)` : ''}`;
+    
+    console.log(`📅 BOB CALENDAR SCHEDULING RESULT:`, {
+      entityId,
+      entityType,
+      schedulingResult,
+      userId,
+      userEmail,
+      aiCallId,
+      timestamp: new Date().toISOString()
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'calendar_scheduled',
+      userId,
+      userEmail: userEmail || undefined,
+      description,
+      blocksCreated: schedulingResult.blocksCreated,
+      timeRequested: schedulingResult.timeRequested,
+      schedulingType: schedulingResult.schedulingType,
+      dateRange: schedulingResult.dateRange,
+      aiCallId: aiCallId || undefined,
+      uiComponent: 'calendar-scheduler'
+    });
+  }
+
+  // Log calendar synchronization events
+  static async logCalendarSync(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    syncResult: {
+      action: 'import' | 'export' | 'bidirectional';
+      itemsProcessed: number;
+      conflicts?: number;
+      source?: string;
+    },
+    userId: string,
+    userEmail?: string
+  ): Promise<void> {
+    const description = `🔄 Calendar Sync: ${syncResult.action} completed (${syncResult.itemsProcessed} items${syncResult.conflicts ? `, ${syncResult.conflicts} conflicts` : ''})`;
+    
+    console.log(`🔄 BOB CALENDAR SYNC:`, {
+      entityId,
+      entityType,
+      syncResult,
+      userId,
+      userEmail,
+      timestamp: new Date().toISOString()
+    });
+
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'calendar_sync',
+      userId,
+      userEmail: userEmail || undefined,
+      description,
+      syncAction: syncResult.action,
+      itemsProcessed: syncResult.itemsProcessed,
+      conflicts: syncResult.conflicts,
+      syncSource: syncResult.source,
+      uiComponent: 'calendar-sync'
+    });
   }
 
   // Get comprehensive activity stream for any entity type
