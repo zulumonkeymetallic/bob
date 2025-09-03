@@ -190,7 +190,7 @@ const SprintManagementView: React.FC = () => {
     if (!currentUser || !selectedStory || !newTask.title.trim()) return;
 
     try {
-      const taskRef = generateRef('TSK');
+      const taskRef = generateRef('task', []); // Pass empty array for now, in production this should contain existing refs
       await addDoc(collection(db, 'tasks'), {
         ref: taskRef,
         title: newTask.title,

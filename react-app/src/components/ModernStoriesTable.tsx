@@ -397,6 +397,27 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
+    // Handle Firebase timestamp objects - React error #31 fix
+    if (value && typeof value === 'object') {
+      // Check if it's a Firebase Timestamp object
+      if (value.seconds !== undefined && value.nanoseconds !== undefined) {
+        const date = new Date(value.seconds * 1000 + value.nanoseconds / 1000000);
+        if (key === 'updatedAt' || key === 'createdAt') {
+          return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        }
+        return date.toISOString();
+      }
+      // If it's already a Date object
+      if (value instanceof Date) {
+        if (key === 'updatedAt' || key === 'createdAt') {
+          return value.toLocaleDateString() + ' ' + value.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        }
+        return value.toISOString();
+      }
+      // For other objects, convert to string safely
+      return String(value);
+    }
+    
     if (key === 'sprintId' && value) {
       const sprint = sprints.find(s => s.id === value);
       return sprint ? sprint.name : value;

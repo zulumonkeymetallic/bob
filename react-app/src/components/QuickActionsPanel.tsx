@@ -9,6 +9,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { Story, Goal, Sprint } from '../types';
 import AddGoalModal from './AddGoalModal';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 interface QuickActionsProps {
   onAction?: (type: string, data: any) => void;
@@ -269,13 +270,12 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
     }
   };
 
-  const themes = [
-    { id: 1, name: 'Health', color: '#ef4444' },
-    { id: 2, name: 'Growth', color: '#8b5cf6' },
-    { id: 3, name: 'Wealth', color: '#059669' },
-    { id: 4, name: 'Tribe', color: '#f59e0b' },
-    { id: 5, name: 'Home', color: '#3b82f6' }
-  ];
+  // Use centralized theme management
+  const themes = GLOBAL_THEMES.map(theme => ({
+    id: theme.id,
+    name: theme.name,
+    color: theme.color
+  }));
 
   return (
     <>
