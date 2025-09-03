@@ -54,6 +54,8 @@ interface ModernTaskTableProps {
   onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
   onTaskDelete: (taskId: string) => Promise<void>;
   onTaskPriorityChange: (taskId: string, newPriority: number) => Promise<void>;
+  defaultColumns?: string[];
+  compact?: boolean;
 }
 
 const defaultColumns: Column[] = [
@@ -447,9 +449,24 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   onTaskUpdate,
   onTaskDelete,
   onTaskPriorityChange,
+  defaultColumns: defaultColumnKeys,
+  compact = false,
 }) => {
   const { trackClick } = useActivityTracking();
-  const [columns, setColumns] = useState<Column[]>(defaultColumns);
+  
+  // Initialize columns based on defaultColumns prop or use all columns
+  const initializeColumns = () => {
+    if (defaultColumnKeys && defaultColumnKeys.length > 0) {
+      return defaultColumns.map(col => ({
+        ...col,
+        visible: defaultColumnKeys.includes(col.key),
+        width: compact ? undefined : col.width // Remove fixed widths in compact mode
+      }));
+    }
+    return defaultColumns;
+  };
+  
+  const [columns, setColumns] = useState<Column[]>(initializeColumns());
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
     columns: true,

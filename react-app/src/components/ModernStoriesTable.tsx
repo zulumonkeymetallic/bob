@@ -54,6 +54,8 @@ interface ModernStoriesTableProps {
   onStoryDelete: (storyId: string) => Promise<void>;
   onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
   onStoryAdd: (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
+  onStorySelect?: (story: Story) => void; // New prop for story selection
+  onEditStory?: (story: Story) => void; // New prop for story editing
   goalId?: string; // Made optional for full stories table
 }
 
@@ -309,6 +311,8 @@ interface SortableRowProps {
   goals: Goal[];
   onStoryUpdate: (storyId: string, updates: Partial<Story>) => Promise<void>;
   onStoryDelete: (storyId: string) => Promise<void>;
+  onStorySelect?: (story: Story) => void;
+  onEditStory?: (story: Story) => void;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -318,7 +322,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
   sprints,
   goals,
   onStoryUpdate, 
-  onStoryDelete 
+  onStoryDelete,
+  onStorySelect,
+  onEditStory
 }) => {
   const {
     attributes,
@@ -517,8 +523,21 @@ const SortableRow: React.FC<SortableRowProps> = ({
         backgroundColor: 'white',
         borderBottom: '1px solid #f3f4f6',
         transition: 'background-color 0.15s ease',
+        cursor: onStorySelect ? 'pointer' : 'default',
       }}
       {...attributes}
+      onClick={(e) => {
+        // Don't trigger story selection if clicking on buttons or form elements
+        if (
+          onStorySelect && 
+          e.target instanceof HTMLElement && 
+          !e.target.closest('button') && 
+          !e.target.closest('input') && 
+          !e.target.closest('select')
+        ) {
+          onStorySelect(story);
+        }
+      }}
       onMouseEnter={(e) => {
         if (!isDragging) {
           e.currentTarget.style.backgroundColor = '#f9fafb';
@@ -564,7 +583,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         textAlign: 'center',
         width: '96px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
           <button
             onClick={() => handleCellEdit('title', story.title)}
             style={{
@@ -575,7 +594,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '12px',
+              fontSize: '11px',
               fontWeight: '500',
             }}
             onMouseEnter={(e) => {
@@ -586,10 +605,37 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = '#2563eb';
             }}
-            title="Edit story title"
+            title="Quick edit story title"
           >
-            Edit
+            Quick
           </button>
+          {onEditStory && (
+            <button
+              onClick={() => onEditStory(story)}
+              style={{
+                color: '#059669',
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                fontSize: '11px',
+                fontWeight: '500',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#d1fae5';
+                e.currentTarget.style.color = '#047857';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = '#059669';
+              }}
+              title="Edit story in modal"
+            >
+              Edit
+            </button>
+          )}
           <button
             onClick={() => onStoryDelete(story.id)}
             style={{
@@ -600,7 +646,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '12px',
+              fontSize: '11px',
               fontWeight: '500',
             }}
             onMouseEnter={(e) => {
@@ -628,6 +674,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onStoryDelete,
   onStoryPriorityChange,
   onStoryAdd,
+  onStorySelect,
+  onEditStory,
   goalId,
 }) => {
   const { currentUser } = useAuth();
@@ -1285,6 +1333,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                       goals={goals}
                       onStoryUpdate={onStoryUpdate}
                       onStoryDelete={onStoryDelete}
+                      onStorySelect={onStorySelect}
+                      onEditStory={onEditStory}
                     />
                   ))}
                 </SortableContext>

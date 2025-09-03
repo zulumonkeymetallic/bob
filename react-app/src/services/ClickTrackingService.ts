@@ -114,7 +114,8 @@ class ClickTrackingService {
     while (current && current !== document.body) {
       // Check for React component class names
       if (current.className) {
-        const classes = current.className.split(' ');
+        const classNames = current.className.toString();
+        const classes = classNames.split(' ');
         
         // Look for component-specific class patterns
         for (const cls of classes) {

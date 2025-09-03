@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
-import { Plus, Upload } from 'lucide-react';
+import { Container, Card, Row, Col, Button, Form, InputGroup, Badge } from 'react-bootstrap';
+import { Plus, Upload, List, Grid } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -8,7 +8,9 @@ import { db } from '../firebase';
 import { Story, Goal } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
 import AddStoryModal from './AddStoryModal';
+import EditStoryModal from './EditStoryModal';
 import ImportModal from './ImportModal';
+import StoryTasksPanel from './StoryTasksPanel';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const StoriesManagement: React.FC = () => {
@@ -21,7 +23,10 @@ const StoriesManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
+  const [showEditStoryModal, setShowEditStoryModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [selectedStory, setSelectedStory] = useState<Story | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
 
   // 📍 PAGE TRACKING
   useEffect(() => {
@@ -54,12 +59,11 @@ const StoriesManagement: React.FC = () => {
     
     setLoading(true);
     
-    // Load stories data
+    // Load stories data - simplified query to avoid index requirements
     const storiesQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc')
+      where('persona', '==', currentPersona)
     );
     
     // Load goals data for relationships
@@ -76,6 +80,14 @@ const StoriesManagement: React.FC = () => {
         id: doc.id,
         ...doc.data()
       })) as Story[];
+      
+      // Sort by createdAt in memory to avoid index requirements
+      storiesData.sort((a, b) => {
+        const aDate = a.createdAt?.toDate?.() || new Date(0);
+        const bDate = b.createdAt?.toDate?.() || new Date(0);
+        return bDate.getTime() - aDate.getTime(); // Desc order (newest first)
+      });
+      
       console.log('📊 Setting stories state with:', storiesData.length, 'stories');
       setStories(storiesData);
     });
@@ -173,6 +185,20 @@ const StoriesManagement: React.FC = () => {
     }
   };
 
+  // Edit story function
+  const openEditStory = (story: Story) => {
+    console.log('📝 Opening edit modal for story:', story);
+    setSelectedStory(story);
+    setShowEditStoryModal(true);
+  };
+
+  const handleStoryUpdated = () => {
+    console.log('✅ Story updated successfully');
+    setShowEditStoryModal(false);
+    setSelectedStory(null);
+    // The real-time listener will automatically update the stories list
+  };
+
   // Apply filters to stories
   const filteredStories = stories.filter(story => {
     if (filterStatus !== 'all' && !isStatus(story.status, filterStatus)) return false;
@@ -222,6 +248,39 @@ const StoriesManagement: React.FC = () => {
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {/* View Mode Toggle */}
+            <div style={{ display: 'flex', border: '1px solid #d1d5db', borderRadius: '6px', overflow: 'hidden' }}>
+              <Button
+                variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
+                size="sm"
+                onClick={() => setViewMode('list')}
+                style={{ 
+                  borderRadius: '0',
+                  borderRight: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <List size={14} />
+                List
+              </Button>
+              <Button
+                variant={viewMode === 'cards' ? 'primary' : 'outline-secondary'}
+                size="sm"
+                onClick={() => setViewMode('cards')}
+                style={{ 
+                  borderRadius: '0',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <Grid size={14} />
+                Cards
+              </Button>
+            </div>
+            
             <Button 
               variant="outline-secondary" 
               onClick={() => setShowImportModal(true)}
@@ -387,20 +446,126 @@ const StoriesManagement: React.FC = () => {
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }} data-component="StoriesManagement">
-                <ModernStoriesTable
-                  stories={filteredStories}
-                  goals={goals}
-                  onStoryUpdate={handleStoryUpdate}
-                  onStoryDelete={handleStoryDelete}
-                  onStoryPriorityChange={handleStoryPriorityChange}
-                  onStoryAdd={handleStoryAdd}
-                  goalId="all"
-                />
+                {viewMode === 'list' ? (
+                  <ModernStoriesTable
+                    stories={filteredStories}
+                    goals={goals}
+                    onStoryUpdate={handleStoryUpdate}
+                    onStoryDelete={handleStoryDelete}
+                    onStoryPriorityChange={handleStoryPriorityChange}
+                    onStoryAdd={handleStoryAdd}
+                    onStorySelect={setSelectedStory}
+                    onEditStory={openEditStory}
+                    goalId="all"
+                  />
+                ) : (
+                  <div style={{ padding: '20px' }}>
+                    <Row>
+                      {filteredStories.map(story => (
+                        <Col md={6} lg={4} key={story.id} className="mb-3">
+                          <Card 
+                            style={{ 
+                              height: '280px', 
+                              cursor: 'pointer',
+                              border: '1px solid #e5e7eb',
+                              transition: 'all 0.2s ease-in-out'
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+                              e.currentTarget.style.transform = 'translateY(-2px)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                            }}
+                            onClick={() => setSelectedStory(story)}
+                          >
+                            <Card.Header style={{ 
+                              backgroundColor: '#f8fafc',
+                              borderBottom: '1px solid #e5e7eb',
+                              padding: '12px 16px'
+                            }}>
+                              <div style={{ 
+                                display: 'flex', 
+                                justifyContent: 'space-between', 
+                                alignItems: 'center' 
+                              }}>
+                                <Badge 
+                                  bg={story.status === 0 ? 'secondary' : story.status === 1 ? 'primary' : 'success'}
+                                  style={{ fontSize: '10px' }}
+                                >
+                                  {story.status === 0 ? 'Backlog' : story.status === 1 ? 'Active' : 'Done'}
+                                </Badge>
+                                <Badge 
+                                  bg={story.priority === 1 ? 'danger' : story.priority === 2 ? 'warning' : 'info'}
+                                  style={{ fontSize: '10px' }}
+                                >
+                                  P{story.priority}
+                                </Badge>
+                              </div>
+                            </Card.Header>
+                            <Card.Body style={{ padding: '16px', display: 'flex', flexDirection: 'column' }}>
+                              <h6 style={{ 
+                                margin: '0 0 8px 0', 
+                                fontSize: '14px', 
+                                fontWeight: '600',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {story.ref}
+                              </h6>
+                              <p style={{ 
+                                margin: '0 0 12px 0', 
+                                fontSize: '13px',
+                                lineHeight: '1.4',
+                                overflow: 'hidden',
+                                display: '-webkit-box',
+                                WebkitLineClamp: 3,
+                                WebkitBoxOrient: 'vertical'
+                              }}>
+                                {story.title}
+                              </p>
+                              <div style={{ marginTop: 'auto' }}>
+                                <div style={{ 
+                                  display: 'flex', 
+                                  justifyContent: 'space-between', 
+                                  alignItems: 'center',
+                                  fontSize: '12px',
+                                  color: '#6b7280'
+                                }}>
+                                  <span>Points: {story.points}</span>
+                                  <span>
+                                    Theme: {
+                                      story.theme === 1 ? 'Health' :
+                                      story.theme === 2 ? 'Wealth' :
+                                      story.theme === 3 ? 'Wisdom' :
+                                      story.theme === 4 ? 'Relationships' :
+                                      'Other'
+                                    }
+                                  </span>
+                                </div>
+                              </div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
+                  </div>
+                )}
               </div>
             )}
           </Card.Body>
         </Card>
       </div>
+
+      {/* Story Tasks Panel */}
+      {selectedStory && (
+        <StoryTasksPanel
+          story={selectedStory}
+          onClose={() => setSelectedStory(null)}
+        />
+      )}
 
       {/* Add Story Modal */}
       <AddStoryModal 
@@ -410,6 +575,15 @@ const StoriesManagement: React.FC = () => {
           // Refresh stories data when modal closes
           loadStoriesData();
         }} 
+      />
+
+      {/* Edit Story Modal */}
+      <EditStoryModal
+        show={showEditStoryModal}
+        onHide={() => setShowEditStoryModal(false)}
+        story={selectedStory}
+        goals={goals}
+        onStoryUpdated={handleStoryUpdated}
       />
 
       {/* Import Stories Modal */}

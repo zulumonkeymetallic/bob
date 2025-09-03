@@ -9,7 +9,7 @@ import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '
 import { ChoiceHelper } from '../config/choices';
 import QuickActionsPanel from './QuickActionsPanel';
 import DashboardSprintKanban from './DashboardSprintKanban';
-import DashboardTaskTable from './DashboardTaskTable';
+import DashboardModernTaskTable from './DashboardModernTaskTable';
 
 interface DashboardStats {
   activeGoals: number;
@@ -234,7 +234,7 @@ const Dashboard: React.FC = () => {
           {/* Tasks and Quick Actions */}
           <Row className="mb-4">
             <Col md={8}>
-              <DashboardTaskTable maxTasks={10} showDueToday={false} />
+              <DashboardModernTaskTable maxTasks={10} showDueToday={false} title="Upcoming Tasks" />
             </Col>
             <Col md={4}>
               <QuickActionsPanel 
@@ -250,7 +250,7 @@ const Dashboard: React.FC = () => {
           {/* Tasks Due Today */}
           <Row className="mb-4">
             <Col md={12}>
-              <DashboardTaskTable maxTasks={5} showDueToday={true} />
+              <DashboardModernTaskTable maxTasks={5} showDueToday={true} title="Tasks Due Today" />
             </Col>
           </Row>
 
