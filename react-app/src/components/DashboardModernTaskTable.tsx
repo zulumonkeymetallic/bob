@@ -1,25 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Badge } from 'react-bootstrap';
+import { Card, Button, Badge, Form, Row, Col, Alert } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, updateDoc, doc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
-import { Plus } from 'lucide-react';
+import { Plus, Filter, Calendar, Clock, Target } from 'lucide-react';
 import { generateRef } from '../utils/referenceGenerator';
-import { getThemeClass } from '../utils/statusHelpers';
+import { getThemeClass, getThemeName, getStatusName, getPriorityName } from '../utils/statusHelpers';
+import { getDeadlineInfo, getTasksApproachingDeadlines } from '../utils/deadlineUtils';
 import ModernTaskTable from './ModernTaskTable';
 
 interface DashboardModernTaskTableProps {
   maxTasks?: number;
   showDueToday?: boolean;
   title?: string;
+  showMetrics?: boolean;
 }
 
 const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({ 
   maxTasks = 10, 
   showDueToday = false,
-  title = "Upcoming Tasks"
+  title = "Upcoming Tasks",
+  showMetrics = true
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -29,6 +32,13 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [metrics, setMetrics] = useState({
+    openTasks: 0,
+    openStories: 0,
+    approachingDeadlines: 0,
+    activeSprint: null as Sprint | null,
+    daysLeftInSprint: 0
+  });
 
   useEffect(() => {
     if (!currentUser || !currentPersona) return;
@@ -140,6 +150,36 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
     return setupSubscriptions();
   }, [currentUser, currentPersona, maxTasks, showDueToday]);
 
+  // Calculate metrics when data changes
+  useEffect(() => {
+    if (tasks.length === 0 && stories.length === 0 && sprints.length === 0) return;
+
+    const openTasks = tasks.filter(task => task.status !== 2).length; // Not Done
+    const openStories = stories.filter(story => story.status !== 4).length; // Not Done
+    
+    // Find active sprint
+    const activeSprint = sprints.find(sprint => sprint.status === 1); // Active
+    
+    // Calculate days left in active sprint
+    let daysLeftInSprint = 0;
+    if (activeSprint) {
+      const now = new Date();
+      const endDate = new Date(activeSprint.endDate);
+      daysLeftInSprint = Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    }
+    
+    // Calculate approaching deadlines (within 7 days)
+    const approachingDeadlines = getTasksApproachingDeadlines(tasks, stories, sprints, 7).length;
+    
+    setMetrics({
+      openTasks,
+      openStories,
+      approachingDeadlines,
+      activeSprint,
+      daysLeftInSprint
+    });
+  }, [tasks, stories, sprints]);
+
   const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
     try {
       console.log(`🔄 Dashboard: Updating task ${taskId}:`, updates);
@@ -248,39 +288,95 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
   }
 
   return (
-    <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-      <Card.Header style={{ 
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
-        color: 'white',
-        padding: '20px 24px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
-            {title}
-          </h5>
-          <Badge bg="light" text="dark" style={{ fontSize: '12px' }}>
-            {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
-          </Badge>
-        </div>
-        <Button 
-          variant="light" 
-          size="sm" 
-          onClick={handleAddTask}
-          style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '6px',
-            fontSize: '14px',
-            fontWeight: '500'
-          }}
-        >
-          <Plus size={16} />
-          Add Task
-        </Button>
-      </Card.Header>
+    <>
+      {/* Metrics Panel */}
+      {showMetrics && (
+        <Row className="mb-4">
+          <Col md={3}>
+            <Card className="text-center border-0 shadow-sm">
+              <Card.Body>
+                <Target size={24} className="text-primary mb-2" />
+                <h4 className="mb-0 text-primary">{metrics.openTasks}</h4>
+                <small className="text-muted">Open Tasks</small>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col md={3}>
+            <Card className="text-center border-0 shadow-sm">
+              <Card.Body>
+                <Calendar size={24} className="text-info mb-2" />
+                <h4 className="mb-0 text-info">{metrics.openStories}</h4>
+                <small className="text-muted">Open Stories</small>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col md={3}>
+            <Card className="text-center border-0 shadow-sm">
+              <Card.Body>
+                <Clock size={24} className="text-warning mb-2" />
+                <h4 className="mb-0 text-warning">{metrics.approachingDeadlines}</h4>
+                <small className="text-muted">Due Soon</small>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col md={3}>
+            <Card className="text-center border-0 shadow-sm">
+              <Card.Body>
+                <Calendar size={24} className="text-success mb-2" />
+                <h4 className="mb-0 text-success">{metrics.daysLeftInSprint}</h4>
+                <small className="text-muted">
+                  Days Left{metrics.activeSprint ? ` in ${metrics.activeSprint.name}` : ''}
+                </small>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      )}
+
+      {/* Task Deadlines Alert */}
+      {metrics.approachingDeadlines > 0 && (
+        <Alert variant="warning" className="d-flex align-items-center gap-2 mb-4">
+          <Clock size={16} />
+          <span>
+            <strong>{metrics.approachingDeadlines}</strong> task{metrics.approachingDeadlines !== 1 ? 's' : ''} 
+            {metrics.approachingDeadlines === 1 ? ' is' : ' are'} approaching {metrics.approachingDeadlines === 1 ? 'its' : 'their'} deadline
+          </span>
+        </Alert>
+      )}
+
+      <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+        <Card.Header style={{ 
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+          color: 'white',
+          padding: '20px 24px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
+              {title}
+            </h5>
+            <Badge bg="light" text="dark" style={{ fontSize: '12px' }}>
+              {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
+            </Badge>
+          </div>
+          <Button 
+            variant="light" 
+            size="sm" 
+            onClick={handleAddTask}
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px',
+              fontSize: '14px',
+              fontWeight: '500'
+            }}
+          >
+            <Plus size={16} />
+            Add Task
+          </Button>
+        </Card.Header>
       <Card.Body style={{ padding: 0 }}>
         {tasks.length === 0 ? (
           <div style={{ 
@@ -322,6 +418,7 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
         )}
       </Card.Body>
     </Card>
+    </>
   );
 };
 
