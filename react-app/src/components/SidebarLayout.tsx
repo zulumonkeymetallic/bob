@@ -95,7 +95,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Visualization',
       icon: 'share-alt',
       items: [
-        { label: 'Goal Timeline', path: '/goals/visualization', icon: 'calendar' },
         { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'timeline' },
         { label: 'Canvas', path: '/canvas', icon: 'share-alt' }
       ]

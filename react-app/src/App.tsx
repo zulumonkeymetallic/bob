@@ -184,9 +184,7 @@ function AppContent() {
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
-            <Route path="/goals/visualization" element={<ThemeBasedGanttChart />} />
             <Route path="/goals/roadmap" element={<ThemeBasedGanttChart />} />
-            <Route path="/goals/gantt" element={<ThemeBasedGanttChart />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
             {/* BOB v3.5.2 - New Scaffolding Components */}
