@@ -5,6 +5,10 @@ const schedulerV2 = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
+const aiUsageLogger = require("./utils/aiUsageLogger");
+
+// Import the daily digest generator
+const { generateDailyDigest } = require("./dailyDigestGenerator");
 
 functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
 admin.initializeApp();
@@ -113,6 +117,7 @@ exports.planCalendar = functionsV2.https.onCall(async (request) => {
     
     // 1. Assemble context for planning
     const context = await assemblePlanningContext(uid, persona, horizonDays);
+    context.userId = uid; // Add userId to context for logging
     
     // 2. Generate AI plan
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -278,7 +283,7 @@ Generate a plan as JSON with:
   "rationale": "Overall planning rationale"
 }`;
 
-  const completion = await openai.chat.completions.create({
+  const requestData = {
     model: "gpt-4o-mini",
     messages: [
       { role: "system", content: systemPrompt },
@@ -287,7 +292,27 @@ Generate a plan as JSON with:
         "Please generate an optimal schedule for these tasks and goals." }
     ],
     temperature: 0.3
-  });
+  };
+
+  // Wrap the AI call with comprehensive logging
+  const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
+  
+  const completion = await aiWrapper(
+    () => openai.chat.completions.create(requestData),
+    {
+      userId: context.userId,
+      functionName: 'planCalendar',
+      request: requestData,
+      purpose: focusGoalId ? `Goal-focused scheduling for: ${context.goals.find(g => g.id === focusGoalId)?.title}` : 'General calendar planning',
+      metadata: {
+        focusGoalId,
+        goalCount: context.goals?.length || 0,
+        taskCount: context.tasks?.length || 0,
+        persona: context.persona,
+        horizonDays: context.horizonDays
+      }
+    }
+  );
 
   try {
     return JSON.parse(completion.choices[0].message.content);
@@ -496,10 +521,39 @@ exports.prioritizeBacklog = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async 
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   let tasks = (req.data && Array.isArray(req.data.tasks)) ? req.data.tasks : [];
   if (tasks.length > 50) tasks = tasks.slice(0,50);
+  
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const prompt = "Score tasks 0-100 and bucket TODAY/NEXT/LATER. Return JSON {items:[{id,score,bucket}]}\nTasks: " + JSON.stringify(tasks);
-  const resp = await client.chat.completions.create({ model: "gpt-4o-mini", messages: [{ role: "user", content: prompt }], temperature: 0.2 });
-  let out = { items: [] }; try { out = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch {}
+  
+  const requestData = {
+    model: "gpt-4o-mini", 
+    messages: [{ role: "user", content: prompt }], 
+    temperature: 0.2
+  };
+
+  // Wrap the AI call with comprehensive logging
+  const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
+  
+  const resp = await aiWrapper(
+    () => client.chat.completions.create(requestData),
+    {
+      userId: req.auth.uid,
+      functionName: 'prioritizeBacklog',
+      request: requestData,
+      purpose: 'Task prioritization and bucketing',
+      metadata: {
+        taskCount: tasks.length,
+        persona: req.data?.persona || 'unknown'
+      }
+    }
+  );
+  
+  let out = { items: [] }; 
+  try { 
+    out = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); 
+  } catch (parseError) {
+    console.error('Failed to parse AI response:', parseError);
+  }
   return out;
 });
 
@@ -839,3 +893,6 @@ exports.cleanupTestTokens = schedulerV2.onSchedule("every 6 hours", async (event
     console.error('Error cleaning up test tokens:', error);
   }
 });
+
+// Export the daily digest function
+exports.generateDailyDigest = generateDailyDigest;

@@ -48,6 +48,7 @@ import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
+import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
@@ -175,6 +176,7 @@ function AppContent() {
             <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
+            <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />
             <Route path="/stories" element={<StoriesManagement />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
@@ -183,6 +185,7 @@ function AppContent() {
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/visualization" element={<ThemeBasedGanttChart />} />
+            <Route path="/goals/roadmap" element={<ThemeBasedGanttChart />} />
             <Route path="/goals/gantt" element={<ThemeBasedGanttChart />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             

@@ -105,6 +105,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'cog',
       items: [
         { label: 'Settings', path: '/theme-colors', icon: 'cog' },
+        { label: 'AI Usage Analytics', path: '/ai-usage', icon: 'chart-pie' },
         { label: 'Developer Status', path: '/admin', icon: 'code' },
         { label: 'Test Suite', path: '/test', icon: 'vial' },
         { label: 'Changelog', path: '/changelog', icon: 'file-text' }
