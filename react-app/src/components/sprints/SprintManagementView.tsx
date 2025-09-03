@@ -25,6 +25,7 @@ import { Story, Goal, Task, Sprint } from '../../types';
 import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
 import SprintMetricsPanel from '../SprintMetricsPanel';
+import ModernSprintsTable from '../ModernSprintsTable';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
 // Replaces /kanban route with comprehensive sprint management
@@ -43,7 +44,7 @@ const SprintManagementView = () => {
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [showSprintModal, setShowSprintModal] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'board' | 'burndown' | 'retrospective'>('board');
+  const [activeTab, setActiveTab] = useState<'overview' | 'board' | 'table' | 'burndown' | 'retrospective'>('table');
   
   // New task form
   const [newTask, setNewTask] = useState({
@@ -279,6 +280,14 @@ const SprintManagementView = () => {
               <Button 
                 variant="outline-secondary" 
                 size="sm"
+                onClick={() => setActiveTab('table')}
+                className={activeTab === 'table' ? 'active' : ''}
+              >
+                Table View
+              </Button>
+              <Button 
+                variant="outline-secondary" 
+                size="sm"
                 onClick={() => setActiveTab('board')}
                 className={activeTab === 'board' ? 'active' : ''}
               >
@@ -391,6 +400,28 @@ const SprintManagementView = () => {
                 </Button>
               </Card.Body>
             </Card>
+          </Col>
+        </Row>
+      )}
+
+      {/* Sprint Table Tab - Modern table with CRUD operations */}
+      {activeTab === 'table' && (
+        <Row>
+          <Col>
+            <ModernSprintsTable 
+              selectedSprintId={selectedSprint?.id}
+              onSprintSelect={(sprintId) => {
+                const sprint = sprints.find(s => s.id === sprintId);
+                setSelectedSprint(sprint || null);
+              }}
+              onSprintChange={(sprint) => {
+                // Update the sprint in our local state
+                setSprints(prev => prev.map(s => s.id === sprint.id ? sprint : s));
+                if (selectedSprint?.id === sprint.id) {
+                  setSelectedSprint(sprint);
+                }
+              }}
+            />
           </Col>
         </Row>
       )}

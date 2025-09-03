@@ -1,0 +1,14 @@
+2025-09-02 21:54:18,689 - INFO - 🚀 Starting Comprehensive Goal CRUD Test Suite
+2025-09-02 21:54:20,700 - INFO - ✅ Firefox WebDriver initialized successfully
+2025-09-02 21:54:20,702 - INFO - 🔐 Attempting to login to BOB application...
+2025-09-02 21:54:20,815 - ERROR - ❌ Login failed: Message: Reached error page: about:neterror?e=connectionFailure&u=http%3A//localhost%3A3000/%3Ftest-login%3Dai-agent-token%26test-mode%3Dtrue&c=UTF-8&d=Firefox%20can%E2%80%99t%20establish%20a%20connection%20to%20the%20server%20at%20localhost%3A3000.
+Stacktrace:
+RemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8
+WebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5
+UnknownError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:910:5
+checkReadyState@chrome://remote/content/marionette/navigate.sys.mjs:59:24
+onNavigation@chrome://remote/content/marionette/navigate.sys.mjs:348:39
+emit@resource://gre/modules/EventEmitter.sys.mjs:156:19
+receiveMessage@chrome://remote/content/marionette/actors/MarionetteEventsParent.sys.mjs:33:25
+
+2025-09-02 21:54:21,143 - INFO - ✅ WebDriver cleaned up successfully

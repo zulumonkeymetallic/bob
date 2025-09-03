@@ -1,12 +1,12 @@
-// Version tracking for cache busting - v3.5.9 Sprint Metrics & Deadline Management
-export const VERSION = 'v3.5.9';
-export const BUILD_TIME = '2025-09-03T10:30:00.000Z'; // Static build time
-export const BUILD_HASH = 'stable-v3.5.9-main.sprint-metrics-deadlines'; // Build hash matching actual file
+// Version tracking for cache busting - v3.5.12 Sprint Management Table
+export const VERSION = 'v3.5.12';
+export const BUILD_TIME = '2025-09-03T14:30:00.000Z'; // Static build time
+export const BUILD_HASH = 'stable-v3.5.12-main.sprint-management-table'; // Build hash matching actual file
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Sprint Metrics & Deadline Management Complete`);
-console.log(`🎯 Features: Sprint Metrics Panel, Task Deadline Inheritance, Open Stories/Tasks Tracking, Days Left Calculation`);
-console.log(`🚀 Architecture: v3.5.9 with Enhanced Sprint Analytics & Deadline Utils`);
+console.log(`✅ Status: Sprint Management Table Complete`);
+console.log(`🎯 Features: Modern Sprint Table, Enhanced Sprint Metrics, Dark Theme Fix, Improved Sprint Selection`);
+console.log(`🚀 Architecture: v3.5.12 with ModernSprintsTable Component`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 console.log(`🔨 Build hash: ${BUILD_HASH}`);
 
