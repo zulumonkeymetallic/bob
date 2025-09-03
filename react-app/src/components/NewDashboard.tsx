@@ -7,6 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story } from '../types';
 import FloatingActionButton from './FloatingActionButton';
 import ImportExportModal from './ImportExportModal';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 import '../styles/MaterialDesign.css';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 
@@ -88,7 +89,7 @@ const Dashboard: React.FC = () => {
   };
 
   const getThemeStats = () => {
-    const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
+    const themes = GLOBAL_THEMES.map(theme => theme.name);
     return themes.map(theme => {
       const themeTasks = tasks.filter(t => isTheme(t.theme, theme));
       const completed = themeTasks.filter(t => isStatus(t.status, 'done')).length;

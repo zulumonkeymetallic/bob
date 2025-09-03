@@ -5,7 +5,7 @@ import { collection, addDoc, getDocs, query, where, orderBy } from 'firebase/fir
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
-import { useThemeAwareColors } from '../hooks/useThemeAwareColors';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 import '../styles/MaterialDesign.css';
 
 interface FloatingActionButtonProps {
@@ -27,14 +27,13 @@ interface Sprint {
 const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportClick }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const themeColors = useThemeAwareColors();
   const [showMenu, setShowMenu] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [quickAddType, setQuickAddType] = useState<'goal' | 'story' | 'task'>('task');
   const [quickAddData, setQuickAddData] = useState({
     title: '',
     description: '',
-    theme: 'Growth',
+    theme: 'General',
     effort: 'M',
     priority: 'med',
     goalId: '',
@@ -45,7 +44,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
 
-  const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
+  const themes = GLOBAL_THEMES.map(theme => theme.name);
   const efforts = [
     { value: 'S', label: 'Small (15-30 min)', minutes: 20 },
     { value: 'M', label: 'Medium (30-60 min)', minutes: 45 },
@@ -341,30 +340,13 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       </button>
 
       {/* Quick Add Modal */}
-      <Modal 
-        show={showQuickAdd} 
-        onHide={() => setShowQuickAdd(false)} 
-        centered
-        contentClassName={`border-0 ${themeColors.isDark ? 'dark-modal' : ''}`}
-      >
-        <Modal.Header 
-          closeButton
-          style={{
-            backgroundColor: themeColors.backgrounds.modal,
-            borderColor: themeColors.borders.primary,
-            color: themeColors.colors.primary
-          }}
-        >
-          <Modal.Title style={{ color: themeColors.colors.primary }}>
+      <Modal show={showQuickAdd} onHide={() => setShowQuickAdd(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>
             Add New {quickAddType.charAt(0).toUpperCase() + quickAddType.slice(1)}
           </Modal.Title>
         </Modal.Header>
-        <Modal.Body
-          style={{
-            backgroundColor: themeColors.backgrounds.modal,
-            color: themeColors.colors.primary
-          }}
-        >
+        <Modal.Body>
           <Form>
             <Form.Group className="mb-3">
               <Form.Label>Title *</Form.Label>
@@ -373,11 +355,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                 value={quickAddData.title}
                 onChange={(e) => setQuickAddData({ ...quickAddData, title: e.target.value })}
                 placeholder={`Enter ${quickAddType} title...`}
-                style={{
-                  backgroundColor: themeColors.backgrounds.secondary,
-                  borderColor: themeColors.borders.primary,
-                  color: themeColors.colors.primary
-                }}
                 autoFocus
               />
             </Form.Group>
@@ -390,11 +367,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                 value={quickAddData.description}
                 onChange={(e) => setQuickAddData({ ...quickAddData, description: e.target.value })}
                 placeholder={`Describe this ${quickAddType}...`}
-                style={{
-                  backgroundColor: themeColors.backgrounds.secondary,
-                  borderColor: themeColors.borders.primary,
-                  color: themeColors.colors.primary
-                }}
               />
             </Form.Group>
 
@@ -404,11 +376,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                 <Form.Select
                   value={quickAddData.theme}
                   onChange={(e) => setQuickAddData({ ...quickAddData, theme: e.target.value })}
-                  style={{
-                    backgroundColor: themeColors.backgrounds.secondary,
-                    borderColor: themeColors.borders.primary,
-                    color: themeColors.colors.primary
-                  }}
                 >
                   {themes.map(theme => (
                     <option key={theme} value={theme}>{theme}</option>
@@ -444,11 +411,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                         availableOptions: goals.length,
                         timestamp: new Date().toISOString()
                       });
-                    }}
-                    style={{
-                      backgroundColor: themeColors.backgrounds.secondary,
-                      borderColor: themeColors.borders.primary,
-                      color: themeColors.colors.primary
                     }}
                   >
                     <option value="">Select a goal (optional)</option>
@@ -489,11 +451,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                         timestamp: new Date().toISOString()
                       });
                     }}
-                    style={{
-                      backgroundColor: themeColors.backgrounds.secondary,
-                      borderColor: themeColors.borders.primary,
-                      color: themeColors.colors.primary
-                    }}
                   >
                     <option value="">No sprint (backlog)</option>
                     {sprints.map(sprint => (
@@ -515,11 +472,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                 <Form.Select
                   value={quickAddData.effort}
                   onChange={(e) => setQuickAddData({ ...quickAddData, effort: e.target.value })}
-                  style={{
-                    backgroundColor: themeColors.backgrounds.secondary,
-                    borderColor: themeColors.borders.primary,
-                    color: themeColors.colors.primary
-                  }}
                 >
                   {efforts.map(effort => (
                     <option key={effort.value} value={effort.value}>
@@ -536,11 +488,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                 <Form.Select
                   value={quickAddData.priority}
                   onChange={(e) => setQuickAddData({ ...quickAddData, priority: e.target.value })}
-                  style={{
-                    backgroundColor: themeColors.backgrounds.secondary,
-                    borderColor: themeColors.borders.primary,
-                    color: themeColors.colors.primary
-                  }}
                 >
                   <option value="low">Low</option>
                   <option value="med">Medium</option>
@@ -556,12 +503,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             </Alert>
           )}
         </Modal.Body>
-        <Modal.Footer
-          style={{
-            backgroundColor: themeColors.backgrounds.modal,
-            borderColor: themeColors.borders.primary
-          }}
-        >
+        <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowQuickAdd(false)}>
             Cancel
           </Button>

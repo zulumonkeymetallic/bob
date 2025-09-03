@@ -29,6 +29,7 @@ import { Task, Story, Goal, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -206,15 +207,15 @@ const SortableRow: React.FC<SortableRowProps> = ({
       return new Date(value).toLocaleDateString();
     }
     if (key === 'theme' && typeof value === 'number') {
-      const themes = ['', 'Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
-      return themes[value] || '';
+      const theme = GLOBAL_THEMES.find(t => t.id === value);
+      return theme ? theme.name : '';
     }
     return value || '';
   };
 
-  const getThemeColor = (theme: number): string => {
-    const colors = ['', '#ef4444', '#8b5cf6', '#059669', '#f59e0b', '#3b82f6'];
-    return colors[theme] || '#6b7280';
+  const getThemeColor = (themeId: number): string => {
+    const theme = GLOBAL_THEMES.find(t => t.id === themeId);
+    return theme ? theme.color : '#6b7280';
   };
 
   const renderCell = (column: Column) => {

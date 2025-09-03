@@ -12,6 +12,7 @@ import { ChoiceMigration } from '../config/migration';
 import PriorityPane from './PriorityPane';
 import AddGoalModal from './AddGoalModal';
 import AddStoryModal from './AddStoryModal';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 // import { VERSION, BUILD_TIME } from '../version';
 import '../styles/MaterialDesign.css';
 import { isStatus, isTheme } from '../utils/statusHelpers';
@@ -133,7 +134,7 @@ const Dashboard: React.FC = () => {
   };
 
   const getThemeStats = () => {
-    const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
+    const themes = GLOBAL_THEMES.map(theme => theme.name);
     return themes.map(theme => {
       const themeTasks = tasks.filter(t => isTheme(t.theme, theme));
       const themeGoals = goals.filter(g => isTheme(g.theme, theme));
