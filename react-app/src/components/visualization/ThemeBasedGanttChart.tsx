@@ -17,6 +17,8 @@ import { db } from '../../firebase';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
 import { Goal, Sprint, Story, Task } from '../../types';
 import EditGoalModal from '../EditGoalModal';
+import { GLOBAL_THEMES, getThemeById } from '../../constants/globalThemes';
+import useThemeAwareColors, { getThemeAwareGoalColor } from '../../hooks/useThemeAwareColors';
 import './EnhancedGanttChart.css';
 
 interface GanttGoal extends Goal {
@@ -45,6 +47,7 @@ interface DragState {
 const ThemeBasedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
+  const themeColors = useThemeAwareColors();
   
   // Core data
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -76,19 +79,8 @@ const ThemeBasedGanttChart: React.FC = () => {
   // Timeline refs
   const timelineRef = useRef<HTMLDivElement>(null);
   
-  // Theme definitions
-  const themes = [
-    { id: 0, name: 'General', color: '#6c757d' },
-    { id: 1, name: 'Health & Fitness', color: '#dc3545' },
-    { id: 2, name: 'Career & Professional', color: '#fd7e14' },
-    { id: 3, name: 'Financial', color: '#ffc107' },
-    { id: 4, name: 'Learning & Education', color: '#198754' },
-    { id: 5, name: 'Family & Relationships', color: '#20c997' },
-    { id: 6, name: 'Hobbies & Interests', color: '#0dcaf0' },
-    { id: 7, name: 'Travel & Adventure', color: '#0d6efd' },
-    { id: 8, name: 'Home & Living', color: '#6610f2' },
-    { id: 9, name: 'Spiritual & Personal Growth', color: '#d63384' }
-  ];
+  // Theme definitions - now using global themes
+  const themes = GLOBAL_THEMES;
 
   // Load data
   useEffect(() => {
@@ -524,13 +516,16 @@ const ThemeBasedGanttChart: React.FC = () => {
               <div className="goal-timeline flex-grow-1 position-relative">
                 {themeRow.goals.map((goal, goalIndex) => {
                   const isDragging = dragState.isDragging && dragState.goalId === goal.id;
+                  const themeAwareColors = getThemeAwareGoalColor(goal.theme || 0, themeColors.isDark);
+                  
                   const goalStyle: React.CSSProperties = {
                     left: `${goal.left}%`,
                     width: `${Math.max(goal.width || 10, 5)}%`,
                     top: `${goalIndex * 35 + 10}px`,
                     minWidth: '100px',
                     height: '30px',
-                    backgroundColor: themeRow.color,
+                    backgroundColor: themeAwareColors.background,
+                    color: themeAwareColors.text,
                     opacity: isDragging ? 0.7 : 1,
                     transform: isDragging ? 'scale(1.05)' : 'scale(1)',
                     zIndex: isDragging ? 1000 : 1
@@ -567,7 +562,8 @@ const ThemeBasedGanttChart: React.FC = () => {
                       />
                       
                       {/* Goal content */}
-                      <div className="goal-content px-2 text-white text-truncate flex-grow-1 d-flex align-items-center justify-content-between">
+                      <div className="goal-content px-2 text-truncate flex-grow-1 d-flex align-items-center justify-content-between"
+                           style={{ color: themeAwareColors.text }}>
                         <span className="text-truncate me-2" style={{ fontSize: '13px' }}>
                           {goal.title}
                         </span>
@@ -577,8 +573,13 @@ const ThemeBasedGanttChart: React.FC = () => {
                           <Button
                             size="sm"
                             variant="link"
-                            className="p-0 text-white"
-                            style={{ minWidth: 'auto', fontSize: '12px' }}
+                            className="p-0"
+                            style={{ 
+                              minWidth: 'auto', 
+                              fontSize: '12px',
+                              color: themeAwareColors.text,
+                              opacity: 0.8
+                            }}
                             onClick={(e) => {
                               e.stopPropagation();
                               handleEditGoal(goal);
@@ -589,8 +590,13 @@ const ThemeBasedGanttChart: React.FC = () => {
                           <Button
                             size="sm"
                             variant="link"
-                            className="p-0 text-white"
-                            style={{ minWidth: 'auto', fontSize: '12px' }}
+                            className="p-0"
+                            style={{ 
+                              minWidth: 'auto', 
+                              fontSize: '12px',
+                              color: themeAwareColors.text,
+                              opacity: 0.8
+                            }}
                             onClick={(e) => {
                               e.stopPropagation();
                               handleDeleteGoal(goal);

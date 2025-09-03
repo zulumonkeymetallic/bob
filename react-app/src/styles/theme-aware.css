@@ -1,0 +1,332 @@
+/* Global Theme-Aware CSS Variables */
+:root {
+  /* Light theme text colors */
+  --text-primary: #212529;
+  --text-secondary: #6c757d;
+  --text-muted: #868e96;
+  --text-inverse: #ffffff;
+  --text-on-background: #212529;
+  --text-on-surface: #212529;
+  --text-on-primary: #ffffff;
+  --text-on-secondary: #212529;
+  
+  /* Light theme backgrounds */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-surface: #ffffff;
+  --bg-card: #ffffff;
+  --bg-modal: #ffffff;
+  
+  /* Light theme borders */
+  --border-primary: #dee2e6;
+  --border-secondary: #e9ecef;
+}
+
+/* Dark theme overrides */
+[data-theme="dark"], 
+.dark {
+  --text-primary: #ffffff;
+  --text-secondary: #adb5bd;
+  --text-muted: #6c757d;
+  --text-inverse: #212529;
+  --text-on-background: #ffffff;
+  --text-on-surface: #ffffff;
+  --text-on-primary: #ffffff;
+  --text-on-secondary: #ffffff;
+  
+  --bg-primary: #212529;
+  --bg-secondary: #343a40;
+  --bg-surface: #495057;
+  --bg-card: #343a40;
+  --bg-modal: #495057;
+  
+  --border-primary: #495057;
+  --border-secondary: #6c757d;
+}
+
+/* Theme-aware utility classes */
+.text-theme-primary {
+  color: var(--text-primary) !important;
+}
+
+.text-theme-secondary {
+  color: var(--text-secondary) !important;
+}
+
+.text-theme-muted {
+  color: var(--text-muted) !important;
+}
+
+.text-theme-inverse {
+  color: var(--text-inverse) !important;
+}
+
+.text-theme-on-background {
+  color: var(--text-on-background) !important;
+}
+
+.text-theme-on-surface {
+  color: var(--text-on-surface) !important;
+}
+
+.text-theme-on-primary {
+  color: var(--text-on-primary) !important;
+}
+
+.text-theme-on-secondary {
+  color: var(--text-on-secondary) !important;
+}
+
+.bg-theme-primary {
+  background-color: var(--bg-primary) !important;
+}
+
+.bg-theme-secondary {
+  background-color: var(--bg-secondary) !important;
+}
+
+.bg-theme-surface {
+  background-color: var(--bg-surface) !important;
+}
+
+.bg-theme-card {
+  background-color: var(--bg-card) !important;
+}
+
+.bg-theme-modal {
+  background-color: var(--bg-modal) !important;
+}
+
+.border-theme-primary {
+  border-color: var(--border-primary) !important;
+}
+
+.border-theme-secondary {
+  border-color: var(--border-secondary) !important;
+}
+
+/* Override Bootstrap's hardcoded white text where appropriate */
+.card-header.bg-primary,
+.card-header.bg-secondary,
+.card-header.bg-success,
+.card-header.bg-danger,
+.card-header.bg-warning,
+.card-header.bg-info,
+.card-header.bg-dark {
+  color: var(--text-on-primary) !important;
+}
+
+.badge.bg-primary,
+.badge.bg-secondary,
+.badge.bg-success,
+.badge.bg-danger,
+.badge.bg-info,
+.badge.bg-dark {
+  color: var(--text-on-primary) !important;
+}
+
+.badge.bg-warning,
+.badge.bg-light {
+  color: var(--text-primary) !important;
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-success,
+.btn-danger,
+.btn-info,
+.btn-dark {
+  color: var(--text-on-primary) !important;
+}
+
+.btn-warning,
+.btn-light {
+  color: var(--text-primary) !important;
+}
+
+/* Fix table backgrounds in dark mode */
+[data-theme="dark"] .table,
+.dark .table {
+  --bs-table-bg: var(--bg-surface);
+  --bs-table-striped-bg: var(--bg-secondary);
+  --bs-table-hover-bg: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .table th,
+[data-theme="dark"] .table td,
+.dark .table th,
+.dark .table td {
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+/* Fix modal backgrounds */
+[data-theme="dark"] .modal-content,
+.dark .modal-content {
+  background-color: var(--bg-modal);
+  color: var(--text-primary);
+  border-color: var(--border-primary);
+}
+
+[data-theme="dark"] .modal-header,
+[data-theme="dark"] .modal-footer,
+.dark .modal-header,
+.dark .modal-footer {
+  border-color: var(--border-primary);
+}
+
+/* Fix dropdown backgrounds */
+[data-theme="dark"] .dropdown-menu,
+.dark .dropdown-menu {
+  background-color: var(--bg-surface);
+  border-color: var(--border-primary);
+}
+
+[data-theme="dark"] .dropdown-item,
+.dark .dropdown-item {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .dropdown-item:hover,
+[data-theme="dark"] .dropdown-item:focus,
+.dark .dropdown-item:hover,
+.dark .dropdown-item:focus {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* Fix form controls */
+[data-theme="dark"] .form-control,
+[data-theme="dark"] .form-select,
+.dark .form-control,
+.dark .form-select {
+  background-color: var(--bg-surface);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .form-control:focus,
+[data-theme="dark"] .form-select:focus,
+.dark .form-control:focus,
+.dark .form-select:focus {
+  background-color: var(--bg-surface);
+  border-color: #0d6efd;
+  color: var(--text-primary);
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+/* Fix sidebar and navigation */
+[data-theme="dark"] .sidebar,
+[data-theme="dark"] .navbar,
+.dark .sidebar,
+.dark .navbar {
+  background-color: var(--bg-secondary);
+  border-color: var(--border-primary);
+}
+
+[data-theme="dark"] .nav-link,
+.dark .nav-link {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .nav-link:hover,
+[data-theme="dark"] .nav-link:focus,
+.dark .nav-link:hover,
+.dark .nav-link:focus {
+  color: var(--text-primary);
+}
+
+/* Gantt chart specific fixes */
+[data-theme="dark"] .goal-content,
+.dark .goal-content {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* Fix alert components */
+[data-theme="dark"] .alert,
+.dark .alert {
+  border-color: var(--border-primary);
+}
+
+[data-theme="dark"] .alert-primary,
+.dark .alert-primary {
+  background-color: rgba(13, 110, 253, 0.1);
+  border-color: rgba(13, 110, 253, 0.3);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .alert-secondary,
+.dark .alert-secondary {
+  background-color: rgba(108, 117, 125, 0.1);
+  border-color: rgba(108, 117, 125, 0.3);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .alert-success,
+.dark .alert-success {
+  background-color: rgba(25, 135, 84, 0.1);
+  border-color: rgba(25, 135, 84, 0.3);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .alert-danger,
+.dark .alert-danger {
+  background-color: rgba(220, 53, 69, 0.1);
+  border-color: rgba(220, 53, 69, 0.3);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .alert-warning,
+.dark .alert-warning {
+  background-color: rgba(255, 193, 7, 0.1);
+  border-color: rgba(255, 193, 7, 0.3);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .alert-info,
+.dark .alert-info {
+  background-color: rgba(13, 202, 240, 0.1);
+  border-color: rgba(13, 202, 240, 0.3);
+  color: var(--text-primary);
+}
+
+/* Fix card components */
+[data-theme="dark"] .card,
+.dark .card {
+  background-color: var(--bg-card);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .card-header,
+[data-theme="dark"] .card-footer,
+.dark .card-header,
+.dark .card-footer {
+  background-color: var(--bg-secondary);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+/* System theme detection and automatic switching */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --text-primary: #ffffff;
+    --text-secondary: #adb5bd;
+    --text-muted: #6c757d;
+    --text-inverse: #212529;
+    --text-on-background: #ffffff;
+    --text-on-surface: #ffffff;
+    --text-on-primary: #ffffff;
+    --text-on-secondary: #ffffff;
+    
+    --bg-primary: #212529;
+    --bg-secondary: #343a40;
+    --bg-surface: #495057;
+    --bg-card: #343a40;
+    --bg-modal: #495057;
+    
+    --border-primary: #495057;
+    --border-secondary: #6c757d;
+  }
+}

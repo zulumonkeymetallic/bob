@@ -14,6 +14,7 @@ import AddGoalModal from './AddGoalModal';
 import EditGoalModal from './EditGoalModal';
 import ImportModal from './ImportModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -406,11 +407,11 @@ const GoalsManagement: React.FC = () => {
                     style={{ border: '1px solid #d1d5db' }}
                   >
                     <option value="all">All Themes</option>
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
+                    {GLOBAL_THEMES.map((theme) => (
+                      <option key={theme.id} value={theme.id}>
+                        {theme.label}
+                      </option>
+                    ))}
                   </Form.Select>
                 </Form.Group>
               </Col>

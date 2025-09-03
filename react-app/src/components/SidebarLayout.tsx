@@ -6,6 +6,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useTestMode } from '../contexts/TestModeContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { VERSION } from '../version';
 import SprintSelector from './SprintSelector';
 import CompactSprintMetrics from './CompactSprintMetrics';
@@ -34,6 +35,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const { currentPersona, setPersona } = usePersona();
   const { theme, toggleTheme } = useTheme();
   const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
   const navigate = useNavigate();
   const location = useLocation();
   const { trackClick } = useActivityTracking();
@@ -175,7 +177,15 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   return (
     <div className="d-flex" style={{ minHeight: '100vh' }}>
       {/* Desktop Sidebar */}
-      <div className="sidebar-desktop d-none d-lg-block" style={{ width: '250px', minHeight: '100vh' }}>
+      <div className="sidebar-desktop d-none d-lg-block" style={{ 
+        width: '250px', 
+        minHeight: '100vh',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        zIndex: 1000,
+        overflowY: 'auto'
+      }}>
         <div className="h-100" style={{ 
           background: 'var(--panel)', 
           color: 'var(--notion-text)',
@@ -193,7 +203,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   className="badge"
                   style={{ 
                     background: '#ff6b6b', 
-                    color: 'white',
+                    color: getContrastTextColor('#ff6b6b'),
                     fontSize: '0.7rem',
                     padding: '4px 8px'
                   }}
@@ -215,7 +225,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                        height: '32px', 
                        fontSize: '14px',
                        background: 'var(--notion-accent)',
-                       color: 'white'
+                       color: colors.onPrimary
                      }}>
                   {currentUser.displayName?.charAt(0) || 'U'}
                 </div>
@@ -225,7 +235,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   </div>
                   <div className="badge" style={{ 
                     background: 'var(--notion-accent)', 
-                    color: 'white',
+                    color: colors.onPrimary,
                     fontSize: '0.75rem'
                   }}>
                     {currentPersona}
@@ -399,7 +409,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 marginLeft: '8px', 
                 fontSize: '10px', 
                 backgroundColor: '#ff6b6b', 
-                color: 'white', 
+                color: getContrastTextColor('#ff6b6b'), 
                 padding: '2px 6px', 
                 borderRadius: '8px',
                 fontWeight: 'bold'
@@ -433,7 +443,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         show={showSidebar} 
         onHide={() => setShowSidebar(false)} 
         placement="start"
-        className="bg-dark text-white"
+        className="bg-dark"
+        style={{ color: colors.onBackground }}
       >
         <Offcanvas.Header closeButton closeVariant="white">
           <Offcanvas.Title>BOB Platform</Offcanvas.Title>
@@ -448,7 +459,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   {currentUser.displayName?.charAt(0) || 'U'}
                 </div>
                 <div>
-                  <div className="text-white">
+                  <div style={{ color: colors.onBackground }}>
                     {currentUser.displayName || 'User'}
                   </div>
                   <small className="text-muted">
@@ -483,9 +494,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               <div key={group.label} className="mb-2">
                 {/* Group Header Mobile */}
                 <div
-                  className="d-flex align-items-center justify-content-between px-3 py-2 text-white-50"
+                  className="d-flex align-items-center justify-content-between px-3 py-2"
                   onClick={() => toggleGroup(group.label)}
-                  style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600' }}
+                  style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600', color: colors.secondary }}
                 >
                   <div className="d-flex align-items-center">
                     <i className={`fas fa-${group.icon} me-2`}></i>
@@ -500,9 +511,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                     {group.items.map((item) => (
                       <Nav.Link
                         key={item.path}
-                        className="text-white py-2 border-0"
+                        className="py-2 border-0"
                         onClick={() => handleNavigation(item.path)}
-                        style={{ fontSize: '0.9rem' }}
+                        style={{ fontSize: '0.9rem', color: colors.onBackground }}
                       >
                         <i className={`fas fa-${item.icon} me-2`}></i>
                         {item.label}
@@ -547,16 +558,19 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       </Offcanvas>
 
       {/* Main Content Area */}
-      <div className="flex-grow-1" style={{ paddingTop: window.innerWidth < 992 ? '60px' : '0' }}>
+      <div className="flex-grow-1" style={{ 
+        paddingTop: window.innerWidth < 992 ? '60px' : '0',
+        marginLeft: window.innerWidth >= 992 ? '250px' : '0'
+      }}>
         {/* Top Header with Sprint Selector and Metrics */}
         <div className="border-bottom px-3 py-2 d-flex justify-content-between align-items-center" 
              style={{ 
                position: 'sticky', 
                top: '0', 
                zIndex: 1000,
-               backgroundColor: 'var(--notion-bg)',
-               borderBottomColor: 'var(--notion-border)',
-               color: 'var(--notion-text)'
+               backgroundColor: backgrounds.surface,
+               borderBottomColor: isDark ? '#374151' : '#e5e7eb',
+               color: colors.primary
              }}>
           <div className="d-flex align-items-center">
             <h6 className="mb-0 text-muted">Current Context</h6>
