@@ -31,6 +31,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { Story, Goal, Sprint } from '../types';
+import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -151,6 +152,7 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
   onSave, 
   onCancel 
 }) => {
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
   const renderNewCell = (column: Column) => {
     const value = newStoryData[column.key as keyof Story];
 
@@ -326,6 +328,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStorySelect,
   onEditStory
 }) => {
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
     attributes,
     listeners,
@@ -680,6 +683,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({

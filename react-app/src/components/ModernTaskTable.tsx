@@ -28,6 +28,7 @@ import {
 import { Task, Story, Goal, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -146,6 +147,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 }) => {
   const { showSidebar } = useSidebar();
   const { trackClick, trackFieldChange } = useActivityTracking();
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
     attributes,
     listeners,
@@ -234,7 +236,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
                   border: '1px solid #3b82f6',
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: 'white',
+                  backgroundColor: backgrounds.surface,
+                  color: colors.onSurface,
                   outline: 'none',
                   boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
                 }}
@@ -264,7 +267,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 border: '1px solid #3b82f6',
                 borderRadius: '4px',
                 fontSize: '14px',
-                backgroundColor: 'white',
+                backgroundColor: backgrounds.surface,
+                color: colors.onSurface,
                 outline: 'none',
                 boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
               }}
@@ -335,19 +339,19 @@ const SortableRow: React.FC<SortableRowProps> = ({
       ref={setNodeRef}
       style={{
         ...style,
-        backgroundColor: 'white',
+        backgroundColor: backgrounds.surface,
         borderBottom: '1px solid #f3f4f6',
         transition: 'background-color 0.15s ease',
       }}
       {...attributes}
       onMouseEnter={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = '#f9fafb';
+          e.currentTarget.style.backgroundColor = isDark ? '#374151' : '#f9fafb';
         }
       }}
       onMouseLeave={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = 'white';
+          e.currentTarget.style.backgroundColor = backgrounds.surface;
         }
       }}
     >
@@ -488,6 +492,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   compact = false,
 }) => {
   const { trackClick } = useActivityTracking();
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
   
   // Initialize columns based on defaultColumns prop or use all columns
   const initializeColumns = () => {

@@ -5,6 +5,7 @@ import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
+import { GLOBAL_THEMES, migrateThemeValue } from '../constants/globalThemes';
 
 interface AddGoalModalProps {
   onClose: () => void;
@@ -17,7 +18,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    theme: 'Growth',
+    theme: 1, // Default to Health & Fitness (ID 1)
     size: 'M',
     timeToMasterHours: 40,
     confidence: 0.5,
@@ -50,7 +51,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     setFormData({ ...formData, kpis: updatedKPIs });
   };
 
-  const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
+  // Legacy theme names to new theme IDs
+  const themes = GLOBAL_THEMES;
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -120,7 +122,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
-        theme: themeMap[formData.theme as keyof typeof themeMap] || 2,
+        theme: formData.theme, // Use the theme ID directly
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
@@ -153,7 +155,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       setFormData({
         title: '',
         description: '',
-        theme: 'Growth',
+        theme: 1, // Health & Fitness
         size: 'M',
         timeToMasterHours: 40,
         confidence: 0.5,
@@ -185,7 +187,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     setFormData({
       title: '',
       description: '',
-      theme: 'Growth',
+      theme: 1, // Health & Fitness
       size: 'M',
       timeToMasterHours: 40,
       confidence: 0.5,
@@ -241,11 +243,11 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                 <Form.Label>Theme</Form.Label>
                 <Form.Select
                   value={formData.theme}
-                  onChange={(e) => setFormData({ ...formData, theme: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, theme: parseInt(e.target.value) })}
                   disabled={currentPersona !== 'personal'}
                 >
                   {themes.map(theme => (
-                    <option key={theme} value={theme}>{theme}</option>
+                    <option key={theme.id} value={theme.id}>{theme.label}</option>
                   ))}
                 </Form.Select>
               </Form.Group>

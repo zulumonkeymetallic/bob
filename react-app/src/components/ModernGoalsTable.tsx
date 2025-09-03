@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Modal, Button, Form } from 'react-bootstrap';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Card, Button, Badge, Form, Modal, Alert, Dropdown } from 'react-bootstrap';
+import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import {
   DndContext,
   closestCenter,
@@ -25,6 +26,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { 
   Settings, 
   GripVertical, 
@@ -164,6 +166,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryPriorityChange,
   onStoryAdd
 }) => {
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
     attributes,
     listeners,
@@ -333,7 +336,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
                   border: '1px solid #3b82f6',
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: 'white',
+                  backgroundColor: backgrounds.surface,
+                  color: colors.onSurface,
                   outline: 'none',
                   boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
                 }}
@@ -363,7 +367,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 border: '1px solid #3b82f6',
                 borderRadius: '4px',
                 fontSize: '14px',
-                backgroundColor: 'white',
+                backgroundColor: backgrounds.surface,
+                color: colors.onSurface,
                 outline: 'none',
                 boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
               }}
@@ -424,7 +429,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       ref={setNodeRef}
       style={{
         ...style,
-        backgroundColor: 'white',
+        backgroundColor: backgrounds.surface,
         borderBottom: '1px solid #f3f4f6',
         transition: 'background-color 0.15s ease',
         cursor: 'pointer',
@@ -444,7 +449,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}
       onMouseLeave={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = 'white';
+          e.currentTarget.style.backgroundColor = backgrounds.surface;
         }
       }}
     >
@@ -606,6 +611,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   onGoalPriorityChange,
   onEditModal,
 }) => {
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -769,7 +775,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       data-component="ModernGoalsTable"
       style={{ 
         position: 'relative', 
-        backgroundColor: 'white', 
+        backgroundColor: backgrounds.card, 
         borderRadius: '8px', 
         border: '1px solid #e5e7eb', 
         boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
@@ -816,17 +822,17 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
             transition: 'all 0.15s ease',
             cursor: 'pointer',
             border: showConfig ? '1px solid #bfdbfe' : '1px solid #d1d5db',
-            backgroundColor: showConfig ? '#dbeafe' : 'white',
-            color: showConfig ? '#1e40af' : '#374151',
+            backgroundColor: showConfig ? '#dbeafe' : backgrounds.surface,
+            color: showConfig ? '#1e40af' : colors.primary,
           }}
           onMouseEnter={(e) => {
             if (!showConfig) {
-              e.currentTarget.style.backgroundColor = '#f9fafb';
+              e.currentTarget.style.backgroundColor = isDark ? '#374151' : '#f9fafb';
             }
           }}
           onMouseLeave={(e) => {
             if (!showConfig) {
-              e.currentTarget.style.backgroundColor = 'white';
+              e.currentTarget.style.backgroundColor = backgrounds.surface;
             }
           }}
         >
@@ -1138,13 +1144,13 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                 <Form.Label>Theme</Form.Label>
                 <Form.Select
                   defaultValue={editingGoal.theme}
-                  onChange={(e) => setEditingGoal({...editingGoal, theme: e.target.value as any})}
+                  onChange={(e) => setEditingGoal({...editingGoal, theme: parseInt(e.target.value) || 0})}
                 >
-                  <option value="Health">Health</option>
-                  <option value="Growth">Growth</option>
-                  <option value="Wealth">Wealth</option>
-                  <option value="Tribe">Tribe</option>
-                  <option value="Home">Home</option>
+                  {GLOBAL_THEMES.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.label}
+                    </option>
+                  ))}
                 </Form.Select>
               </Form.Group>
               <Form.Group className="mb-3">

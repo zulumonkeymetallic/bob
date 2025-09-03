@@ -21,13 +21,16 @@ import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 import FloatingActionButton from './components/FloatingActionButton';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
-import ThemeColorManager from './components/ThemeColorManager';
+import SettingsPage from './components/SettingsPage';
 import LoginPage from './components/LoginPage';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
 import { SidebarProvider } from './contexts/SidebarContext';
+
+// Import theme-aware styles
+import './styles/theme-aware.css';
 import { TestModeProvider } from './contexts/TestModeContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
@@ -184,7 +187,6 @@ function AppContent() {
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
             {/* BOB v3.5.2 - New Scaffolding Components */}
-            <Route path="/goals/roadmap" element={<GoalsVisualizationView />} />
             <Route path="/goals/timeline" element={<GoalsVisualizationView />} />
             <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
             <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
@@ -197,8 +199,8 @@ function AppContent() {
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
             <Route path="/calendar" element={<Calendar />} />
-            <Route path="/settings" element={<Navigate to="/theme-colors" replace />} />
-            <Route path="/theme-colors" element={<ThemeColorManager />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
             <Route path="/admin" element={<Admin />} />
             <Route path="/test" element={<ComprehensiveTest />} />
             <Route path="/changelog" element={<Changelog />} />

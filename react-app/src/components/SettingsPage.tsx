@@ -1,325 +1,529 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Nav, Tab } from 'react-bootstrap';
-import { useTheme } from '../contexts/ThemeContext';
-import { useAuth } from '../contexts/AuthContext';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { Container, Row, Col, Card, Button, Form, Modal, Alert, Nav, Tab, Badge } from 'react-bootstrap';
 import { db } from '../firebase';
-import ChoiceManager from './ChoiceManager';
+import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
+import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
+import CalendarSyncManager from './CalendarSyncManager';
+import { Settings, Palette, Database, Calendar } from 'lucide-react';
+import { useThemeDebugger } from '../utils/themeDebugger';
 
-interface ThemeColors {
-  Health: string;
-  Growth: string;
-  Wealth: string;
-  Tribe: string;
-  Home: string;
+interface GlobalThemeSettings {
+  themes: GlobalTheme[];
+  customizations: Record<string, any>;
+  lastUpdated: any;
 }
 
 const SettingsPage: React.FC = () => {
-  const { theme, setTheme } = useTheme();
   const { currentUser } = useAuth();
-  const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
-  const [steamConnected, setSteamConnected] = useState(false);
-  const [notifications, setNotifications] = useState(true);
-  const [autoSync, setAutoSync] = useState(false);
-  
-  // Theme colors from Firebase
-  const [themeColors, setThemeColors] = useState<ThemeColors>({
-    Health: '#e53e3e', // Red
-    Growth: '#3182ce', // Blue  
-    Wealth: '#38a169', // Green
-    Tribe: '#805ad5', // Purple
-    Home: '#d69e2e'   // Orange/Yellow
+  const { theme, toggleTheme } = useTheme();
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { logThemeInfo, scanPageForInconsistencies, createClickHandler } = useThemeDebugger('SettingsPage');
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [migrateSuccess, setMigrateSuccess] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState(0);
+
+  // Global theme management state
+  const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
+  const [editingTheme, setEditingTheme] = useState<GlobalTheme | null>(null);
+  const [showThemeModal, setShowThemeModal] = useState(false);
+
+  // Migration state
+  const [migrationStats, setMigrationStats] = useState({
+    goals: 0,
+    stories: 0, 
+    tasks: 0,
+    needsMigration: false
   });
 
-  // Load settings from localStorage and Firebase
-  useEffect(() => {
-    const savedSettings = localStorage.getItem('bobSettings');
-    if (savedSettings) {
-      const settings = JSON.parse(savedSettings);
-      setNotifications(settings.notifications ?? true);
-      setAutoSync(settings.autoSync ?? false);
-      setGoogleCalendarConnected(settings.googleCalendarConnected ?? false);
-      setSteamConnected(settings.steamConnected ?? false);
-    }
+  // Check if database needs migration to new theme system
+  const checkMigrationStatus = async () => {
+    if (!currentUser) return;
 
-    // Load theme colors from Firebase
-    if (currentUser) {
-      const loadThemeColors = async () => {
-        try {
-          const docRef = doc(db, 'theme_colors', currentUser.uid);
-          const docSnap = await getDoc(docRef);
-          
-          if (docSnap.exists()) {
-            const colors = docSnap.data() as ThemeColors;
-            setThemeColors(colors);
+    try {
+      const collections = ['goals', 'stories', 'tasks'];
+      let needsMigration = false;
+
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        
+        const count = snapshot.size;
+
+        // Check if any items have string-based themes (need migration)
+        snapshot.docs.forEach(doc => {
+          const data = doc.data();
+          if (typeof data.theme === 'string') {
+            needsMigration = true;
           }
-        } catch (error) {
-          console.error('Error loading theme colors:', error);
-        }
-      };
-      
-      loadThemeColors();
+        });
+
+        setMigrationStats(prev => ({
+          ...prev,
+          [collectionName]: count,
+          needsMigration
+        }));
+      }
+    } catch (error) {
+      console.error('Error checking migration status:', error);
     }
+  };
+
+  // Load global theme settings from Firebase
+  useEffect(() => {
+    const loadGlobalThemes = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const docRef = doc(db, 'global_themes', currentUser.uid);
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists()) {
+          const data = docSnap.data() as GlobalThemeSettings;
+          setGlobalThemes(data.themes || GLOBAL_THEMES);
+        }
+        
+        // Check migration status
+        await checkMigrationStatus();
+        
+      } catch (error) {
+        console.error('Error loading global themes:', error);
+      }
+    };
+
+    loadGlobalThemes();
   }, [currentUser]);
 
-  const saveSettings = () => {
-    const settings = {
-      notifications,
-      autoSync,
-      googleCalendarConnected,
-      steamConnected
-    };
-    localStorage.setItem('bobSettings', JSON.stringify(settings));
-  };
+  // Initialize theme debugging (only when debug mode is enabled)
+  useEffect(() => {
+    // Theme debugging is now controlled by THEME_DEBUG_ENABLED flag in themeDebugger.ts
+    // This prevents console flooding during normal usage
+  }, [isDark, theme, logThemeInfo, scanPageForInconsistencies]);
 
-  const handleThemeChange = (newTheme: 'light' | 'dark' | 'system') => {
-    setTheme(newTheme);
-    saveSettings();
-  };
+  // Migrate database to use numeric theme IDs
+  const migrateDatabase = async () => {
+    if (!currentUser) return;
 
-  const handleColorChange = async (themeName: keyof ThemeColors, color: string) => {
-    const newColors = { ...themeColors, [themeName]: color };
-    setThemeColors(newColors);
-    
-    // Save to Firebase
-    if (currentUser) {
-      try {
-        const docRef = doc(db, 'theme_colors', currentUser.uid);
-        await setDoc(docRef, {
-          ...newColors,
-          updatedAt: serverTimestamp(),
-          userId: currentUser.uid
-        });
-        console.log('Theme colors saved successfully');
-      } catch (error) {
-        console.error('Error saving theme colors:', error);
+    try {
+      setMigrationProgress(0);
+      const collections = ['goals', 'stories', 'tasks'];
+      const batch = writeBatch(db);
+      let totalProcessed = 0;
+      let totalItems = 0;
+      
+      // First count total items
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        totalItems += snapshot.size;
       }
+      
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        
+        snapshot.docs.forEach(docSnapshot => {
+          const data = docSnapshot.data();
+          
+          // Only migrate if theme is still a string
+          if (typeof data.theme === 'string') {
+            const themeMapping: Record<string, number> = {
+              'Health': 1, 'Growth': 2, 'Wealth': 3, 'Tribe': 4, 'Home': 5, 'General': 0
+            };
+            
+            const newThemeId = themeMapping[data.theme] || 0;
+            
+            batch.update(doc(db, collectionName, docSnapshot.id), {
+              theme: newThemeId,
+              migratedAt: serverTimestamp()
+            });
+          }
+          
+          totalProcessed++;
+          setMigrationProgress(Math.round((totalProcessed / totalItems) * 100));
+        });
+      }
+      
+      await batch.commit();
+      setMigrateSuccess(true);
+      await checkMigrationStatus();
+      
+    } catch (error) {
+      console.error('Error migrating database:', error);
     }
   };
 
-  const handleGoogleCalendarConnect = async () => {
-    console.log('Google Calendar OAuth flow will be implemented here');
-    setGoogleCalendarConnected(!googleCalendarConnected);
-    saveSettings();
+  // Save global theme configuration
+  const saveGlobalThemes = async () => {
+    if (!currentUser) return;
+
+    try {
+      const globalThemeSettings: GlobalThemeSettings = {
+        themes: globalThemes,
+        customizations: {},
+        lastUpdated: serverTimestamp()
+      };
+
+      await setDoc(doc(db, 'global_themes', currentUser.uid), globalThemeSettings);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (error) {
+      console.error('Error saving global themes:', error);
+    }
   };
 
-  const handleSteamConnect = async () => {
-    console.log('Steam authentication flow will be implemented here');
-    setSteamConnected(!steamConnected);
-    saveSettings();
+  // Edit theme color
+  const handleThemeEdit = (theme: GlobalTheme) => {
+    setEditingTheme({ ...theme });
+    setShowThemeModal(true);
   };
 
-  const handleNotificationToggle = () => {
-    setNotifications(!notifications);
-    saveSettings();
+  // Save edited theme
+  const saveThemeEdit = () => {
+    if (!editingTheme) return;
+
+    setGlobalThemes(prev => 
+      prev.map(theme => 
+        theme.id === editingTheme.id ? editingTheme : theme
+      )
+    );
+    
+    setShowThemeModal(false);
+    setEditingTheme(null);
   };
 
-  const handleAutoSyncToggle = () => {
-    setAutoSync(!autoSync);
-    saveSettings();
+  // Reset to default themes
+  const resetToDefaults = () => {
+    setGlobalThemes(GLOBAL_THEMES);
   };
 
   return (
     <Container fluid className="py-4">
-      <h2 className="mb-4">Settings</h2>
-      
-      <Tab.Container defaultActiveKey="general">
+      <Row>
+        <Col>
+          <div className="d-flex justify-content-between align-items-center mb-4">
+            <h2 style={{ color: colors.primary }} className="mb-0">
+              <Settings size={28} className="me-2" />
+              Settings
+            </h2>
+            <Button 
+              variant="outline-info" 
+              size="sm"
+              onClick={(e) => {
+                createClickHandler()(e);
+                scanPageForInconsistencies();
+              }}
+            >
+              🔍 Debug Theme
+            </Button>
+          </div>
+        </Col>
+      </Row>
+
+      <Tab.Container defaultActiveKey="themes">
         <Row>
           <Col sm={3}>
             <Nav variant="pills" className="flex-column">
               <Nav.Item>
-                <Nav.Link eventKey="general">General</Nav.Link>
+                <Nav.Link 
+                  eventKey="themes" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Palette size={20} className="me-2" />
+                  Themes & Colors
+                </Nav.Link>
               </Nav.Item>
               <Nav.Item>
-                <Nav.Link eventKey="themes">Theme & Colors</Nav.Link>
+                <Nav.Link 
+                  eventKey="database" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Database size={20} className="me-2" />
+                  Database Migration
+                  {migrationStats.needsMigration && (
+                    <Badge bg="warning" className="ms-2">Action Needed</Badge>
+                  )}
+                </Nav.Link>
               </Nav.Item>
               <Nav.Item>
-                <Nav.Link eventKey="choices">Choice Management</Nav.Link>
+                <Nav.Link 
+                  eventKey="calendar" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Calendar size={20} className="me-2" />
+                  Calendar Integration
+                </Nav.Link>
               </Nav.Item>
               <Nav.Item>
-                <Nav.Link eventKey="integrations">Integrations</Nav.Link>
+                <Nav.Link 
+                  eventKey="system" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Settings size={20} className="me-2" />
+                  System Preferences
+                </Nav.Link>
               </Nav.Item>
             </Nav>
           </Col>
+          
           <Col sm={9}>
             <Tab.Content>
-              
-              {/* General Settings */}
-              <Tab.Pane eventKey="general">
-                <div className="card">
-                  <div className="card-header">
-                    <h4 className="mb-0">General Settings</h4>
-                  </div>
-                  <div className="card-body">
-                    {/* Theme Settings */}
-                    <div className="settings-section mb-4">
-                      <h5 className="mb-3">Theme & Appearance</h5>
-                      <div className="mb-3">
-                        <label className="form-label">Light/Dark Mode</label>
-                        <select 
-                          className="form-select"
-                          value={theme}
-                          onChange={(e) => handleThemeChange(e.target.value as 'light' | 'dark' | 'system')}
+              {/* Themes & Colors Tab */}
+              <Tab.Pane eventKey="themes">
+                <Card 
+                  style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}
+                  onClick={createClickHandler()}
+                >
+                  <Card.Header 
+                    style={{ backgroundColor: backgrounds.surface, color: colors.primary }}
+                    onClick={createClickHandler()}
+                  >
+                    <h4 className="mb-0">Global Theme Management</h4>
+                    <small style={{ color: colors.secondary }}>
+                      Customize themes used across all goals, stories, and tasks
+                    </small>
+                  </Card.Header>
+                  <Card.Body>
+                    {saveSuccess && (
+                      <Alert variant="success" className="mb-3">
+                        Global themes saved successfully!
+                      </Alert>
+                    )}
+                    
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                      <h5 style={{ color: colors.primary }}>Global Themes ({globalThemes.length})</h5>
+                      <div>
+                        <Button 
+                          variant="outline-secondary" 
+                          size="sm" 
+                          onClick={(e) => {
+                            createClickHandler()(e);
+                            resetToDefaults();
+                          }}
+                          className="me-2"
                         >
-                          <option value="light">Light Mode</option>
-                          <option value="dark">Dark Mode</option>
-                          <option value="system">System Preference</option>
-                        </select>
-                        <div className="form-text">
-                          Choose your preferred light/dark mode setting
-                        </div>
+                          Reset to Defaults
+                        </Button>
+                        <Button 
+                          variant="primary" 
+                          onClick={(e) => {
+                            createClickHandler()(e);
+                            saveGlobalThemes();
+                          }}
+                        >
+                          Save Themes
+                        </Button>
                       </div>
                     </div>
 
-                    {/* Notification Settings */}
-                    <div className="settings-section mb-4">
-                      <h5 className="mb-3">Notifications</h5>
-                      <div className="form-check form-switch mb-3">
-                        <input
-                          className="form-check-input"
-                          type="checkbox"
-                          id="notifications"
-                          checked={notifications}
-                          onChange={handleNotificationToggle}
-                        />
-                        <label className="form-check-label" htmlFor="notifications">
-                          Enable Notifications
-                        </label>
-                        <div className="form-text">
-                          Receive browser notifications for important updates
-                        </div>
-                      </div>
-                    </div>
+                    <Row>
+                      {globalThemes.map((theme) => (
+                        <Col md={6} lg={4} key={theme.id} className="mb-3">
+                          <Card 
+                            style={{ 
+                              backgroundColor: theme.color,
+                              color: getContrastTextColor(theme.color),
+                              cursor: 'pointer',
+                              transition: 'transform 0.2s ease'
+                            }}
+                            className="h-100"
+                            onClick={(e) => {
+                              createClickHandler()(e);
+                              handleThemeEdit(theme);
+                            }}
+                          >
+                            <Card.Body className="text-center">
+                              <h6 className="mb-1">{theme.label}</h6>
+                              <small style={{ opacity: 0.8 }}>
+                                ID: {theme.id} | {theme.color}
+                              </small>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
 
-                    {/* Auto Sync */}
-                    <div className="settings-section mb-4">
-                      <h5 className="mb-3">Data Synchronization</h5>
-                      <div className="form-check form-switch mb-3">
-                        <input
-                          className="form-check-input"
-                          type="checkbox"
-                          id="autoSync"
-                          checked={autoSync}
-                          onChange={handleAutoSyncToggle}
-                        />
-                        <label className="form-check-label" htmlFor="autoSync">
-                          Auto Sync
-                        </label>
-                        <div className="form-text">
-                          Automatically sync data across devices
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Profile Information */}
-                    <div className="settings-section mb-4">
-                      <h5 className="mb-3">Profile</h5>
-                      <div className="mb-3">
-                        <strong>Email:</strong> {currentUser?.email || 'Not signed in'}
-                      </div>
-                      <div className="mb-3">
-                        <strong>User ID:</strong> <code>{currentUser?.uid || 'N/A'}</code>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                    <Alert variant="info" className="mt-3">
+                      <strong>Note:</strong> Changes to themes will apply to all new goals, stories, and tasks. 
+                      Existing items will retain their current theme assignments unless migrated.
+                    </Alert>
+                  </Card.Body>
+                </Card>
               </Tab.Pane>
 
-              {/* Theme & Colors */}
-              <Tab.Pane eventKey="themes">
-                <div className="card">
-                  <div className="card-header">
-                    <h4 className="mb-0">Theme & Color Settings</h4>
-                  </div>
-                  <div className="card-body">
-                    <div className="mb-3">
-                      <label className="form-label">Color Themes</label>
-                      <div className="row g-2">
-                        {Object.entries(themeColors).map(([themeName, color]) => (
-                          <div key={themeName} className="col-md-6">
-                            <div className="d-flex align-items-center gap-2">
-                              <label htmlFor={`color-${themeName}`} className="form-label mb-0">{themeName}</label>
-                              <input
-                                type="color"
-                                className="form-control form-control-color"
-                                id={`color-${themeName}`}
-                                value={color}
-                                onChange={(e) => handleColorChange(themeName as keyof ThemeColors, e.target.value)}
-                                title={`Choose ${themeName} color`}
-                              />
+              {/* Database Migration Tab */}
+              <Tab.Pane eventKey="database">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">Database Migration</h4>
+                    <small style={{ color: colors.secondary }}>
+                      Upgrade your data to use the new global theme system
+                    </small>
+                  </Card.Header>
+                  <Card.Body>
+                    {migrateSuccess && (
+                      <Alert variant="success" className="mb-3">
+                        Database migration completed successfully!
+                      </Alert>
+                    )}
+
+                    <Row className="mb-4">
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.goals}</h3>
+                        <p style={{ color: colors.secondary }}>Goals</p>
+                      </Col>
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.stories}</h3>
+                        <p style={{ color: colors.secondary }}>Stories</p>
+                      </Col>
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.tasks}</h3>
+                        <p style={{ color: colors.secondary }}>Tasks</p>
+                      </Col>
+                    </Row>
+
+                    {migrationStats.needsMigration ? (
+                      <div>
+                        <Alert variant="warning">
+                          <strong>Migration Required:</strong> Your database contains items using the old theme format. 
+                          Click below to upgrade them to the new global theme system.
+                        </Alert>
+                        
+                        {migrationProgress > 0 && migrationProgress < 100 && (
+                          <div className="mb-3">
+                            <div className="progress">
+                              <div 
+                                className="progress-bar" 
+                                style={{ width: `${migrationProgress}%` }}
+                              >
+                                {migrationProgress}%
+                              </div>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                      <div className="form-text">
-                        Customize colors for your goal themes
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Tab.Pane>
-
-              {/* Choice Management */}
-              <Tab.Pane eventKey="choices">
-                <ChoiceManager />
-              </Tab.Pane>
-
-              {/* Integrations */}
-              <Tab.Pane eventKey="integrations">
-                <div className="card">
-                  <div className="card-header">
-                    <h4 className="mb-0">External Integrations</h4>
-                  </div>
-                  <div className="card-body">
-                    {/* Google Calendar */}
-                    <div className="d-flex justify-content-between align-items-center mb-3 p-3 border rounded">
-                      <div>
-                        <h6 className="mb-1">Google Calendar</h6>
-                        <small className="text-muted">
-                          Sync your tasks and deadlines with Google Calendar
-                        </small>
-                        {googleCalendarConnected && (
-                          <div>
-                            <span className="badge bg-success mt-1">Connected</span>
-                          </div>
                         )}
+                        
+                        <Button 
+                          variant="warning" 
+                          onClick={migrateDatabase}
+                          disabled={migrationProgress > 0 && migrationProgress < 100}
+                        >
+                          {migrationProgress > 0 && migrationProgress < 100 ? 'Migrating...' : 'Migrate Database'}
+                        </Button>
                       </div>
-                      <button
-                        className={`btn ${googleCalendarConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`}
-                        onClick={handleGoogleCalendarConnect}
-                      >
-                        {googleCalendarConnected ? 'Disconnect' : 'Connect'}
-                      </button>
-                    </div>
-
-                    {/* Steam Library */}
-                    <div className="d-flex justify-content-between align-items-center mb-3 p-3 border rounded">
-                      <div>
-                        <h6 className="mb-1">Steam Library</h6>
-                        <small className="text-muted">
-                          Import games from your Steam library to personal backlog
-                        </small>
-                        {steamConnected && (
-                          <div>
-                            <span className="badge bg-success mt-1">Connected</span>
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        className={`btn ${steamConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`}
-                        onClick={handleSteamConnect}
-                      >
-                        {steamConnected ? 'Disconnect' : 'Connect'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                    ) : (
+                      <Alert variant="success">
+                        <strong>Up to Date:</strong> Your database is using the latest global theme system.
+                      </Alert>
+                    )}
+                  </Card.Body>
+                </Card>
               </Tab.Pane>
 
+              {/* Calendar Integration Tab */}
+              <Tab.Pane eventKey="calendar">
+                <CalendarSyncManager />
+              </Tab.Pane>
+
+              {/* System Preferences Tab */}
+              <Tab.Pane eventKey="system">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">System Preferences</h4>
+                  </Card.Header>
+                  <Card.Body>
+                    <Form.Group className="mb-3">
+                      <Form.Label style={{ color: colors.primary }}>Theme Mode</Form.Label>
+                      <Form.Select 
+                        value={theme} 
+                        onChange={(e) => {
+                          const newTheme = e.target.value as 'light' | 'dark' | 'system';
+                          if (newTheme !== theme) {
+                            toggleTheme();
+                          }
+                        }}
+                        style={{ 
+                          backgroundColor: backgrounds.surface, 
+                          color: colors.onSurface,
+                          border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                        }}
+                      >
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                        <option value="system">System</option>
+                      </Form.Select>
+                    </Form.Group>
+
+                    <Alert variant="info">
+                      <strong>Current Theme:</strong> {theme} mode
+                      {theme === 'system' && ` (resolved to ${isDark ? 'dark' : 'light'})`}
+                    </Alert>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
             </Tab.Content>
           </Col>
         </Row>
       </Tab.Container>
+
+      {/* Theme Edit Modal */}
+      <Modal show={showThemeModal} onHide={() => setShowThemeModal(false)}>
+        <Modal.Header closeButton style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+          <Modal.Title>Edit Theme</Modal.Title>
+        </Modal.Header>
+        <Modal.Body style={{ backgroundColor: backgrounds.card }}>
+          {editingTheme && (
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label style={{ color: colors.primary }}>Theme Name</Form.Label>
+                <Form.Control
+                  type="text"
+                  value={editingTheme.label}
+                  onChange={(e) => setEditingTheme({...editingTheme, label: e.target.value})}
+                  style={{ 
+                    backgroundColor: backgrounds.surface, 
+                    color: colors.onSurface,
+                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                  }}
+                />
+              </Form.Group>
+              
+              <Form.Group className="mb-3">
+                <Form.Label style={{ color: colors.primary }}>Color</Form.Label>
+                <Form.Control
+                  type="color"
+                  value={editingTheme.color}
+                  onChange={(e) => setEditingTheme({...editingTheme, color: e.target.value})}
+                  style={{ 
+                    backgroundColor: backgrounds.surface,
+                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                  }}
+                />
+              </Form.Group>
+
+              <div className="preview-card p-3 text-center rounded" style={{ 
+                backgroundColor: editingTheme.color,
+                color: getContrastTextColor(editingTheme.color)
+              }}>
+                Preview: {editingTheme.label}
+              </div>
+            </Form>
+          )}
+        </Modal.Body>
+        <Modal.Footer style={{ backgroundColor: backgrounds.surface }}>
+          <Button variant="secondary" onClick={() => setShowThemeModal(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={saveThemeEdit}>
+            Save Changes
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </Container>
   );
 };

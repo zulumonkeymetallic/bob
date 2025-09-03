@@ -7,6 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 interface TaskWithContext extends Task {
   referenceNumber?: string;
@@ -46,7 +47,7 @@ const TasksList: React.FC = () => {
     effort: 'M' as 'S' | 'M' | 'L',
     parentType: 'story' as 'story' | 'project',
     parentId: '',
-    theme: 'Health' as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
+    theme: 1, // Default to Health & Fitness
     status: 'planned' as 'planned' | 'in_progress' | 'done'
   });
 
@@ -275,7 +276,7 @@ const TasksList: React.FC = () => {
         effort: 'M',
         parentType: currentPersona === 'personal' ? 'story' : 'project',
         parentId: '',
-        theme: 'Health',
+        theme: 1, // Default to Health & Fitness
         status: 'planned'
       });
       setShowAddTask(false);
@@ -705,13 +706,13 @@ const TasksList: React.FC = () => {
                   <Form.Label>Theme</Form.Label>
                   <Form.Select
                     value={newTask.theme}
-                    onChange={(e) => setNewTask({...newTask, theme: e.target.value as any})}
+                    onChange={(e) => setNewTask({...newTask, theme: parseInt(e.target.value) || 0})}
                   >
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
+                    {GLOBAL_THEMES.map((theme) => (
+                      <option key={theme.id} value={theme.id}>
+                        {theme.label}
+                      </option>
+                    ))}
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -837,13 +838,13 @@ const TasksList: React.FC = () => {
                     <Form.Label>Theme</Form.Label>
                     <Form.Select
                       value={selectedTask.theme}
-                      onChange={(e) => setSelectedTask({...selectedTask, theme: e.target.value as any})}
+                      onChange={(e) => setSelectedTask({...selectedTask, theme: parseInt(e.target.value) || 0})}
                     >
-                      <option value="Health">Health</option>
-                      <option value="Growth">Growth</option>
-                      <option value="Wealth">Wealth</option>
-                      <option value="Tribe">Tribe</option>
-                      <option value="Home">Home</option>
+                      {GLOBAL_THEMES.map((theme) => (
+                        <option key={theme.id} value={theme.id}>
+                          {theme.label}
+                        </option>
+                      ))}
                     </Form.Select>
                   </Form.Group>
                 </Col>

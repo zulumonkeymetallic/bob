@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Goal } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -16,7 +17,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    theme: 'Growth',
+    theme: 1, // Default to Health & Fitness theme ID
     size: 'M',
     timeToMasterHours: 40,
     confidence: 0.5,
@@ -28,7 +29,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
 
-  const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
+  const themes = GLOBAL_THEMES;
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -47,14 +48,13 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   useEffect(() => {
     if (goal && show) {
       // Map database values back to form values
-      const themeMap = { 1: 'Health', 2: 'Growth', 3: 'Wealth', 4: 'Tribe', 5: 'Home' };
       const sizeMap = { 1: 'XS', 2: 'S', 3: 'M', 4: 'L', 5: 'XL' };
       const statusMap = { 0: 'New', 1: 'Work in Progress', 2: 'Complete', 3: 'Blocked', 4: 'Deferred' };
       
       setFormData({
         title: goal.title || '',
         description: goal.description || '',
-        theme: themeMap[goal.theme as keyof typeof themeMap] || 'Growth',
+        theme: migrateThemeValue(goal.theme) || 1, // Migrate and default to Health & Fitness
         size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
         timeToMasterHours: goal.timeToMasterHours || 40,
         confidence: goal.confidence || 0.5,
@@ -102,7 +102,6 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       });
 
       // Map form values back to database values
-      const themeMap = { 'Health': 1, 'Growth': 2, 'Wealth': 3, 'Tribe': 4, 'Home': 5 };
       const sizeMap = { 'XS': 1, 'S': 2, 'M': 3, 'L': 4, 'XL': 5 };
       const statusMap = { 'New': 0, 'Work in Progress': 1, 'Complete': 2, 'Blocked': 3, 'Deferred': 4 };
       
@@ -111,7 +110,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       const goalUpdates = {
         title: formData.title.trim(),
         description: formData.description.trim(),
-        theme: themeMap[formData.theme as keyof typeof themeMap] || 2,
+        theme: formData.theme, // Use theme ID directly
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
@@ -199,10 +198,10 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 <Form.Label>Theme</Form.Label>
                 <Form.Select
                   value={formData.theme}
-                  onChange={(e) => setFormData({ ...formData, theme: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, theme: parseInt(e.target.value) })}
                 >
                   {themes.map(theme => (
-                    <option key={theme} value={theme}>{theme}</option>
+                    <option key={theme.id} value={theme.id}>{theme.label}</option>
                   ))}
                 </Form.Select>
               </Form.Group>
