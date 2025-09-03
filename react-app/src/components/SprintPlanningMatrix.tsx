@@ -347,7 +347,7 @@ const SprintPlanningMatrix: React.FC = () => {
   // Filter stories
   const filteredStories = stories.filter(story => {
     if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
-    if (filterStatus !== 'all' && story.status.toString() !== filterStatus) return false;
+    if (filterStatus !== 'all' && (story.status !== undefined ? story.status : 0).toString() !== filterStatus) return false;
     return true;
   });
 

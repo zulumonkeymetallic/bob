@@ -118,6 +118,15 @@ const defaultColumns: Column[] = [
     editable: true, 
     type: 'date' 
   },
+  { 
+    key: 'theme', 
+    label: 'Theme', 
+    width: '12%', 
+    visible: true, 
+    editable: false, 
+    type: 'select',
+    options: ['Health', 'Growth', 'Wealth', 'Tribe', 'Home']
+  },
 ];
 
 interface SortableRowProps {
@@ -194,7 +203,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'dueDate' && typeof value === 'number') {
       return new Date(value).toLocaleDateString();
     }
+    if (key === 'theme' && typeof value === 'number') {
+      const themes = ['', 'Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
+      return themes[value] || '';
+    }
     return value || '';
+  };
+
+  const getThemeColor = (theme: number): string => {
+    const colors = ['', '#ef4444', '#8b5cf6', '#059669', '#f59e0b', '#3b82f6'];
+    return colors[theme] || '#6b7280';
   };
 
   const renderCell = (column: Column) => {
@@ -289,7 +307,24 @@ const SortableRow: React.FC<SortableRowProps> = ({
           whiteSpace: 'normal',
           lineHeight: '1.4',
         }}>
-          {formatValue(column.key, value)}
+          {column.key === 'theme' && value ? (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '2px 8px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: '500',
+                backgroundColor: getThemeColor(value as number),
+                color: 'white',
+              }}
+            >
+              {formatValue(column.key, value)}
+            </span>
+          ) : (
+            formatValue(column.key, value)
+          )}
         </div>
       </td>
     );

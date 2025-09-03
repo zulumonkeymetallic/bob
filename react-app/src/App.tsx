@@ -23,6 +23,7 @@ import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
 import ThemeColorManager from './components/ThemeColorManager';
 import LoginPage from './components/LoginPage';
+import ErrorBoundary from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
@@ -50,6 +51,7 @@ import GoalVizPage from './components/visualization/GoalVizPage';
 import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
+import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
 
 function App() {
   return (
@@ -145,18 +147,19 @@ function AppContent() {
   };
 
   return (
-    <MigrationManager>
-      <SidebarLayout onSignOut={handleSignOut}>
-        {/* Debug current route */}
-        
-        <div key={`${location.pathname}-${forceRender}`}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/sprint-dashboard" element={<SprintDashboard />} />
-            <Route path="/tasks" element={<TasksList />} />
-            <Route path="/task-list" element={<TaskListView />} />
-            <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
+    <ErrorBoundary>
+      <MigrationManager>
+        <SidebarLayout onSignOut={handleSignOut}>
+          {/* Debug current route */}
+          
+          <div key={`${location.pathname}-${forceRender}`}>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/sprint-dashboard" element={<SprintDashboard />} />
+              <Route path="/tasks" element={<TasksList />} />
+              <Route path="/task-list" element={<TaskListView />} />
+              <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
             <Route path="/kanban" element={<SprintManagementView />} />
             <Route path="/kanban-old" element={<KanbanPage />} />
@@ -176,7 +179,8 @@ function AppContent() {
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
-            <Route path="/goals/visualization" element={<GoalVizPage />} />
+            <Route path="/goals/visualization" element={<EnhancedGanttChart />} />
+            <Route path="/goals/gantt" element={<EnhancedGanttChart />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
             {/* BOB v3.5.2 - New Scaffolding Components */}
@@ -218,6 +222,7 @@ function AppContent() {
         />
       </SidebarLayout>
     </MigrationManager>
+    </ErrorBoundary>
   );
 }
 

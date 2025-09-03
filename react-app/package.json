@@ -1,7 +1,7 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.5.12",
-  "description": "AI-Powered Personal Productivity Platform with Complete Goals-Stories Integration, Enhanced Console Logging & Modal Consistency",
+  "version": "3.6.0",
+  "description": "AI-Powered Personal Productivity Platform with Enhanced Gantt Chart Timeline Visualization, Drag-and-Drop Goal Management & VR Support",
   "private": true,
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^1.7.4",

@@ -7,6 +7,8 @@ export interface Goal {
   size: number; // 1=Small, 2=Medium, 3=Large
   timeToMasterHours: number;
   targetDate?: string;
+  startDate?: number; // Timestamp for goal start date
+  endDate?: number; // Timestamp for goal end date
   confidence: number; // 1=Low, 2=Medium, 3=High
   kpis?: Array<{name: string; target: number; unit: string}>;
   status: number; // 0=New, 1=Work in Progress, 2=Complete, 3=Blocked, 4=Deferred

@@ -1,17 +1,61 @@
-// Version tracking for cache busting - v3.5.12 Sprint Management Table
-export const VERSION = 'v3.5.12';
-export const BUILD_TIME = '2025-09-03T14:30:00.000Z'; // Static build time
-export const BUILD_HASH = 'stable-v3.5.12-main.sprint-management-table'; // Build hash matching actual file
+// Version tracking for cache busting - v3.6.0 Enhanced Gantt Chart
+export const VERSION = 'v3.6.0';
+export const BUILD_TIME = '2025-09-03T14:20:00.000Z'; // Static build time
+export const BUILD_HASH = 'enhanced-gantt-chart-v3.6.0'; // Build hash matching actual file
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Sprint Management Table Complete`);
-console.log(`🎯 Features: Modern Sprint Table, Enhanced Sprint Metrics, Dark Theme Fix, Improved Sprint Selection`);
-console.log(`🚀 Architecture: v3.5.12 with ModernSprintsTable Component`);
+console.log(`✅ Status: Enhanced Gantt Chart Timeline Visualization Complete`);
+console.log(`🎯 Features: Drag-and-Drop Goal Management, VR/Touch Support, Real-time Activity Tracking`);
+console.log(`🚀 Architecture: v3.6.0 with Advanced Timeline Visualization System`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 console.log(`🔨 Build hash: ${BUILD_HASH}`);
 
-// Force browser cache refresh and version notification with smart loop prevention
-export const checkForUpdates = () => {
+// Server version checking interface
+interface ServerVersion {
+  version: string;
+  buildTime: string;
+  buildHash: string;
+  features: string[];
+}
+
+// Fetch server version with timeout and error handling
+const fetchServerVersion = async (): Promise<ServerVersion | null> => {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+    
+    const response = await fetch('/version.json?t=' + Date.now(), {
+      signal: controller.signal,
+      cache: 'no-cache',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      }
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      console.warn(`⚠️ Server version check failed: ${response.status}`);
+      return null;
+    }
+    
+    const serverVersion = await response.json();
+    console.log(`📡 Server version: ${serverVersion.version} (${serverVersion.buildHash?.substring(0,8)})`);
+    return serverVersion;
+    
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      console.warn('⏰ Server version check timed out');
+    } else {
+      console.warn('🚨 Server version check error:', error.message);
+    }
+    return null;
+  }
+};
+
+// Enhanced force browser cache refresh with server version checking
+export const checkForUpdates = async () => {
   // Prevent running if already in a clearing process
   const isClearing = localStorage.getItem('bobCacheClearing');
   if (isClearing) {
@@ -22,44 +66,60 @@ export const checkForUpdates = () => {
   const lastVersion = localStorage.getItem('bobLastVersion');
   const lastBuildHash = localStorage.getItem('bobLastBuildHash');
   const lastPageLoad = localStorage.getItem('bobLastPageLoad');
+  const lastServerCheck = localStorage.getItem('bobLastServerCheck');
   const currentVersion = VERSION;
   const currentBuildHash = BUILD_HASH;
   const currentTime = Date.now();
   
   // Prevent infinite loops - only check once per session or after 30 minutes
   const sessionCheckInterval = 30 * 60 * 1000; // 30 minutes
+  const serverCheckInterval = 10 * 60 * 1000; // 10 minutes for server checks
   const hasRecentCheck = lastPageLoad && (currentTime - parseInt(lastPageLoad)) < sessionCheckInterval;
+  const hasRecentServerCheck = lastServerCheck && (currentTime - parseInt(lastServerCheck)) < serverCheckInterval;
   
   console.log(`🔍 Version check: ${lastVersion}→${currentVersion}, hash: ${lastBuildHash?.substring(0,8)}→${currentBuildHash.substring(0,8)}`);
+  
+  // Check server version if enough time has passed
+  let serverVersion: ServerVersion | null = null;
+  if (!hasRecentServerCheck) {
+    console.log('📡 Checking server for version updates...');
+    serverVersion = await fetchServerVersion();
+    localStorage.setItem('bobLastServerCheck', currentTime.toString());
+  }
   
   // Only proceed if no recent check or if there are actual changes
   const versionChanged = lastVersion && lastVersion !== currentVersion;
   const buildChanged = lastBuildHash && lastBuildHash !== currentBuildHash;
   const noStoredData = !lastVersion || !lastBuildHash;
   
-  if (!hasRecentCheck && (versionChanged || buildChanged || noStoredData)) {
-    console.log(`🔄 Cache update needed: version=${versionChanged}, build=${buildChanged}, noData=${noStoredData}`);
+  // Check server version differences
+  const serverVersionDifferent = serverVersion && serverVersion.version !== currentVersion;
+  const serverBuildDifferent = serverVersion && serverVersion.buildHash !== currentBuildHash;
+  
+  if (!hasRecentCheck && (versionChanged || buildChanged || noStoredData || serverVersionDifferent || serverBuildDifferent)) {
+    console.log(`🔄 Cache update needed: version=${versionChanged}, build=${buildChanged}, noData=${noStoredData}, serverVer=${serverVersionDifferent}, serverBuild=${serverBuildDifferent}`);
     
     // Mark this check to prevent loops
     localStorage.setItem('bobLastPageLoad', currentTime.toString());
     
-    if (versionChanged) {
+    if (versionChanged || serverVersionDifferent) {
+      const targetVersion = serverVersion?.version || currentVersion;
       // Prompt for version changes
-      if (window.confirm(`🚀 BOB has been updated to ${currentVersion}!\n\nClick OK to clear cache and reload with the latest version.`)) {
-        performCacheClear(currentVersion, currentBuildHash);
+      if (window.confirm(`🚀 BOB has been updated to ${targetVersion}!\n\nClick OK to clear cache and reload with the latest version.`)) {
+        await performCacheClear(targetVersion, serverVersion?.buildHash || currentBuildHash);
         return;
       }
     } else {
       // Silent clear for build changes or missing data
       console.log('🔄 Performing silent cache validation...');
-      performCacheClear(currentVersion, currentBuildHash, true);
+      await performCacheClear(serverVersion?.version || currentVersion, serverVersion?.buildHash || currentBuildHash, true);
       return;
     }
   }
   
   // Store current version/hash for future checks
-  localStorage.setItem('bobLastVersion', currentVersion);
-  localStorage.setItem('bobLastBuildHash', currentBuildHash);
+  localStorage.setItem('bobLastVersion', serverVersion?.version || currentVersion);
+  localStorage.setItem('bobLastBuildHash', serverVersion?.buildHash || currentBuildHash);
   if (!hasRecentCheck) {
     localStorage.setItem('bobLastPageLoad', currentTime.toString());
   }
@@ -124,7 +184,7 @@ const performCacheClear = async (version: string, buildHash: string, silent: boo
 };
 
 // Auto-check for updates with cleanup and aggressive cache validation
-(() => {
+(async () => {
   // Clean up any stuck clearing flags (in case page reloaded during clearing)
   const clearingFlag = localStorage.getItem('bobCacheClearing');
   if (clearingFlag) {
@@ -138,22 +198,22 @@ const performCacheClear = async (version: string, buildHash: string, silent: boo
     console.log('🚨 Previous JavaScript syntax error detected - forcing aggressive cache clear...');
     localStorage.removeItem('bobJSError');
     // Force immediate cache clear without checking intervals
-    performCacheClear(VERSION, BUILD_HASH, false);
+    await performCacheClear(VERSION, BUILD_HASH, false);
     return;
   }
   
   // Set up error handler for JavaScript syntax errors
-  window.addEventListener('error', (event) => {
+  window.addEventListener('error', async (event) => {
     if (event.message && event.message.includes('Unexpected token')) {
       console.log('🚨 JavaScript syntax error detected - marking for next reload...');
       localStorage.setItem('bobJSError', 'true');
       // Force immediate cache clear
-      performCacheClear(VERSION, BUILD_HASH, false);
+      await performCacheClear(VERSION, BUILD_HASH, false);
     }
   });
   
-  // Run the version check
-  checkForUpdates();
+  // Run the enhanced version check
+  await checkForUpdates();
 })();
 
 // Default export to ensure module is recognized

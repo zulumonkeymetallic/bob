@@ -554,8 +554,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                position: 'sticky', 
                top: '0', 
                zIndex: 1000,
-               backgroundColor: 'var(--bs-body-bg)',
-               borderBottomColor: 'var(--bs-border-color)!important'
+               backgroundColor: 'var(--notion-bg)',
+               borderBottomColor: 'var(--notion-border)',
+               color: 'var(--notion-text)'
              }}>
           <div className="d-flex align-items-center">
             <h6 className="mb-0 text-muted">Current Context</h6>
