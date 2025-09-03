@@ -57,7 +57,7 @@ STEPS:
 4. Verify successful login and redirect to dashboard
 
 EXPECTED RESULTS:
-- OAuth popup appears without errors
+- OAuth popup appears without ezrrors
 - User successfully authenticated
 - Dashboard loads with user data
 - No console errors during authentication

@@ -148,20 +148,6 @@ function AppContent() {
     <MigrationManager>
       <SidebarLayout onSignOut={handleSignOut}>
         {/* Debug current route */}
-        <div style={{
-          position: 'fixed',
-          top: '10px',
-          right: '10px',
-          background: 'rgba(0,0,0,0.8)',
-          color: 'white',
-          padding: '5px 10px',
-          borderRadius: '4px',
-          fontSize: '12px',
-          zIndex: 1000,
-          fontFamily: 'monospace'
-        }}>
-          Route: {location.pathname} | Render: {forceRender}
-        </div>
         
         <div key={`${location.pathname}-${forceRender}`}>
           <Routes>

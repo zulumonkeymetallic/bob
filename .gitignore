@@ -2,19 +2,3 @@ node_modules
 backups/
 *.bundle
 *.tar.gz
-
-# Firebase credentials (SECURITY: Never commit these)
-firebase-service-account.json
-*-service-account.json
-firebase-adminsdk-*.json
-
-# Environment files
-.env
-.env.local
-.env.production
-.env.staging
-
-# Test results
-test-results/
-screenshots/
-*.log

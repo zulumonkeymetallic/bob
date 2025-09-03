@@ -46,11 +46,20 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         setSprints(sprintData);
         setLoading(false);
 
-        // Auto-select active sprint if none selected
-        if (!selectedSprintId && sprintData.length > 0) {
+        // Always try to select active sprint first, then fall back to most recent
+        if (sprintData.length > 0) {
           const activeSprint = sprintData.find(sprint => isStatus(sprint.status, 'active'));
-          if (activeSprint) {
-            onSprintChange(activeSprint.id);
+          const plannedSprint = sprintData.find(sprint => isStatus(sprint.status, 'planned'));
+          const fallbackSprint = sprintData[0]; // Most recent by start date
+          
+          const preferredSprint = activeSprint || plannedSprint || fallbackSprint;
+          
+          // If no sprint is selected or current selection is not found, select preferred
+          if (!selectedSprintId || !sprintData.find(s => s.id === selectedSprintId)) {
+            if (preferredSprint) {
+              console.log('🎯 SprintSelector: Auto-selecting sprint:', preferredSprint.name, preferredSprint.status);
+              onSprintChange(preferredSprint.id);
+            }
           }
         }
       },

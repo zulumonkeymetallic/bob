@@ -8,6 +8,7 @@ import { useTestMode } from '../contexts/TestModeContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { VERSION } from '../version';
 import SprintSelector from './SprintSelector';
+import CompactSprintMetrics from './CompactSprintMetrics';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 // import { SideDoorAuth } from '../services/SideDoorAuth';
 
@@ -547,17 +548,27 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
       {/* Main Content Area */}
       <div className="flex-grow-1" style={{ paddingTop: window.innerWidth < 992 ? '60px' : '0' }}>
-        {/* Top Header with Sprint Selector */}
-        <div className="bg-white border-bottom px-3 py-2 d-flex justify-content-between align-items-center" 
-             style={{ position: 'sticky', top: '0', zIndex: 1000 }}>
+        {/* Top Header with Sprint Selector and Metrics */}
+        <div className="border-bottom px-3 py-2 d-flex justify-content-between align-items-center" 
+             style={{ 
+               position: 'sticky', 
+               top: '0', 
+               zIndex: 1000,
+               backgroundColor: 'var(--bs-body-bg)',
+               borderBottomColor: 'var(--bs-border-color)!important'
+             }}>
           <div className="d-flex align-items-center">
             <h6 className="mb-0 text-muted">Current Context</h6>
           </div>
           <div className="d-flex align-items-center gap-3">
+            <CompactSprintMetrics
+              selectedSprintId={selectedSprintId}
+              className="me-2"
+            />
             <SprintSelector
               selectedSprintId={selectedSprintId}
               onSprintChange={setSelectedSprintId}
-              className="me-2"
+              className="ms-2"
             />
           </div>
         </div>

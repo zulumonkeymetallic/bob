@@ -1,6 +1,6 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.5.9",
+  "version": "3.5.12",
   "description": "AI-Powered Personal Productivity Platform with Complete Goals-Stories Integration, Enhanced Console Logging & Modal Consistency",
   "private": true,
   "dependencies": {
