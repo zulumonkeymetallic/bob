@@ -32,8 +32,8 @@ import { Sprint, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, getStatusName } from '../utils/statusHelpers';
 
-// Sprint status helpers
-const getSprintStatusLabel = (status: number): string => {
+// Sprint status helpers with null checking
+const getSprintStatusLabel = (status: number | undefined): string => {
   switch (status) {
     case 0: return 'Planning';
     case 1: return 'Active';
@@ -43,7 +43,7 @@ const getSprintStatusLabel = (status: number): string => {
   }
 };
 
-const getSprintStatusVariant = (status: number): string => {
+const getSprintStatusVariant = (status: number | undefined): string => {
   switch (status) {
     case 0: return 'secondary'; // Planning
     case 1: return 'primary';   // Active
@@ -231,7 +231,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       objective: sprint.objective || '',
       startDate: new Date(sprint.startDate).toISOString().split('T')[0],
       endDate: new Date(sprint.endDate).toISOString().split('T')[0],
-      status: sprint.status.toString()
+      status: (sprint.status !== undefined ? sprint.status : 0).toString()
     });
     setShowModal(true);
   };

@@ -164,8 +164,9 @@ const GlobalEditButton: React.FC<GlobalEditButtonProps> = ({
                   style={{
                     minWidth: '180px',
                     borderRadius: '8px',
-                    border: '1px solid var(--bs-border-color)',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                    border: '1px solid var(--notion-border)',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    backgroundColor: 'var(--notion-bg)'
                   }}
                 >
                   {actions.map((action) => (

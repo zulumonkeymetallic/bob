@@ -113,7 +113,7 @@ const TasksManagement: React.FC = () => {
   // Filter tasks based on story/goal/sprint relationships
   const filteredTasks = tasks.filter(task => {
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
-    if (filterStatus !== 'all' && task.status.toString() !== filterStatus) return false;
+    if (filterStatus !== 'all' && (task.status !== undefined ? task.status : 0).toString() !== filterStatus) return false;
     if (filterSprint !== 'all' && task.sprintId !== filterSprint) return false;
     
     // Filter by story

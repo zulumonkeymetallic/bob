@@ -236,7 +236,7 @@ const Dashboard: React.FC = () => {
             <Col md={8}>
                         <DashboardModernTaskTable 
             maxTasks={10} 
-            showDueToday={false} 
+            showDueToday={true} 
             title="Upcoming Tasks"
             showMetrics={true}
           />

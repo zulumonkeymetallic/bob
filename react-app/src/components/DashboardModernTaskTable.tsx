@@ -8,7 +8,7 @@ import { Task, Story, Goal, Sprint } from '../types';
 import { Plus, Filter, Calendar, Clock, Target } from 'lucide-react';
 import { generateRef } from '../utils/referenceGenerator';
 import { getThemeClass, getThemeName, getStatusName, getPriorityName } from '../utils/statusHelpers';
-import { getDeadlineInfo, getTasksApproachingDeadlines } from '../utils/deadlineUtils';
+import { getDeadlineInfo } from '../utils/deadlineUtils';
 import ModernTaskTable from './ModernTaskTable';
 
 interface DashboardModernTaskTableProps {
@@ -35,7 +35,7 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
   const [metrics, setMetrics] = useState({
     openTasks: 0,
     openStories: 0,
-    approachingDeadlines: 0,
+    tasksDueToday: 0,
     activeSprint: null as Sprint | null,
     daysLeftInSprint: 0
   });
@@ -168,13 +168,22 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
       daysLeftInSprint = Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
     }
     
-    // Calculate approaching deadlines (within 7 days)
-    const approachingDeadlines = getTasksApproachingDeadlines(tasks, stories, sprints, 7).length;
+    // Calculate tasks due today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const tasksDueToday = tasks.filter(task => {
+      if (!task.dueDate || task.status === 3) return false; // exclude completed tasks
+      const dueDate = new Date(task.dueDate);
+      return dueDate >= today && dueDate < tomorrow;
+    }).length;
     
     setMetrics({
       openTasks,
       openStories,
-      approachingDeadlines,
+      tasksDueToday,
       activeSprint,
       daysLeftInSprint
     });
@@ -314,8 +323,8 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
             <Card className="text-center border-0 shadow-sm">
               <Card.Body>
                 <Clock size={24} className="text-warning mb-2" />
-                <h4 className="mb-0 text-warning">{metrics.approachingDeadlines}</h4>
-                <small className="text-muted">Due Soon</small>
+                <h4 className="mb-0 text-warning">{metrics.tasksDueToday}</h4>
+                <small className="text-muted">Due Today</small>
               </Card.Body>
             </Card>
           </Col>
@@ -334,13 +343,13 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
       )}
 
       {/* Task Deadlines Alert */}
-      {metrics.approachingDeadlines > 0 && (
-        <Alert variant="warning" className="d-flex align-items-center gap-2 mb-4">
-          <Clock size={16} />
-          <span>
-            <strong>{metrics.approachingDeadlines}</strong> task{metrics.approachingDeadlines !== 1 ? 's' : ''} 
-            {metrics.approachingDeadlines === 1 ? ' is' : ' are'} approaching {metrics.approachingDeadlines === 1 ? 'its' : 'their'} deadline
-          </span>
+            {metrics.tasksDueToday > 0 && (
+        <Alert variant="warning" className="mb-3">
+          <Clock size={18} className="me-2" />
+          <strong>
+            <strong>{metrics.tasksDueToday}</strong> task{metrics.tasksDueToday !== 1 ? 's' : ''} 
+            {metrics.tasksDueToday === 1 ? ' is' : ' are'} due today
+          </strong>
         </Alert>
       )}
 
