@@ -1,12 +1,12 @@
-// Version tracking for cache busting - v3.5.7 Comprehensive Enhancements
-export const VERSION = 'v3.5.7';
-export const BUILD_TIME = '2025-09-03T08:00:00.000Z'; // Static build time
-export const BUILD_HASH = 'stable-v3.5.7-main.comprehensive-enhancements'; // Build hash matching actual file
+// Version tracking for cache busting - v3.5.8 Story-Task Management & Dashboard Refactor
+export const VERSION = 'v3.5.8';
+export const BUILD_TIME = '2025-09-03T09:00:00.000Z'; // Static build time
+export const BUILD_HASH = 'stable-v3.5.8-main.story-task-management'; // Build hash matching actual file
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Comprehensive Enhancements - Dashboard Sprint Kanban, Modern Tasks, Excel Import`);
-console.log(`🎯 Features: Dashboard Sprint Kanban, Modern Task Tables, Excel/CSV Import, Firestore Fixes`);
-console.log(`🚀 Architecture: v3.5.7 with Dashboard Enhancements & Import System`);
+console.log(`✅ Status: Story-Task Management & Dashboard Refactor Complete`);
+console.log(`🎯 Features: Story Task Panels, EditStoryModal, Modern Dashboard Tables, Card/List View Toggle`);
+console.log(`🚀 Architecture: v3.5.8 with Enhanced Story Management & Task Integration`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 console.log(`🔨 Build hash: ${BUILD_HASH}`);
 
