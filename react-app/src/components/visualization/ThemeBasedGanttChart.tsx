@@ -7,12 +7,17 @@ import {
   AlertTriangle,
   Edit,
   Trash2,
-  Plus
+  Plus,
+  MoreVertical,
+  Archive,
+  CheckCircle,
+  Copy,
+  ExternalLink
 } from 'lucide-react';
-import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal } from 'react-bootstrap';
+import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal, Dropdown } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
 import { Goal, Sprint, Story, Task } from '../../types';
@@ -55,7 +60,7 @@ const ThemeBasedGanttChart: React.FC = () => {
   const [loading, setLoading] = useState(true);
   
   // UI State
-  const [zoomLevel, setZoomLevel] = useState<'month' | 'quarter' | 'half' | 'year'>('quarter');
+  const [zoomLevel, setZoomLevel] = useState<'day' | 'week' | 'month' | 'quarter'>('month');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedThemes, setSelectedThemes] = useState<number[]>([]);
   
@@ -133,13 +138,35 @@ const ThemeBasedGanttChart: React.FC = () => {
     loadData();
   }, [currentUser]);
 
-  // Calculate timeline bounds
+  // Calculate timeline bounds based on zoom level
   const timelineBounds = useMemo(() => {
     const now = new Date();
-    const start = new Date(now.getFullYear() - 1, 0, 1);
-    const end = new Date(now.getFullYear() + 2, 11, 31);
+    let start: Date, end: Date;
+    
+    switch (zoomLevel) {
+      case 'day':
+        start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 15);
+        end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 15);
+        break;
+      case 'week':
+        start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 60);
+        end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 60);
+        break;
+      case 'month':
+        start = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+        end = new Date(now.getFullYear(), now.getMonth() + 6, 0);
+        break;
+      case 'quarter':
+        start = new Date(now.getFullYear() - 1, 0, 1);
+        end = new Date(now.getFullYear() + 2, 11, 31);
+        break;
+      default:
+        start = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+        end = new Date(now.getFullYear(), now.getMonth() + 6, 0);
+    }
+    
     return { start, end };
-  }, []);
+  }, [zoomLevel]);
 
   // Calculate date position
   const getDatePosition = useCallback((date: Date) => {
@@ -196,6 +223,78 @@ const ThemeBasedGanttChart: React.FC = () => {
     setDeletingGoal(goal);
     setShowDeleteConfirm(true);
   }, []);
+
+  // Handle goal archiving
+  const handleArchiveGoal = useCallback(async (goal: Goal) => {
+    try {
+      await updateDoc(doc(db, 'goals', goal.id), {
+        status: 4, // 4 = Deferred/Archived
+        archivedAt: serverTimestamp()
+      });
+      await ActivityStreamService.logFieldChange(
+        goal.id,
+        'goal',
+        'status',
+        goal.status.toString(),
+        '4',
+        currentUser?.uid || '',
+        currentUser?.email || '',
+        JSON.stringify({ action: 'archived', title: goal.title })
+      );
+    } catch (error) {
+      console.error('Error archiving goal:', error);
+    }
+  }, [currentUser]);
+
+  // Handle goal completion
+  const handleCompleteGoal = useCallback(async (goal: Goal) => {
+    try {
+      await updateDoc(doc(db, 'goals', goal.id), {
+        status: 2, // 2 = Complete
+        completedAt: serverTimestamp()
+      });
+      await ActivityStreamService.logFieldChange(
+        goal.id,
+        'goal',
+        'status',
+        goal.status.toString(),
+        '2',
+        currentUser?.uid || '',
+        currentUser?.email || '',
+        JSON.stringify({ action: 'completed', title: goal.title })
+      );
+    } catch (error) {
+      console.error('Error completing goal:', error);
+    }
+  }, [currentUser]);
+
+  // Handle goal duplication
+  const handleDuplicateGoal = useCallback(async (goal: Goal) => {
+    try {
+      const { id, createdAt, updatedAt, ...goalData } = goal;
+      const duplicatedGoal = {
+        ...goalData,
+        title: `${goalData.title} (Copy)`,
+        status: 0, // 0 = New
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      
+      await addDoc(collection(db, 'goals'), duplicatedGoal);
+      await ActivityStreamService.logFieldChange(
+        'new-goal',
+        'goal',
+        'status',
+        '',
+        '0',
+        currentUser?.uid || '',
+        currentUser?.email || '',
+        JSON.stringify({ action: 'duplicated', originalTitle: goal.title, newTitle: duplicatedGoal.title })
+      );
+    } catch (error) {
+      console.error('Error duplicating goal:', error);
+    }
+  }, [currentUser]);
 
   const confirmDeleteGoal = useCallback(async () => {
     if (!deletingGoal) return;
@@ -339,25 +438,55 @@ const ThemeBasedGanttChart: React.FC = () => {
     const headers = [];
     const current = new Date(start);
 
-    if (zoomLevel === 'month') {
-      while (current <= end) {
-        headers.push({
-          label: current.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-          date: new Date(current),
-          width: getDatePosition(new Date(current.getFullYear(), current.getMonth() + 1, 1)) - getDatePosition(current)
-        });
-        current.setMonth(current.getMonth() + 1);
-      }
-    } else if (zoomLevel === 'quarter') {
-      while (current <= end) {
-        const quarter = Math.floor(current.getMonth() / 3) + 1;
-        headers.push({
-          label: `Q${quarter} ${current.getFullYear()}`,
-          date: new Date(current),
-          width: getDatePosition(new Date(current.getFullYear(), current.getMonth() + 3, 1)) - getDatePosition(current)
-        });
-        current.setMonth(current.getMonth() + 3);
-      }
+    switch (zoomLevel) {
+      case 'day':
+        while (current <= end) {
+          headers.push({
+            label: current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            date: new Date(current),
+            width: getDatePosition(new Date(current.getTime() + 24 * 60 * 60 * 1000)) - getDatePosition(current)
+          });
+          current.setDate(current.getDate() + 1);
+        }
+        break;
+      case 'week':
+        // Start from the beginning of the week
+        const startOfWeek = new Date(current);
+        startOfWeek.setDate(current.getDate() - current.getDay());
+        current.setTime(startOfWeek.getTime());
+        
+        while (current <= end) {
+          const weekEnd = new Date(current);
+          weekEnd.setDate(current.getDate() + 6);
+          headers.push({
+            label: `${current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+            date: new Date(current),
+            width: getDatePosition(new Date(current.getTime() + 7 * 24 * 60 * 60 * 1000)) - getDatePosition(current)
+          });
+          current.setDate(current.getDate() + 7);
+        }
+        break;
+      case 'month':
+        while (current <= end) {
+          headers.push({
+            label: current.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+            date: new Date(current),
+            width: getDatePosition(new Date(current.getFullYear(), current.getMonth() + 1, 1)) - getDatePosition(current)
+          });
+          current.setMonth(current.getMonth() + 1);
+        }
+        break;
+      case 'quarter':
+        while (current <= end) {
+          const quarter = Math.floor(current.getMonth() / 3) + 1;
+          headers.push({
+            label: `Q${quarter} ${current.getFullYear()}`,
+            date: new Date(current),
+            width: getDatePosition(new Date(current.getFullYear(), current.getMonth() + 3, 1)) - getDatePosition(current)
+          });
+          current.setMonth(current.getMonth() + 3);
+        }
+        break;
     }
     
     return headers;
@@ -390,11 +519,33 @@ const ThemeBasedGanttChart: React.FC = () => {
             </Col>
             <Col md={6} className="text-end">
               <div className="d-flex align-items-center justify-content-end gap-2">
-                <Button variant="outline-secondary" size="sm" onClick={() => setZoomLevel('month')}>
-                  <ZoomIn size={16} />
+                <Button 
+                  variant={zoomLevel === 'day' ? 'primary' : 'outline-secondary'} 
+                  size="sm" 
+                  onClick={() => setZoomLevel('day')}
+                >
+                  Day
                 </Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => setZoomLevel('quarter')}>
-                  <ZoomOut size={16} />
+                <Button 
+                  variant={zoomLevel === 'week' ? 'primary' : 'outline-secondary'} 
+                  size="sm" 
+                  onClick={() => setZoomLevel('week')}
+                >
+                  Week
+                </Button>
+                <Button 
+                  variant={zoomLevel === 'month' ? 'primary' : 'outline-secondary'} 
+                  size="sm" 
+                  onClick={() => setZoomLevel('month')}
+                >
+                  Month
+                </Button>
+                <Button 
+                  variant={zoomLevel === 'quarter' ? 'primary' : 'outline-secondary'} 
+                  size="sm" 
+                  onClick={() => setZoomLevel('quarter')}
+                >
+                  Quarter
                 </Button>
               </div>
             </Col>
@@ -416,10 +567,10 @@ const ThemeBasedGanttChart: React.FC = () => {
                 value={zoomLevel}
                 onChange={(e) => setZoomLevel(e.target.value as any)}
               >
+                <option value="day">Day View</option>
+                <option value="week">Week View</option>
                 <option value="month">Month View</option>
                 <option value="quarter">Quarter View</option>
-                <option value="half">Half Year View</option>
-                <option value="year">Year View</option>
               </Form.Select>
             </Col>
             <Col md={4}>
@@ -568,43 +719,75 @@ const ThemeBasedGanttChart: React.FC = () => {
                           {goal.title}
                         </span>
                         
-                        {/* Action buttons */}
-                        <div className="goal-actions d-flex gap-1">
-                          <Button
-                            size="sm"
+                        {/* Action dropdown */}
+                        <Dropdown>
+                          <Dropdown.Toggle
                             variant="link"
-                            className="p-0"
+                            size="sm"
+                            className="p-0 border-0"
                             style={{ 
                               minWidth: 'auto', 
                               fontSize: '12px',
                               color: themeAwareColors.text,
-                              opacity: 0.8
+                              opacity: 0.8,
+                              backgroundColor: 'transparent'
                             }}
-                            onClick={(e) => {
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <MoreVertical size={14} />
+                          </Dropdown.Toggle>
+
+                          <Dropdown.Menu>
+                            <Dropdown.Item onClick={(e) => {
                               e.stopPropagation();
                               handleEditGoal(goal);
-                            }}
-                          >
-                            <Edit size={12} />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="link"
-                            className="p-0"
-                            style={{ 
-                              minWidth: 'auto', 
-                              fontSize: '12px',
-                              color: themeAwareColors.text,
-                              opacity: 0.8
-                            }}
-                            onClick={(e) => {
+                            }}>
+                              <Edit size={14} className="me-2" />
+                              Edit Goal
+                            </Dropdown.Item>
+                            
+                            {goal.status !== 2 && ( // 2 = Complete
+                              <Dropdown.Item onClick={(e) => {
+                                e.stopPropagation();
+                                handleCompleteGoal(goal);
+                              }}>
+                                <CheckCircle size={14} className="me-2" />
+                                Mark Complete
+                              </Dropdown.Item>
+                            )}
+                            
+                            {goal.status !== 4 && ( // 4 = Deferred/Archived
+                              <Dropdown.Item onClick={(e) => {
+                                e.stopPropagation();
+                                handleArchiveGoal(goal);
+                              }}>
+                                <Archive size={14} className="me-2" />
+                                Archive
+                              </Dropdown.Item>
+                            )}
+                            
+                            <Dropdown.Item onClick={(e) => {
                               e.stopPropagation();
-                              handleDeleteGoal(goal);
-                            }}
-                          >
-                            <Trash2 size={12} />
-                          </Button>
-                        </div>
+                              handleDuplicateGoal(goal);
+                            }}>
+                              <Copy size={14} className="me-2" />
+                              Duplicate
+                            </Dropdown.Item>
+                            
+                            <Dropdown.Divider />
+                            
+                            <Dropdown.Item 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteGoal(goal);
+                              }}
+                              className="text-danger"
+                            >
+                              <Trash2 size={14} className="me-2" />
+                              Delete
+                            </Dropdown.Item>
+                          </Dropdown.Menu>
+                        </Dropdown>
                       </div>
                       
                       {/* Resize handle - end */}
@@ -636,23 +819,81 @@ const ThemeBasedGanttChart: React.FC = () => {
           ))}
         </div>
 
-        {/* Sprint markers */}
+        {/* Sprint bars - positioned below timeline headers */}
+        <div className="sprint-bars-container position-absolute" style={{ top: '40px', left: '250px', right: '0', height: '30px', zIndex: 3 }}>
+          {sprints.map(sprint => {
+            const startDate = sprint.startDate ? new Date(sprint.startDate) : null;
+            const endDate = sprint.endDate ? new Date(sprint.endDate) : null;
+            
+            if (!startDate || !endDate) return null;
+            
+            const startPos = getDatePosition(startDate);
+            const endPos = getDatePosition(endDate);
+            const width = Math.max(endPos - startPos, 2); // Minimum 2% width
+            
+            return (
+              <div
+                key={sprint.id}
+                className="sprint-bar position-absolute"
+                style={{
+                  left: `${startPos}%`,
+                  width: `${width}%`,
+                  top: '5px',
+                  height: '20px',
+                  backgroundColor: '#3b82f6',
+                  borderRadius: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'white',
+                  fontSize: '11px',
+                  fontWeight: '500',
+                  overflow: 'hidden',
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                }}
+                title={`${sprint.name || 'Sprint'}: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`}
+              >
+                {width > 8 ? (sprint.name || `Sprint ${sprint.id.slice(-3)}`) : 'S'}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Today indicator */}
+        <div 
+          className="today-line position-absolute"
+          style={{
+            left: `${getDatePosition(new Date())}%`,
+            top: '0',
+            width: '2px',
+            height: '100%',
+            backgroundColor: '#ef4444',
+            zIndex: 4,
+            pointerEvents: 'none'
+          }}
+          title={`Today: ${new Date().toLocaleDateString()}`}
+        />
+        
+        {/* Original sprint markers for goal rows */}
         {sprints.map(sprint => {
           const startPos = getDatePosition(new Date(sprint.startDate));
           const endPos = getDatePosition(new Date(sprint.endDate));
           
           return (
             <div
-              key={sprint.id}
+              key={`marker-${sprint.id}`}
               className="sprint-line position-absolute"
               style={{
                 left: `${startPos}%`,
                 width: `${endPos - startPos}%`,
-                top: '0',
-                height: '100%',
-                borderColor: '#3b82f6',
+                top: '70px', // Below sprint bars
+                height: 'calc(100% - 70px)',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                borderLeft: '1px dashed #3b82f6',
+                borderRight: '1px dashed #3b82f6',
                 pointerEvents: 'none',
-                zIndex: 0
+                zIndex: 1
               }}
               title={sprint.name}
             />
