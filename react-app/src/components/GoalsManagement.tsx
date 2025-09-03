@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup, ButtonGroup } from 'react-bootstrap';
-import { Grid, List, Plus } from 'lucide-react';
+import { Grid, List, Plus, Upload } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -12,6 +12,7 @@ import GoalsCardView from './GoalsCardView';
 import ModernStoriesTable from './ModernStoriesTable';
 import AddGoalModal from './AddGoalModal';
 import EditGoalModal from './EditGoalModal';
+import ImportModal from './ImportModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const GoalsManagement: React.FC = () => {
@@ -27,6 +28,7 @@ const GoalsManagement: React.FC = () => {
   const [storiesLoading, setStoriesLoading] = useState(true);
   const [showAddGoalModal, setShowAddGoalModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState<Goal | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'card'>('card');
 
   // 📍 PAGE TRACKING
@@ -276,6 +278,14 @@ const GoalsManagement: React.FC = () => {
                 Cards
               </Button>
             </ButtonGroup>
+            <Button 
+              variant="outline-secondary" 
+              onClick={() => setShowImportModal(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Upload size={16} />
+              Import
+            </Button>
             <Button 
               variant="primary" 
               onClick={() => setShowAddGoalModal(true)}
@@ -575,6 +585,17 @@ const GoalsManagement: React.FC = () => {
           currentUserId={currentUser?.uid || ''}
         />
       )}
+
+      {/* Import Modal */}
+      <ImportModal
+        show={showImportModal}
+        onHide={() => setShowImportModal(false)}
+        entityType="goals"
+        onImportComplete={() => {
+          setShowImportModal(false);
+          loadGoalsData(); // Refresh the data
+        }}
+      />
     </div>
   );
 };

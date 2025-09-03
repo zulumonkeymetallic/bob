@@ -1,6 +1,6 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.5.6",
+  "version": "3.5.7",
   "description": "AI-Powered Personal Productivity Platform with Complete Goals-Stories Integration, Enhanced Console Logging & Modal Consistency",
   "private": true,
   "dependencies": {
@@ -28,6 +28,7 @@
     "@types/node": "^16.18.126",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
+    "@types/xlsx": "^0.0.35",
     "bootstrap": "^5.3.7",
     "chart.js": "^4.5.0",
     "class-variance-authority": "^0.7.1",
