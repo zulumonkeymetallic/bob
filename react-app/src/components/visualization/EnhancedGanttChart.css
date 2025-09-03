@@ -1,71 +1,158 @@
 /* Enhanced Gantt Chart Styles */
 .enhanced-gantt-chart {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
 .timeline-container {
-  position: relative;
-  overflow: auto;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
   background: #fafafa;
+  overflow: auto;
 }
 
 .timeline-header {
+  background: linear-gradient(to bottom, #ffffff, #f8f9fa);
+  border-bottom: 2px solid #dee2e6;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
   z-index: 10;
-  background: white !important;
-  border-bottom: 2px solid #e5e7eb;
+}
+
+.goal-label {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-right: 1px solid #dee2e6;
+  background: #ffffff;
+  font-weight: 600;
+  color: #495057;
 }
 
 .timeline-months {
-  min-width: 200%;
+  background: #ffffff;
+  position: relative;
+}
+
+.timeline-month {
+  background: linear-gradient(to bottom, #ffffff, #f8f9fa);
+  border-right: 1px solid #e9ecef;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6c757d;
+  transition: background-color 0.2s ease;
+}
+
+.timeline-month:hover {
+  background: linear-gradient(to bottom, #f8f9fa, #e9ecef);
 }
 
 .goal-row {
-  min-height: 50px;
-  background: white;
+  background: #ffffff;
   transition: background-color 0.2s ease;
+  position: relative;
+  min-height: 80px;
+  border-bottom: 1px solid #e9ecef;
 }
 
 .goal-row:hover {
   background: #f8f9fa;
 }
 
-.goal-label {
-  background: #f8f9fa;
-  border-right: 1px solid #e5e7eb;
-  position: sticky;
-  left: 0;
-  z-index: 5;
+.goal-row:nth-child(even) {
+  background: #fdfdfd;
+}
+
+.goal-row:nth-child(even):hover {
+  background: #f5f5f5;
 }
 
 .goal-timeline {
   position: relative;
-  min-height: 40px;
+  min-height: 80px;
+  overflow: hidden;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 99px,
+    #e9ecef 99px,
+    #e9ecef 100px
+  );
 }
 
 .goal-bar {
+  background: linear-gradient(135deg, var(--goal-color, #6c757d) 0%, var(--goal-color-dark, #5a6268) 100%);
+  border: 2px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   transition: all 0.2s ease;
   cursor: move;
   user-select: none;
-  position: relative;
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .goal-bar:hover {
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
   transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  border-color: rgba(255, 255, 255, 0.4);
 }
 
 .goal-bar.dragging {
-  opacity: 0.8;
   z-index: 1000;
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+  transform: scale(1.05) rotate(2deg);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+  opacity: 0.9;
+}
+
+.goal-content {
+  flex: 1;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.goal-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.goal-bar:hover .goal-actions {
+  opacity: 1;
+}
+
+.goal-actions button {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 3px;
+  padding: 2px 4px;
+  color: white;
+  transition: background-color 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: auto;
+}
+
+.goal-actions button:hover {
+  background: rgba(255, 255, 255, 0.3);
+  color: white;
 }
 
 .resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  cursor: ew-resize;
+  transition: background-color 0.2s ease;
   opacity: 0;
-  transition: opacity 0.2s ease;
 }
 
 .goal-bar:hover .resize-handle {
@@ -73,43 +160,29 @@
 }
 
 .resize-handle:hover {
-  background-color: rgba(0, 0, 0, 0.4) !important;
+  background: rgba(255, 255, 255, 0.4);
 }
 
-.theme-indicator {
-  border-radius: 2px;
-  flex-shrink: 0;
+.resize-start {
+  left: 0;
+  border-radius: 4px 0 0 4px;
+}
+
+.resize-end {
+  right: 0;
+  border-radius: 0 4px 4px 0;
 }
 
 .sprint-line {
+  background: rgba(59, 130, 246, 0.1);
+  border-left: 2px dashed #3b82f6;
+  border-right: 2px dashed #3b82f6;
   pointer-events: none;
-  border-style: dashed;
-  border-width: 0 2px;
-  background: linear-gradient(
-    to bottom,
-    rgba(59, 130, 246, 0.05) 0%,
-    rgba(59, 130, 246, 0.1) 50%,
-    rgba(59, 130, 246, 0.05) 100%
-  );
 }
 
-.sprint-line::before {
-  content: attr(title);
-  position: absolute;
-  top: 5px;
-  left: 5px;
-  font-size: 10px;
-  color: #3b82f6;
-  font-weight: 500;
-  transform: rotate(90deg);
-  transform-origin: left top;
-  white-space: nowrap;
-}
-
-.activity-stream-sidebar {
-  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.1);
-  background: white;
-  z-index: 1000;
+.theme-indicator {
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .cursor-move {
@@ -120,143 +193,79 @@
   cursor: pointer;
 }
 
-/* Touch and mobile optimizations */
+/* Responsive design */
 @media (max-width: 768px) {
   .goal-label {
     width: 200px !important;
     min-width: 200px !important;
+    font-size: 14px;
+  }
+  
+  .timeline-month {
+    font-size: 11px;
+    min-width: 80px !important;
   }
   
   .goal-bar {
-    min-height: 36px;
+    min-width: 80px !important;
+    font-size: 11px;
   }
   
-  .resize-handle {
-    width: 12px;
-    opacity: 0.8;
-  }
-  
-  .activity-stream-sidebar {
-    width: 100vw !important;
-  }
-}
-
-/* VR and large screen optimizations */
-@media (min-width: 1920px) {
-  .goal-bar {
-    min-height: 40px;
-    border-radius: 8px;
-  }
-  
-  .goal-label {
-    width: 300px !important;
-    min-width: 300px !important;
-  }
-  
-  .timeline-header {
-    font-size: 1.1rem;
-  }
-}
-
-/* High DPI displays */
-@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
-  .goal-bar {
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  }
-  
-  .goal-bar:hover {
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
-  }
-}
-
-/* Dark mode support */
-@media (prefers-color-scheme: dark) {
-  .enhanced-gantt-chart {
-    background: #1f2937;
-    color: #f9fafb;
-  }
-  
-  .timeline-container {
-    background: #111827;
-  }
-  
-  .timeline-header {
-    background: #1f2937 !important;
-    border-color: #374151;
-  }
-  
-  .goal-row {
-    background: #1f2937;
-    border-color: #374151;
-  }
-  
-  .goal-row:hover {
-    background: #374151;
-  }
-  
-  .goal-label {
-    background: #374151;
-    border-color: #4b5563;
-  }
-  
-  .activity-stream-sidebar {
-    background: #1f2937;
-    border-color: #374151;
-  }
-}
-
-/* Animation keyframes */
-@keyframes slideInRight {
-  from {
-    transform: translateX(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
+  .goal-actions {
     opacity: 1;
   }
 }
 
-@keyframes pulseGlow {
-  0%, 100% {
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+/* Animation for smooth transitions */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
   }
-  50% {
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
 
-.activity-stream-sidebar {
-  animation: slideInRight 0.3s ease-out;
+.goal-row {
+  animation: slideIn 0.3s ease-out;
 }
 
-.goal-bar.highlight {
-  animation: pulseGlow 2s ease-in-out;
+/* Drag drop zones */
+.goal-row[data-theme-id]:hover {
+  background: rgba(var(--bs-primary-rgb), 0.05);
+  transition: background-color 0.2s ease;
 }
 
-/* Accessibility */
+.goal-row.drag-over {
+  background: rgba(var(--bs-primary-rgb), 0.1);
+  border: 2px dashed var(--bs-primary);
+}
+
+/* Accessibility improvements */
 .goal-bar:focus {
-  outline: 3px solid #3b82f6;
+  outline: 2px solid #0d6efd;
   outline-offset: 2px;
 }
 
-.resize-handle:focus {
-  outline: 2px solid #f59e0b;
+.goal-actions button:focus {
+  outline: 1px solid rgba(255, 255, 255, 0.8);
+  outline-offset: 1px;
 }
 
 /* Print styles */
 @media print {
-  .activity-stream-sidebar {
-    display: none;
-  }
-  
-  .timeline-container {
-    overflow: visible;
-    height: auto;
+  .enhanced-gantt-chart {
+    background: white !important;
   }
   
   .goal-bar {
-    box-shadow: none;
-    border: 1px solid #000;
+    box-shadow: none !important;
+    border: 1px solid #000 !important;
+  }
+  
+  .goal-actions {
+    display: none !important;
   }
 }

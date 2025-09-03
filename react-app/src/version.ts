@@ -1,12 +1,12 @@
-// Version tracking for cache busting - v3.6.0 Enhanced Gantt Chart
-export const VERSION = 'v3.6.0';
-export const BUILD_TIME = '2025-09-03T14:20:00.000Z'; // Static build time
-export const BUILD_HASH = 'enhanced-gantt-chart-v3.6.0'; // Build hash matching actual file
+// Version tracking for cache busting - v3.6.1 Theme-Based Gantt Chart
+export const VERSION = 'v3.6.1';
+export const BUILD_TIME = '2025-09-03T14:50:00.000Z'; // Static build time
+export const BUILD_HASH = 'theme-based-gantt-chart-v3.6.1'; // Build hash matching actual file
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Enhanced Gantt Chart Timeline Visualization Complete`);
-console.log(`🎯 Features: Drag-and-Drop Goal Management, VR/Touch Support, Real-time Activity Tracking`);
-console.log(`🚀 Architecture: v3.6.0 with Advanced Timeline Visualization System`);
+console.log(`✅ Status: Theme-Based Gantt Chart Timeline Visualization Complete`);
+console.log(`🎯 Features: Themes as Rows, Goals as Draggable Bars, Edit/Delete Buttons, VR/Touch Support`);
+console.log(`🚀 Architecture: v3.6.1 with Revolutionary Theme-Based Timeline Layout`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 console.log(`🔨 Build hash: ${BUILD_HASH}`);
 

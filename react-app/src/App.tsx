@@ -51,7 +51,7 @@ import GoalVizPage from './components/visualization/GoalVizPage';
 import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
-import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
+import ThemeBasedGanttChart from './components/visualization/ThemeBasedGanttChart';
 
 function App() {
   return (
@@ -179,8 +179,8 @@ function AppContent() {
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
-            <Route path="/goals/visualization" element={<EnhancedGanttChart />} />
-            <Route path="/goals/gantt" element={<EnhancedGanttChart />} />
+            <Route path="/goals/visualization" element={<ThemeBasedGanttChart />} />
+            <Route path="/goals/gantt" element={<ThemeBasedGanttChart />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
             {/* BOB v3.5.2 - New Scaffolding Components */}

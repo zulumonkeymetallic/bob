@@ -1,7 +1,7 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.6.0",
-  "description": "AI-Powered Personal Productivity Platform with Enhanced Gantt Chart Timeline Visualization, Drag-and-Drop Goal Management & VR Support",
+  "version": "3.6.1",
+  "description": "AI-Powered Personal Productivity Platform with Revolutionary Theme-Based Gantt Chart - Themes as Rows, Goals as Draggable Bars with Edit/Delete Actions",
   "private": true,
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^1.7.4",
