@@ -164,6 +164,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const scheduleGoalTime = async (goal: Goal) => {
     if (!currentUser) return;
 
+    let aiCallId: string | undefined;
+    const startTime = Date.now();
+
     try {
       setIsSchedulingGoal(goal.id);
       setCalendarSyncStatus(prev => ({ 
@@ -171,17 +174,43 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
         [goal.id]: '🤖 AI is analyzing and scheduling time for this goal...' 
       }));
 
-      // Call the calendar planning function with goal focus
-      const planCalendar = httpsCallable(functions, 'planCalendar');
-      const result = await planCalendar({
+      // 🤖 Log AI call initiation
+      const parameters = {
         startDate: new Date().toISOString().split('T')[0],
         endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         persona: currentPersona || 'personal',
-        focusGoalId: goal.id, // Focus planning on this specific goal
-        goalTimeRequest: goal.timeToMasterHours ? Math.min(goal.timeToMasterHours * 60, 300) : 120 // Request 2-5 hours per week
-      });
+        focusGoalId: goal.id,
+        goalTimeRequest: goal.timeToMasterHours ? Math.min(goal.timeToMasterHours * 60, 300) : 120
+      };
+
+      aiCallId = await ActivityStreamService.logAICallInitiated(
+        goal.id,
+        'goal',
+        'planCalendar',
+        parameters,
+        currentUser.uid,
+        currentUser.email || undefined,
+        `Scheduling time blocks for goal: ${goal.title}`
+      );
+
+      // Call the calendar planning function with goal focus
+      const planCalendar = httpsCallable(functions, 'planCalendar');
+      const result = await planCalendar(parameters);
 
       const planResult = result.data as any;
+      const executionTime = Date.now() - startTime;
+
+      // 🤖 Log AI call completion
+      await ActivityStreamService.logAICallCompleted(
+        aiCallId,
+        goal.id,
+        'goal',
+        'planCalendar',
+        planResult,
+        currentUser.uid,
+        currentUser.email || undefined,
+        executionTime
+      );
       
       if (planResult.blocksCreated > 0) {
         setCalendarSyncStatus(prev => ({ 
@@ -189,16 +218,40 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           [goal.id]: `✅ Scheduled ${planResult.blocksCreated} time blocks for "${goal.title}"` 
         }));
 
-        // Track activity
-        await addDoc(collection(db, 'activity_stream'), {
-          entityType: 'goal',
-          entityId: goal.id,
-          ownerUid: currentUser.uid,
-          activityType: 'calendar_scheduled',
-          description: `Scheduled ${planResult.blocksCreated} time blocks`,
-          metadata: { blocksCreated: planResult.blocksCreated, timeRequested: goal.timeToMasterHours },
-          timestamp: serverTimestamp()
-        });
+        // 📅 Log calendar scheduling result
+        await ActivityStreamService.logCalendarSchedulingResult(
+          goal.id,
+          'goal',
+          {
+            blocksCreated: planResult.blocksCreated,
+            timeRequested: goal.timeToMasterHours ? Math.min(goal.timeToMasterHours * 60, 300) : 120,
+            schedulingType: 'goal_focus',
+            dateRange: `${new Date().toISOString().split('T')[0]} to ${new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}`
+          },
+          currentUser.uid,
+          currentUser.email || undefined,
+          aiCallId
+        );
+
+        // Log individual calendar blocks if available
+        if (planResult.blocks && Array.isArray(planResult.blocks)) {
+          for (const block of planResult.blocks) {
+            await ActivityStreamService.logCalendarBlockCreated(
+              goal.id,
+              'goal',
+              {
+                startTime: block.startTime,
+                endTime: block.endTime,
+                title: block.title || `${goal.title} - Work Session`,
+                description: block.description || `Scheduled time for goal: ${goal.title}`,
+                isAiGenerated: true
+              },
+              currentUser.uid,
+              currentUser.email || undefined,
+              aiCallId
+            );
+          }
+        }
       } else {
         setCalendarSyncStatus(prev => ({ 
           ...prev, 
@@ -207,6 +260,22 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       }
     } catch (error) {
       console.error('Failed to schedule goal time:', error);
+      const executionTime = Date.now() - startTime;
+      
+      // 🤖 Log AI call failure
+      if (aiCallId) {
+        await ActivityStreamService.logAICallFailed(
+          aiCallId,
+          goal.id,
+          'goal',
+          'planCalendar',
+          error,
+          currentUser.uid,
+          currentUser.email || undefined,
+          executionTime
+        );
+      }
+
       setCalendarSyncStatus(prev => ({ 
         ...prev, 
         [goal.id]: '❌ Failed to schedule time: ' + (error as Error).message 
