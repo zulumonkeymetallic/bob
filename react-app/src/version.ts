@@ -1,12 +1,12 @@
-// Version tracking for cache busting - v3.5.8 Story-Task Management & Dashboard Refactor
-export const VERSION = 'v3.5.8';
-export const BUILD_TIME = '2025-09-03T09:00:00.000Z'; // Static build time
-export const BUILD_HASH = 'stable-v3.5.8-main.story-task-management'; // Build hash matching actual file
+// Version tracking for cache busting - v3.5.9 Sprint Metrics & Deadline Management
+export const VERSION = 'v3.5.9';
+export const BUILD_TIME = '2025-09-03T10:30:00.000Z'; // Static build time
+export const BUILD_HASH = 'stable-v3.5.9-main.sprint-metrics-deadlines'; // Build hash matching actual file
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Story-Task Management & Dashboard Refactor Complete`);
-console.log(`🎯 Features: Story Task Panels, EditStoryModal, Modern Dashboard Tables, Card/List View Toggle`);
-console.log(`🚀 Architecture: v3.5.8 with Enhanced Story Management & Task Integration`);
+console.log(`✅ Status: Sprint Metrics & Deadline Management Complete`);
+console.log(`🎯 Features: Sprint Metrics Panel, Task Deadline Inheritance, Open Stories/Tasks Tracking, Days Left Calculation`);
+console.log(`🚀 Architecture: v3.5.9 with Enhanced Sprint Analytics & Deadline Utils`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 console.log(`🔨 Build hash: ${BUILD_HASH}`);
 

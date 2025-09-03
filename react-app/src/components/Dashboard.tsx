@@ -234,7 +234,12 @@ const Dashboard: React.FC = () => {
           {/* Tasks and Quick Actions */}
           <Row className="mb-4">
             <Col md={8}>
-              <DashboardModernTaskTable maxTasks={10} showDueToday={false} title="Upcoming Tasks" />
+                        <DashboardModernTaskTable 
+            maxTasks={10} 
+            showDueToday={false} 
+            title="Upcoming Tasks"
+            showMetrics={true}
+          />
             </Col>
             <Col md={4}>
               <QuickActionsPanel 

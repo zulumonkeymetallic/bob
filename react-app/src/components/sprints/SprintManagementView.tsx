@@ -24,6 +24,7 @@ import { useSidebar } from '../../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../../types';
 import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
+import SprintMetricsPanel from '../SprintMetricsPanel';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
 // Replaces /kanban route with comprehensive sprint management
@@ -363,6 +364,16 @@ const SprintManagementView = () => {
             </Card>
           </Col>
         </Row>
+      )}
+
+      {/* Sprint Metrics Panel - Enhanced */}
+      {selectedSprint && (
+        <SprintMetricsPanel
+          sprint={selectedSprint}
+          stories={stories.filter(s => s.sprintId === selectedSprint.id)}
+          tasks={tasks}
+          goals={goals}
+        />
       )}
 
       {/* Empty state when no sprints */}
