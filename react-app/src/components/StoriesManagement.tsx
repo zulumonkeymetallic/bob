@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
+import { Plus, Upload } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -7,6 +8,7 @@ import { db } from '../firebase';
 import { Story, Goal } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
 import AddStoryModal from './AddStoryModal';
+import ImportModal from './ImportModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const StoriesManagement: React.FC = () => {
@@ -19,6 +21,7 @@ const StoriesManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   // 📍 PAGE TRACKING
   useEffect(() => {
@@ -218,9 +221,24 @@ const StoriesManagement: React.FC = () => {
               Manage user stories and their relationships to goals
             </p>
           </div>
-          <Button variant="primary" onClick={() => setShowAddStoryModal(true)}>
-            Add Story
-          </Button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Button 
+              variant="outline-secondary" 
+              onClick={() => setShowImportModal(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Upload size={16} />
+              Import
+            </Button>
+            <Button 
+              variant="primary" 
+              onClick={() => setShowAddStoryModal(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Plus size={16} />
+              Add Story
+            </Button>
+          </div>
         </div>
 
         {/* Dashboard Cards */}
@@ -392,6 +410,17 @@ const StoriesManagement: React.FC = () => {
           // Refresh stories data when modal closes
           loadStoriesData();
         }} 
+      />
+
+      {/* Import Stories Modal */}
+      <ImportModal
+        entityType="stories"
+        show={showImportModal}
+        onHide={() => setShowImportModal(false)}
+        onImportComplete={() => {
+          setShowImportModal(false);
+          loadStoriesData(); // Refresh stories after import
+        }}
       />
     </div>
   );

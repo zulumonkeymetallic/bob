@@ -59,7 +59,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Planning',
       icon: 'calendar-alt',
       items: [
-        { label: 'Sprint Planning', path: '/sprint-planning', icon: 'tasks' },
+        { label: 'Sprint Planning Matrix', path: '/sprint-matrix', icon: 'tasks' },
         { label: 'Sprint Management', path: '/sprints/management', icon: 'chart-gantt' },
         { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
         { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'calendar' },
@@ -72,7 +72,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Delivery',
       icon: 'rocket',
       items: [
-        { label: 'Current Sprint', path: '/current-sprint', icon: 'play' },
+        { label: 'Sprint Kanban', path: '/sprint-kanban', icon: 'play' },
+        { label: 'Current Sprint', path: '/current-sprint', icon: 'chart-line' },
         { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
       ]
     },
@@ -81,7 +82,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'list',
       items: [
         { label: 'Goals', path: '/goals-management', icon: 'target' },
-        { label: 'Task List', path: '/task-list', icon: 'list-check' },
+        { label: 'Tasks Management', path: '/tasks-management', icon: 'list-check' },
+        { label: 'Task List', path: '/task-list', icon: 'list-alt' },
         { label: 'Stories', path: '/stories', icon: 'book' },
         { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' }
       ]

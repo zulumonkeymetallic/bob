@@ -8,6 +8,8 @@ import { Story, Task } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { ChoiceHelper } from '../config/choices';
 import QuickActionsPanel from './QuickActionsPanel';
+import DashboardSprintKanban from './DashboardSprintKanban';
+import DashboardTaskTable from './DashboardTaskTable';
 
 interface DashboardStats {
   activeGoals: number;
@@ -222,44 +224,18 @@ const Dashboard: React.FC = () => {
             </Col>
           </Row>
 
-          {/* Recent Stories and Quick Actions */}
+          {/* Sprint Kanban Board */}
+          <Row className="mb-4">
+            <Col md={12}>
+              <DashboardSprintKanban maxStories={8} />
+            </Col>
+          </Row>
+
+          {/* Tasks and Quick Actions */}
           <Row className="mb-4">
             <Col md={8}>
-              <Card>
-                <Card.Header>
-                  <h5 className="mb-0">Recent Stories</h5>
-                </Card.Header>
-                <Card.Body>
-                  {loading ? (
-                    <div className="text-center p-3">
-                      <div className="spinner-border spinner-border-sm" />
-                      <p className="mt-2 mb-0">Loading stories...</p>
-                    </div>
-                  ) : recentStories.length === 0 ? (
-                    <p className="text-muted mb-0">No stories found. <a href="/kanban">Create your first story</a></p>
-                  ) : (
-                    <div className="list-group list-group-flush">
-                      {recentStories.map(story => (
-                        <div key={story.id} className="list-group-item border-0 px-0">
-                          <div className="d-flex justify-content-between align-items-start">
-                            <div>
-                              <h6 className="mb-1">{story.title}</h6>
-                              <p className="mb-1 text-muted small">{story.description}</p>
-                            </div>
-                            <div className="text-end">
-                              <Badge bg={ChoiceHelper.getColor('story', 'status', story.status)}>{ChoiceHelper.getLabel('story', 'status', story.status)}</Badge>
-                              <br />
-                              <Badge bg={ChoiceHelper.getColor('story', 'priority', story.priority)} className="mt-1">{ChoiceHelper.getLabel('story', 'priority', story.priority)}</Badge>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </Card.Body>
-              </Card>
+              <DashboardTaskTable maxTasks={10} showDueToday={false} />
             </Col>
-
             <Col md={4}>
               <QuickActionsPanel 
                 onAction={(type, data) => {
@@ -271,42 +247,10 @@ const Dashboard: React.FC = () => {
             </Col>
           </Row>
 
-          {/* Upcoming Tasks */}
+          {/* Tasks Due Today */}
           <Row className="mb-4">
             <Col md={12}>
-              <Card>
-                <Card.Header>
-                  <h5 className="mb-0">Upcoming Tasks</h5>
-                </Card.Header>
-                <Card.Body>
-                  {loading ? (
-                    <div className="text-center p-3">
-                      <div className="spinner-border spinner-border-sm" />
-                      <p className="mt-2 mb-0">Loading tasks...</p>
-                    </div>
-                  ) : upcomingTasks.length === 0 ? (
-                    <p className="text-muted mb-0">All caught up! <a href="/tasks">View all tasks</a></p>
-                  ) : (
-                    <div className="list-group list-group-flush">
-                      {upcomingTasks.map(task => (
-                        <div key={task.id} className="list-group-item border-0 px-0">
-                          <div className="d-flex justify-content-between align-items-start">
-                            <div>
-                              <h6 className="mb-1">{task.title}</h6>
-                              <p className="mb-1 text-muted small">{task.description}</p>
-                            </div>
-                            <div className="text-end">
-                              <Badge bg={ChoiceHelper.getColor('task', 'status', task.status)}>{ChoiceHelper.getLabel('task', 'status', task.status)}</Badge>
-                              <br />
-                              <Badge bg={ChoiceHelper.getColor('task', 'priority', task.priority)} className="mt-1">{ChoiceHelper.getLabel('task', 'priority', task.priority)}</Badge>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </Card.Body>
-              </Card>
+              <DashboardTaskTable maxTasks={5} showDueToday={true} />
             </Col>
           </Row>
 

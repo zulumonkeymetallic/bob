@@ -47,6 +47,9 @@ import MobileView from './components/MobileView';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
+import SprintKanbanPage from './components/SprintKanbanPage';
+import TasksManagement from './components/TasksManagement';
+import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 
 function App() {
   return (
@@ -169,10 +172,13 @@ function AppContent() {
             <Route path="/task-list" element={<TaskListView />} />
             <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
-            <Route path="/kanban" element={<ModernKanbanPage />} />
+            <Route path="/kanban" element={<SprintManagementView />} />
             <Route path="/kanban-old" element={<KanbanPage />} />
-            <Route path="/sprint-planning" element={<SprintPlannerMatrix />} />
+            <Route path="/sprint-planning" element={<SprintPlanningMatrix />} />
             <Route path="/sprint-simple" element={<SprintPlannerSimple />} />
+            <Route path="/sprint-kanban" element={<SprintKanbanPage />} />
+            <Route path="/tasks-management" element={<TasksManagement />} />
+            <Route path="/sprint-matrix" element={<SprintPlanningMatrix />} />
             <Route path="/current-sprint" element={<CurrentSprintKanban />} />
             <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
             <Route path="/mobile-view" element={<MobileView />} />

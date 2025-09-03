@@ -1,12 +1,12 @@
-// Version tracking for cache busting - v3.5.6 Goal-Story Relationship Fixes
-export const VERSION = 'v3.5.6';
-export const BUILD_TIME = '2025-09-02T19:45:00.000Z'; // Static build time
-export const BUILD_HASH = 'stable-v3.5.6-main.goal-story-fix'; // Build hash matching actual file
+// Version tracking for cache busting - v3.5.7 Comprehensive Enhancements
+export const VERSION = 'v3.5.7';
+export const BUILD_TIME = '2025-09-03T08:00:00.000Z'; // Static build time
+export const BUILD_HASH = 'stable-v3.5.7-main.comprehensive-enhancements'; // Build hash matching actual file
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Goal-Story Relationship Fixes & Excel-like UI`);
-console.log(`🎯 Features: Fixed Goal Dropdown in Edit Mode, Proper Goal-Story Filtering, Excel-like Inline Editing`);
-console.log(`🚀 Architecture: v3.5.6 with Complete Goal-Story Integration & UI Fixes`);
+console.log(`✅ Status: Comprehensive Enhancements - Dashboard Sprint Kanban, Modern Tasks, Excel Import`);
+console.log(`🎯 Features: Dashboard Sprint Kanban, Modern Task Tables, Excel/CSV Import, Firestore Fixes`);
+console.log(`🚀 Architecture: v3.5.7 with Dashboard Enhancements & Import System`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 console.log(`🔨 Build hash: ${BUILD_HASH}`);
 
