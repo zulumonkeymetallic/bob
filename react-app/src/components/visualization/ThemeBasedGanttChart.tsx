@@ -98,7 +98,7 @@ const ThemeBasedGanttChart: React.FC = () => {
         // Load goals
         const goalsQuery = query(
           collection(db, 'goals'),
-          where('uid', '==', currentUser.uid)
+          where('ownerUid', '==', currentUser.uid)
         );
         
         const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
@@ -107,12 +107,13 @@ const ThemeBasedGanttChart: React.FC = () => {
             ...doc.data()
           })) as Goal[];
           setGoals(goalsData);
+          console.log('🎯 ThemeBasedGanttChart: Loaded goals:', goalsData.length);
         });
 
         // Load sprints for timeline markers
         const sprintsQuery = query(
           collection(db, 'sprints'),
-          where('uid', '==', currentUser.uid)
+          where('ownerUid', '==', currentUser.uid)
         );
         
         const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
@@ -121,6 +122,7 @@ const ThemeBasedGanttChart: React.FC = () => {
             ...doc.data()
           })) as Sprint[];
           setSprints(sprintsData);
+          console.log('🏃 ThemeBasedGanttChart: Loaded sprints:', sprintsData.length);
         });
 
         setLoading(false);

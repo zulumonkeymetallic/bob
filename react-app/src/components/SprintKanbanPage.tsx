@@ -10,9 +10,13 @@ import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3 } from 'lucide-r
 
 interface SprintKanbanPageProps {
   showSidebar?: boolean;
+  selectedSprintId?: string;
 }
 
-const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({ showSidebar = false }) => {
+const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({ 
+  showSidebar = false, 
+  selectedSprintId: propSelectedSprintId 
+}) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   
@@ -21,8 +25,15 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({ showSidebar = false
   const [tasks, setTasks] = useState<Task[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
-  const [selectedSprintId, setSelectedSprintId] = useState<string | null>(null);
+  const [selectedSprintId, setSelectedSprintId] = useState<string | null>(propSelectedSprintId || null);
   const [loading, setLoading] = useState(true);
+
+  // Update selected sprint when prop changes
+  useEffect(() => {
+    if (propSelectedSprintId && propSelectedSprintId !== selectedSprintId) {
+      setSelectedSprintId(propSelectedSprintId);
+    }
+  }, [propSelectedSprintId, selectedSprintId]);
 
   // Get current sprint or selected sprint
   const currentSprint = selectedSprintId 

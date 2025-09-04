@@ -48,8 +48,18 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
 
         // Always try to select active sprint first, then fall back to most recent
         if (sprintData.length > 0) {
-          const activeSprint = sprintData.find(sprint => isStatus(sprint.status, 'active'));
-          const plannedSprint = sprintData.find(sprint => isStatus(sprint.status, 'planned'));
+          // Look for active sprint (status = 1) or 'active' string
+          const activeSprint = sprintData.find(sprint => 
+            (typeof sprint.status === 'number' && sprint.status === 1) || 
+            (typeof sprint.status === 'string' && sprint.status === 'active') || 
+            isStatus(sprint.status, 'active')
+          );
+          // Look for planned sprint (status = 0) or 'planned' string
+          const plannedSprint = sprintData.find(sprint => 
+            (typeof sprint.status === 'number' && sprint.status === 0) || 
+            (typeof sprint.status === 'string' && sprint.status === 'planned') || 
+            isStatus(sprint.status, 'planned')
+          );
           const fallbackSprint = sprintData[0]; // Most recent by start date
           
           const preferredSprint = activeSprint || plannedSprint || fallbackSprint;

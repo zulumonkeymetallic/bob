@@ -44,6 +44,7 @@ import { clickTrackingService } from './services/ClickTrackingService';
 import GoalsVisualizationView from './components/visualization/GoalsVisualizationView';
 import CalendarIntegrationView from './components/calendar/CalendarIntegrationView';
 import SprintManagementView from './components/sprints/SprintManagementView';
+import SprintsPage from './components/sprints/SprintsPage';
 import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
@@ -165,14 +166,22 @@ function AppContent() {
               <Route path="/task-list" element={<TaskListView />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
-            <Route path="/kanban" element={<SprintManagementView />} />
-            <Route path="/kanban-old" element={<KanbanPage />} />
-            <Route path="/sprint-planning" element={<SprintPlanningMatrix />} />
-            <Route path="/sprint-simple" element={<SprintPlannerSimple />} />
-            <Route path="/sprint-kanban" element={<SprintKanbanPage />} />
+            {/* Legacy sprint routes - redirect to consolidated */}
+            <Route path="/kanban" element={<Navigate to="/sprints/kanban" replace />} />
+            <Route path="/kanban-old" element={<Navigate to="/sprints/kanban" replace />} />
+            <Route path="/sprint-planning" element={<Navigate to="/sprints/management" replace />} />
+            <Route path="/sprint-simple" element={<Navigate to="/sprints/management" replace />} />
+            <Route path="/sprint-kanban" element={<Navigate to="/sprints/kanban" replace />} />
+            <Route path="/sprint-matrix" element={<Navigate to="/sprints/management" replace />} />
+            <Route path="/current-sprint" element={<Navigate to="/sprints/kanban" replace />} />
+            
+            {/* New consolidated sprint routes */}
+            <Route path="/sprints" element={<SprintsPage />} />
+            <Route path="/sprints/management" element={<SprintsPage />} />
+            <Route path="/sprints/kanban" element={<SprintsPage />} />
+            <Route path="/sprints/stories" element={<SprintsPage />} />
+            
             <Route path="/tasks-management" element={<TasksManagement />} />
-            <Route path="/sprint-matrix" element={<SprintPlanningMatrix />} />
-            <Route path="/current-sprint" element={<CurrentSprintKanban />} />
             <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
@@ -191,8 +200,6 @@ function AppContent() {
             <Route path="/goals/timeline" element={<GoalsVisualizationView />} />
             <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
             <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
-            <Route path="/sprints/management" element={<SprintManagementView />} />
-            <Route path="/sprints/board" element={<SprintManagementView />} />
             <Route path="/routes" element={<RoutesManagementView />} />
             <Route path="/routines" element={<RoutesManagementView />} />
             <Route path="/routes/optimization" element={<RoutesManagementView />} />

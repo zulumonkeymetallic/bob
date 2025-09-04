@@ -10,7 +10,7 @@ export interface ClickEvent {
   component: string;
   element: string;
   coordinates: { x: number; y: number };
-  eventType: 'click' | 'touch';
+  eventType: 'click' | 'touch' | 'scroll';
   device: 'desktop' | 'mobile' | 'tablet';
   targetInfo: {
     tagName: string;
@@ -20,10 +20,20 @@ export interface ClickEvent {
     ariaLabel?: string;
     role?: string;
   };
+  scrollInfo?: {
+    scrollTop: number;
+    scrollLeft: number;
+    scrollHeight: number;
+    scrollWidth: number;
+    direction: 'up' | 'down' | 'left' | 'right';
+  };
 }
 
 class ClickTrackingService {
   private isInitialized = false;
+  private lastScrollTop = 0;
+  private lastScrollLeft = 0;
+  private scrollTimeout: NodeJS.Timeout | null = null;
   
   public initialize() {
     if (this.isInitialized) return;
@@ -36,6 +46,10 @@ class ClickTrackingService {
     // Track touch events (mobile/iPad)
     document.addEventListener('touchend', this.handleTouch, true);
     
+    // Track scroll events (all devices)
+    document.addEventListener('scroll', this.handleScroll, true);
+    window.addEventListener('scroll', this.handleScroll, true);
+    
     // Track page navigation
     this.trackPageNavigation();
     
@@ -47,6 +61,14 @@ class ClickTrackingService {
     console.log('🛑 CLICK TRACKING: Destroying click tracking service');
     document.removeEventListener('click', this.handleClick, true);
     document.removeEventListener('touchend', this.handleTouch, true);
+    document.removeEventListener('scroll', this.handleScroll, true);
+    window.removeEventListener('scroll', this.handleScroll, true);
+    
+    if (this.scrollTimeout) {
+      clearTimeout(this.scrollTimeout);
+      this.scrollTimeout = null;
+    }
+    
     this.isInitialized = false;
   }
   
@@ -57,6 +79,51 @@ class ClickTrackingService {
   private handleTouch = (event: TouchEvent) => {
     this.logInteraction(event, 'touch');
   };
+  
+  private handleScroll = (event: Event) => {
+    // Debounce scroll events to avoid spam
+    if (this.scrollTimeout) {
+      clearTimeout(this.scrollTimeout);
+    }
+    
+    this.scrollTimeout = setTimeout(() => {
+      this.logScrollInteraction(event);
+    }, 150); // 150ms debounce
+  };
+  
+  private logScrollInteraction(event: Event) {
+    const target = event.target as HTMLElement;
+    if (!target) return;
+    
+    const scrollTop = target.scrollTop || window.pageYOffset || document.documentElement.scrollTop;
+    const scrollLeft = target.scrollLeft || window.pageXOffset || document.documentElement.scrollLeft;
+    const scrollHeight = target.scrollHeight || document.documentElement.scrollHeight;
+    const scrollWidth = target.scrollWidth || document.documentElement.scrollWidth;
+    
+    // Determine scroll direction
+    let direction: 'up' | 'down' | 'left' | 'right' = 'down';
+    if (scrollTop < this.lastScrollTop) direction = 'up';
+    else if (scrollTop > this.lastScrollTop) direction = 'down';
+    else if (scrollLeft < this.lastScrollLeft) direction = 'right';
+    else if (scrollLeft > this.lastScrollLeft) direction = 'left';
+    
+    // Update last scroll positions
+    this.lastScrollTop = scrollTop;
+    this.lastScrollLeft = scrollLeft;
+    
+    const pageInfo = this.getPageInfo();
+    const componentInfo = this.getComponentInfo(target);
+    
+    console.log('📜 🖥️ USER SCROLL');
+    console.log('📍 Page:', pageInfo.page);
+    console.log('🧩 Component:', componentInfo.component);
+    console.log('🎯 Element:', componentInfo.element);
+    console.log('📍 Scroll Position:', { scrollTop, scrollLeft });
+    console.log('📏 Scroll Size:', { scrollHeight, scrollWidth });
+    console.log('🔄 Direction:', direction);
+    console.log('⏰ Timestamp:', new Date().toISOString());
+    console.log(`📜 ${pageInfo.page} → ${componentInfo.component} → ${componentInfo.element} | Direction: ${direction}`);
+  }
   
   private logInteraction(event: Event, eventType: 'click' | 'touch') {
     const target = event.target as HTMLElement;
