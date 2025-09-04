@@ -14,7 +14,7 @@ export interface ActivityEntry {
   id?: string;
   entityId: string;
   entityType: 'goal' | 'story' | 'task' | 'sprint' | 'calendar_block' | 'digest' | 'habit' | 'personal_list' | 'okr' | 'resource' | 'trip' | 'work_project';
-  activityType: 'created' | 'updated' | 'deleted' | 'note_added' | 'status_changed' | 'sprint_changed' | 'priority_changed' | 'viewed' | 'clicked' | 'edited' | 'exported' | 'imported';
+  activityType: 'created' | 'updated' | 'deleted' | 'note_added' | 'status_changed' | 'sprint_changed' | 'priority_changed' | 'viewed' | 'clicked' | 'edited' | 'exported' | 'imported' | 'ai_generated' | 'ai_processed' | 'ai_enhanced';
   userId: string;
   userEmail?: string;
   timestamp: Timestamp;
@@ -37,6 +37,13 @@ export interface ActivityEntry {
   uiComponent?: string;
   userAgent?: string;
   sessionId?: string;
+  
+  // AI vs Human tracking
+  isAIGenerated?: boolean;
+  aiModel?: string; // 'gpt-4', 'gpt-3.5-turbo', etc.
+  aiPrompt?: string;
+  aiConfidence?: number;
+  humanReviewed?: boolean;
   
   // For UI interaction tracking
   clickType?: 'button' | 'link' | 'dropdown' | 'checkbox' | 'edit' | 'delete' | 'view' | 'drag' | 'drop';
@@ -557,5 +564,124 @@ export class ActivityStreamService {
         timestamp: new Date().toISOString()
       });
     });
+  }
+
+  // Track AI-generated or AI-processed activities
+  static async trackAIActivity(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    activityType: 'ai_generated' | 'ai_processed' | 'ai_enhanced',
+    userId: string,
+    description: string,
+    options: {
+      userEmail?: string;
+      persona?: string;
+      referenceNumber?: string;
+      entityTitle?: string;
+      aiModel?: string;
+      aiPrompt?: string;
+      aiConfidence?: number;
+      humanReviewed?: boolean;
+      fieldName?: string;
+      oldValue?: any;
+      newValue?: any;
+    } = {}
+  ): Promise<void> {
+    const {
+      userEmail,
+      persona,
+      referenceNumber,
+      entityTitle,
+      aiModel,
+      aiPrompt,
+      aiConfidence,
+      humanReviewed,
+      fieldName,
+      oldValue,
+      newValue
+    } = options;
+
+    const activityData: Omit<ActivityEntry, 'id' | 'timestamp'> = {
+      entityId,
+      entityType,
+      activityType,
+      userId,
+      description,
+      isAIGenerated: true,
+      aiModel: aiModel || 'gpt-4',
+      aiPrompt,
+      aiConfidence,
+      humanReviewed: humanReviewed || false
+    };
+
+    // Only include optional fields if they're defined
+    if (userEmail !== undefined && userEmail !== null) {
+      activityData.userEmail = userEmail;
+    }
+    if (persona !== undefined && persona !== null) {
+      activityData.persona = persona;
+    }
+    if (referenceNumber !== undefined && referenceNumber !== null) {
+      activityData.referenceNumber = referenceNumber;
+    }
+    if (entityTitle !== undefined && entityTitle !== null) {
+      activityData.entityTitle = entityTitle;
+    }
+    if (fieldName !== undefined && fieldName !== null) {
+      activityData.fieldName = fieldName;
+    }
+    if (oldValue !== undefined && oldValue !== null) {
+      activityData.oldValue = oldValue;
+    }
+    if (newValue !== undefined && newValue !== null) {
+      activityData.newValue = newValue;
+    }
+
+    await this.addActivity(activityData);
+  }
+
+  // Mark AI activity as human-reviewed
+  static async markAIActivityReviewed(
+    entityId: string,
+    userId: string,
+    description: string = 'AI activity reviewed by human'
+  ): Promise<void> {
+    await this.addActivity({
+      entityId,
+      entityType: 'goal', // This could be made dynamic
+      activityType: 'updated',
+      userId,
+      description,
+      isAIGenerated: false,
+      humanReviewed: true
+    });
+  }
+
+  // Get AI vs Human activity analytics
+  static async getAIHumanAnalytics(
+    userId: string,
+    dateRange?: { start: Date; end: Date }
+  ): Promise<{
+    totalActivities: number;
+    aiGenerated: number;
+    humanGenerated: number;
+    aiPercentage: number;
+    humanPercentage: number;
+    aiModelBreakdown: Record<string, number>;
+    activityTypeBreakdown: Record<string, { ai: number; human: number }>;
+  }> {
+    // This would need to be implemented with proper Firestore querying
+    // For now, return mock data structure
+    console.log('🤖 AI/Human Analytics requested for user:', userId, dateRange);
+    
+    return {
+      totalActivities: 0,
+      aiGenerated: 0,
+      humanGenerated: 0,
+      aiPercentage: 0,
+      humanPercentage: 0,
+      aiModelBreakdown: {},
+      activityTypeBreakdown: {}
+    };
   }
 }

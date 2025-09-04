@@ -59,25 +59,23 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       ]
     },
     {
+      label: 'Sprints',
+      icon: 'calendar-alt',
+      items: [
+        { label: 'Sprint Management', path: '/sprints/management', icon: 'chart-gantt' },
+        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'play' },
+        { label: 'Sprint Stories', path: '/sprints/stories', icon: 'book' }
+      ]
+    },
+    {
       label: 'Planning',
       icon: 'calendar-alt',
       items: [
-        { label: 'Sprint Planning Matrix', path: '/sprint-matrix', icon: 'tasks' },
-        { label: 'Sprint Management', path: '/sprints/management', icon: 'chart-gantt' },
         { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
         { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'calendar' },
         { label: 'Calendar Integration', path: '/calendar/integration', icon: 'calendar-sync' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar-alt' },
         { label: 'Routes & Routines', path: '/routes', icon: 'route' }
-      ]
-    },
-    {
-      label: 'Delivery',
-      icon: 'rocket',
-      items: [
-        { label: 'Sprint Kanban', path: '/sprint-kanban', icon: 'play' },
-        { label: 'Current Sprint', path: '/current-sprint', icon: 'chart-line' },
-        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
       ]
     },
     {
@@ -184,15 +182,18 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         top: 0,
         left: 0,
         zIndex: 1000,
-        overflowY: 'auto'
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        scrollBehavior: 'smooth'
       }}>
-        <div className="h-100" style={{ 
+        <div className="h-100 d-flex flex-column" style={{ 
           background: 'var(--panel)', 
           color: 'var(--notion-text)',
-          borderRight: '1px solid var(--notion-border)'
+          borderRight: '1px solid var(--notion-border)',
+          minHeight: '100vh'
         }}>
           {/* Brand */}
-          <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)' }}>
+          <div className="p-3 flex-shrink-0" style={{ borderBottom: '1px solid var(--notion-border)' }}>
             <div className="d-flex align-items-center justify-content-between">
               <div>
                 <h4 className="mb-1" style={{ color: 'var(--notion-text)', fontWeight: '600' }}>BOB</h4>
@@ -217,7 +218,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
           {/* User Info */}
           {currentUser && (
-            <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)' }}>
+            <div className="p-3 flex-shrink-0" style={{ borderBottom: '1px solid var(--notion-border)' }}>
               <div className="d-flex align-items-center mb-2">
                 <div className="rounded-circle d-flex align-items-center justify-content-center me-2" 
                      style={{ 
@@ -263,8 +264,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </div>
           )}
 
-          {/* Navigation */}
-          <div className="flex-grow-1">
+          {/* Navigation - Scrollable Area */}
+          <div className="flex-grow-1" style={{ 
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            scrollBehavior: 'smooth',
+            maxHeight: 'calc(100vh - 280px)' // Account for header and footer space
+          }}>
             <Nav className="flex-column">
               {navigationGroups.map((group) => (
                 <div key={group.label} className="mb-2">
