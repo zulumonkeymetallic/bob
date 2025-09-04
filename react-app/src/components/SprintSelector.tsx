@@ -168,7 +168,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           ))
         )}
         <Dropdown.Divider />
-        <Dropdown.Item onClick={() => window.location.href = '/sprint-dashboard'}>
+        <Dropdown.Item onClick={() => window.location.href = '/sprints/management'}>
           <span className="me-2">➕</span>
           Manage Sprints
         </Dropdown.Item>

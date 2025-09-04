@@ -91,53 +91,49 @@ const ThemeBasedGanttChart: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    const loadData = async () => {
-      try {
-        setLoading(true);
+    setLoading(true);
 
-        // Load goals
-        const goalsQuery = query(
-          collection(db, 'goals'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        
-        const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-          const goalsData = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          })) as Goal[];
-          setGoals(goalsData);
-          console.log('🎯 ThemeBasedGanttChart: Loaded goals:', goalsData.length);
-        });
+    // Load goals
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      const goalsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Goal[];
+      setGoals(goalsData);
+      console.log('🎯 ThemeBasedGanttChart: Loaded goals:', goalsData.length);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error loading goals:', error);
+      setLoading(false);
+    });
 
-        // Load sprints for timeline markers
-        const sprintsQuery = query(
-          collection(db, 'sprints'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        
-        const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-          const sprintsData = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          })) as Sprint[];
-          setSprints(sprintsData);
-          console.log('🏃 ThemeBasedGanttChart: Loaded sprints:', sprintsData.length);
-        });
+    // Load sprints for timeline markers
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    
+    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
+      const sprintsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Sprint[];
+      setSprints(sprintsData);
+      console.log('🏃 ThemeBasedGanttChart: Loaded sprints:', sprintsData.length);
+    }, (error) => {
+      console.error('Error loading sprints:', error);
+    });
 
-        setLoading(false);
-
-        return () => {
-          unsubscribeGoals();
-          unsubscribeSprints();
-        };
-      } catch (error) {
-        console.error('Error loading Gantt data:', error);
-        setLoading(false);
-      }
+    // Return cleanup function directly from useEffect
+    return () => {
+      unsubscribeGoals();
+      unsubscribeSprints();
     };
-
-    loadData();
   }, [currentUser]);
 
   // Calculate timeline bounds based on zoom level
