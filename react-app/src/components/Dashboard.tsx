@@ -81,10 +81,16 @@ const Dashboard: React.FC = () => {
     );
 
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
-      const storiesData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Story[];
+      const storiesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+        };
+      }) as Story[];
       setRecentStories(storiesData);
       
       // Calculate stats from stories
@@ -99,10 +105,17 @@ const Dashboard: React.FC = () => {
     });
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const allTasks = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
+      const allTasks = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+          dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
+        };
+      }) as Task[];
       
       // Filter out 'done' tasks on client side while indexes are building
       const tasksData = allTasks.filter(task => !isStatus(task.status, 'done')).slice(0, 5);
