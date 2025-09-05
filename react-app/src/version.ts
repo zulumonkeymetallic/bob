@@ -1,12 +1,12 @@
 // Version tracking for cache busting
-export const VERSION = '3.0.2.20250905.001';
+export const VERSION = '3.8.0.20250905.001';
 export const BUILD_TIME = new Date().toISOString();
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Navigation & Menu Structure Fixed`);
-console.log(`🔧 Fixes: Stories moved under Goals, Admin page removed, Data corruption fixed`);
-console.log(`🎯 Features: Clean navigation structure, consistent menu organization`);
-console.log(`🚀 Architecture: Stable v3.0.2 ready for production`);
+console.log(`✅ Status: Enhanced UI Consistency & Kanban-Goals Integration`);
+console.log(`🔧 Fixes: Story Kanban visual consistency, React error resolution, Sprint model integration`);
+console.log(`🎯 Features: Unified card design, consistent CRUD operations, enhanced task management`);
+console.log(`🚀 Architecture: Stable v3.8.0 with visual consistency updates`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force refresh if version mismatch detected
