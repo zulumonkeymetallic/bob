@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
-import { updateDoc, doc } from 'firebase/firestore';
+import { collection, query, getDocs, where, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Goal } from '../types';
 import { getPriorityName, getStatusName, getThemeName } from '../utils/statusHelpers';
@@ -77,7 +77,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         acceptanceCriteria: editedStory.acceptanceCriteria.trim() 
           ? editedStory.acceptanceCriteria.split('\n').map(line => line.trim()).filter(line => line.length > 0)
           : [],
-        updatedAt: new Date()
+        updatedAt: serverTimestamp()
       });
 
       console.log('✅ EditStoryModal: Story updated successfully');

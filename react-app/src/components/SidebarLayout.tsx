@@ -42,37 +42,51 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       ]
     },
     {
-      label: 'Goals & Planning',
+      label: 'Goals',
       icon: 'target',
       items: [
-        { label: 'Goals Management', path: '/goals', icon: 'target' },
-        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
+        { label: 'Goals List', path: '/goals', icon: 'list' },
+        { label: 'Gantt Chart', path: '/goals/visualization', icon: 'chart-gantt' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },
     {
-      label: 'Sprint & Execution',
+      label: 'Stories',
+      icon: 'book',
+      items: [
+        { label: 'Stories List', path: '/stories', icon: 'list' },
+        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
+      ]
+    },
+    {
+      label: 'Tasks',
+      icon: 'list-check',
+      items: [
+        { label: 'Tasks List', path: '/task-list', icon: 'list' },
+        { label: 'Task Board', path: '/tasks', icon: 'clipboard' }
+      ]
+    },
+    {
+      label: 'Sprints',
       icon: 'calendar-alt',
       items: [
-        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
+        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' }
+      ]
+    },
+    {
+      label: 'Planning & AI',
+      icon: 'cpu',
+      items: [
+        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' }
       ]
     },
     {
       label: 'Data Management',
       icon: 'list',
       items: [
-        { label: 'Stories', path: '/stories', icon: 'book' },
-        { label: 'Tasks', path: '/task-list', icon: 'list-check' },
         { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' }
-      ]
-    },
-    {
-      label: 'Visualization',
-      icon: 'share-alt',
-      items: [
-        { label: 'Sprint Planning Matrix', path: '/sprints/planning', icon: 'th' }
       ]
     },
     {
