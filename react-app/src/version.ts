@@ -1,13 +1,13 @@
 // Version tracking for cache busting
-export const VERSION = '3.8.3';
+export const VERSION = '3.8.6';
 export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'stable-v3.8.0-main.comprehensive-ui-consistency';
+export const BUILD_HASH = 'stable-v3.8.6-main.firebase-permission-fixes';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Enhanced UI Consistency & Kanban-Goals Integration`);
-console.log(`🔧 Fixes: Story Kanban visual consistency, React error resolution, Sprint model integration`);
-console.log(`🎯 Features: Unified card design, consistent CRUD operations, enhanced task management`);
-console.log(`🚀 Architecture: Stable v3.8.0 with visual consistency updates`);
+console.log(`✅ Status: Firebase Permission Fixes & React Error Resolution`);
+console.log(`🔧 Fixes: QuickActionsPanel permission error, Firebase index optimization, timestamp serialization`);
+console.log(`🎯 Features: Consistent field naming (ownerUid), zero permission errors, stable data loading`);
+console.log(`🚀 Architecture: Stable v3.8.6 with Firebase security alignment`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force refresh if version mismatch detected
