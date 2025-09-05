@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Alert, ButtonGroup } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
@@ -131,8 +131,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         description: quickAddData.description.trim(),
         persona: currentPersona,
         ownerUid: currentUser.uid,
-        createdAt: new Date(),
-        updatedAt: new Date()
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       };
 
       console.log('📝 FloatingActionButton: Prepared base data', {

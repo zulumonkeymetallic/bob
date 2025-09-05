@@ -39,32 +39,24 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' },
         { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' },
-        { label: 'Goals Dashboard', path: '/goals', icon: 'target' }
+        { label: 'Goals Management', path: '/goals', icon: 'target' }
       ]
     },
     {
-      label: 'Planning',
+      label: 'Planning & Delivery',
       icon: 'calendar-alt',
       items: [
         { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Kanban', path: '/kanban', icon: 'kanban' }
+        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
       ]
     },
     {
-      label: 'Delivery',
-      icon: 'rocket',
-      items: [
-        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
-      ]
-    },
-    {
-      label: 'Lists',
+      label: 'Data Management',
       icon: 'list',
       items: [
-        { label: 'Goals', path: '/goals-management', icon: 'target' },
         { label: 'Stories', path: '/stories', icon: 'book' },
-        { label: 'Task List', path: '/task-list', icon: 'list-check' },
+        { label: 'Tasks', path: '/task-list', icon: 'list-check' },
         { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' }
       ]
     },
@@ -72,11 +64,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Visualization',
       icon: 'share-alt',
       items: [
-        { label: 'Canvas', path: '/canvas', icon: 'share-alt' }
+        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },
     {
-      label: 'Settings',
+      label: 'System',
       icon: 'cog',
       items: [
         { label: 'Settings', path: '/theme-colors', icon: 'cog' },
@@ -103,20 +95,22 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     <div className="d-flex" style={{ minHeight: '100vh' }}>
       {/* Desktop Sidebar */}
       <div className="sidebar-desktop d-none d-lg-block" style={{ width: '250px', minHeight: '100vh' }}>
-        <div className="h-100" style={{ 
+        <div className="h-100 d-flex flex-column" style={{ 
           background: 'var(--panel)', 
           color: 'var(--notion-text)',
-          borderRight: '1px solid var(--notion-border)'
+          borderRight: '1px solid var(--notion-border)',
+          maxHeight: '100vh',
+          overflow: 'hidden'
         }}>
           {/* Brand */}
-          <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)' }}>
+          <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0 }}>
             <h4 className="mb-1" style={{ color: 'var(--notion-text)', fontWeight: '600' }}>BOB</h4>
             <small style={{ color: 'var(--notion-text-gray)' }}>Productivity Platform</small>
           </div>
 
           {/* User Info */}
           {currentUser && (
-            <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)' }}>
+            <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0 }}>
               <div className="d-flex align-items-center mb-2">
                 <div className="rounded-circle d-flex align-items-center justify-content-center me-2" 
                      style={{ 
@@ -162,10 +156,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </div>
           )}
 
-          {/* Navigation */}
-          <div className="flex-grow-1">
-            <Nav className="flex-column">
-              {navigationGroups.map((group) => (
+          {/* Navigation - Scrollable */}
+          <div className="flex-grow-1" style={{ 
+            overflowY: 'auto', 
+            overflowX: 'hidden',
+            scrollbarWidth: 'thin',
+            msOverflowStyle: 'scrollbar'
+          }}>
+            <Nav className="flex-column py-2">{navigationGroups.map((group) => (
                 <div key={group.label} className="mb-2">
                   {/* Group Header */}
                   <div
