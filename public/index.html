@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bob — Motion-style Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo">Bob</div>
+      <nav class="nav">
+        <button data-view="today" class="nav-btn active">Today</button>
+        <button data-view="calendar" class="nav-btn">Calendar</button>
+        <button data-view="kanban" class="nav-btn">Kanban</button>
+        <button data-view="goals" class="nav-btn">Goals & OKRs</button>
+        <button data-view="imports" class="nav-btn" onclick="window.location.href='/admin.html'">Imports</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="foot-label">Areas</div>
+        <div class="area growth"></div><span>Growth</span>
+        <div class="area tribe"></div><span>Tribe</span>
+        <div class="area wealth"></div><span>Wealth</span>
+        <div class="area health"></div><span>Health</span>
+        <div class="area home"></div><span>Home</span>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="search"><input id="search" type="search" placeholder="Search tasks, goals..."></div>
+        <div class="actions">
+          <button id="connectCal" class="ghost">Connect Calendar</button>
+          <button id="addToday" class="ghost" style="display:none;">+ Today</button>
+          <button id="prioritise" class="primary">Prioritise</button>
+          <button id="signin" class="ghost">Sign in</button>
+          <button id="signout" class="ghost" style="display:none;">Sign out</button>
+        </div>
+      </header>
+
+      <section id="view-today" class="view visible">
+        <div class="pane">
+          <h2>Today</h2>
+          <div id="todayList" class="list"></div>
+        </div>
+        <div class="pane">
+          <h2>Upcoming</h2>
+          <div id="upcomingList" class="list"></div>
+        </div>
+      </section>
+
+      <section id="view-calendar" class="view">
+        <div class="calendar-head">
+          <div>
+            <button id="calPrev" class="ghost">◀</button>
+            <span id="calRange"></span>
+            <button id="calNext" class="ghost">▶</button>
+          </div>
+          <div>
+            <button id="calDay" class="ghost">Day</button>
+            <button id="calWeek" class="ghost">Week</button>
+          </div>
+        </div>
+        <div id="calendarGrid" class="calendar-grid"></div>
+      </section>
+
+      <section id="view-kanban" class="view">
+        <div class="kanban">
+          <div class="col"><h3>Backlog</h3><div id="col-backlog" class="cards"></div></div>
+          <div class="col"><h3>Doing</h3><div id="col-doing" class="cards"></div></div>
+          <div class="col"><h3>Done</h3><div id="col-done" class="cards"></div></div>
+        </div>
+      </section>
+
+      <section id="view-goals" class="view">
+        <div class="pane">
+          <h2>Goals</h2>
+          <div id="goalsList" class="list"></div>
+        </div>
+        <div class="pane">
+          <h2>OKRs</h2>
+          <div id="okrsList" class="list"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

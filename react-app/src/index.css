@@ -1,0 +1,77 @@
+/* Temporarily disable Tailwind CSS until configuration is resolved */
+/* @import url('https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css'); */
+
+:root {
+  /* Light Theme (Default - will be overridden by data-theme="dark" if active) */
+  --bg: #f0f2f5; /* Light background */
+  --panel: #ffffff; /* White panel */
+  --card: #ffffff; /* White card */
+  --line: #e0e0e0; /* Light line */
+  --text: #333333; /* Dark text */
+  --muted: #666666; /* Muted text */
+  --brand: #007bff; /* Blue brand color */
+  --blue: #007bff;
+  --purple: #6f42c1;
+  --green: #28a745;
+  --red: #dc3545;
+  --orange: #fd7e14;
+
+  /* Glassmorphism base for light theme (adjust as needed) */
+  --glass-bg-opacity: 0.7;
+  --glass-border-color: rgba(255, 255, 255, 0.3);
+  --glass-shadow-color: rgba(0, 0, 0, 0.1);
+  --glass-blur: 10px;
+  --card-rgb: 255, 255, 255; /* RGB for #ffffff */
+}
+
+[data-theme="dark"] {
+  --bg: #0b0d11; /* Deep dark background */
+  --panel: #12141a; /* Slightly lighter dark panel */
+  --card: #171a21; /* Card background */
+  --line: #232632; /* Border/line color */
+  --text: #e8e9ed; /* Light text */
+  --muted: #a0a5b1; /* Muted light text */
+  --brand: #6aa5ff; /* Vibrant blue brand */
+  --blue: #4A86E8;
+  --purple: #674EA7;
+  --green: #93C47D;
+  --red: #E06666;
+  --orange: #F6B26B;
+
+  /* Glassmorphism for dark theme */
+  --glass-bg-opacity: 0.15; /* More transparent for dark glass */
+  --glass-border-color: rgba(255, 255, 255, 0.1); /* Subtle white border */
+  --glass-shadow-color: rgba(0, 0, 0, 0.3); /* Darker shadow */
+  --glass-blur: 20px; /* Stronger blur for dark glass */
+  --card-rgb: 23, 26, 33; /* RGB for #171a21 */
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  transition: background-color 0.3s ease, color 0.3s ease; /* Smooth theme transition */
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* Glassmorphism Effect */
+.glass-effect {
+  background-color: rgba(var(--card-rgb), var(--glass-bg-opacity)); /* Use RGB for transparency */
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur)); /* For Safari */
+  border: 1px solid var(--glass-border-color);
+  border-radius: 15px; /* Rounded corners for glass effect */
+  box-shadow: 0 8px 32px 0 var(--glass-shadow-color);
+  transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}

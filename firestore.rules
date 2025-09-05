@@ -1,0 +1,52 @@
+// Firestore rules
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function isOwner() { return isSignedIn() && request.auth.uid == resource.data.ownerUid; }
+    function isOwnerForCreate() { return isSignedIn() && request.resource.data.ownerUid == request.auth.uid; }
+
+    match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /tasks/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /stories/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    
+    // Core v3.0.8 collections with enhanced logging
+    match /sprints/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /calendar_blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /digests/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_hrv/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_workouts/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /taxonomies/{id} { allow read: if isSignedIn(); allow create: if isOwnerForCreate(); allow update, delete: if isOwner(); }
+    match /activity_stream/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    
+    // Test login tokens - DENY in production
+    match /test_login_tokens/{id} { allow read, write: if false; }
+
+    // Habits with enhanced logging support
+    match /habits/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+
+      // Habit Entries as a subcollection
+      match /habitEntries/{entryId} {
+        allow create: if isOwner(); // Owner of the parent habit can create entries
+        allow read, update, delete: if isOwner(); // Owner of the parent habit can manage entries
+      }
+    }
+
+    // Per-user integration profile with v3.0.8 support
+    match /profiles/{uid} {
+      allow read, update, delete: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.ownerUid == uid;
+    }
+
+    // No client access to tokens by default (server-only)
+  }
+}

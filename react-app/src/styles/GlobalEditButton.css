@@ -1,0 +1,101 @@
+/* Global Edit Button Styles */
+.global-edit-controls {
+  backdrop-filter: blur(10px);
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 12px;
+  padding: 0.5rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+[data-bs-theme="dark"] .global-edit-controls {
+  background: rgba(30, 30, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.global-edit-controls .btn {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition: all 0.2s ease;
+}
+
+.global-edit-controls .btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.global-edit-controls .badge {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.global-edit-controls .dropdown-menu {
+  border: none;
+  backdrop-filter: blur(10px);
+  background: rgba(255, 255, 255, 0.95);
+}
+
+[data-bs-theme="dark"] .global-edit-controls .dropdown-menu {
+  background: rgba(30, 30, 30, 0.95);
+}
+
+.global-edit-controls .dropdown-item {
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.global-edit-controls .dropdown-item:hover {
+  background: rgba(var(--bs-primary-rgb), 0.1);
+  transform: translateX(4px);
+}
+
+/* Table row selection styles */
+.table-active.global-edit-selected {
+  background: rgba(var(--bs-primary-rgb), 0.08) !important;
+  border-color: rgba(var(--bs-primary-rgb), 0.2) !important;
+}
+
+.table tbody tr.global-edit-selectable {
+  transition: all 0.2s ease;
+}
+
+.table tbody tr.global-edit-selectable:hover {
+  background: rgba(var(--bs-primary-rgb), 0.05);
+}
+
+/* Animation for selection */
+@keyframes selectPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.global-edit-controls .btn.btn-success {
+  animation: selectPulse 0.3s ease-in-out;
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .global-edit-controls {
+    position: fixed !important;
+    top: auto !important;
+    bottom: 1rem !important;
+    left: 50% !important;
+    transform: translateX(-50%);
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.25rem;
+    max-width: calc(100vw - 2rem);
+    z-index: 1050;
+  }
+
+  .global-edit-controls .btn {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+  }
+
+  .global-edit-controls .badge {
+    font-size: 0.7rem;
+  }
+}

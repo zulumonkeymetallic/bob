@@ -1,0 +1,184 @@
+{
+  "test_suite": "BOB v3.5.0 - Selenium Comprehensive Test",
+  "timestamp": "2025-09-02T11:32:09.617080",
+  "test_duration_seconds": 72,
+  "test_environment": {
+    "url": "https://bob20250810.web.app?test-login=ai-agent-token&test-mode=true",
+    "browser": "Firefox (Headless)",
+    "selenium_version": "4.x",
+    "viewport": "1920x1080"
+  },
+  "test_results": {
+    "start_time": "2025-09-02T11:30:57.320465",
+    "end_time": "2025-09-02T11:32:09.617047",
+    "tests_run": 7,
+    "tests_pass": 2,
+    "tests_fail": 5,
+    "browser": "firefox",
+    "headless": true
+  },
+  "summary": {
+    "total_defects": 13,
+    "critical": 1,
+    "high": 4,
+    "medium": 7,
+    "low": 1
+  },
+  "defects": [
+    {
+      "type": "CRITICAL",
+      "category": "AUTHENTICATION_FAILURE",
+      "message": "No authenticated user found - side door authentication failed",
+      "timestamp": "2025-09-02T11:31:05.241964",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/AUTHENTICATION_FAILURE_1756809065.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": {
+        "currentUrl": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+        "hasAccessToken": false,
+        "hasIdTokenMethod": false,
+        "userExists": false,
+        "userId": null
+      }
+    },
+    {
+      "type": "HIGH",
+      "category": "ELEMENT_NOT_FOUND",
+      "message": "Element not found: ('xpath', \"//a[contains(@href, 'dashboard') or contains(text(), 'Dashboard')]\")",
+      "timestamp": "2025-09-02T11:31:35.677593",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/ELEMENT_NOT_FOUND_1756809095.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": {
+        "locator": "('xpath', \"//a[contains(@href, 'dashboard') or contains(text(), 'Dashboard')]\")",
+        "timeout": 30
+      }
+    },
+    {
+      "type": "HIGH",
+      "category": "QUICK_ACTIONS_MISSING",
+      "message": "QuickActionsPanel \"Create Goal\" button not found on Dashboard",
+      "timestamp": "2025-09-02T11:31:35.698751",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/QUICK_ACTIONS_MISSING_1756809095.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "HIGH",
+      "category": "ELEMENT_NOT_FOUND",
+      "message": "Element not found: ('xpath', \"//a[contains(@href, 'dashboard') or contains(text(), 'Dashboard')]\")",
+      "timestamp": "2025-09-02T11:32:06.209318",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/ELEMENT_NOT_FOUND_1756809126.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": {
+        "locator": "('xpath', \"//a[contains(@href, 'dashboard') or contains(text(), 'Dashboard')]\")",
+        "timeout": 30
+      }
+    },
+    {
+      "type": "HIGH",
+      "category": "NEW_FEATURE_MISSING_QUICKACTIONS",
+      "message": "QuickActionsPanel not found on Dashboard - v3.5.0 feature missing",
+      "timestamp": "2025-09-02T11:32:09.602114",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true#dashboard",
+      "screenshot_path": "./test-results/screenshots/NEW_FEATURE_MISSING_QUICKACTIONS_1756809129.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NAVIGATION_MISSING",
+      "message": "Stories navigation link not found",
+      "timestamp": "2025-09-02T11:31:35.715512",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/NAVIGATION_MISSING_1756809095.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "TASKS_BUTTON_MISSING",
+      "message": "Create Task button not found in QuickActionsPanel",
+      "timestamp": "2025-09-02T11:32:06.230825",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/TASKS_BUTTON_MISSING_1756809126.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NAVIGATION_MISSING",
+      "message": "Navigation link for Goals not found",
+      "timestamp": "2025-09-02T11:32:06.248487",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/NAVIGATION_MISSING_1756809126.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NAVIGATION_MISSING",
+      "message": "Navigation link for Stories not found",
+      "timestamp": "2025-09-02T11:32:06.263568",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/NAVIGATION_MISSING_1756809126.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NAVIGATION_MISSING",
+      "message": "Navigation link for Tasks not found",
+      "timestamp": "2025-09-02T11:32:06.277660",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/NAVIGATION_MISSING_1756809126.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NAVIGATION_MISSING",
+      "message": "Navigation link for Dashboard not found",
+      "timestamp": "2025-09-02T11:32:06.290750",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/NAVIGATION_MISSING_1756809126.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NEW_FEATURE_MISSING_GOALVIZ",
+      "message": "Goal Visualization link not found in navigation",
+      "timestamp": "2025-09-02T11:32:09.616508",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true#dashboard",
+      "screenshot_path": "./test-results/screenshots/NEW_FEATURE_MISSING_GOALVIZ_1756809129.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "LOW",
+      "category": "CONSOLE_ACCESS_ERROR",
+      "message": "Could not access console logs: 'WebDriver' object has no attribute 'get_log'",
+      "timestamp": "2025-09-02T11:31:05.222747",
+      "url": "https://bob20250810.web.app/?test-login=ai-agent-token&test-mode=true",
+      "screenshot_path": "./test-results/screenshots/CONSOLE_ACCESS_ERROR_1756809065.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    }
+  ]
+}

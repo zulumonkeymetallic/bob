@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BOB v3.5.7 - Force Cache Refresh</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 40px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+        }
+        .version-badge {
+            background: #28a745;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        .features {
+            text-align: left;
+            margin: 20px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+        .feature-item {
+            margin: 10px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        .feature-item:before {
+            content: "✅";
+            position: absolute;
+            left: 0;
+        }
+        .refresh-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 25px;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s ease;
+        }
+        .refresh-btn:hover {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+        .cache-info {
+            margin-top: 20px;
+            font-size: 14px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="version-badge">BOB v3.5.7 - Comprehensive Enhancements</div>
+        
+        <h1>🚀 New Version Available!</h1>
+        <p>BOB has been updated with major new features and improvements.</p>
+        
+        <div class="features">
+            <h3>🎯 What's New in v3.5.7:</h3>
+            <div class="feature-item">Dashboard Sprint Kanban with drag-and-drop</div>
+            <div class="feature-item">Modern Task Management with inline editing</div>
+            <div class="feature-item">Excel/CSV Import System for bulk data import</div>
+            <div class="feature-item">Enhanced UI/UX with modern table designs</div>
+            <div class="feature-item">Firestore performance improvements</div>
+            <div class="feature-item">Auto-reference generation for imported data</div>
+        </div>
+        
+        <button class="refresh-btn" onclick="clearCacheAndRefresh()">
+            🔄 Update to v3.5.7 Now
+        </button>
+        
+        <button class="refresh-btn" onclick="window.open('https://bob20250810.web.app', '_blank')">
+            🌐 Open BOB Application
+        </button>
+        
+        <div class="cache-info">
+            <p><strong>Deployment Info:</strong></p>
+            <p>Version: v3.5.7 | Build: stable-v3.5.7-main.comprehensive-enhancements</p>
+            <p>Deployed: September 3, 2025 | Status: Production Ready ✅</p>
+        </div>
+    </div>
+
+    <script>
+        function clearCacheAndRefresh() {
+            // Clear all caches
+            if ('caches' in window) {
+                caches.keys().then(function(names) {
+                    names.forEach(function(name) {
+                        caches.delete(name);
+                    });
+                });
+            }
+            
+            // Clear localStorage
+            localStorage.clear();
+            sessionStorage.clear();
+            
+            // Clear specific BOB cache items
+            ['bobAppVersion', 'bobCacheClearing', 'bobLastCacheCheck'].forEach(key => {
+                localStorage.removeItem(key);
+            });
+            
+            // Set new version
+            localStorage.setItem('bobAppVersion', 'v3.5.7');
+            localStorage.setItem('bobForceRefresh', 'true');
+            
+            // Show loading message
+            document.body.innerHTML = `
+                <div style="text-align: center; padding: 50px;">
+                    <h2>🔄 Updating BOB to v3.5.7...</h2>
+                    <p>Clearing cache and loading new features...</p>
+                    <div style="margin: 20px 0;">
+                        <div style="display: inline-block; width: 20px; height: 20px; border: 3px solid #f3f3f3; border-top: 3px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                    </div>
+                </div>
+                <style>
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                </style>
+            `;
+            
+            // Redirect to BOB with cache busting
+            setTimeout(() => {
+                window.location.href = 'https://bob20250810.web.app?v=3.5.7&t=' + Date.now();
+            }, 2000);
+        }
+        
+        // Auto-check for cache clearing requirement
+        document.addEventListener('DOMContentLoaded', function() {
+            const currentVersion = localStorage.getItem('bobAppVersion');
+            if (currentVersion && currentVersion !== 'v3.5.7') {
+                console.log('� Version mismatch detected:', currentVersion, '→ v3.5.7');
+                document.querySelector('.container').style.border = '3px solid #ffc107';
+                document.querySelector('.container').style.backgroundColor = 'rgba(255, 193, 7, 0.1)';
+            }
+        });
+    </script>
+</body>
+</html>

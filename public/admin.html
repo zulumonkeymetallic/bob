@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bob — Imports</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script defer src="/admin.js"></script>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px}
+    fieldset{margin-bottom:16px}
+    textarea{width:100%;height:160px}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .col{flex:1;min-width:220px}
+    .muted{color:#777}
+  </style>
+</head>
+<body>
+  <h1>Imports</h1>
+  <p class="muted">CSV / JSON / XLSX (first sheet). Max 500 rows per import. Sign in first on the main app.</p>
+
+  <fieldset>
+    <legend>Import type</legend>
+    <label><input type="radio" name="type" value="goals" checked> Goals</label>
+    <label><input type="radio" name="type" value="okrs"> OKRs</label>
+    <label><input type="radio" name="type" value="tasks"> Tasks</label>
+    <label><input type="radio" name="type" value="resources"> Resources</label>
+    <label><input type="radio" name="type" value="trips"> Trips</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Integrations (per user)</legend>
+    <div class="row">
+      <div class="col"><label>Trakt Username<br><input id="traktUser" type="text" placeholder="yourtrakt"></label></div>
+      <div class="col"><label>Steam ID (64-bit)<br><input id="steamId" type="text" placeholder="7656119..."></label></div>
+    </div>
+    <div style="margin-top:8px;" class="row">
+      <button id="saveProfile">Save IDs</button>
+      <button id="syncTrakt">Sync Trakt Watchlist</button>
+      <button id="syncSteam">Sync Steam Wishlist</button>
+    </div>
+  </fieldset>
+
+  <div class="row">
+    <div class="col">
+      <input id="file" type="file" accept=".csv,.json,.xlsx">
+      <label style="margin-left:8px;">
+        <input id="uploadToStorage" type="checkbox" checked>
+        Upload source file to Storage
+      </label>
+    </div>
+    <div><button id="upload">Upload</button></div>
+  </div>
+
+  <p class="muted">Or paste JSON array:</p>
+  <textarea id="json"></textarea>
+
+  <pre id="log"></pre>
+</body>
+</html>
