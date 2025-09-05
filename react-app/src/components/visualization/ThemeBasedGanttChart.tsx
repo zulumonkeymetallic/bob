@@ -100,10 +100,16 @@ const ThemeBasedGanttChart: React.FC = () => {
     );
     
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const goalsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Goal[];
+      const goalsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+        };
+      }) as Goal[];
       setGoals(goalsData);
       console.log('🎯 ThemeBasedGanttChart: Loaded goals:', goalsData.length);
       setLoading(false);
@@ -119,10 +125,18 @@ const ThemeBasedGanttChart: React.FC = () => {
     );
     
     const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
+      const sprintsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+          startDate: data.startDate?.toDate?.() || data.startDate,
+          endDate: data.endDate?.toDate?.() || data.endDate,
+        };
+      }) as Sprint[];
       setSprints(sprintsData);
       console.log('🏃 ThemeBasedGanttChart: Loaded sprints:', sprintsData.length);
     }, (error) => {
