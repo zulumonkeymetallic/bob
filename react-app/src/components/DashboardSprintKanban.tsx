@@ -10,9 +10,13 @@ import { useNavigate } from 'react-router-dom';
 
 interface DashboardSprintKanbanProps {
   maxStories?: number;
+  selectedSprintId?: string | null;
 }
 
-const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({ maxStories = 6 }) => {
+const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({ 
+  maxStories = 6, 
+  selectedSprintId 
+}) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const navigate = useNavigate();
@@ -67,9 +71,16 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({ maxStorie
           ...doc.data()
         })) as Story[];
         
-        // Filter to current sprint and limit count
+        // Filter to selected sprint and limit count
         const sprintStories = storiesData
-          .filter(story => activeSprint ? story.sprintId === activeSprint.id : true)
+          .filter(story => {
+            if (selectedSprintId) {
+              return story.sprintId === selectedSprintId;
+            } else if (activeSprint) {
+              return story.sprintId === activeSprint.id;
+            }
+            return true;
+          })
           .slice(0, maxStories);
         
         setStories(sprintStories);
@@ -88,7 +99,7 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({ maxStorie
         console.error('Error cleaning up dashboard subscriptions:', error);
       }
     };
-  }, [currentUser, currentPersona, activeSprint?.id, maxStories]);
+  }, [currentUser, currentPersona, activeSprint?.id, maxStories, selectedSprintId]);
 
   const handleDragEnd = async (result: DropResult) => {
     if (!result.destination) return;

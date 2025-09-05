@@ -38,16 +38,24 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'chart-bar',
       items: [
         { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' },
-        { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' },
-        { label: 'Goals Management', path: '/goals', icon: 'target' }
+        { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' }
       ]
     },
     {
-      label: 'Planning & Delivery',
+      label: 'Goals & Planning',
+      icon: 'target',
+      items: [
+        { label: 'Goals Management', path: '/goals', icon: 'target' },
+        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
+        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
+      ]
+    },
+    {
+      label: 'Sprint & Execution',
       icon: 'calendar-alt',
       items: [
-        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
         { label: 'Kanban Board', path: '/kanban', icon: 'kanban' },
+        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' }
       ]
     },
@@ -64,7 +72,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Visualization',
       icon: 'share-alt',
       items: [
-        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
+        { label: 'Sprint Planning Matrix', path: '/sprints/planning', icon: 'th' }
       ]
     },
     {
