@@ -11,6 +11,7 @@ import AddStoryModal from './AddStoryModal';
 import EditStoryModal from './EditStoryModal';
 import ImportModal from './ImportModal';
 import StoryTasksPanel from './StoryTasksPanel';
+import StoriesCardView from './StoriesCardView';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const StoriesManagement: React.FC = () => {
@@ -76,15 +77,21 @@ const StoriesManagement: React.FC = () => {
     // Subscribe to real-time updates
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
       console.log('🔄 Stories snapshot received, docs count:', snapshot.docs.length);
-      const storiesData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Story[];
+      const storiesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+        };
+      }) as Story[];
       
       // Sort by createdAt in memory to avoid index requirements
       storiesData.sort((a, b) => {
-        const aDate = a.createdAt?.toDate?.() || new Date(0);
-        const bDate = b.createdAt?.toDate?.() || new Date(0);
+        const aDate = a.createdAt instanceof Date ? a.createdAt : new Date(0);
+        const bDate = b.createdAt instanceof Date ? b.createdAt : new Date(0);
         return bDate.getTime() - aDate.getTime(); // Desc order (newest first)
       });
       
@@ -94,10 +101,16 @@ const StoriesManagement: React.FC = () => {
     
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       console.log('🎯 Goals snapshot received, docs count:', snapshot.docs.length);
-      const goalsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Goal[];
+      const goalsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+        };
+      }) as Goal[];
       console.log('📊 Setting goals state with:', goalsData.length, 'goals');
       console.log('🎯 Goals details:', goalsData.map(g => ({ id: g.id, title: g.title })));
       setGoals(goalsData);
@@ -459,99 +472,15 @@ const StoriesManagement: React.FC = () => {
                     goalId="all"
                   />
                 ) : (
-                  <div style={{ padding: '20px' }}>
-                    <Row>
-                      {filteredStories.map(story => (
-                        <Col md={6} lg={4} key={story.id} className="mb-3">
-                          <Card 
-                            style={{ 
-                              height: '280px', 
-                              cursor: 'pointer',
-                              border: '1px solid #e5e7eb',
-                              transition: 'all 0.2s ease-in-out'
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
-                              e.currentTarget.style.transform = 'translateY(-2px)';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
-                              e.currentTarget.style.transform = 'translateY(0)';
-                            }}
-                            onClick={() => setSelectedStory(story)}
-                          >
-                            <Card.Header style={{ 
-                              backgroundColor: '#f8fafc',
-                              borderBottom: '1px solid #e5e7eb',
-                              padding: '12px 16px'
-                            }}>
-                              <div style={{ 
-                                display: 'flex', 
-                                justifyContent: 'space-between', 
-                                alignItems: 'center' 
-                              }}>
-                                <Badge 
-                                  bg={story.status === 0 ? 'secondary' : story.status === 1 ? 'primary' : 'success'}
-                                  style={{ fontSize: '10px' }}
-                                >
-                                  {story.status === 0 ? 'Backlog' : story.status === 1 ? 'Active' : 'Done'}
-                                </Badge>
-                                <Badge 
-                                  bg={story.priority === 1 ? 'danger' : story.priority === 2 ? 'warning' : 'info'}
-                                  style={{ fontSize: '10px' }}
-                                >
-                                  P{story.priority}
-                                </Badge>
-                              </div>
-                            </Card.Header>
-                            <Card.Body style={{ padding: '16px', display: 'flex', flexDirection: 'column' }}>
-                              <h6 style={{ 
-                                margin: '0 0 8px 0', 
-                                fontSize: '14px', 
-                                fontWeight: '600',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }}>
-                                {story.ref}
-                              </h6>
-                              <p style={{ 
-                                margin: '0 0 12px 0', 
-                                fontSize: '13px',
-                                lineHeight: '1.4',
-                                overflow: 'hidden',
-                                display: '-webkit-box',
-                                WebkitLineClamp: 3,
-                                WebkitBoxOrient: 'vertical'
-                              }}>
-                                {story.title}
-                              </p>
-                              <div style={{ marginTop: 'auto' }}>
-                                <div style={{ 
-                                  display: 'flex', 
-                                  justifyContent: 'space-between', 
-                                  alignItems: 'center',
-                                  fontSize: '12px',
-                                  color: '#6b7280'
-                                }}>
-                                  <span>Points: {story.points}</span>
-                                  <span>
-                                    Theme: {
-                                      story.theme === 1 ? 'Health' :
-                                      story.theme === 2 ? 'Wealth' :
-                                      story.theme === 3 ? 'Wisdom' :
-                                      story.theme === 4 ? 'Relationships' :
-                                      'Other'
-                                    }
-                                  </span>
-                                </div>
-                              </div>
-                            </Card.Body>
-                          </Card>
-                        </Col>
-                      ))}
-                    </Row>
-                  </div>
+                  <StoriesCardView 
+                    stories={filteredStories}
+                    goals={goals}
+                    onStoryUpdate={handleStoryUpdate}
+                    onStoryDelete={handleStoryDelete}
+                    onStorySelect={setSelectedStory}
+                    onEditStory={openEditStory}
+                    selectedStoryId={selectedStory?.id || null}
+                  />
                 )}
               </div>
             )}
