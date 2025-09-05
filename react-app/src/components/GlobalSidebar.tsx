@@ -239,13 +239,26 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
   };
 
+  const getThemeName = (themeValue: number): string => {
+    const themeNames: { [key: number]: string } = {
+      1: 'Health',
+      2: 'Growth', 
+      3: 'Wealth',
+      4: 'Tribe',
+      5: 'Home'
+    };
+    return themeNames[themeValue] || 'Home';
+  };
+
   const generateReferenceNumber = () => {
     if (selectedType === 'goal') {
       const goalItem = selectedItem as Goal;
-      return `${goalItem.theme.substring(0, 2).toUpperCase()}-${goalItem.id.substring(0, 6).toUpperCase()}`;
+      const themeName = getThemeName(goalItem.theme);
+      return `${themeName.substring(0, 2).toUpperCase()}-${goalItem.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'story') {
       const storyItem = selectedItem as Story;
-      const goalPrefix = goal?.theme ? goal.theme.substring(0, 2).toUpperCase() : 'ST';
+      const themeName = goal?.theme ? getThemeName(goal.theme) : 'Story';
+      const goalPrefix = themeName.substring(0, 2).toUpperCase();
       return `${goalPrefix}-${storyItem.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'task') {
       const taskItem = selectedItem as Task;
@@ -522,13 +535,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   ) : (
                     <Badge 
                       bg={
-                        selectedItem.status === 'done' ? 'success' : 
-                        selectedItem.status === 'active' || selectedItem.status === 'in-progress' ? 'primary' : 
+                        selectedItem.status === 2 ? 'success' : 
+                        selectedItem.status === 1 ? 'primary' : 
                         'secondary'
                       }
                       style={{ fontSize: '12px', padding: '6px 12px' }}
                     >
-                      {selectedItem.status}
+                      {selectedItem.status === 0 ? 'New/Backlog' : 
+                       selectedItem.status === 1 ? 'Active/In Progress' : 
+                       selectedItem.status === 2 ? 'Done/Complete' : 
+                       selectedItem.status === 3 ? 'Blocked' : 
+                       selectedItem.status === 4 ? 'Deferred' : 
+                       'Unknown'}
                     </Badge>
                   )}
                 </Col>
@@ -564,13 +582,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   ) : selectedItem.priority ? (
                     <Badge 
                       bg={
-                        (selectedItem.priority === 'P1' || selectedItem.priority === 'high') ? 'danger' :
-                        (selectedItem.priority === 'P2' || selectedItem.priority === 'med' || selectedItem.priority === 'medium') ? 'warning' : 
+                        selectedItem.priority === 1 ? 'danger' :
+                        selectedItem.priority === 2 ? 'warning' : 
                         'secondary'
                       }
                       style={{ fontSize: '12px', padding: '6px 12px' }}
                     >
-                      {selectedItem.priority}
+                      {selectedItem.priority === 1 ? 'P1 - High' : 
+                       selectedItem.priority === 2 ? 'P2 - Medium' : 
+                       selectedItem.priority === 3 ? 'P3 - Low' : 
+                       'Unknown'}
                     </Badge>
                   ) : (
                     <span style={{ color: '#9ca3af' }}>Not set</span>

@@ -13,7 +13,7 @@ import { db } from '../firebase';
 export interface ActivityEntry {
   id?: string;
   entityId: string;
-  entityType: 'goal' | 'story' | 'task';
+  entityType: 'goal' | 'story' | 'task' | 'calendar_block';
   activityType: 'created' | 'updated' | 'deleted' | 'note_added' | 'status_changed' | 'sprint_changed' | 'priority_changed';
   userId: string;
   userEmail?: string;
@@ -33,6 +33,10 @@ export interface ActivityEntry {
   // Metadata
   persona?: string;
   referenceNumber?: string;
+  
+  // Source tracking (Human, Function, AI)
+  source: 'human' | 'function' | 'ai';
+  sourceDetails?: string;
 }
 
 export class ActivityStreamService {
@@ -49,19 +53,20 @@ export class ActivityStreamService {
     }
   }
 
-  // Log field change
+  // Log field changes with source tracking
   static async logFieldChange(
     entityId: string,
-    entityType: 'goal' | 'story' | 'task',
+    entityType: 'goal' | 'story' | 'task' | 'calendar_block',
+    userId: string,
+    userEmail: string,
     fieldName: string,
     oldValue: any,
     newValue: any,
-    userId: string,
-    userEmail?: string,
-    persona?: string,
-    referenceNumber?: string
+    persona: string,
+    referenceNumber: string,
+    source: 'human' | 'function' | 'ai' = 'human'
   ): Promise<void> {
-    const description = `Changed ${fieldName} from "${oldValue}" to "${newValue}"`;
+    const description = `Updated ${fieldName} from "${oldValue}" to "${newValue}"`;
     
     await this.addActivity({
       entityId,
@@ -75,19 +80,21 @@ export class ActivityStreamService {
       description,
       persona,
       referenceNumber,
+      source
     });
   }
 
-  // Log status change
+    // Log status change
   static async logStatusChange(
     entityId: string,
     entityType: 'goal' | 'story' | 'task',
+    userId: string,
+    userEmail: string,
     oldStatus: string,
     newStatus: string,
-    userId: string,
-    userEmail?: string,
-    persona?: string,
-    referenceNumber?: string
+    persona: string,
+    referenceNumber: string,
+    source: 'human' | 'function' | 'ai' = 'human'
   ): Promise<void> {
     const description = `Status changed from "${oldStatus}" to "${newStatus}"`;
     
@@ -103,6 +110,7 @@ export class ActivityStreamService {
       description,
       persona,
       referenceNumber,
+      source
     });
   }
 
@@ -115,7 +123,8 @@ export class ActivityStreamService {
     userId: string,
     userEmail?: string,
     persona?: string,
-    referenceNumber?: string
+    referenceNumber?: string,
+    source: 'human' | 'function' | 'ai' = 'human'
   ): Promise<void> {
     const description = `Sprint changed from "${oldSprint}" to "${newSprint}"`;
     
@@ -131,6 +140,7 @@ export class ActivityStreamService {
       description,
       persona,
       referenceNumber,
+      source
     });
   }
 
@@ -142,7 +152,8 @@ export class ActivityStreamService {
     userId: string,
     userEmail?: string,
     persona?: string,
-    referenceNumber?: string
+    referenceNumber?: string,
+    source: 'human' | 'function' | 'ai' = 'human'
   ): Promise<void> {
     const description = `Added note: ${noteContent.substring(0, 100)}${noteContent.length > 100 ? '...' : ''}`;
     
@@ -156,6 +167,7 @@ export class ActivityStreamService {
       description,
       persona,
       referenceNumber,
+      source
     });
   }
 
@@ -167,7 +179,8 @@ export class ActivityStreamService {
     userId: string,
     userEmail?: string,
     persona?: string,
-    referenceNumber?: string
+    referenceNumber?: string,
+    source: 'human' | 'function' | 'ai' = 'human'
   ): Promise<void> {
     const description = `Created ${entityType}: ${entityTitle}`;
     
@@ -180,6 +193,7 @@ export class ActivityStreamService {
       description,
       persona,
       referenceNumber,
+      source
     });
   }
 

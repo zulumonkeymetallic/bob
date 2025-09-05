@@ -234,8 +234,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </Nav>
           </div>
 
-          {/* Bottom Actions */}
-          <div className="p-3" style={{ borderTop: '1px solid var(--notion-border)' }}>
+          {/* Bottom Actions - Now Sticky */}
+          <div 
+            className="p-3" 
+            style={{ 
+              borderTop: '1px solid var(--notion-border)',
+              position: 'sticky',
+              bottom: 0,
+              background: 'var(--notion-bg)',
+              zIndex: 10
+            }}
+          >
             <div className="d-flex gap-2 mb-2">
               <Button 
                 size="sm" 
@@ -414,8 +423,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             ))}
           </Nav>
 
-          {/* Bottom Actions Mobile */}
-          <div className="mt-auto pt-3 border-top border-secondary">
+          {/* Bottom Actions Mobile - Now Sticky */}
+          <div 
+            className="mt-auto pt-3 border-top border-secondary"
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              background: 'var(--bs-dark)',
+              zIndex: 10,
+              marginTop: 'auto !important'
+            }}
+          >
             <div className="d-flex gap-2 mb-2">
               <Button 
                 variant="outline-light" 
