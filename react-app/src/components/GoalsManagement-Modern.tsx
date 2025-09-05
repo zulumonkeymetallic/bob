@@ -83,8 +83,8 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    if (filterStatus !== 'all' && goal.status !== filterStatus) return false;
-    if (filterTheme !== 'all' && goal.theme !== filterTheme) return false;
+    if (filterStatus !== 'all' && goal.status !== parseInt(filterStatus)) return false;
+    if (filterTheme !== 'all' && goal.theme !== parseInt(filterTheme)) return false;
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -92,9 +92,9 @@ const GoalsManagement: React.FC = () => {
   // Get counts for dashboard cards
   const goalCounts = {
     total: filteredGoals.length,
-    active: filteredGoals.filter(g => g.status === 'active').length,
-    done: filteredGoals.filter(g => g.status === 'done').length,
-    paused: filteredGoals.filter(g => g.status === 'paused').length
+    active: filteredGoals.filter(g => g.status === 1).length, // Work in Progress
+    done: filteredGoals.filter(g => g.status === 2).length, // Complete
+    paused: filteredGoals.filter(g => g.status === 3).length // Blocked
   };
 
   return (

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Badge, Popover, OverlayTrigger } from 'react-bootstrap';
 import { Clock, RefreshCw, Info } from 'lucide-react';
-import { VERSION, BUILD_DATE } from '../version';
+import { VERSION, BUILD_TIME } from '../version';
 import { versionTimeoutService } from '../services/versionTimeoutService';
 
 interface VersionDisplayProps {
@@ -67,7 +67,7 @@ const VersionDisplay: React.FC<VersionDisplayProps> = ({
         </div>
         <div className="mb-2">
           <strong>Build Time:</strong><br />
-          <small className="text-muted">{BUILD_DATE}</small>
+          <small className="text-muted">{BUILD_TIME}</small>
         </div>
         
         {showSessionInfo && (

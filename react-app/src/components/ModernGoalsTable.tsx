@@ -178,7 +178,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
-  const { trackClick, trackFieldChange } = useActivityTracking();
+  const { trackCRUD, trackClick, trackFieldChange } = useActivityTracking();
   const { currentUser } = useAuth();
 
   // Note: Removed view tracking to focus activity stream on meaningful changes only
@@ -244,8 +244,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
           key,
           oldValue,
           valueToSave,
-          goal.title,
-          goal.id
+          goal.title // This is the referenceNumber parameter
         );
         
         trackClick({

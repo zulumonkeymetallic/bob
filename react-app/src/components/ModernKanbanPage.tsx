@@ -17,16 +17,16 @@ const ModernKanbanPage: React.FC = () => {
   
   // Configurable swim lanes
   const [swimLanes] = useState([
-    { id: 'backlog', title: 'Backlog', status: 'backlog' },
-    { id: 'active', title: 'Active', status: 'active' },
-    { id: 'done', title: 'Done', status: 'done' }
+    { id: 'backlog', title: 'Backlog', status: 0 }, // 0 = Backlog
+    { id: 'active', title: 'Active', status: 2 }, // 2 = In Progress
+    { id: 'done', title: 'Done', status: 4 } // 4 = Done
   ]);
 
   const [newStory, setNewStory] = useState({
     title: '',
     description: '',
     goalId: '',
-    priority: 'P2' as 'P1' | 'P2' | 'P3',
+    priority: 2, // P2 = Medium
     points: 1
   });
   
@@ -34,14 +34,14 @@ const ModernKanbanPage: React.FC = () => {
     title: '',
     description: '',
     effort: 'M' as 'S' | 'M' | 'L',
-    priority: 'med' as 'low' | 'med' | 'high'
+    priority: 2 // 2 = Medium
   });
 
   const [editStory, setEditStory] = useState({
     title: '',
     description: '',
     goalId: '',
-    priority: 'P2' as 'P1' | 'P2' | 'P3',
+    priority: 2, // P2 = Medium
     points: 1
   });
 
@@ -105,7 +105,7 @@ const ModernKanbanPage: React.FC = () => {
         title: newStory.title,
         description: newStory.description,
         goalId: newStory.goalId,
-        status: 'backlog',
+        status: 0, // 0 = Backlog
         priority: newStory.priority,
         points: newStory.points,
         orderIndex: stories.length,
@@ -118,7 +118,7 @@ const ModernKanbanPage: React.FC = () => {
         title: '',
         description: '',
         goalId: '',
-        priority: 'P2',
+        priority: 2, // P2 = Medium
         points: 1
       });
       setShowAddStory(false);
@@ -153,7 +153,7 @@ const ModernKanbanPage: React.FC = () => {
         title: '',
         description: '',
         effort: 'M',
-        priority: 'med'
+        priority: 2 // 2 = Medium
       });
       setShowAddTask(false);
     } catch (error) {
@@ -161,7 +161,7 @@ const ModernKanbanPage: React.FC = () => {
     }
   };
 
-  const updateStoryStatus = async (storyId: string, newStatus: string) => {
+  const updateStoryStatus = async (storyId: string, newStatus: number) => {
     try {
       await updateDoc(doc(db, 'stories', storyId), {
         status: newStatus,
@@ -172,7 +172,7 @@ const ModernKanbanPage: React.FC = () => {
     }
   };
 
-  const updateTaskStatus = async (taskId: string, newStatus: string) => {
+  const updateTaskStatus = async (taskId: string, newStatus: number) => {
     try {
       await updateDoc(doc(db, 'tasks', taskId), {
         status: newStatus,
@@ -385,13 +385,13 @@ const ModernKanbanPage: React.FC = () => {
                                     Move
                                   </Dropdown.Toggle>
                                   <Dropdown.Menu>
-                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 'backlog'); }}>
+                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 0); }}>
                                       Backlog
                                     </Dropdown.Item>
-                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 'active'); }}>
+                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 2); }}>
                                       Active
                                     </Dropdown.Item>
-                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 'done'); }}>
+                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 4); }}>
                                       Done
                                     </Dropdown.Item>
                                   </Dropdown.Menu>
@@ -485,28 +485,24 @@ const ModernKanbanPage: React.FC = () => {
                           </td>
                           <td onClick={(e) => e.stopPropagation()}>
                             <Dropdown>
-                              <Dropdown.Toggle as={Badge} bg={task.status === 'done' ? 'success' : 
-                                  task.status === 'in-progress' ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
-                                {task.status === 'in-progress' ? 'In Progress' : 
-                                 task.status === 'done' ? 'Done' : 
-                                 task.status === 'planned' ? 'Planned' :
-                                 task.status === 'todo' ? 'To Do' :
-                                 task.status === 'blocked' ? 'Blocked' : 'Unknown'}
+                              <Dropdown.Toggle as={Badge} bg={task.status === 2 ? 'success' : 
+                                  task.status === 1 ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                                {task.status === 1 ? 'In Progress' : 
+                                 task.status === 2 ? 'Done' : 
+                                 task.status === 3 ? 'Blocked' :
+                                 task.status === 0 ? 'To Do' : 'Unknown'}
                               </Dropdown.Toggle>
                               <Dropdown.Menu>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'todo')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 0)}>
                                   To Do
                                 </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'planned')}>
-                                  Planned
-                                </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'in-progress')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 1)}>
                                   In Progress
                                 </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'blocked')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 3)}>
                                   Blocked
                                 </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'done')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 2)}>
                                   Done
                                 </Dropdown.Item>
                               </Dropdown.Menu>
@@ -518,9 +514,11 @@ const ModernKanbanPage: React.FC = () => {
                             </Badge>
                           </td>
                           <td>
-                            <Badge bg={task.priority === 'high' ? 'danger' : 
-                                task.priority === 'med' ? 'warning' : 'secondary'}>
-                              {task.priority === 'med' ? 'medium' : task.priority}
+                            <Badge bg={task.priority === 1 ? 'danger' : 
+                                task.priority === 2 ? 'warning' : 'secondary'}>
+                              {task.priority === 1 ? 'High' : 
+                               task.priority === 2 ? 'Medium' : 
+                               task.priority === 3 ? 'Low' : 'Unknown'}
                             </Badge>
                           </td>
                           <td>
@@ -592,11 +590,11 @@ const ModernKanbanPage: React.FC = () => {
                   <Form.Label>Priority</Form.Label>
                   <Form.Select
                     value={newStory.priority}
-                    onChange={(e) => setNewStory({...newStory, priority: e.target.value as 'P1' | 'P2' | 'P3'})}
+                    onChange={(e) => setNewStory({...newStory, priority: parseInt(e.target.value)})}
                   >
-                    <option value="P1">P1 - High</option>
-                    <option value="P2">P2 - Medium</option>
-                    <option value="P3">P3 - Low</option>
+                    <option value="1">P1 - High</option>
+                    <option value="2">P2 - Medium</option>
+                    <option value="3">P3 - Low</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -678,11 +676,11 @@ const ModernKanbanPage: React.FC = () => {
                   <Form.Label>Priority</Form.Label>
                   <Form.Select
                     value={editStory.priority}
-                    onChange={(e) => setEditStory({...editStory, priority: e.target.value as 'P1' | 'P2' | 'P3'})}
+                    onChange={(e) => setEditStory({...editStory, priority: parseInt(e.target.value)})}
                   >
-                    <option value="P1">P1 - High</option>
-                    <option value="P2">P2 - Medium</option>
-                    <option value="P3">P3 - Low</option>
+                    <option value="1">P1 - High</option>
+                    <option value="2">P2 - Medium</option>
+                    <option value="3">P3 - Low</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -762,11 +760,11 @@ const ModernKanbanPage: React.FC = () => {
                   <Form.Label>Priority</Form.Label>
                   <Form.Select
                     value={newTask.priority}
-                    onChange={(e) => setNewTask({...newTask, priority: e.target.value as 'low' | 'med' | 'high'})}
+                    onChange={(e) => setNewTask({...newTask, priority: parseInt(e.target.value)})}
                   >
-                    <option value="low">Low</option>
-                    <option value="med">Medium</option>
-                    <option value="high">High</option>
+                    <option value="3">Low</option>
+                    <option value="2">Medium</option>
+                    <option value="1">High</option>
                   </Form.Select>
                 </Form.Group>
               </Col>

@@ -271,15 +271,16 @@ const EnhancedGanttChart: React.FC = () => {
     ]);
 
     // Log activity
-    await ActivityStreamService.logUIClick(
-      `gantt-${item.type}-${item.id}`,
-      'view',
-      item.id,
-      item.type as any,
-      currentUser?.uid || '',
-      currentUser?.email || '',
-      { title: item.title, ganttView: true }
-    );
+    await ActivityStreamService.addActivity({
+      entityId: item.id,
+      entityType: item.type as 'goal' | 'story' | 'task',
+      activityType: 'note_added',
+      userId: currentUser?.uid || '',
+      userEmail: currentUser?.email || '',
+      description: `Viewed ${item.type} "${item.title}" in Gantt chart`,
+      noteContent: `Gantt view interaction: ${JSON.stringify({ title: item.title, ganttView: true })}`,
+      source: 'human'
+    });
   }, [stories, tasks, currentUser]);
 
   // Handle drag start

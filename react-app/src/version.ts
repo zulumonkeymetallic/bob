@@ -1,6 +1,7 @@
 // Version tracking for cache busting
 export const VERSION = '3.8.0.20250905.001';
 export const BUILD_TIME = new Date().toISOString();
+export const BUILD_HASH = 'stable-v3.8.0-main.comprehensive-ui-consistency';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
 console.log(`✅ Status: Enhanced UI Consistency & Kanban-Goals Integration`);

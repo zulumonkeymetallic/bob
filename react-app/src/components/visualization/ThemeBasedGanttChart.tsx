@@ -232,12 +232,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         goal.id,
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'status',
         goal.status.toString(),
         '4',
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ action: 'archived', title: goal.title })
+        'personal',
+        JSON.stringify({ action: 'archived', title: goal.title }),
+        'human'
       );
     } catch (error) {
       console.error('Error archiving goal:', error);
@@ -254,12 +256,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         goal.id,
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'status',
         goal.status.toString(),
         '2',
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ action: 'completed', title: goal.title })
+        'personal',
+        JSON.stringify({ action: 'completed', title: goal.title }),
+        'human'
       );
     } catch (error) {
       console.error('Error completing goal:', error);
@@ -282,12 +286,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         'new-goal',
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'status',
         '',
         '0',
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ action: 'duplicated', originalTitle: goal.title, newTitle: duplicatedGoal.title })
+        'personal',
+        JSON.stringify({ action: 'duplicated', originalTitle: goal.title, newTitle: duplicatedGoal.title }),
+        'human'
       );
     } catch (error) {
       console.error('Error duplicating goal:', error);
@@ -302,12 +308,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         deletingGoal.id,
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'status',
         deletingGoal.status,
         -1,
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ action: 'deleted', title: deletingGoal.title })
+        'personal',
+        JSON.stringify({ action: 'deleted', title: deletingGoal.title }),
+        'human'
       );
       setShowDeleteConfirm(false);
       setDeletingGoal(null);
@@ -401,12 +409,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         dragState.goalId,
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'timeline',
         `${dragState.originalTheme}`,
         JSON.stringify(updateData),
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ dragType: dragState.dragType, ganttView: true })
+        'personal',
+        JSON.stringify({ dragType: dragState.dragType, ganttView: true }),
+        'human'
       );
 
     } catch (error) {

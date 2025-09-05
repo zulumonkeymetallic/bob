@@ -382,7 +382,6 @@ const SortableRow: React.FC<SortableRowProps> = ({
           actualKey,
           oldValue,
           editValue,
-          story.title,
           story.ref
         );
         

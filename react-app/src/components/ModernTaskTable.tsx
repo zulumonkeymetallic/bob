@@ -147,7 +147,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onTaskDelete 
 }) => {
   const { showSidebar } = useSidebar();
-  const { trackClick, trackFieldChange } = useActivityTracking();
+  const { trackCRUD, trackFieldChange } = useActivityTracking();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
     attributes,
@@ -188,7 +188,6 @@ const SortableRow: React.FC<SortableRowProps> = ({
           key,
           oldValue,
           editValue,
-          task.title,
           task.ref
         );
         
@@ -401,20 +400,6 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 timestamp: new Date().toISOString()
               });
               
-              // 🎯 BOB v3.2.4: Enhanced Activity Tracking
-              await trackClick({
-                elementId: 'task-edit-btn',
-                elementType: 'edit',
-                entityId: task.id,
-                entityType: 'task',
-                entityTitle: task.title,
-                additionalData: {
-                  taskStatus: task.status,
-                  taskPriority: task.priority,
-                  action: 'edit_button_clicked'
-                }
-              });
-              
               showSidebar(task, 'task');
             }}
             style={{
@@ -492,7 +477,6 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   defaultColumns: defaultColumnKeys,
   compact = false,
 }) => {
-  const { trackClick } = useActivityTracking();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   
   // Initialize columns based on defaultColumns prop or use all columns
