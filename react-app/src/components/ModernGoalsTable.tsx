@@ -654,16 +654,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     console.log('📚 ModernGoalsTable: Query created, setting up listener');
 
     const unsubscribe = onSnapshot(storiesQuery, (snapshot) => {
-      const storiesData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id, 
-          ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
-          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
-          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
-        };
-      }) as Story[];
+      const storiesData = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      } as Story));
       
       console.log(`📚 ModernGoalsTable: Query result received`);
       console.log(`📚 Stories found: ${storiesData.length}`);
