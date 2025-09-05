@@ -1,0 +1,280 @@
+/* Theme Consistency CSS - Ensures proper theming across all components */
+
+/* CSS Variables for Light Theme */
+[data-theme="light"] {
+  --notion-bg: #ffffff;
+  --notion-text: #37352f;
+  --notion-text-secondary: #73716e;
+  --notion-border: #e9e9e7;
+  --notion-hover: #f7f6f3;
+  --notion-accent: #2d9cdb;
+  --notion-danger: #dc3545;
+  --notion-success: #28a745;
+  --notion-warning: #ffc107;
+  
+  /* Button specific variables */
+  --btn-outline-color: #37352f;
+  --btn-outline-border: #e9e9e7;
+  --btn-outline-hover-bg: #f7f6f3;
+  --btn-outline-hover-color: #37352f;
+  
+  /* Sign out button specific */
+  --signout-bg: transparent;
+  --signout-color: #dc3545;
+  --signout-border: #dc3545;
+  --signout-hover-bg: #dc3545;
+  --signout-hover-color: #ffffff;
+}
+
+/* CSS Variables for Dark Theme */
+[data-theme="dark"] {
+  --notion-bg: #1a1a1a;
+  --notion-text: #ffffff;
+  --notion-text-secondary: #b0b0b0;
+  --notion-border: #333333;
+  --notion-hover: #2a2a2a;
+  --notion-accent: #5dade2;
+  --notion-danger: #e74c3c;
+  --notion-success: #2ecc71;
+  --notion-warning: #f39c12;
+  
+  /* Button specific variables */
+  --btn-outline-color: #ffffff;
+  --btn-outline-border: #444444;
+  --btn-outline-hover-bg: #3a3a3a;
+  --btn-outline-hover-color: #ffffff;
+  
+  /* Sign out button specific */
+  --signout-bg: transparent;
+  --signout-color: #e74c3c;
+  --signout-border: #e74c3c;
+  --signout-hover-bg: #e74c3c;
+  --signout-hover-color: #ffffff;
+}
+
+/* Ensure body and root elements respect theme */
+body[data-theme="dark"] {
+  background-color: var(--notion-bg) !important;
+  color: var(--notion-text) !important;
+}
+
+body[data-theme="light"] {
+  background-color: var(--notion-bg) !important;
+  color: var(--notion-text) !important;
+}
+
+/* Fix Bootstrap components in dark mode */
+[data-theme="dark"] .navbar {
+  background-color: var(--notion-bg) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme="dark"] .offcanvas {
+  background-color: var(--notion-bg) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme="dark"] .card {
+  background-color: var(--notion-bg) !important;
+  color: var(--notion-text) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme="dark"] .modal-content {
+  background-color: var(--notion-bg) !important;
+  color: var(--notion-text) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme="dark"] .form-control {
+  background-color: var(--notion-hover) !important;
+  color: var(--notion-text) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme="dark"] .form-control:focus {
+  background-color: var(--notion-hover) !important;
+  color: var(--notion-text) !important;
+  border-color: var(--notion-accent) !important;
+  box-shadow: 0 0 0 0.2rem rgba(93, 173, 226, 0.25) !important;
+}
+
+[data-theme="dark"] .form-select {
+  background-color: var(--notion-hover) !important;
+  color: var(--notion-text) !important;
+  border-color: var(--notion-border) !important;
+}
+
+/* Theme-Aware Button Classes */
+.btn-theme-outline {
+  background: var(--signout-bg);
+  color: var(--btn-outline-color);
+  border: 1px solid var(--btn-outline-border);
+  transition: all 0.2s ease-in-out;
+}
+
+.btn-theme-outline:hover {
+  background: var(--btn-outline-hover-bg);
+  color: var(--btn-outline-hover-color);
+  border-color: var(--btn-outline-border);
+}
+
+.btn-theme-outline:focus {
+  box-shadow: 0 0 0 0.2rem rgba(55, 53, 47, 0.25);
+}
+
+[data-theme="dark"] .btn-theme-outline:focus {
+  box-shadow: 0 0 0 0.2rem rgba(255, 255, 255, 0.25);
+}
+
+/* Sign Out Button Specific Styling */
+.btn-signout {
+  background: var(--signout-bg) !important;
+  color: var(--signout-color) !important;
+  border: 1px solid var(--signout-border) !important;
+  transition: all 0.2s ease-in-out;
+  font-weight: 500;
+}
+
+.btn-signout:hover {
+  background: var(--signout-hover-bg) !important;
+  color: var(--signout-hover-color) !important;
+  border-color: var(--signout-border) !important;
+  transform: translateY(-1px);
+}
+
+.btn-signout:focus {
+  box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25) !important;
+}
+
+[data-theme="dark"] .btn-signout:focus {
+  box-shadow: 0 0 0 0.2rem rgba(231, 76, 60, 0.25) !important;
+}
+
+/* Version Display Theme Consistency */
+.version-display {
+  color: var(--notion-text-secondary) !important;
+  background: var(--notion-hover) !important;
+  border: 1px solid var(--notion-border) !important;
+}
+
+/* Navigation Theme Consistency */
+.nav-link {
+  color: var(--notion-text) !important;
+  transition: all 0.2s ease-in-out;
+}
+
+.nav-link:hover {
+  color: var(--notion-accent) !important;
+  background: var(--notion-hover) !important;
+}
+
+.nav-link.active {
+  color: var(--notion-accent) !important;
+  background: var(--notion-hover) !important;
+}
+
+/* Dropdown Theme Consistency */
+[data-theme="dark"] .dropdown-menu {
+  background-color: var(--notion-bg) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme="dark"] .dropdown-item {
+  color: var(--notion-text) !important;
+}
+
+[data-theme="dark"] .dropdown-item:hover {
+  background-color: var(--notion-hover) !important;
+  color: var(--notion-text) !important;
+}
+
+/* Table Theme Consistency */
+[data-theme="dark"] .table {
+  color: var(--notion-text) !important;
+}
+
+[data-theme="dark"] .table-striped > tbody > tr:nth-of-type(odd) > td,
+[data-theme="dark"] .table-striped > tbody > tr:nth-of-type(odd) > th {
+  background-color: var(--notion-hover) !important;
+}
+
+[data-theme="dark"] .table-hover > tbody > tr:hover > td,
+[data-theme="dark"] .table-hover > tbody > tr:hover > th {
+  background-color: var(--notion-hover) !important;
+}
+
+/* Badge Theme Consistency */
+[data-theme="dark"] .badge {
+  color: var(--notion-text) !important;
+}
+
+/* Alert Theme Consistency */
+[data-theme="dark"] .alert {
+  color: var(--notion-text) !important;
+  border-color: var(--notion-border) !important;
+}
+
+/* Pagination Theme Consistency */
+[data-theme="dark"] .page-link {
+  background-color: var(--notion-bg) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme="dark"] .page-link:hover {
+  background-color: var(--notion-hover) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme="dark"] .page-item.active .page-link {
+  background-color: var(--notion-accent) !important;
+  border-color: var(--notion-accent) !important;
+}
+
+/* Smooth Theme Transitions */
+* {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Ensure text readability */
+[data-theme="dark"] {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Force white text on dark backgrounds */
+[data-theme="dark"] * {
+  color: var(--notion-text) !important;
+}
+
+/* Override any white backgrounds in dark mode */
+[data-theme="dark"] .bg-white {
+  background-color: var(--notion-bg) !important;
+}
+
+[data-theme="dark"] .bg-light {
+  background-color: var(--notion-hover) !important;
+}
+
+/* Accessibility improvements */
+.btn-signout:focus-visible {
+  outline: 2px solid var(--signout-color);
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  [data-theme="dark"] {
+    --notion-text: #ffffff;
+    --notion-bg: #000000;
+    --notion-border: #ffffff;
+  }
+  
+  [data-theme="light"] {
+    --notion-text: #000000;
+    --notion-bg: #ffffff;
+    --notion-border: #000000;
+  }
+}

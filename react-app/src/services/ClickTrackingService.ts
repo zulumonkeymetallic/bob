@@ -93,7 +93,10 @@ class ClickTrackingService {
   
   private logScrollInteraction(event: Event) {
     const target = event.target as HTMLElement;
-    if (!target) return;
+    // Safety check for null/undefined target
+    if (!target) {
+      return; // Silent fail for invalid targets
+    }
     
     const scrollTop = target.scrollTop || window.pageYOffset || document.documentElement.scrollTop;
     const scrollLeft = target.scrollLeft || window.pageXOffset || document.documentElement.scrollLeft;
@@ -127,7 +130,10 @@ class ClickTrackingService {
   
   private logInteraction(event: Event, eventType: 'click' | 'touch') {
     const target = event.target as HTMLElement;
-    if (!target) return;
+    // Safety check for null/undefined target
+    if (!target || !target.tagName) {
+      return; // Silent fail for invalid targets
+    }
     
     // Get coordinates
     let coordinates = { x: 0, y: 0 };
@@ -172,7 +178,12 @@ class ClickTrackingService {
     this.logClickEvent(clickEvent);
   }
   
-  private getComponentInfo(target: HTMLElement): { component: string; element: string } {
+  private getComponentInfo(target: HTMLElement | null): { component: string; element: string } {
+    // Safety check for null/undefined target
+    if (!target || !target.tagName) {
+      return { component: 'Unknown', element: 'unknown' };
+    }
+    
     let component = 'Unknown';
     let element = target.tagName.toLowerCase();
     

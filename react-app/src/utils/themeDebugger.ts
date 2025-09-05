@@ -14,7 +14,64 @@ export interface ThemeDebugInfo {
 }
 
 // Enable/disable theme debugging globally
-const THEME_DEBUG_ENABLED = false; // Set to true only when debugging themes
+const THEME_DEBUG_ENABLED = true; // Set to true when debugging themes
+
+// Theme mismatch detection
+export const logThemeInteraction = (element: HTMLElement, eventType: string) => {
+  if (!THEME_DEBUG_ENABLED) return;
+  
+  try {
+    const currentTheme = document.documentElement.getAttribute('data-bs-theme') || 'light';
+    const computedStyle = window.getComputedStyle(element);
+    const backgroundColor = computedStyle.backgroundColor;
+    const color = computedStyle.color;
+    
+    // Detect theme mismatches
+    const isDarkTheme = currentTheme === 'dark';
+    const hasLightBackground = backgroundColor === 'rgb(255, 255, 255)' || 
+                               backgroundColor === 'white' ||
+                               backgroundColor === 'rgba(255, 255, 255, 1)';
+    const hasDarkBackground = backgroundColor === 'rgb(0, 0, 0)' || 
+                              backgroundColor === 'black' ||
+                              backgroundColor.includes('33, 37, 41'); // Bootstrap dark
+
+    // Log theme inconsistencies
+    if (isDarkTheme && hasLightBackground) {
+      console.warn('🎨 THEME MISMATCH: Light background in dark theme', {
+        element: element.tagName,
+        class: element.className,
+        backgroundColor,
+        currentTheme,
+        eventType
+      });
+    }
+    
+    if (!isDarkTheme && hasDarkBackground) {
+      console.warn('🎨 THEME MISMATCH: Dark background in light theme', {
+        element: element.tagName,
+        class: element.className,
+        backgroundColor,
+        currentTheme,
+        eventType
+      });
+    }
+
+    // Enhanced click tracking with theme info
+    if (eventType === 'click') {
+      console.log('🖱️ Theme-aware click:', {
+        theme: currentTheme,
+        element: element.tagName,
+        backgroundColor,
+        textColor: color,
+        classes: element.className,
+        isVisible: element.offsetWidth > 0 && element.offsetHeight > 0,
+        timestamp: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    // Silent fail for theme debugging
+  }
+};
 
 export const useThemeDebugger = (componentName: string = 'Unknown Component') => {
   const { theme } = useTheme();

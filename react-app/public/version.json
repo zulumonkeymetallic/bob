@@ -1,11 +1,19 @@
 {
-  "version": "v3.5.13",
-  "buildTime": "2025-09-03T13:38:00.000Z",
-  "buildHash": "enhanced-cache-busting-v3.5.13",
+  "version": "3.8.3",
+  "buildTime": "2025-09-04T12:00:00.000Z",
+  "buildHash": "cache-loop-fix",
   "features": [
-    "Enhanced Quick Actions with linking",
-    "Theme inheritance system", 
-    "Server-side version checking",
-    "Advanced cache busting"
+    "Cache Loop Prevention System",
+    "Safe Cache Management", 
+    "Login Issue Resolution",
+    "Enhanced Error Recovery",
+    "Production Stability Improvements",
+    "Version Synchronization"
+  ],
+  "description": "Critical Cache Loop Fix for Login Issues",
+  "githubIssues": [
+    "#Cache Loop - Fixed infinite cache clearing preventing login",
+    "#Login Issues - Resolved cache busting loop conflicts",
+    "#Production Stability - Enhanced cache management safety"
   ]
 }

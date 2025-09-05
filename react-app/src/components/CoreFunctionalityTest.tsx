@@ -5,7 +5,6 @@ import { useTestMode } from '../contexts/TestModeContext';
 import { collection, addDoc, query, where, onSnapshot, updateDoc, doc, deleteDoc, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Goal, Story, Task, Sprint } from '../types';
-import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface TestResult {
   name: string;
