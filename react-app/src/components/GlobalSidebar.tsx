@@ -6,10 +6,6 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { useTestMode } from '../contexts/TestModeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
-import { useActivityTracking } from '../hooks/useActivityTracking';
-import { ChoiceHelper, GoalStatus, StoryStatus, StoryPriority, TaskPriority } from '../config/choices';
-import { ChoiceMigration } from '../config/migration';
-import { isStatus, isTheme } from '../utils/statusHelpers';
 
 interface GlobalSidebarProps {
   goals: Goal[];
@@ -29,7 +25,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, toggleCollapse, updateItem } = useSidebar();
   const { isTestMode, testModeLabel } = useTestMode();
   const { currentUser } = useAuth();
-  const { trackClick, addNote, subscribeToActivity } = useActivityTracking();
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -37,41 +32,31 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [showAddNote, setShowAddNote] = useState(false);
   const [newNote, setNewNote] = useState('');
 
-  // Theme colors mapping - now using integer keys
+  // Theme colors mapping
   const themeColors = {
-    1: '#ef4444', // Health
-    2: '#8b5cf6', // Growth
-    3: '#059669', // Wealth
-    4: '#f59e0b', // Tribe
-    5: '#3b82f6'  // Home
+    'Health': '#ef4444',
+    'Growth': '#8b5cf6', 
+    'Wealth': '#059669',
+    'Tribe': '#f59e0b',
+    'Home': '#3b82f6'
   };
 
   React.useEffect(() => {
-    if (selectedItem && currentUser) {
+    if (selectedItem) {
       setEditForm({ ...selectedItem });
       setIsEditing(false);
       
-      console.log('🎯 BOB v3.2.4: GlobalSidebar - Setting up activity stream for', selectedType, selectedItem.id);
-      
-      // Note: Removed view tracking to focus activity stream on meaningful changes only
-      
-      // Subscribe to activity stream using new global method
-      const unsubscribe = ActivityStreamService.subscribeToGlobalActivityStream(
+      // Subscribe to activity stream for this item
+      const unsubscribe = ActivityStreamService.subscribeToActivityStream(
         selectedItem.id,
-        selectedType as any,
-        currentUser.uid,
         setActivities
       );
       
-      return () => {
-        if (unsubscribe) {
-          unsubscribe();
-        }
-      };
+      return unsubscribe;
     } else {
       setActivities([]);
     }
-  }, [selectedItem?.id, selectedType, currentUser?.uid]); // Only re-run when item ID or type changes
+  }, [selectedItem]);
 
   // Apply margin to main content when sidebar is visible
   React.useEffect(() => {
@@ -96,18 +81,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const handleSave = async () => {
     try {
-      console.log('🎯 BOB v3.2.4: GlobalSidebar - Saving changes to', selectedType, selectedItem?.id);
-      
-      // Track save button click
-      await trackClick({
-        elementId: 'sidebar-save-btn',
-        elementType: 'button',
-        entityId: selectedItem?.id || '',
-        entityType: selectedType as any,
-        entityTitle: selectedItem?.title || 'Unknown',
-        additionalData: { action: 'save_changes' }
-      });
-
       // Track field changes for activity stream
       const changes: Array<{field: string, oldValue: any, newValue: any}> = [];
       
@@ -123,25 +96,45 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
       await updateItem(editForm);
       
-      console.log('✅ BOB v3.2.4: Changes saved successfully', { changesCount: changes.length });
+      // Log activity for each change
+      if (currentUser && selectedItem && selectedType) {
+        const referenceNumber = generateReferenceNumber();
+        
+        for (const change of changes) {
+          if (change.field === 'status') {
+            await ActivityStreamService.logStatusChange(
+              selectedItem.id,
+              selectedType,
+              change.oldValue,
+              change.newValue,
+              currentUser.uid,
+              currentUser.email || undefined,
+              undefined, // persona can be added if needed
+              referenceNumber
+            );
+          } else {
+            await ActivityStreamService.logFieldChange(
+              selectedItem.id,
+              selectedType,
+              change.field,
+              change.oldValue,
+              change.newValue,
+              currentUser.uid,
+              currentUser.email || undefined,
+              undefined,
+              referenceNumber
+            );
+          }
+        }
+      }
+      
       setIsEditing(false);
     } catch (error) {
-      console.error('❌ BOB v3.2.4: Error updating item:', error);
+      console.error('Error updating item:', error);
     }
   };
 
-  const handleEdit = async () => {
-    console.log('🎯 BOB v3.2.4: GlobalSidebar - Edit button clicked for', selectedType, selectedItem?.id);
-    
-    await trackClick({
-      elementId: 'sidebar-edit-btn',
-      elementType: 'edit',
-      entityId: selectedItem?.id || '',
-      entityType: selectedType as any,
-      entityTitle: selectedItem?.title || 'Unknown',
-      additionalData: { action: 'start_edit' }
-    });
-
+  const handleEdit = () => {
     if (onEdit) {
       onEdit(selectedItem, selectedType);
     } else {
@@ -149,18 +142,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     }
   };
 
-  const handleDelete = async () => {
-    console.log('🎯 BOB v3.2.4: GlobalSidebar - Delete button clicked for', selectedType, selectedItem?.id);
-    
-    await trackClick({
-      elementId: 'sidebar-delete-btn',
-      elementType: 'delete',
-      entityId: selectedItem?.id || '',
-      entityType: selectedType as any,
-      entityTitle: selectedItem?.title || 'Unknown',
-      additionalData: { action: 'initiate_delete' }
-    });
-
+  const handleDelete = () => {
     setShowDeleteModal(true);
   };
 
@@ -173,7 +155,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const handleAddNote = async () => {
-    console.log('🎯 BOB v3.2.4: GlobalSidebar - Add note initiated', { 
+    console.log('Adding note...', { 
       hasNote: !!newNote.trim(), 
       hasItem: !!selectedItem, 
       hasType: !!selectedType, 
@@ -197,20 +179,30 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     
     try {
       const referenceNumber = generateReferenceNumber();
+      console.log('Calling ActivityStreamService.addNote...', {
+        itemId: selectedItem.id,
+        itemType: selectedType,
+        note: newNote,
+        userId: currentUser.uid,
+        userEmail: currentUser.email,
+        referenceNumber
+      });
       
-      // Use the new activity tracking system
-      await addNote(
+      await ActivityStreamService.addNote(
         selectedItem.id,
-        selectedType as any,
+        selectedType,
         newNote,
+        currentUser.uid,
+        currentUser.email || undefined,
+        'personal', // Set default persona to 'personal'
         referenceNumber
       );
       
-      console.log('✅ BOB v3.2.4: Note added successfully');
+      console.log('Note added successfully');
       setNewNote('');
       setShowAddNote(false);
     } catch (error) {
-      console.error('❌ BOB v3.2.4: Error adding note:', error);
+      console.error('Error adding note:', error);
       alert('Failed to add note: ' + (error as Error).message);
     }
   };
@@ -239,7 +231,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const goal = getGoalForItem();
   const story = selectedType === 'task' ? getStoryForTask() : (selectedType === 'story' ? selectedItem as Story : null);
-  const themeColor = goal?.theme ? (themeColors[goal.theme as keyof typeof themeColors] || '#6b7280') : '#6b7280';
+  const themeColor = goal?.theme ? themeColors[goal.theme] : '#6b7280';
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return 'Not set';
@@ -250,12 +242,10 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const generateReferenceNumber = () => {
     if (selectedType === 'goal') {
       const goalItem = selectedItem as Goal;
-      const themeLabel = ChoiceHelper.getLabel('goal', 'theme', goalItem.theme);
-      return `${themeLabel.substring(0, 2).toUpperCase()}-${goalItem.id.substring(0, 6).toUpperCase()}`;
+      return `${goalItem.theme.substring(0, 2).toUpperCase()}-${goalItem.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'story') {
       const storyItem = selectedItem as Story;
-      const themeLabel = goal?.theme ? ChoiceHelper.getLabel('goal', 'theme', goal.theme) : 'ST';
-      const goalPrefix = themeLabel.substring(0, 2).toUpperCase();
+      const goalPrefix = goal?.theme ? goal.theme.substring(0, 2).toUpperCase() : 'ST';
       return `${goalPrefix}-${storyItem.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'task') {
       const taskItem = selectedItem as Task;
@@ -504,11 +494,11 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     >
                       {selectedType === 'goal' && (
                         <>
-                          <option value="New">New</option>
-                          <option value="Work in Progress">Work in Progress</option>
-                          <option value="Complete">Complete</option>
-                          <option value="Blocked">Blocked</option>
-                          <option value="Deferred">Deferred</option>
+                          <option value="new">New</option>
+                          <option value="active">Active</option>
+                          <option value="paused">Paused</option>
+                          <option value="done">Done</option>
+                          <option value="dropped">Dropped</option>
                         </>
                       )}
                       {selectedType === 'story' && (
@@ -532,30 +522,13 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   ) : (
                     <Badge 
                       bg={
-                        // Status badge color based on type and value
-                        selectedType === 'story' ? (
-                          selectedItem.status === StoryStatus.DONE ? 'success' :
-                          selectedItem.status === StoryStatus.IN_PROGRESS || selectedItem.status === StoryStatus.PLANNED ? 'primary' :
-                          'secondary'
-                        ) : selectedType === 'task' ? (
-                          selectedItem.status === 2 ? 'success' : // Task Done
-                          selectedItem.status === 1 ? 'primary' : // Task In Progress
-                          'secondary'
-                        ) : selectedType === 'goal' ? (
-                          selectedItem.status === GoalStatus.COMPLETE ? 'success' :
-                          selectedItem.status === GoalStatus.WORK_IN_PROGRESS ? 'primary' :
-                          selectedItem.status === GoalStatus.BLOCKED ? 'danger' :
-                          'secondary'
-                        ) : 'secondary'
+                        selectedItem.status === 'done' ? 'success' : 
+                        selectedItem.status === 'active' || selectedItem.status === 'in-progress' ? 'primary' : 
+                        'secondary'
                       }
                       style={{ fontSize: '12px', padding: '6px 12px' }}
                     >
-                      {
-                        selectedType === 'goal' ? ChoiceHelper.getLabel('goal', 'status', selectedItem.status) :
-                        selectedType === 'story' ? ChoiceHelper.getLabel('story', 'status', selectedItem.status) :
-                        selectedType === 'task' ? ChoiceHelper.getLabel('task', 'status', selectedItem.status) :
-                        selectedItem.status
-                      }
+                      {selectedItem.status}
                     </Badge>
                   )}
                 </Col>
@@ -591,23 +564,13 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   ) : selectedItem.priority ? (
                     <Badge 
                       bg={
-                        selectedType === 'story' ? (
-                          selectedItem.priority === StoryPriority.P1 ? 'danger' :
-                          selectedItem.priority === StoryPriority.P2 ? 'warning' : 
-                          'secondary'
-                        ) : selectedType === 'task' ? (
-                          selectedItem.priority === TaskPriority.HIGH ? 'danger' :
-                          selectedItem.priority === TaskPriority.MEDIUM ? 'warning' : 
-                          'secondary'
-                        ) : 'secondary'
+                        (selectedItem.priority === 'P1' || selectedItem.priority === 'high') ? 'danger' :
+                        (selectedItem.priority === 'P2' || selectedItem.priority === 'med' || selectedItem.priority === 'medium') ? 'warning' : 
+                        'secondary'
                       }
                       style={{ fontSize: '12px', padding: '6px 12px' }}
                     >
-                      {
-                        selectedType === 'story' ? ChoiceHelper.getLabel('story', 'priority', selectedItem.priority) :
-                        selectedType === 'task' ? ChoiceHelper.getLabel('task', 'priority', selectedItem.priority) :
-                        selectedItem.priority
-                      }
+                      {selectedItem.priority}
                     </Badge>
                   ) : (
                     <span style={{ color: '#9ca3af' }}>Not set</span>
@@ -629,7 +592,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                       padding: '6px 12px'
                     }}
                   >
-                    {ChoiceHelper.getLabel('goal', 'theme', (selectedItem as Goal).theme)}
+                    {(selectedItem as Goal).theme}
                   </Badge>
                 </div>
               )}
@@ -672,58 +635,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     Note
                   </Button>
                 </div>
-
-                {/* Latest Status/Comment */}
-                {activities.length > 0 && (() => {
-                  // Find latest status change or comment
-                  const latestStatusChange = activities.find(activity => 
-                    activity.activityType === 'status_changed'
-                  );
-                  const latestComment = activities.find(activity => activity.activityType === 'note_added' && activity.noteContent);
-                  const latestActivity = latestStatusChange || latestComment;
-                  
-                  return latestActivity ? (
-                    <div style={{ 
-                      marginBottom: '16px',
-                      padding: '12px',
-                      backgroundColor: '#f0f9ff',
-                      border: '1px solid #0ea5e9',
-                      borderRadius: '6px'
-                    }}>
-                      <div style={{ 
-                        fontSize: '12px', 
-                        fontWeight: '600', 
-                        color: '#0ea5e9', 
-                        marginBottom: '6px',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px'
-                      }}>
-                        {latestActivity.activityType === 'status_changed' 
-                          ? 'Latest Status' 
-                          : 'Latest Comment'}
-                      </div>
-                      <div style={{ 
-                        fontSize: '13px', 
-                        color: '#374151', 
-                        fontStyle: 'italic',
-                        lineHeight: '1.4'
-                      }}>
-                        {latestActivity.activityType === 'status_changed'
-                          ? `Status changed to: ${ChoiceHelper.getLabel(selectedType as any, 'status', parseInt(latestActivity.newValue) || latestActivity.newValue)}`
-                          : `"${latestActivity.noteContent}"`}
-                      </div>
-                      <div style={{ 
-                        fontSize: '11px', 
-                        color: '#6b7280', 
-                        marginTop: '6px'
-                      }}>
-                        {ActivityStreamService.formatTimestamp(latestActivity.timestamp)}
-                        {latestActivity.userEmail && ` • ${latestActivity.userEmail.split('@')[0]}`}
-                        {latestActivity.referenceNumber && ` • Ref: ${latestActivity.referenceNumber}`}
-                      </div>
-                    </div>
-                  ) : null;
-                })()}
                 
                 <div style={{ 
                   maxHeight: '300px', 
@@ -743,12 +654,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     </div>
                   ) : (
                     <ListGroup variant="flush">
-                      {activities
-                        .filter(activity => 
-                          // Filter out UI activities that aren't meaningful
-                          !['clicked', 'viewed', 'exported', 'imported'].includes(activity.activityType)
-                        )
-                        .map((activity, index) => (
+                      {activities.map((activity, index) => (
                         <ListGroup.Item 
                           key={activity.id || index}
                           style={{ 
@@ -783,8 +689,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                               <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '4px' }}>
                                 {ActivityStreamService.formatTimestamp(activity.timestamp)}
                                 {activity.userEmail && ` • ${activity.userEmail.split('@')[0]}`}
-                                {activity.referenceNumber && ` • Ref: ${activity.referenceNumber}`}
-                                {!activity.referenceNumber && ` • Ref: ${generateReferenceNumber()}`}
                               </div>
                             </div>
                           </div>

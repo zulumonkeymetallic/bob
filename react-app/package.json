@@ -1,11 +1,10 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.7.0",
-  "description": "AI-Powered Personal Productivity Platform with Revolutionary Theme-Based Gantt Chart - Themes as Rows, Goals as Draggable Bars with Edit/Delete Actions",
+  "version": "3.0.2",
+  "description": "AI-Powered Personal Productivity Platform with Personal Backlogs, Mobile UX & Visual Canvas",
   "private": true,
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^1.7.4",
-    "@atlaskit/pragmatic-drag-and-drop-hitbox": "^1.1.0",
     "@atlaskit/pragmatic-drag-and-drop-react-drop-indicator": "^3.2.5",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
@@ -28,7 +27,6 @@
     "@types/node": "^16.18.126",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
-    "@types/xlsx": "^0.0.35",
     "bootstrap": "^5.3.7",
     "chart.js": "^4.5.0",
     "class-variance-authority": "^0.7.1",

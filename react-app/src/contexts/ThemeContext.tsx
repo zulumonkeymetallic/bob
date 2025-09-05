@@ -40,14 +40,40 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
 
   useEffect(() => {
     const root = document.documentElement;
+    const body = document.body;
+    
     const applyTheme = (themeToApply: string) => {
+      // Set both data-theme attribute and class for CSS targeting
       root.setAttribute('data-theme', themeToApply);
+      body.setAttribute('data-theme', themeToApply);
       root.className = themeToApply;
+      body.className = themeToApply;
+      
+      // Force Bootstrap theme update
+      if (themeToApply === 'dark') {
+        body.setAttribute('data-bs-theme', 'dark');
+      } else {
+        body.setAttribute('data-bs-theme', 'light');
+      }
+      
+      // Dispatch theme change event for any listening components
+      window.dispatchEvent(new CustomEvent('themeChange', { 
+        detail: { theme: themeToApply } 
+      }));
     };
 
     if (theme === 'system') {
       const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       applyTheme(systemTheme);
+      
+      // Listen for system theme changes
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const handleSystemThemeChange = (e: MediaQueryListEvent) => {
+        applyTheme(e.matches ? 'dark' : 'light');
+      };
+      
+      mediaQuery.addEventListener('change', handleSystemThemeChange);
+      return () => mediaQuery.removeEventListener('change', handleSystemThemeChange);
     } else {
       applyTheme(theme);
     }

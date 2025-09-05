@@ -8,14 +8,11 @@ import { Task, Goal, Story } from '../types';
 import FloatingActionButton from './FloatingActionButton';
 import ImportExportModal from './ImportExportModal';
 import DevTools from './DevTools';
-import { ChoiceMigration } from '../config/migration';
 import PriorityPane from './PriorityPane';
 import AddGoalModal from './AddGoalModal';
 import AddStoryModal from './AddStoryModal';
-import { GLOBAL_THEMES } from '../constants/globalThemes';
 // import { VERSION, BUILD_TIME } from '../version';
 import '../styles/MaterialDesign.css';
-import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -95,18 +92,18 @@ const Dashboard: React.FC = () => {
 
   const getTaskStats = () => {
     const total = tasks.length;
-    const inProgress = tasks.filter(t => isStatus(t.status, 'in_progress')).length;
-    const completed = tasks.filter(t => isStatus(t.status, 'done')).length;
-    const planned = tasks.filter(t => isStatus(t.status, 'planned')).length;
+    const inProgress = tasks.filter(t => t.status === 'in_progress').length;
+    const completed = tasks.filter(t => t.status === 'done').length;
+    const planned = tasks.filter(t => t.status === 'planned').length;
     
     return { total, inProgress, completed, planned };
   };
 
   const getStoryStats = () => {
     const total = stories.length;
-    const active = stories.filter(s => isStatus(s.status, 'active')).length;
-    const completed = stories.filter(s => isStatus(s.status, 'done')).length;
-    const backlog = stories.filter(s => isStatus(s.status, 'backlog')).length;
+    const active = stories.filter(s => s.status === 'active').length;
+    const completed = stories.filter(s => s.status === 'done').length;
+    const backlog = stories.filter(s => s.status === 'backlog').length;
     
     return { total, active, completed, backlog };
   };
@@ -115,7 +112,7 @@ const Dashboard: React.FC = () => {
     const currentSprint = 'current'; // This could be dynamic
     const sprintTasks = tasks.filter(t => t.storyId); // Tasks linked to stories
     const sprintStories = stories.filter(s => s.sprintId === currentSprint);
-    const activeGoals = goals.filter(g => isStatus(g.status, 'Work in Progress'));
+    const activeGoals = goals.filter(g => g.status === 'active');
     
     return {
       goals: activeGoals.length,
@@ -127,25 +124,25 @@ const Dashboard: React.FC = () => {
 
   const getOverallProgress = () => {
     const allItems = [...goals, ...stories, ...tasks];
-    const completedItems = allItems.filter(item => isStatus(item.status, 'done'));
+    const completedItems = allItems.filter(item => item.status === 'done');
     const totalItems = allItems.length;
     
     return totalItems > 0 ? Math.round((completedItems.length / totalItems) * 100) : 0;
   };
 
   const getThemeStats = () => {
-    const themes = GLOBAL_THEMES.map(theme => theme.name);
+    const themes = ['Health', 'Growth', 'Wealth', 'Tribe', 'Home'];
     return themes.map(theme => {
-      const themeTasks = tasks.filter(t => isTheme(t.theme, theme));
-      const themeGoals = goals.filter(g => isTheme(g.theme, theme));
+      const themeTasks = tasks.filter(t => t.theme === theme);
+      const themeGoals = goals.filter(g => g.theme === theme);
       const themeStories = stories.filter(s => {
         // Stories get theme from their associated goal
         const associatedGoal = goals.find(g => g.id === s.goalId);
-        return associatedGoal && isTheme(associatedGoal.theme, theme);
+        return associatedGoal?.theme === theme;
       });
       
       const allThemeItems = [...themeTasks, ...themeStories, ...themeGoals];
-      const completed = allThemeItems.filter(item => isStatus(item.status, 'done')).length;
+      const completed = allThemeItems.filter(item => item.status === 'done').length;
       const total = allThemeItems.length;
       const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
       
@@ -155,7 +152,7 @@ const Dashboard: React.FC = () => {
 
   const getGoalProgress = (goalId: string) => {
     const goalStories = stories.filter(s => s.goalId === goalId);
-    const completedStories = goalStories.filter(s => isStatus(s.status, 'done')).length;
+    const completedStories = goalStories.filter(s => s.status === 'done').length;
     const totalStories = goalStories.length;
     
     return totalStories > 0 ? (completedStories / totalStories) * 100 : 0;
@@ -237,7 +234,7 @@ const Dashboard: React.FC = () => {
                     <div className="text-center">
                       <div className="md-headline-4 text-success">{goals.length}</div>
                       <div className="md-caption text-muted">Goals</div>
-                      <small className="text-muted">{goals.filter(g => isStatus(g.status, 'Complete')).length} completed</small>
+                      <small className="text-muted">{goals.filter(g => g.status === 'done').length} completed</small>
                     </div>
                   </Col>
                   <Col md={4}>
