@@ -75,3 +75,111 @@ code {
   box-shadow: 0 8px 32px 0 var(--glass-shadow-color);
   transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
+
+/* Modern Theme System CSS Variables */
+/* These will be set dynamically by the ThemeProvider */
+
+/* Global theme transitions */
+* {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+/* Theme-based body styling */
+body.theme-light {
+  background-color: var(--theme-background);
+  color: var(--theme-onBackground);
+}
+
+body.theme-dark {
+  background-color: var(--theme-background);
+  color: var(--theme-onBackground);
+}
+
+/* Bootstrap component theme overrides */
+.btn-primary {
+  background-color: var(--theme-primary) !important;
+  border-color: var(--theme-primary) !important;
+  color: var(--theme-onPrimary) !important;
+}
+
+.btn-secondary {
+  background-color: var(--theme-secondary) !important;
+  border-color: var(--theme-secondary) !important;
+  color: var(--theme-onSecondary) !important;
+}
+
+.card {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  color: var(--theme-onSurface) !important;
+}
+
+.form-control {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  color: var(--theme-onSurface) !important;
+}
+
+.form-control:focus {
+  border-color: var(--theme-accent) !important;
+  box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--theme-accent) 25%, transparent) !important;
+}
+
+.navbar {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+}
+
+.nav-link {
+  color: var(--theme-onSurface) !important;
+}
+
+.nav-link:hover {
+  background-color: var(--theme-hover) !important;
+  color: var(--theme-accent) !important;
+}
+
+.sticky-signout {
+  position: sticky !important;
+  bottom: 0 !important;
+  z-index: 100 !important;
+}
+
+/* Dropdown theme styling */
+.dropdown-menu {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+}
+
+body.theme-dark .dropdown-menu {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+}
+
+.dropdown-item {
+  color: var(--theme-onSurface) !important;
+}
+
+.dropdown-item:hover,
+.dropdown-item.active {
+  background-color: var(--theme-hover) !important;
+  color: var(--theme-accent) !important;
+}
+
+/* Scrollbar styling for dark theme */
+body.theme-dark::-webkit-scrollbar {
+  width: 8px;
+}
+
+body.theme-dark::-webkit-scrollbar-track {
+  background: var(--theme-background);
+}
+
+body.theme-dark::-webkit-scrollbar-thumb {
+  background: var(--theme-border);
+  border-radius: 4px;
+}
+
+body.theme-dark::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-secondary);
+}

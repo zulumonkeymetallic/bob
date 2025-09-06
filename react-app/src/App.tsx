@@ -24,7 +24,7 @@ import SidebarLayout from './components/SidebarLayout';
 import SettingsPage from './components/SettingsPage';
 import LoginPage from './components/LoginPage';
 import ErrorBoundary from './components/ErrorBoundary';
-import { useTheme } from './contexts/ThemeContext';
+import { ThemeProvider } from './contexts/ModernThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
 import { SidebarProvider } from './contexts/SidebarContext';
@@ -40,6 +40,7 @@ import { VERSION } from './version';
 import ComprehensiveTest from './components/ComprehensiveTest';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
 import { clickTrackingService } from './services/ClickTrackingService';
+import { cacheBustingService } from './services/cacheBustingService';
 
 // BOB v3.5.2 - New Scaffolding Components
 import GoalsVisualizationView from './components/visualization/GoalsVisualizationView';
@@ -61,20 +62,21 @@ import ThemeBasedGanttChart from './components/visualization/ThemeBasedGanttChar
 
 function App() {
   return (
-    <TestModeProvider>
-      <PersonaProvider>
-        <SidebarProvider>
-          <Router>
-            <AppContent />
-          </Router>
-        </SidebarProvider>
-      </PersonaProvider>
-    </TestModeProvider>
+    <ThemeProvider>
+      <TestModeProvider>
+        <PersonaProvider>
+          <SidebarProvider>
+            <Router>
+              <AppContent />
+            </Router>
+          </SidebarProvider>
+        </PersonaProvider>
+      </TestModeProvider>
+    </ThemeProvider>
   );
 }
 
 function AppContent() {
-  const { theme, toggleTheme } = useTheme();
   const { currentUser, signInWithGoogle, signOut } = useAuth();
   const location = useLocation();
   const deviceInfo = useDeviceInfo();
@@ -107,11 +109,11 @@ function AppContent() {
     setForceRender(prev => prev + 1);
   }, [location.pathname, location.key]);
 
-  // Check for updates on app load and initialize version timeout service
+  // Check for updates on app load and initialize cache busting
   useEffect(() => {
-    // Initialize enhanced version timeout service
-    console.log('🕐 Initializing Version Timeout Service');
-    // versionTimeoutService.forceVersionCheck(); // Temporarily disabled to fix cache loop
+    // Initialize cache busting service
+    console.log('� Initializing Cache Busting Service');
+    cacheBustingService.initialize();
     
     // Version info logging
     console.log(`📦 BOB v${VERSION} loaded successfully`);

@@ -1,19 +1,19 @@
 {
-  "version": "3.8.3",
-  "buildTime": "2025-09-04T12:00:00.000Z",
-  "buildHash": "cache-loop-fix",
+  "version": "1.1.2",
+  "buildTime": "2025-09-06T20:00:00.000Z",
+  "buildHash": "sprint-management-fix",
   "features": [
-    "Cache Loop Prevention System",
-    "Safe Cache Management", 
-    "Login Issue Resolution",
-    "Enhanced Error Recovery",
-    "Production Stability Improvements",
-    "Version Synchronization"
+    "Comprehensive Dark/Light Theme System",
+    "Sticky Sign Out Component", 
+    "Modern Theme Architecture",
+    "Version Cache Busting Fixes",
+    "Navigation Menu Cleanup",
+    "Theme-Aware Components"
   ],
-  "description": "Critical Cache Loop Fix for Login Issues",
+  "description": "Theme System Implementation with Navigation Cleanup",
   "githubIssues": [
-    "#Cache Loop - Fixed infinite cache clearing preventing login",
-    "#Login Issues - Resolved cache busting loop conflicts",
-    "#Production Stability - Enhanced cache management safety"
+    "#Theme System - Ground-up dark/light theme implementation",
+    "#Navigation - Goals menu structure cleanup", 
+    "#Cache Busting - Proper version alignment and cache management"
   ]
 }

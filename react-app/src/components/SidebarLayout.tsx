@@ -3,13 +3,13 @@ import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
-import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
-import VersionDisplay from './VersionDisplay';
+import StickySignOut from './StickySignOut';
+import ThemeToggle from './ThemeToggle';
 import SprintSelector from './SprintSelector';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import { isStatus, isTheme } from '../utils/statusHelpers';
-// import { SideDoorAuth } from '../services/SideDoorAuth';
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -31,7 +31,7 @@ interface NavigationItem {
 const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) => {
   const { currentUser, signOut, isTestUser } = useAuth();
   const { currentPersona, setPersona } = usePersona();
-  const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { theme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const { trackClick } = useActivityTracking();
@@ -59,9 +59,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'target',
       items: [
         { label: 'Goals Table', path: '/goals-management', icon: 'table' },
-        { label: 'Goals Dashboard', path: '/goals', icon: 'chart-pie' },
-        { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'timeline' },
-        { label: 'Goals Visualization', path: '/canvas', icon: 'share-alt' }
+        { label: 'Goals Gantt Chart', path: '/goals/roadmap', icon: 'timeline' },
+        { label: 'Goals Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },
     // Stories section  
@@ -213,7 +212,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   className="badge"
                   style={{ 
                     background: '#ff6b6b', 
-                    color: getContrastTextColor('#ff6b6b'),
+                    color: 'white',
                     fontSize: '0.7rem',
                     padding: '4px 8px'
                   }}
@@ -235,7 +234,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                        height: '32px', 
                        fontSize: '14px',
                        background: 'var(--notion-accent)',
-                       color: colors.onPrimary
+                       color: theme.colors.onPrimary
                      }}>
                   {currentUser.displayName?.charAt(0) || 'U'}
                 </div>
@@ -245,7 +244,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   </div>
                   <div className="badge" style={{ 
                     background: 'var(--notion-accent)', 
-                    color: colors.onPrimary,
+                    color: theme.colors.onPrimary,
                     fontSize: '0.75rem'
                   }}>
                     {currentPersona}
@@ -351,32 +350,21 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </Nav>
           </div>
 
-          {/* Sticky Sign Out Button */}
-          <div className="p-3" style={{ 
-            borderTop: '1px solid var(--notion-border)',
-            position: 'sticky',
-            bottom: 0,
-            background: 'var(--panel)'
+          {/* Sticky Sign Out with Theme Toggle */}
+          <div style={{ 
+            borderTop: `1px solid ${theme.colors.border}`,
+            padding: '12px 16px',
+            background: theme.colors.surface
           }}>
-            <Button 
-              size="sm" 
-              onClick={onSignOut || signOut}
-              className="w-100 btn-signout"
-              style={{
-                borderRadius: '6px',
-                background: '#dc3545',
-                border: '1px solid #dc3545',
-                color: 'white'
-              }}
-            >
-              Sign Out
-            </Button>
+            {/* Theme Toggle */}
+            <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'center' }}>
+              <ThemeToggle variant="dropdown" showLabel={true} />
+            </div>
             
-            {/* Version Display */}
-            <VersionDisplay 
-              className="mt-2"
-              variant="compact"
-              showSessionInfo={true}
+            {/* Sticky Sign Out Component */}
+            <StickySignOut 
+              onSignOut={onSignOut || signOut}
+              showVersion={true}
             />
           </div>
         </div>
@@ -412,7 +400,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         onHide={() => setShowSidebar(false)} 
         placement="start"
         className="bg-dark"
-        style={{ color: colors.onBackground }}
+        style={{ color: theme.colors.onBackground }}
       >
         <Offcanvas.Header closeButton closeVariant="white">
           <Offcanvas.Title>BOB Platform</Offcanvas.Title>
@@ -427,7 +415,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   {currentUser.displayName?.charAt(0) || 'U'}
                 </div>
                 <div>
-                  <div style={{ color: colors.onBackground }}>
+                  <div style={{ color: theme.colors.onBackground }}>
                     {currentUser.displayName || 'User'}
                   </div>
                   <small className="text-muted">
@@ -464,7 +452,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 <div
                   className="d-flex align-items-center justify-content-between px-3 py-2"
                   onClick={() => toggleGroup(group.label)}
-                  style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600', color: colors.secondary }}
+                  style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600', color: theme.colors.secondary }}
                 >
                   <div className="d-flex align-items-center">
                     <i className={`fas fa-${group.icon} me-2`}></i>
@@ -481,7 +469,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                         key={item.path}
                         className="py-2 border-0"
                         onClick={() => handleNavigation(item.path)}
-                        style={{ fontSize: '0.9rem', color: colors.onBackground }}
+                        style={{ fontSize: '0.9rem', color: theme.colors.onBackground }}
                       >
                         <i className={`fas fa-${item.icon} me-2`}></i>
                         {item.label}
@@ -508,12 +496,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               Sign Out
             </Button>
             
-            {/* Version Display Mobile */}
-            <VersionDisplay 
-              className="mt-2"
-              variant="compact"
-              showSessionInfo={true}
-            />
+            {/* Theme Toggle and Sign Out Mobile */}
+            <div style={{ marginTop: '20px' }}>
+              <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'center' }}>
+                <ThemeToggle variant="dropdown" showLabel={true} />
+              </div>
+              <StickySignOut 
+                onSignOut={onSignOut || signOut}
+                showVersion={true}
+              />
+            </div>
           </div>
         </Offcanvas.Body>
       </Offcanvas>
@@ -529,9 +521,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                position: 'sticky', 
                top: '0', 
                zIndex: 1000,
-               backgroundColor: backgrounds.surface,
-               borderBottomColor: isDark ? '#374151' : '#e5e7eb',
-               color: colors.primary
+               backgroundColor: theme.colors.surface,
+               borderBottomColor: theme.isDark ? '#374151' : '#e5e7eb',
+               color: theme.colors.primary
              }}>
           <div className="d-flex align-items-center">
             <h6 className="mb-0 text-muted">Current Context</h6>
