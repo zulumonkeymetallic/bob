@@ -94,12 +94,32 @@
             <h2>My Routines</h2>
             <button id="createRoutine" class="primary">+ Create Routine</button>
           </div>
-          <div id="routinesList" class="list"></div>
+          <div id="routinesList" class="list">
+            <div class="routine-item demo-routine" onclick="loadDemoTracking()">
+              <strong>Morning Routine</strong>
+              <div class="routine-info">4 steps · 55min total · 🔥 7 day streak</div>
+            </div>
+          </div>
         </div>
         <div class="pane">
           <h2>Routine Builder</h2>
           <div id="routineBuilder" class="routine-builder">
             <div class="builder-empty">Select a routine to edit or create a new one</div>
+          </div>
+          <div id="routineTracking" class="routine-tracking" style="display:none;">
+            <h3>Completion Tracking</h3>
+            <div class="tracking-summary">
+              <div class="stat"><span class="stat-value">7</span><span class="stat-label">Day Streak</span></div>
+              <div class="stat"><span class="stat-value">85%</span><span class="stat-label">This Week</span></div>
+              <div class="stat"><span class="stat-value">4/4</span><span class="stat-label">Today</span></div>
+            </div>
+            <div class="step-tracking">
+              <div class="step-complete">✅ Meditation (10min)</div>
+              <div class="step-complete">✅ Exercise (30min)</div>
+              <div class="step-complete">✅ Journaling (15min)</div>
+              <div class="step-pending">⏳ Breakfast (20min)</div>
+            </div>
+            <button onclick="completeStep()" class="primary">Mark Breakfast Complete</button>
           </div>
         </div>
       </section>

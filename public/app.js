@@ -78,21 +78,24 @@ function showDemoRoutineBuilder(routineName) {
     '</select></label>' +
     '<button onclick="saveDemoRoutine()">Save Routine</button>' +
     '</div>' +
-    '<div><strong>Steps:</strong> <button onclick="addDemoStep()">+ Add Step</button></div>' +
+    '<div><strong>Steps:</strong> <button onclick="addDemoStep()">+ Add Step</button> <span style="color: var(--muted); font-size: 12px;">Drag steps to reorder</span></div>' +
     '<div id="routineSteps">' +
-    '<div class="routine-step">' +
+    '<div class="routine-step" draggable="true">' +
     '<div><strong>Meditation</strong><div class="step-info">10min · Priority 8</div></div>' +
     '<div class="step-actions"><button onclick="editDemoStep(this)">Edit</button><button onclick="deleteDemoStep(this)">Delete</button></div>' +
     '</div>' +
-    '<div class="routine-step">' +
+    '<div class="routine-step" draggable="true">' +
     '<div><strong>Exercise</strong><div class="step-info">30min · Priority 9</div></div>' +
     '<div class="step-actions"><button onclick="editDemoStep(this)">Edit</button><button onclick="deleteDemoStep(this)">Delete</button></div>' +
     '</div>' +
-    '<div class="routine-step">' +
+    '<div class="routine-step" draggable="true">' +
     '<div><strong>Journaling</strong><div class="step-info">15min · Priority 7</div></div>' +
     '<div class="step-actions"><button onclick="editDemoStep(this)">Edit</button><button onclick="deleteDemoStep(this)">Delete</button></div>' +
     '</div>' +
     '</div>';
+  
+  // Set up drag and drop for steps
+  setupStepDragAndDrop();
 }
 
 window.addDemoStep = function() {
@@ -105,11 +108,61 @@ window.addDemoStep = function() {
   if (stepsDiv) {
     var step = document.createElement('div');
     step.className = 'routine-step';
+    step.draggable = true;
     step.innerHTML = '<div><strong>' + title + '</strong><div class="step-info">' + effort + 'min · Priority ' + importance + '</div></div>' +
       '<div class="step-actions"><button onclick="editDemoStep(this)">Edit</button><button onclick="deleteDemoStep(this)">Delete</button></div>';
     stepsDiv.appendChild(step);
+    setupStepDragAndDrop(); // Re-setup drag and drop for new step
   }
 };
+
+function setupStepDragAndDrop() {
+  var steps = document.querySelectorAll('.routine-step');
+  var draggedElement = null;
+  
+  steps.forEach(function(step) {
+    step.addEventListener('dragstart', function(e) {
+      draggedElement = this;
+      this.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    
+    step.addEventListener('dragend', function(e) {
+      this.classList.remove('dragging');
+      draggedElement = null;
+    });
+    
+    step.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      
+      if (draggedElement && draggedElement !== this) {
+        var container = document.getElementById('routineSteps');
+        var afterElement = getDragAfterElement(container, e.clientY);
+        if (afterElement == null) {
+          container.appendChild(draggedElement);
+        } else {
+          container.insertBefore(draggedElement, afterElement);
+        }
+      }
+    });
+  });
+}
+
+function getDragAfterElement(container, y) {
+  var draggableElements = Array.from(container.querySelectorAll('.routine-step:not(.dragging)'));
+  
+  return draggableElements.reduce(function(closest, child) {
+    var box = child.getBoundingClientRect();
+    var offset = y - box.top - box.height / 2;
+    
+    if (offset < 0 && offset > closest.offset) {
+      return { offset: offset, element: child };
+    } else {
+      return closest;
+    }
+  }, { offset: Number.NEGATIVE_INFINITY }).element;
+}
 
 window.saveDemoRoutine = function() {
   var title = document.getElementById('routineTitle').value;
@@ -131,6 +184,30 @@ window.editDemoStep = function(button) {
 window.deleteDemoStep = function(button) {
   if (confirm('Delete this step?')) {
     button.closest('.routine-step').remove();
+    setupStepDragAndDrop(); // Re-setup after deletion
+  }
+};
+
+window.loadDemoTracking = function() {
+  var builder = document.getElementById('routineBuilder');
+  var tracking = document.getElementById('routineTracking');
+  if (builder && tracking) {
+    builder.style.display = 'none';
+    tracking.style.display = 'block';
+  }
+};
+
+window.completeStep = function() {
+  var pendingStep = document.querySelector('.step-pending');
+  if (pendingStep) {
+    pendingStep.className = 'step-complete';
+    pendingStep.textContent = '✅ Breakfast (20min)';
+    
+    // Update today's completion
+    var todayStats = document.querySelector('.stat:last-child .stat-value');
+    if (todayStats) todayStats.textContent = '4/4';
+    
+    alert('Great job! Breakfast step completed. 🎉\n\nMorning routine fully completed for today!');
   }
 };
 
