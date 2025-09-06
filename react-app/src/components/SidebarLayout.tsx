@@ -3,8 +3,6 @@ import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { useTheme } from '../contexts/ThemeContext';
-import { useTestMode } from '../contexts/TestModeContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import VersionDisplay from './VersionDisplay';
@@ -33,14 +31,12 @@ interface NavigationItem {
 const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) => {
   const { currentUser, signOut, isTestUser } = useAuth();
   const { currentPersona, setPersona } = usePersona();
-  const { theme, toggleTheme } = useTheme();
-  const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const navigate = useNavigate();
   const location = useLocation();
   const { trackClick } = useActivityTracking();
   const [showSidebar, setShowSidebar] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Main Dashboard', 'Goals', 'Tasks']);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Overview', 'Goals']);
   const [selectedSprintId, setSelectedSprintId] = useState<string>('');
   
   // Check if side-door test mode is active
@@ -48,35 +44,33 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const isSideDoorActive = false;
 
   const navigationGroups: NavigationGroup[] = [
-    // Main Dashboard at the top
+    // Overview at the top
     {
-      label: 'Main Dashboard',
+      label: 'Overview',
       icon: 'home',
       items: [
-        { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' },
-        { label: 'Mobile View', path: '/mobile-view', icon: 'mobile-alt' }
+        { label: 'Dashboard', path: '/dashboard', icon: 'home' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' }
       ]
     },
-    // Goals section with all goal-related items
+    // Goals section
     {
       label: 'Goals',
       icon: 'target',
       items: [
+        { label: 'Goals Table', path: '/goals-management', icon: 'table' },
         { label: 'Goals Dashboard', path: '/goals', icon: 'chart-pie' },
-        { label: 'Goals Management', path: '/goals-management', icon: 'target' },
         { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'timeline' },
         { label: 'Goals Visualization', path: '/canvas', icon: 'share-alt' }
       ]
     },
-    // Sprints section with management, dashboard, and related items
+    // Stories section  
     {
-      label: 'Sprints',
-      icon: 'chart-gantt',
+      label: 'Stories',
+      icon: 'book',
       items: [
-        { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' },
-        { label: 'Sprint Management', path: '/sprints/management', icon: 'chart-gantt' },
-        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'play' },
-        { label: 'Sprint Stories', path: '/sprints/stories', icon: 'book' }
+        { label: 'Stories Table', path: '/stories', icon: 'table' },
+        { label: 'Stories Kanban', path: '/enhanced-kanban', icon: 'columns' }
       ]
     },
     // Tasks section
@@ -84,23 +78,23 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Tasks',
       icon: 'list-check',
       items: [
-        { label: 'Tasks Management', path: '/tasks-management', icon: 'list-check' },
-        { label: 'Task List View', path: '/task-list', icon: 'list-alt' },
-        { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' }
+        { label: 'Tasks Table', path: '/task-list', icon: 'table' },
+        { label: 'Tasks Management', path: '/tasks-management', icon: 'cog' }
       ]
     },
-    // Stories section
+    // Sprints section
     {
-      label: 'Stories',
-      icon: 'book',
+      label: 'Sprints',
+      icon: 'chart-gantt',
       items: [
-        { label: 'Stories Management', path: '/stories', icon: 'book' }
+        { label: 'Sprints Management', path: '/sprints/management', icon: 'table' },
+        { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' }
       ]
     },
-    // Planning & Calendar section
+    // Planning & Tools
     {
-      label: 'Planning & Calendar',
-      icon: 'calendar-alt',
+      label: 'Planning & Tools',
+      icon: 'cpu',
       items: [
         { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar-alt' },
@@ -109,11 +103,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Routes & Routines', path: '/routes', icon: 'route' }
       ]
     },
-    // Settings & Administration
+    // System & Settings
     {
-      label: 'Settings',
+      label: 'System & Settings',
       icon: 'cog',
       items: [
+        { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' },
+        { label: 'Mobile View', path: '/mobile-view', icon: 'mobile-alt' },
         { label: 'Settings', path: '/theme-colors', icon: 'cog' },
         { label: 'AI Usage Analytics', path: '/ai-usage', icon: 'chart-pie' },
         { label: 'Developer Status', path: '/admin', icon: 'code' },
@@ -355,43 +351,22 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </Nav>
           </div>
 
-          {/* Bottom Actions */}
-          <div className="p-3" style={{ borderTop: '1px solid var(--notion-border)' }}>
-            <div className="d-flex gap-2 mb-2">
-              <Button 
-                size="sm" 
-                onClick={toggleTheme}
-                className="flex-fill"
-                style={{
-                  background: 'var(--notion-hover)',
-                  border: '1px solid var(--notion-border)',
-                  color: 'var(--notion-text)',
-                  borderRadius: '6px'
-                }}
-              >
-                {theme === 'light' ? 'Dark' : 'Light'} Mode
-              </Button>
-              <Button
-                size="sm"
-                onClick={toggleTestMode}
-                className="flex-fill"
-                style={{
-                  background: isTestMode ? '#ff6b6b' : 'var(--notion-hover)',
-                  border: `1px solid ${isTestMode ? '#ff6b6b' : 'var(--notion-border)'}`,
-                  color: isTestMode ? 'white' : 'var(--notion-text)',
-                  borderRadius: '6px'
-                }}
-                title={`Switch to ${isTestMode ? 'Production' : 'Test'} Mode`}
-              >
-                {isTestMode ? '🧪 TEST' : '🏭 PROD'}
-              </Button>
-            </div>
+          {/* Sticky Sign Out Button */}
+          <div className="p-3" style={{ 
+            borderTop: '1px solid var(--notion-border)',
+            position: 'sticky',
+            bottom: 0,
+            background: 'var(--panel)'
+          }}>
             <Button 
               size="sm" 
               onClick={onSignOut || signOut}
               className="w-100 btn-signout"
               style={{
-                borderRadius: '6px'
+                borderRadius: '6px',
+                background: '#dc3545',
+                border: '1px solid #dc3545',
+                color: 'white'
               }}
             >
               Sign Out
@@ -419,30 +394,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </Button>
           <Navbar.Brand className="mx-auto">
             BOB
-            {isTestMode && (
-              <span style={{ 
-                marginLeft: '8px', 
-                fontSize: '10px', 
-                backgroundColor: '#ff6b6b', 
-                color: getContrastTextColor('#ff6b6b'), 
-                padding: '2px 6px', 
-                borderRadius: '8px',
-                fontWeight: 'bold'
-              }}>
-                TEST
-              </span>
-            )}
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
-            <Button
-              variant={isTestMode ? "danger" : "outline-secondary"}
-              size="sm"
-              onClick={toggleTestMode}
-              style={{ fontSize: '10px', padding: '2px 6px' }}
-              title={`Switch to ${isTestMode ? 'Production' : 'Test'} Mode`}
-            >
-              {isTestMode ? '🧪' : '🏭'}
-            </Button>
             {currentUser && (
               <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center" 
                    style={{ width: '24px', height: '24px', fontSize: '12px' }}>
@@ -542,20 +495,15 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
           {/* Bottom Actions Mobile */}
           <div className="mt-auto pt-3 border-top border-secondary">
-            <div className="d-flex gap-2 mb-2">
-              <Button 
-                variant="outline-light" 
-                size="sm" 
-                onClick={toggleTheme}
-                className="flex-fill"
-              >
-                {theme === 'light' ? 'Dark' : 'Light'} Mode
-              </Button>
-            </div>
             <Button 
               size="sm" 
               onClick={signOut}
               className="w-100 btn-signout"
+              style={{
+                background: '#dc3545',
+                border: '1px solid #dc3545',
+                color: 'white'
+              }}
             >
               Sign Out
             </Button>

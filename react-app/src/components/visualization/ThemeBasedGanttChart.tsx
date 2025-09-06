@@ -80,6 +80,7 @@ const ThemeBasedGanttChart: React.FC = () => {
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingGoal, setDeletingGoal] = useState<Goal | null>(null);
+  const [stories, setStories] = useState<Story[]>([]);
   
   // Timeline refs
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -143,10 +144,34 @@ const ThemeBasedGanttChart: React.FC = () => {
       console.error('Error loading sprints:', error);
     });
 
+    // Load stories to get sprint information for goals
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    
+    const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+      const storiesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+        };
+      }) as Story[];
+      setStories(storiesData);
+      console.log('📚 ThemeBasedGanttChart: Loaded stories:', storiesData.length);
+    }, (error) => {
+      console.error('Error loading stories:', error);
+    });
+
     // Return cleanup function directly from useEffect
     return () => {
       unsubscribeGoals();
       unsubscribeSprints();
+      unsubscribeStories();
     };
   }, [currentUser]);
 
@@ -187,6 +212,31 @@ const ThemeBasedGanttChart: React.FC = () => {
     const daysSinceStart = (date.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
     return (daysSinceStart / totalDays) * 100; // Percentage
   }, [timelineBounds]);
+
+  // Get sprint information for a goal
+  const getGoalSprintInfo = useCallback((goalId: string) => {
+    const goalStories = stories.filter(story => story.goalId === goalId);
+    const sprintIds = [...new Set(goalStories.map(story => story.sprintId).filter(Boolean))];
+    
+    if (sprintIds.length === 0) return null;
+    
+    // Get sprint names
+    const sprintNames = sprintIds
+      .map(sprintId => {
+        const sprint = sprints.find(s => s.id === sprintId);
+        return sprint ? (sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-3)}`) : null;
+      })
+      .filter(Boolean);
+    
+    if (sprintNames.length === 0) return null;
+    
+    // Return single sprint name or count if multiple
+    if (sprintNames.length === 1) {
+      return sprintNames[0];
+    } else {
+      return `${sprintNames.length} sprints`;
+    }
+  }, [stories, sprints]);
 
   // Organize goals by theme
   const themeRows: ThemeRow[] = useMemo(() => {
@@ -694,18 +744,21 @@ const ThemeBasedGanttChart: React.FC = () => {
                   const goalStyle: React.CSSProperties = {
                     left: `${goal.left}%`,
                     width: `${Math.max(goal.width || 10, 5)}%`,
-                    top: `${goalIndex * 40 + 10}px`, // Increased spacing for flatter bars
-                    minWidth: '120px',
-                    height: '32px', // Slightly taller for better text visibility
+                    top: `${goalIndex * 42 + 8}px`, // Slightly more spacing for better separation
+                    minWidth: '140px',
+                    height: '36px', // Taller for better text visibility and modern look
                     backgroundColor: themeAwareColors.background,
                     color: themeAwareColors.text,
-                    opacity: isDragging ? 0.7 : 1,
-                    transform: isDragging ? 'scale(1.02)' : 'scale(1)', // Less dramatic scaling
+                    opacity: isDragging ? 0.8 : 1,
+                    transform: isDragging ? 'scale(1.01)' : 'scale(1)', // Subtle scaling
                     zIndex: isDragging ? 1000 : 1,
-                    borderRadius: '8px', // Rounded corners like cards
-                    border: `1px solid rgba(0,0,0,0.1)`, // Simple border
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)', // Subtle shadow like cards
-                    transition: 'all 0.2s ease' // Smooth transitions
+                    borderRadius: '6px', // Slightly less rounded for flatter look
+                    border: `1px solid ${themeAwareColors.background === '#fff' ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.1)'}`, // Theme-aware border
+                    boxShadow: themeColors.isDark 
+                      ? '0 1px 3px rgba(0,0,0,0.2)' 
+                      : '0 1px 3px rgba(0,0,0,0.08)', // Softer shadow for flat design
+                    transition: 'all 0.15s ease', // Quicker transitions for responsiveness
+                    cursor: 'grab'
                   };
 
                   return (
@@ -722,11 +775,13 @@ const ThemeBasedGanttChart: React.FC = () => {
                         style={{
                           left: '0',
                           top: '0',
-                          width: '8px',
+                          width: '6px',
                           height: '100%',
                           cursor: 'ew-resize',
-                          backgroundColor: 'rgba(255,255,255,0.3)',
-                          borderRadius: '4px 0 0 4px'
+                          backgroundColor: 'rgba(255,255,255,0.2)',
+                          borderRadius: '3px 0 0 3px',
+                          opacity: 0.7,
+                          transition: 'opacity 0.2s ease'
                         }}
                         onMouseDown={(e) => {
                           e.stopPropagation();
@@ -735,6 +790,12 @@ const ThemeBasedGanttChart: React.FC = () => {
                         onTouchStart={(e) => {
                           e.stopPropagation();
                           handleDragStart(e, goal, 'resize-start');
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.opacity = '1';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.opacity = '0.7';
                         }}
                       />
                       
@@ -750,7 +811,7 @@ const ThemeBasedGanttChart: React.FC = () => {
                             color: `${themeAwareColors.text}80`,
                             marginTop: '2px'
                           }}>
-                            {getThemeById(goal.theme || 0)?.name || 'General'} Goal
+                            {getGoalSprintInfo(goal.id) || `${getThemeById(goal.theme || 0)?.name || 'General'} Goal`}
                           </small>
                         </div>
                         
@@ -831,11 +892,13 @@ const ThemeBasedGanttChart: React.FC = () => {
                         style={{
                           right: '0',
                           top: '0',
-                          width: '8px',
+                          width: '6px',
                           height: '100%',
                           cursor: 'ew-resize',
-                          backgroundColor: 'rgba(255,255,255,0.3)',
-                          borderRadius: '0 4px 4px 0'
+                          backgroundColor: 'rgba(255,255,255,0.2)',
+                          borderRadius: '0 3px 3px 0',
+                          opacity: 0.7,
+                          transition: 'opacity 0.2s ease'
                         }}
                         onMouseDown={(e) => {
                           e.stopPropagation();
@@ -844,6 +907,12 @@ const ThemeBasedGanttChart: React.FC = () => {
                         onTouchStart={(e) => {
                           e.stopPropagation();
                           handleDragStart(e, goal, 'resize-end');
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.opacity = '1';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.opacity = '0.7';
                         }}
                       />
                     </div>

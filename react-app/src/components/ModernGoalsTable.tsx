@@ -124,6 +124,14 @@ const defaultColumns: Column[] = [
     type: 'text' 
   },
   { 
+    key: 'startDate', 
+    label: 'Start Date', 
+    width: '15%', 
+    visible: true, 
+    editable: true, 
+    type: 'date' 
+  },
+  { 
     key: 'targetDate', 
     label: 'Target Date', 
     width: '15%', 
@@ -274,6 +282,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
+    if (key === 'startDate' && typeof value === 'number') {
+      return new Date(value).toLocaleDateString();
+    }
     if (key === 'targetDate' && typeof value === 'number') {
       return new Date(value).toLocaleDateString();
     }

@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Container, Row, Col, Button, Dropdown, Badge, Spinner } from 'react-bootstrap';
+import { Card, Container, Row, Col, Button, Dropdown, Badge, Spinner, Collapse } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Story, Sprint, Task, Goal } from '../types';
 import ModernKanbanBoard from './ModernKanbanBoard';
-import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3 } from 'lucide-react';
+import ModernTaskTable from './ModernTaskTable';
+import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface SprintKanbanPageProps {
   showSidebar?: boolean;
@@ -26,6 +27,8 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [selectedSprintId, setSelectedSprintId] = useState<string | null>(propSelectedSprintId || null);
+  const [selectedStory, setSelectedStory] = useState<Story | null>(null);
+  const [showTasksForStory, setShowTasksForStory] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Update selected sprint when prop changes
@@ -48,6 +51,51 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
   const sprintTasks = tasks.filter(task => 
     currentSprint ? task.sprintId === currentSprint.id : !task.sprintId
   );
+
+  // Filter tasks for selected story
+  const storyTasks = selectedStory 
+    ? tasks.filter(task => task.parentType === 'story' && task.parentId === selectedStory.id)
+    : [];
+
+  // Story selection handler
+  const handleStorySelect = (story: Story) => {
+    console.log('🎯 Story selected:', story.title);
+    if (selectedStory?.id === story.id) {
+      // Clicking same story - toggle task display
+      setShowTasksForStory(!showTasksForStory);
+    } else {
+      // New story selected - show tasks
+      setSelectedStory(story);
+      setShowTasksForStory(true);
+    }
+  };
+
+  // Task update handler for the ModernTaskTable
+  const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        ...updates,
+        updatedAt: serverTimestamp()
+      });
+      console.log('✅ Task updated:', taskId, updates);
+    } catch (error) {
+      console.error('❌ Error updating task:', error);
+    }
+  };
+
+  // Task delete handler
+  const handleTaskDelete = async (taskId: string) => {
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        deleted: true,
+        deletedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      console.log('✅ Task deleted:', taskId);
+    } catch (error) {
+      console.error('❌ Error deleting task:', error);
+    }
+  };
 
   useEffect(() => {
     if (!currentUser) return;
@@ -373,13 +421,80 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
               <ModernKanbanBoard
                 onItemSelect={(item, type) => {
                   console.log('Item selected:', item, type);
-                  // showSidebar(item, type); // Feature disabled for route version
+                  if (type === 'story') {
+                    handleStorySelect(item as Story);
+                  }
                 }}
               />
             </Card.Body>
           </Card>
         </Col>
       </Row>
+
+      {/* Selected Story Tasks */}
+      {selectedStory && (
+        <Row className="mt-4">
+          <Col>
+            <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <Card.Header 
+                style={{ 
+                  background: '#f8fafc', 
+                  border: 'none', 
+                  padding: '16px 24px',
+                  cursor: 'pointer'
+                }}
+                onClick={() => setShowTasksForStory(!showTasksForStory)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+                      Tasks for: {selectedStory.title}
+                    </h5>
+                    <small style={{ color: '#6b7280' }}>
+                      {storyTasks.length} tasks • {storyTasks.filter(t => t.status === 2).length} completed
+                    </small>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Badge bg="primary" style={{ fontSize: '11px' }}>
+                      {selectedStory.ref || `STRY-${selectedStory.id.slice(-3).toUpperCase()}`}
+                    </Badge>
+                    {showTasksForStory ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </div>
+                </div>
+              </Card.Header>
+              <Collapse in={showTasksForStory}>
+                <Card.Body style={{ padding: 0 }}>
+                  {storyTasks.length > 0 ? (
+                    <ModernTaskTable
+                      tasks={storyTasks}
+                      stories={stories || []}
+                      goals={goals || []}
+                      sprints={sprints || []}
+                      onTaskUpdate={handleTaskUpdate}
+                      onTaskDelete={handleTaskDelete}
+                      onTaskPriorityChange={async (taskId: string, newPriority: number) => {
+                        await handleTaskUpdate(taskId, { priority: newPriority });
+                      }}
+                      compact={true}
+                    />
+                  ) : (
+                    <div style={{ 
+                      padding: '40px 24px', 
+                      textAlign: 'center', 
+                      color: '#6b7280',
+                      borderTop: '1px solid #f3f4f6'
+                    }}>
+                      <p style={{ margin: 0, fontSize: '14px' }}>
+                        No tasks yet for this story. Click "Add Task" to create the first one.
+                      </p>
+                    </div>
+                  )}
+                </Card.Body>
+              </Collapse>
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       {/* Empty State */}
       {sprintStories.length === 0 && sprintTasks.length === 0 && (
