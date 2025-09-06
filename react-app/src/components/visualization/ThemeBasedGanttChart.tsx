@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal, Dropdown } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
-import { useTheme } from '../../contexts/ThemeContext';
+import { useTheme } from '../../contexts/ModernThemeContext';
 import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { ActivityStreamService } from '../../services/ActivityStreamService';

@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { Story, Sprint } from '../types';
 import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import { useNavigate } from 'react-router-dom';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface DashboardSprintKanbanProps {
   maxStories?: number;
@@ -17,6 +18,7 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
   maxStories = 6, 
   selectedSprintId 
 }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const navigate = useNavigate();

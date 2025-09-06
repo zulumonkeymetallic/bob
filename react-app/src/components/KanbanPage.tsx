@@ -1,8 +1,10 @@
 import React from 'react';
 import { Container } from 'react-bootstrap';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 // Legacy component - replaced by ModernKanbanPage
 const KanbanPage: React.FC = () => {
+  const { theme } = useTheme();
   return (
     <Container fluid className="mt-4">
       <div className="text-center">

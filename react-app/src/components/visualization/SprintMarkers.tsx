@@ -1,5 +1,6 @@
 import React from 'react';
 import { Sprint } from './types';
+import { useTheme } from '../../contexts/ModernThemeContext';
 
 interface Props {
   sprints: Sprint[];
@@ -7,6 +8,7 @@ interface Props {
 }
 
 const SprintMarkers: React.FC<Props> = ({ sprints, zoomLevel }) => {
+  const { theme } = useTheme();
   // Calculate timeline range based on zoom level
   const getTimelineRange = () => {
     const now = new Date();

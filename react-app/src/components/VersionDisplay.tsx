@@ -3,6 +3,7 @@ import { Button, Badge, Popover, OverlayTrigger } from 'react-bootstrap';
 import { Clock, RefreshCw, Info } from 'lucide-react';
 import { VERSION, BUILD_DATE } from '../version';
 import { versionTimeoutService } from '../services/versionTimeoutService';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface VersionDisplayProps {
   className?: string;
@@ -15,6 +16,7 @@ const VersionDisplay: React.FC<VersionDisplayProps> = ({
   variant = 'compact',
   showSessionInfo = true 
 }) => {
+  const { theme } = useTheme();
   const [sessionInfo, setSessionInfo] = useState({
     duration: 0,
     timeUntilTimeout: 30,

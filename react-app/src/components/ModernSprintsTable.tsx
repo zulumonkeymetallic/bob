@@ -31,6 +31,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Sprint, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, getStatusName } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 // Sprint status helpers with null checking
 const getSprintStatusLabel = (status: number | undefined): string => {
@@ -64,6 +65,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
   onSprintSelect,
   onSprintChange
 }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [stories, setStories] = useState<Story[]>([]);

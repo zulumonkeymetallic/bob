@@ -2,6 +2,7 @@ import React from 'react';
 import { Draggable } from 'react-beautiful-dnd';
 import '../styles/TaskCard.css';
 import { Task } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface TaskCardProps {
   task: Task;
@@ -11,6 +12,7 @@ interface TaskCardProps {
 }
 
 const TaskCard: React.FC<TaskCardProps> = ({ task, index, onEdit, onDelete }) => {
+  const { theme } = useTheme();
   const [isEditing, setIsEditing] = React.useState(false);
   const [editedTask, setEditedTask] = React.useState(task);
 

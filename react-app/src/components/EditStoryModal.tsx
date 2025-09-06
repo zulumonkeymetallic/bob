@@ -4,6 +4,7 @@ import { collection, query, getDocs, where, updateDoc, doc, serverTimestamp } fr
 import { db } from '../firebase';
 import { Story, Goal } from '../types';
 import { getPriorityName, getStatusName, getThemeName } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -20,6 +21,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   goals,
   onStoryUpdated 
 }) => {
+  const { theme } = useTheme();
   const [editedStory, setEditedStory] = useState({
     title: '',
     description: '',

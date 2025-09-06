@@ -7,8 +7,10 @@ import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const TaskListView: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [tasks, setTasks] = useState<Task[]>([]);

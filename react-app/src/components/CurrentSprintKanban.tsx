@@ -7,8 +7,10 @@ import { Container, Row, Col, Card, Dropdown, Button } from 'react-bootstrap';
 import ModernTaskTable from './ModernTaskTable';
 import { ChoiceHelper } from '../config/choices';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const CurrentSprintKanban: React.FC = () => {
+  const { theme } = useTheme();
     const { currentUser } = useAuth();
     const [stories, setStories] = useState<Story[]>([]);
     const [sprints, setSprints] = useState<Sprint[]>([]);

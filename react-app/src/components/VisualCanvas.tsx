@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Goal, Story, Task } from '../types';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface CanvasNode {
   id: string;
@@ -27,6 +28,7 @@ interface CanvasConnection {
 }
 
 const VisualCanvas: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const canvasRef = useRef<HTMLDivElement>(null);
   const [goals, setGoals] = useState<Goal[]>([]);

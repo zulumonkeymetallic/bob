@@ -7,6 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface TaskWithContext extends Task {
   referenceNumber?: string;
@@ -16,6 +17,7 @@ interface TaskWithContext extends Task {
 }
 
 const TasksList: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [tasks, setTasks] = useState<TaskWithContext[]>([]);

@@ -10,6 +10,7 @@ import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface StoriesCardViewProps {
   stories: Story[];
@@ -30,6 +31,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   onEditStory,
   selectedStoryId
 }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { showSidebar } = useSidebar();
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
@@ -177,7 +179,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         fontWeight: '600',
                         lineHeight: '1.4',
                         wordBreak: 'break-word',
-                        color: '#1f2937'
+                        color: theme.colors.onBackground
                       }}>
                         {story.ref}
                       </h5>
@@ -185,7 +187,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         margin: '0 0 8px 0', 
                         fontSize: '14px',
                         lineHeight: '1.4',
-                        color: '#374151',
+                        color: theme.colors.onSurface,
                         display: '-webkit-box',
                         WebkitLineClamp: 2,
                         WebkitBoxOrient: 'vertical',
@@ -289,7 +291,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       </div>
                       <div style={{ 
                         fontSize: '13px', 
-                        color: '#374151', 
+                        color: theme.colors.onSurface, 
                         fontWeight: '500',
                         lineHeight: '1.3'
                       }}>
@@ -297,7 +299,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       </div>
                       <div style={{ 
                         fontSize: '11px', 
-                        color: '#6b7280', 
+                        color: theme.colors.onSurface, 
                         marginTop: '2px'
                       }}>
                         {getThemeName(parentGoal.theme)} • {getStatusName(parentGoal.status)}
@@ -332,7 +334,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       </div>
                       <div style={{ 
                         fontSize: '12px', 
-                        color: '#374151', 
+                        color: theme.colors.onSurface, 
                         fontStyle: 'italic',
                         lineHeight: '1.4'
                       }}>
@@ -348,7 +350,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       </div>
                       <div style={{ 
                         fontSize: '10px', 
-                        color: '#6b7280', 
+                        color: theme.colors.onSurface, 
                         marginTop: '6px'
                       }}>
                         {ActivityStreamService.formatTimestamp(latestActivities[story.id].timestamp)}
@@ -359,7 +361,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
 
                   {/* Story Details */}
                   <div style={{ marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: theme.colors.onSurface }}>
                       <Hash size={14} style={{ marginRight: '8px' }} />
                       <span style={{ fontWeight: '500', marginRight: '8px' }}>Points:</span>
                       <span>{story.points}</span>
@@ -367,7 +369,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                     {story.description && (
                       <div style={{ 
                         fontSize: '13px',
-                        color: '#6b7280',
+                        color: theme.colors.onSurface,
                         lineHeight: '1.4',
                         display: '-webkit-box',
                         WebkitLineClamp: 2,
@@ -387,7 +389,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                     paddingTop: '16px',
                     borderTop: '1px solid #e5e7eb',
                     fontSize: '12px',
-                    color: '#9ca3af'
+                    color: theme.colors.onSurface
                   }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                       <div style={{ display: 'flex', alignItems: 'center' }}>

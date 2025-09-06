@@ -1,5 +1,6 @@
 import React from 'react';
 import { Story } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface StoryCardProps {
   story: Story;
@@ -7,6 +8,7 @@ interface StoryCardProps {
 }
 
 const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
+  const { theme } = useTheme();
   // Handle both Story and EnhancedStory types
   const storyRef = (story as any).ref || `STRY-${String(index + 1).padStart(3, '0')}`;
   

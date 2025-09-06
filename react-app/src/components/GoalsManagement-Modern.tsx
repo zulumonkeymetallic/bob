@@ -6,8 +6,10 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const GoalsManagement: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [goals, setGoals] = useState<Goal[]>([]);

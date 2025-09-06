@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, ProgressBar, Badge, Button, Alert } from 'react-bootstrap';
 import { fetchProjectStatus, ProjectStats } from '../services/dataService';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 export interface FeatureStatus {
   category: string;
@@ -13,6 +14,7 @@ export interface FeatureStatus {
 }
 
 const DevelopmentTracking: React.FC = () => {
+  const { theme } = useTheme();
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());

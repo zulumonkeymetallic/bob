@@ -4,8 +4,10 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const SprintPlannerSimple: React.FC = () => {
+  const { theme } = useTheme();
     const { currentUser } = useAuth();
     const [stories, setStories] = useState<Story[]>([]);
     const [sprints, setSprints] = useState<Sprint[]>([]);

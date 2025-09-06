@@ -6,6 +6,7 @@ import { db } from '../firebase';
 import { Goal, Story, Task, Sprint } from '../types';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface TestData {
   goals: Goal[];
@@ -27,6 +28,7 @@ interface TestResults {
 }
 
 const ComprehensiveTest: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { isTestMode, toggleTestMode } = useTestMode();
   const [testData, setTestData] = useState<TestData>({

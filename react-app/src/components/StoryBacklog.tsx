@@ -5,8 +5,10 @@ import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/f
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const StoryBacklog: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);

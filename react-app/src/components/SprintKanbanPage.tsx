@@ -8,6 +8,7 @@ import { Story, Sprint, Task, Goal } from '../types';
 import ModernKanbanBoard from './ModernKanbanBoard';
 import ModernTaskTable from './ModernTaskTable';
 import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3, ChevronDown, ChevronUp } from 'lucide-react';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface SprintKanbanPageProps {
   showSidebar?: boolean;
@@ -18,6 +19,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
   showSidebar = false, 
   selectedSprintId: propSelectedSprintId 
 }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   
@@ -235,7 +237,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
       <Container fluid className="p-4">
         <div style={{ textAlign: 'center', padding: '60px 20px' }}>
           <Spinner animation="border" variant="primary" />
-          <p style={{ marginTop: '16px', color: '#6b7280' }}>Loading sprint data...</p>
+          <p style={{ marginTop: '16px', color: theme.colors.onSurface }}>Loading sprint data...</p>
         </div>
       </Container>
     );
@@ -248,7 +250,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
         <Col>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: '#1f2937' }}>
+              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: theme.colors.onBackground }}>
                 Sprint Kanban
               </h2>
               <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
@@ -312,7 +314,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
                         <Calendar size={16} />
                         <div>
                           <div>{sprint.name}</div>
-                          <small style={{ color: '#6b7280' }}>
+                          <small style={{ color: theme.colors.onSurface }}>
                             {new Date(sprint.startDate).toLocaleDateString()} - {new Date(sprint.endDate).toLocaleDateString()}
                           </small>
                         </div>
@@ -353,7 +355,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
                       <div style={{ fontSize: '24px', fontWeight: '700', color: '#059669' }}>
                         {metrics.completedStories}/{metrics.totalStories}
                       </div>
-                      <div style={{ fontSize: '12px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      <div style={{ fontSize: '12px', color: theme.colors.onSurface, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         Stories Completed
                       </div>
                       <div style={{ marginTop: '4px' }}>
@@ -368,7 +370,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
                       <div style={{ fontSize: '24px', fontWeight: '700', color: '#2563eb' }}>
                         {metrics.completedTasks}/{metrics.totalTasks}
                       </div>
-                      <div style={{ fontSize: '12px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      <div style={{ fontSize: '12px', color: theme.colors.onSurface, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         Tasks Completed
                       </div>
                       <div style={{ marginTop: '4px' }}>
@@ -383,7 +385,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
                       <div style={{ fontSize: '24px', fontWeight: '700', color: '#7c3aed' }}>
                         {metrics.completedPoints}/{metrics.totalPoints}
                       </div>
-                      <div style={{ fontSize: '12px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      <div style={{ fontSize: '12px', color: theme.colors.onSurface, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         Story Points
                       </div>
                       <div style={{ marginTop: '4px' }}>
@@ -395,10 +397,10 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
                   </Col>
                   <Col md={3}>
                     <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '20px', fontWeight: '700', color: '#1f2937' }}>
+                      <div style={{ fontSize: '20px', fontWeight: '700', color: theme.colors.onBackground }}>
                         {currentSprint.name}
                       </div>
-                      <div style={{ fontSize: '12px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      <div style={{ fontSize: '12px', color: theme.colors.onSurface, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         Sprint Duration
                       </div>
                       <div style={{ marginTop: '4px', fontSize: '11px', color: '#4b5563' }}>
@@ -447,10 +449,10 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
-                    <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+                    <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: theme.colors.onBackground }}>
                       Tasks for: {selectedStory.title}
                     </h5>
-                    <small style={{ color: '#6b7280' }}>
+                    <small style={{ color: theme.colors.onSurface }}>
                       {storyTasks.length} tasks • {storyTasks.filter(t => t.status === 2).length} completed
                     </small>
                   </div>
@@ -481,7 +483,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
                     <div style={{ 
                       padding: '40px 24px', 
                       textAlign: 'center', 
-                      color: '#6b7280',
+                      color: theme.colors.onSurface,
                       borderTop: '1px solid #f3f4f6'
                     }}>
                       <p style={{ margin: 0, fontSize: '14px' }}>
@@ -502,11 +504,11 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
           <Col>
             <Card style={{ border: 'none', textAlign: 'center', padding: '60px 20px' }}>
               <Card.Body>
-                <BarChart3 size={48} style={{ color: '#9ca3af', marginBottom: '16px' }} />
-                <h5 style={{ color: '#374151', marginBottom: '8px' }}>
+                <BarChart3 size={48} style={{ color: theme.colors.onSurface, marginBottom: '16px' }} />
+                <h5 style={{ color: theme.colors.onSurface, marginBottom: '8px' }}>
                   {currentSprint ? `No items in ${currentSprint.name}` : 'No items in backlog'}
                 </h5>
-                <p style={{ color: '#6b7280', marginBottom: '24px' }}>
+                <p style={{ color: theme.colors.onSurface, marginBottom: '24px' }}>
                   {currentSprint 
                     ? 'Add stories and tasks to this sprint to start planning your work.'
                     : 'Create stories and tasks, then assign them to a sprint when ready.'

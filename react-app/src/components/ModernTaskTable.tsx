@@ -28,6 +28,7 @@ import {
 import { Task, Story, Goal, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useTheme } from '../contexts/ModernThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 
@@ -157,6 +158,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onTaskUpdate, 
   onTaskDelete 
 }) => {
+  const { theme } = useTheme();
   const { showSidebar } = useSidebar();
   const { trackCRUD, trackFieldChange } = useActivityTracking();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
@@ -335,7 +337,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         style={{ 
           width: column.width,
           padding: '12px 8px',
-          borderRight: '1px solid #f3f4f6',
+          borderRight: `1px solid ${theme.colors.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
         }}
@@ -408,13 +410,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
-        borderRight: '1px solid #f3f4f6',
+        borderRight: `1px solid ${theme.colors.border}`,
         width: '48px',
       }}>
         <button
           {...listeners}
           style={{
-            color: '#9ca3af',
+            color: theme.colors.onSurface,
             padding: '4px',
             borderRadius: '4px',
             border: 'none',
@@ -643,9 +645,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   return (
     <div style={{ 
       position: 'relative', 
-      backgroundColor: 'white', 
+      backgroundColor: theme.colors.surface, 
       borderRadius: '8px', 
-      border: '1px solid #e5e7eb', 
+      border: `1px solid ${theme.colors.border}`, 
       boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
       overflow: 'hidden' 
     }}>
@@ -655,14 +657,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '16px',
-        borderBottom: '1px solid #e5e7eb',
+        borderBottom: `1px solid ${theme.colors.border}`,
         backgroundColor: '#f9fafb',
       }}>
         <div>
           <h3 style={{ 
             fontSize: '18px', 
             fontWeight: '600', 
-            color: '#111827', 
+            color: theme.colors.onBackground, 
             margin: 0, 
             marginBottom: '4px' 
           }}>
@@ -670,7 +672,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
           </h3>
           <p style={{ 
             fontSize: '14px', 
-            color: '#6b7280', 
+            color: theme.colors.onSurface, 
             margin: 0 
           }}>
             {tasks.length} tasks • {visibleColumnsCount} columns visible
@@ -727,7 +729,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             }}>
               <thead style={{ 
                 backgroundColor: '#f9fafb', 
-                borderBottom: '1px solid #e5e7eb' 
+                borderBottom: `1px solid ${theme.colors.border}` 
               }}>
                 <tr>
                   <th style={{
@@ -735,10 +737,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     textAlign: 'left',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: theme.colors.onSurface,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
-                    borderRight: '1px solid #f3f4f6',
+                    borderRight: `1px solid ${theme.colors.border}`,
                     width: '48px',
                   }}>
                     Order
@@ -751,10 +753,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         textAlign: 'left',
                         fontSize: '12px',
                         fontWeight: '500',
-                        color: '#6b7280',
+                        color: theme.colors.onSurface,
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em',
-                        borderRight: '1px solid #f3f4f6',
+                        borderRight: `1px solid ${theme.colors.border}`,
                         width: column.width,
                       }}
                     >
@@ -766,7 +768,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     textAlign: 'center',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: theme.colors.onSurface,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     width: '96px',
@@ -804,7 +806,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
           right: 0,
           height: '100%',
           width: '320px',
-          backgroundColor: 'white',
+          backgroundColor: theme.colors.surface,
           borderLeft: '1px solid #e5e7eb',
           transition: 'transform 0.3s ease',
           boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
@@ -829,7 +831,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: theme.colors.onBackground,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -891,13 +893,13 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                               </svg>
                             )}
                           </div>
-                          <span style={{ fontSize: '14px', color: '#111827' }}>{column.label}</span>
+                          <span style={{ fontSize: '14px', color: theme.colors.onBackground }}>{column.label}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {column.visible ? (
-                            <Eye size={14} style={{ color: '#9ca3af' }} />
+                            <Eye size={14} style={{ color: theme.colors.onSurface }} />
                           ) : (
-                            <EyeOff size={14} style={{ color: '#9ca3af' }} />
+                            <EyeOff size={14} style={{ color: theme.colors.onSurface }} />
                           )}
                         </div>
                       </div>
@@ -919,7 +921,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: theme.colors.onBackground,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -952,14 +954,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: theme.colors.onBackground, 
                         margin: '0 0 8px 0' 
                       }}>
                         Text Wrapping
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: theme.colors.onSurface, 
                         margin: '0 0 8px 0',
                         lineHeight: '1.4',
                       }}>
@@ -988,14 +990,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: theme.colors.onBackground, 
                         margin: '0 0 8px 0' 
                       }}>
                         Inline Editing
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: theme.colors.onSurface, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>
@@ -1011,14 +1013,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: theme.colors.onBackground, 
                         margin: '0 0 8px 0' 
                       }}>
                         Modern Actions
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: theme.colors.onSurface, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>

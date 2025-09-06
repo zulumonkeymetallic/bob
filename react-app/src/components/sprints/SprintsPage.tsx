@@ -5,8 +5,10 @@ import SprintManagementView from './SprintManagementView';
 import SprintKanbanPage from '../SprintKanbanPage';
 import StoriesManagement from '../StoriesManagement';
 import SprintSelector from '../SprintSelector';
+import { useTheme } from '../../contexts/ModernThemeContext';
 
 const SprintsPage: React.FC = () => {
+  const { theme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('management');

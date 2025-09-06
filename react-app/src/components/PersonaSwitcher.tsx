@@ -1,8 +1,10 @@
 import React from 'react';
 import { Badge, Button } from 'react-bootstrap';
 import { usePersona } from '../contexts/PersonaContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const PersonaSwitcher: React.FC = () => {
+  const { theme } = useTheme();
   const { currentPersona, togglePersona } = usePersona();
 
   return (

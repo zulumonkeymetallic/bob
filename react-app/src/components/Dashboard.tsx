@@ -11,6 +11,7 @@ import QuickActionsPanel from './QuickActionsPanel';
 import DashboardSprintKanban from './DashboardSprintKanban';
 import DashboardModernTaskTable from './DashboardModernTaskTable';
 import SprintSelector from './SprintSelector';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface DashboardStats {
   activeGoals: number;
@@ -22,6 +23,7 @@ interface DashboardStats {
 }
 
 const Dashboard: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   

@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Goal } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import { useTheme } from '../contexts/ModernThemeContext';
 import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
 
 interface EditGoalModalProps {
@@ -14,6 +15,7 @@ interface EditGoalModalProps {
 }
 
 const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId }) => {
+  const { theme } = useTheme();
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -168,24 +170,36 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
   return (
     <Modal show={show} onHide={handleClose} centered size="lg">
-      <Modal.Header closeButton>
+      <Modal.Header 
+        closeButton
+        style={{ 
+          backgroundColor: theme.colors.surface, 
+          color: theme.colors.onSurface,
+          borderBottom: `1px solid ${theme.colors.border}`
+        }}
+      >
         <Modal.Title>Edit Goal: {goal.title}</Modal.Title>
       </Modal.Header>
-      <Modal.Body>
+      <Modal.Body style={{ backgroundColor: theme.colors.background, color: theme.colors.onBackground }}>
         <Form>
           <Form.Group className="mb-3">
-            <Form.Label>Title *</Form.Label>
+            <Form.Label style={{ color: theme.colors.onBackground }}>Title *</Form.Label>
             <Form.Control
               type="text"
               value={formData.title}
               onChange={(e) => setFormData({ ...formData, title: e.target.value })}
               placeholder="Enter goal title..."
               autoFocus
+              style={{
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.border,
+                color: theme.colors.onSurface
+              }}
             />
           </Form.Group>
 
           <Form.Group className="mb-3">
-            <Form.Label>Description</Form.Label>
+            <Form.Label style={{ color: theme.colors.onBackground }}>Description</Form.Label>
             <Form.Control
               as="textarea"
               rows={3}

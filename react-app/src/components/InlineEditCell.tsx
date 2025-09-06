@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Form, Button, Spinner } from 'react-bootstrap';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface InlineEditCellProps {
   value: any;
@@ -22,6 +23,7 @@ const InlineEditCell: React.FC<InlineEditCellProps> = ({
   placeholder = '',
   variant = 'default'
 }) => {
+  const { theme } = useTheme();
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(value);
   const [isSaving, setIsSaving] = useState(false);

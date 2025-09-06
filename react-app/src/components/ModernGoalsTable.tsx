@@ -40,6 +40,7 @@ import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import ModernStoriesTable from './ModernStoriesTable';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -174,6 +175,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryPriorityChange,
   onStoryAdd
 }) => {
+  const { theme } = useTheme();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
     attributes,
@@ -395,7 +397,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         style={{ 
           width: column.width,
           padding: '12px 8px',
-          borderRight: '1px solid #f3f4f6',
+          borderRight: `1px solid ${theme.colors.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
         }}
@@ -466,13 +468,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
-        borderRight: '1px solid #f3f4f6',
+        borderRight: `1px solid ${theme.colors.border}`,
         width: '48px',
       }}>
         <button
           {...listeners}
           style={{
-            color: '#9ca3af',
+            color: theme.colors.onSurface,
             padding: '4px',
             borderRadius: '4px',
             border: 'none',
@@ -584,13 +586,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
             backgroundColor: '#f8fafc', 
             padding: '16px',
             borderLeft: '4px solid #059669',
-            borderBottom: '1px solid #e5e7eb'
+            borderBottom: `1px solid ${theme.colors.border}`
           }}>
             <h4 style={{ 
               margin: '0 0 12px 0', 
               fontSize: '14px', 
               fontWeight: '600', 
-              color: '#374151',
+              color: theme.colors.onSurface,
               display: 'flex',
               alignItems: 'center',
               gap: '8px'
@@ -621,6 +623,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   onGoalPriorityChange,
   onEditModal,
 }) => {
+  const { theme } = useTheme();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
@@ -791,9 +794,9 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       data-component="ModernGoalsTable"
       style={{ 
         position: 'relative', 
-        backgroundColor: backgrounds.card, 
+        backgroundColor: theme.colors.surface, 
         borderRadius: '8px', 
-        border: '1px solid #e5e7eb', 
+        border: `1px solid ${theme.colors.border}`, 
         boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
         overflow: 'hidden' 
       }}
@@ -804,14 +807,14 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '16px',
-        borderBottom: '1px solid #e5e7eb',
+        borderBottom: `1px solid ${theme.colors.border}`,
         backgroundColor: '#f9fafb',
       }}>
         <div>
           <h3 style={{ 
             fontSize: '18px', 
             fontWeight: '600', 
-            color: '#111827', 
+            color: theme.colors.onBackground, 
             margin: 0, 
             marginBottom: '4px' 
           }}>
@@ -819,7 +822,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
           </h3>
           <p style={{ 
             fontSize: '14px', 
-            color: '#6b7280', 
+            color: theme.colors.onSurface, 
             margin: 0 
           }}>
             {goals.length} goals • {visibleColumnsCount} columns visible
@@ -876,7 +879,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
             }}>
               <thead style={{ 
                 backgroundColor: '#f9fafb', 
-                borderBottom: '1px solid #e5e7eb' 
+                borderBottom: `1px solid ${theme.colors.border}` 
               }}>
                 <tr>
                   <th style={{
@@ -884,10 +887,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: theme.colors.onSurface,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
-                    borderRight: '1px solid #f3f4f6',
+                    borderRight: `1px solid ${theme.colors.border}`,
                     width: '48px',
                   }}>
                     Order
@@ -900,10 +903,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                         textAlign: 'left',
                         fontSize: '12px',
                         fontWeight: '500',
-                        color: '#6b7280',
+                        color: theme.colors.onSurface,
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em',
-                        borderRight: '1px solid #f3f4f6',
+                        borderRight: `1px solid ${theme.colors.border}`,
                         width: column.width,
                       }}
                     >
@@ -915,7 +918,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'center',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: theme.colors.onSurface,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     width: '96px',
@@ -961,7 +964,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
           right: 0,
           height: '100%',
           width: '320px',
-          backgroundColor: 'white',
+          backgroundColor: theme.colors.surface,
           borderLeft: '1px solid #e5e7eb',
           transition: 'transform 0.3s ease',
           boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
@@ -986,7 +989,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: theme.colors.onBackground,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -1048,13 +1051,13 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                               </svg>
                             )}
                           </div>
-                          <span style={{ fontSize: '14px', color: '#111827' }}>{column.label}</span>
+                          <span style={{ fontSize: '14px', color: theme.colors.onBackground }}>{column.label}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {column.visible ? (
-                            <Eye size={14} style={{ color: '#9ca3af' }} />
+                            <Eye size={14} style={{ color: theme.colors.onSurface }} />
                           ) : (
-                            <EyeOff size={14} style={{ color: '#9ca3af' }} />
+                            <EyeOff size={14} style={{ color: theme.colors.onSurface }} />
                           )}
                         </div>
                       </div>
@@ -1076,7 +1079,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: theme.colors.onBackground,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -1109,14 +1112,14 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: theme.colors.onBackground, 
                         margin: '0 0 8px 0' 
                       }}>
                         Goals Management
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: theme.colors.onSurface, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Toast, Button } from 'react-bootstrap';
 import { RefreshCw, X } from 'lucide-react';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface VersionInfo {
   version: string;
@@ -23,6 +24,7 @@ export const UpdateAvailableToast: React.FC<UpdateAvailableToastProps> = ({
   onReload,
   onDismiss
 }) => {
+  const { theme } = useTheme();
   if (!show || !newVersion) return null;
 
   return (

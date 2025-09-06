@@ -5,8 +5,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { Task, Story, Goal, IHabit, IHabitEntry } from '../types';
 import { Container, Card, Button, Badge, ProgressBar, Alert } from 'react-bootstrap';
 import { isStatus, isTheme, isPriority } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const MobileView: React.FC = () => {
+  const { theme } = useTheme();
     const { currentUser } = useAuth();
     const [tasks, setTasks] = useState<Task[]>([]);
     const [stories, setStories] = useState<Story[]>([]);

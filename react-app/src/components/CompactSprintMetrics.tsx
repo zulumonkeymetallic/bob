@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Sprint, Story, Task } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface CompactSprintMetricsProps {
   selectedSprintId?: string;
@@ -15,6 +16,7 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
   selectedSprintId,
   className = ''
 }) => {
+  const { theme } = useTheme();
   const [sprint, setSprint] = useState<Sprint | null>(null);
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);

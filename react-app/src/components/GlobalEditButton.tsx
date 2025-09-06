@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Button, Dropdown, Badge, Tooltip, OverlayTrigger } from 'react-bootstrap';
 import { PencilSquare, Check2, X, ThreeDots } from 'react-bootstrap-icons';
 import '../styles/GlobalEditButton.css';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface GlobalEditButtonProps {
   isEditMode: boolean;
@@ -31,6 +32,7 @@ const GlobalEditButton: React.FC<GlobalEditButtonProps> = ({
   position = 'top-right',
   disabled = false
 }) => {
+  const { theme } = useTheme();
   const [showBulkActions, setShowBulkActions] = useState(false);
 
   // Default bulk actions if none provided

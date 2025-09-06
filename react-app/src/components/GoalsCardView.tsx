@@ -14,6 +14,7 @@ import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface GoalsCardViewProps {
   goals: Goal[];
@@ -32,6 +33,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   onGoalSelect,
   selectedGoalId
 }) => {
+  const { theme } = useTheme();
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -265,7 +267,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       <div style={{ 
         textAlign: 'center', 
         padding: '60px 20px',
-        color: '#6b7280'
+        color: theme.colors.onSurface
       }}>
         <Target size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
         <h4>No Goals Found</h4>
@@ -422,7 +424,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 {goal.description && (
                   <p style={{ 
                     margin: '0 0 16px 0', 
-                    color: '#6b7280', 
+                    color: theme.colors.onSurface, 
                     fontSize: '14px',
                     lineHeight: '1.5',
                     display: '-webkit-box',
@@ -461,7 +463,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     </div>
                     <div style={{ 
                       fontSize: '12px', 
-                      color: '#374151', 
+                      color: theme.colors.onSurface, 
                       fontStyle: 'italic',
                       lineHeight: '1.4'
                     }}>
@@ -477,7 +479,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     </div>
                     <div style={{ 
                       fontSize: '10px', 
-                      color: '#6b7280', 
+                      color: theme.colors.onSurface, 
                       marginTop: '6px'
                     }}>
                       {ActivityStreamService.formatTimestamp(latestActivities[goal.id].timestamp)}
@@ -488,18 +490,18 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
                 {/* Goal Details */}
                 <div style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: theme.colors.onSurface }}>
                     <Target size={14} style={{ marginRight: '8px' }} />
                     <span style={{ fontWeight: '500', marginRight: '8px' }}>Size:</span>
                     <span>{goal.size}</span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: theme.colors.onSurface }}>
                     <Hash size={14} style={{ marginRight: '8px' }} />
                     <span style={{ fontWeight: '500', marginRight: '8px' }}>Priority:</span>
                     <span>{goal.priority}</span>
                   </div>
                   {goal.confidence && (
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: theme.colors.onSurface }}>
                       <User size={14} style={{ marginRight: '8px' }} />
                       <span style={{ fontWeight: '500', marginRight: '8px' }}>Confidence:</span>
                       <span>{goal.confidence}/10</span>
@@ -522,7 +524,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   paddingTop: '16px',
                   borderTop: '1px solid #e5e7eb',
                   fontSize: '12px',
-                  color: '#9ca3af'
+                  color: theme.colors.onSurface
                 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>

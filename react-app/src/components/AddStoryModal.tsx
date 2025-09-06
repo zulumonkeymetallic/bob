@@ -5,6 +5,7 @@ import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } f
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface AddStoryModalProps {
   onClose: () => void;
@@ -25,6 +26,7 @@ interface Sprint {
 }
 
 const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [goals, setGoals] = useState<Goal[]>([]);

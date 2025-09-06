@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Alert, Table, Card, Row, Col, ProgressBar } from 'react-bootstrap';
+import { useTheme } from '../contexts/ModernThemeContext';
 // import { VERSION, BUILD_TIME } from '../version';
 import { fetchProjectStatus, ProjectStats } from '../services/dataService';
 
@@ -9,6 +10,7 @@ interface DevToolsProps {
 }
 
 const DevTools: React.FC<DevToolsProps> = ({ show, onHide }) => {
+  const { theme } = useTheme();
   const [cacheInfo, setCacheInfo] = useState<any[]>([]);
   const [message, setMessage] = useState<string>('');
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);

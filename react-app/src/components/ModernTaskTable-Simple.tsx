@@ -19,6 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Task, Story, Goal, Sprint } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -69,6 +70,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onTaskUpdate, 
   onTaskDelete 
 }) => {
+  const { theme } = useTheme();
   const {
     attributes,
     listeners,
@@ -85,7 +87,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.surface,
     borderBottom: '1px solid #e5e5e5',
   };
 
@@ -257,14 +259,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const tableStyle = {
     width: '100%',
     borderCollapse: 'collapse' as const,
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.surface,
     boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
     borderRadius: '8px',
     overflow: 'hidden',
   };
 
   const headerStyle = {
-    backgroundColor: '#f8f9fa',
+    backgroundColor: theme.colors.background,
     borderBottom: '2px solid #e5e5e5',
   };
 
@@ -273,7 +275,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     textAlign: 'left' as const,
     fontWeight: '600' as const,
     fontSize: '14px',
-    color: '#495057',
+    color: theme.colors.onSurface,
     borderRight: '1px solid #e5e5e5',
   };
 
@@ -286,7 +288,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         right: showConfig ? 0 : '-300px',
         width: '280px',
         height: '100%',
-        backgroundColor: '#fff',
+        backgroundColor: theme.colors.surface,
         borderLeft: '1px solid #e5e5e5',
         boxShadow: '-2px 0 8px rgba(0,0,0,0.1)',
         transition: 'right 0.3s ease',

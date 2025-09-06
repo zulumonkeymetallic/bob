@@ -24,11 +24,13 @@ import { useSidebar } from '../../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../../types';
 import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
 // Replaces /kanban route with comprehensive sprint management
 
 const SprintManagementView: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
@@ -412,7 +414,7 @@ const SprintManagementView: React.FC = () => {
                                     <div className="d-flex justify-content-between align-items-start mb-2">
                                       <div className="flex-grow-1">
                                         <div className="d-flex align-items-center gap-2 mb-1">
-                                          <span style={{ fontSize: '11px', fontWeight: '600', color: '#6b7280' }}>
+                                          <span style={{ fontSize: '11px', fontWeight: '600', color: theme.colors.onSurface }}>
                                             {story.ref || `STRY-${story.id.slice(-3).toUpperCase()}`}
                                           </span>
                                         </div>

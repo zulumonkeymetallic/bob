@@ -1,8 +1,10 @@
 import React from 'react';
 import { Container } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const Dashboard: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
 
   if (!currentUser) {

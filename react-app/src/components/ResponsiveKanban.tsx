@@ -4,8 +4,10 @@ import { Story, Task } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const ResponsiveKanban: React.FC = () => {
+  const { theme } = useTheme();
   const { showSidebar, setUpdateHandler } = useSidebar();
 
   // Set up the update handler for the global sidebar

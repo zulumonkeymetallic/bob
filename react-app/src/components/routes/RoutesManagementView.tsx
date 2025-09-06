@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
+import { useTheme } from '../../contexts/ModernThemeContext';
 
 // BOB v3.5.2 - Routes & Routines Management
 // FTR-03 Implementation - Daily routine optimization and route planning
@@ -97,6 +98,7 @@ interface Goal {
 }
 
 const RoutesManagementView: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   

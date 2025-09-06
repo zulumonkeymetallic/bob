@@ -2,6 +2,7 @@ import React from 'react';
 import { Droppable } from 'react-beautiful-dnd';
 import StoryCard from './StoryCard';
 import { Column as ColumnType, Story } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface ColumnProps {
   column: ColumnType;
@@ -9,6 +10,7 @@ interface ColumnProps {
 }
 
 const Column: React.FC<ColumnProps> = ({ column, stories }) => {
+  const { theme } = useTheme();
   return (
     <div className="col-md-4">
       <div className="card kanban-column glass-effect">

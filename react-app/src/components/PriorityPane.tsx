@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task } from '../types';
 import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface PriorityPaneProps {
   tasks: Task[];
@@ -18,6 +19,7 @@ interface PrioritizedTask extends Task {
 }
 
 const PriorityPane: React.FC<PriorityPaneProps> = ({ tasks }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [prioritizedTasks, setPrioritizedTasks] = useState<PrioritizedTask[]>([]);

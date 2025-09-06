@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Card, Row, Col, Badge, ProgressBar } from 'react-bootstrap';
 import { Calendar, Target, Clock, TrendingUp, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Sprint, Story, Task } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface SprintMetricsPanelProps {
   sprint: Sprint;
@@ -34,6 +35,7 @@ const SprintMetricsPanel: React.FC<SprintMetricsPanelProps> = ({
   tasks,
   goals
 }) => {
+  const { theme } = useTheme();
   const metrics = useMemo((): SprintMetrics => {
     const now = new Date();
     const startDate = new Date(sprint.startDate);

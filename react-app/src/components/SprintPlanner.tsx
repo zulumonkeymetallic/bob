@@ -6,6 +6,7 @@ import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
 import { getThemeName, getStatusName, getPriorityName, isStatus } from '../utils/statusHelpers';
 import {
+import { useTheme } from '../contexts/ModernThemeContext';
   DndContext,
   closestCenter,
   KeyboardSensor,
@@ -29,6 +30,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Calendar, Target, FileText } from 'lucide-react';
 
 const SprintPlanner: React.FC = () => {
+  const { theme } = useTheme();
     const { currentUser } = useAuth();
     const [stories, setStories] = useState<Story[]>([]);
     const [sprints, setSprints] = useState<Sprint[]>([]);

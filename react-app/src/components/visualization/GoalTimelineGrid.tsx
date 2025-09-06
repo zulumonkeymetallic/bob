@@ -1,5 +1,6 @@
 import React from 'react';
 import { Goal, Sprint, Story } from './types';
+import { useTheme } from '../../contexts/ModernThemeContext';
 
 interface Props {
   goals: Goal[];
@@ -22,6 +23,7 @@ const GoalTimelineGrid: React.FC<Props> = ({
   onGoalCollapse,
   onGoalDateChange
 }) => {
+  const { theme } = useTheme();
   // Calculate timeline range based on zoom level
   const getTimelineRange = () => {
     const now = new Date();

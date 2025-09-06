@@ -8,6 +8,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import '../styles/MaterialDesign.css';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -26,6 +27,7 @@ interface Sprint {
 }
 
 const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportClick }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [showMenu, setShowMenu] = useState(false);

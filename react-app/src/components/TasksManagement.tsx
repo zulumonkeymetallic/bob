@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -13,6 +14,7 @@ import ImportModal from './ImportModal';
 const TasksManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { theme } = useTheme();
   const { showSidebar } = useSidebar();
   
   // State
@@ -209,26 +211,60 @@ const TasksManagement: React.FC = () => {
   };
 
   return (
-    <Container fluid style={{ padding: '24px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
+    <Container fluid style={{ 
+      padding: '24px', 
+      backgroundColor: theme.colors.background, 
+      minHeight: '100vh',
+      color: theme.colors.onBackground
+    }}>
       {/* Header */}
       <Row className="mb-4">
         <Col>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: '#1f2937' }}>
+              <h2 style={{ 
+                margin: 0, 
+                fontSize: '28px', 
+                fontWeight: '700', 
+                color: theme.colors.onBackground
+              }}>
                 Task Management
               </h2>
-              <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+              <Badge 
+                bg="primary" 
+                style={{ 
+                  fontSize: '12px', 
+                  padding: '6px 12px',
+                  backgroundColor: theme.colors.primary,
+                  color: theme.colors.onPrimary
+                }}
+              >
                 {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
               </Badge>
             </div>
             
             <div style={{ display: 'flex', gap: '8px' }}>
-              <Button variant="outline-primary" onClick={() => setShowImportModal(true)}>
+              <Button 
+                variant="outline-primary" 
+                onClick={() => setShowImportModal(true)}
+                style={{
+                  borderColor: theme.colors.border,
+                  backgroundColor: theme.colors.surface,
+                  color: theme.colors.onSurface
+                }}
+              >
                 <Upload size={16} style={{ marginRight: '8px' }} />
                 Import
               </Button>
-              <Button variant="primary" href="/tasks/new">
+              <Button 
+                variant="primary" 
+                href="/tasks/new"
+                style={{
+                  backgroundColor: theme.colors.primary,
+                  borderColor: theme.colors.primary,
+                  color: theme.colors.onPrimary
+                }}
+              >
                 <Plus size={16} style={{ marginRight: '8px' }} />
                 Add Task
               </Button>
@@ -240,48 +276,104 @@ const TasksManagement: React.FC = () => {
       {/* Statistics Cards */}
       <Row className="mb-4">
         <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ 
+            border: `1px solid ${theme.colors.border}`, 
+            backgroundColor: theme.colors.surface,
+            boxShadow: theme.isDark 
+              ? '0 1px 3px rgba(0,0,0,0.3)' 
+              : '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
+              <div style={{ 
+                fontSize: '32px', 
+                fontWeight: '700', 
+                color: theme.colors.onSurface
+              }}>
                 {taskStats.total}
               </div>
-              <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ 
+                fontSize: '14px', 
+                color: theme.colors.onSecondary, 
+                marginTop: '4px' 
+              }}>
                 Total Tasks
               </div>
             </Card.Body>
           </Card>
         </Col>
         <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ 
+            border: `1px solid ${theme.colors.border}`, 
+            backgroundColor: theme.colors.surface,
+            boxShadow: theme.isDark 
+              ? '0 1px 3px rgba(0,0,0,0.3)' 
+              : '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+              <div style={{ 
+                fontSize: '32px', 
+                fontWeight: '700', 
+                color: theme.colors.success
+              }}>
                 {taskStats.linked}
               </div>
-              <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ 
+                fontSize: '14px', 
+                color: theme.colors.onSecondary, 
+                marginTop: '4px' 
+              }}>
                 Linked to Stories
               </div>
             </Card.Body>
           </Card>
         </Col>
         <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ 
+            border: `1px solid ${theme.colors.border}`, 
+            backgroundColor: theme.colors.surface,
+            boxShadow: theme.isDark 
+              ? '0 1px 3px rgba(0,0,0,0.3)' 
+              : '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#dc2626' }}>
+              <div style={{ 
+                fontSize: '32px', 
+                fontWeight: '700', 
+                color: theme.colors.danger
+              }}>
                 {taskStats.unlinked}
               </div>
-              <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ 
+                fontSize: '14px', 
+                color: theme.colors.onSecondary, 
+                marginTop: '4px' 
+              }}>
                 Unlinked Tasks
               </div>
             </Card.Body>
           </Card>
         </Col>
         <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ 
+            border: `1px solid ${theme.colors.border}`, 
+            backgroundColor: theme.colors.surface,
+            boxShadow: theme.isDark 
+              ? '0 1px 3px rgba(0,0,0,0.3)' 
+              : '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#7c3aed' }}>
+              <div style={{ 
+                fontSize: '32px', 
+                fontWeight: '700', 
+                color: theme.colors.primary
+              }}>
                 {taskStats.withGoals}
               </div>
-              <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ 
+                fontSize: '14px', 
+                color: theme.colors.onSecondary, 
+                marginTop: '4px' 
+              }}>
                 Connected to Goals
               </div>
             </Card.Body>
@@ -292,12 +384,23 @@ const TasksManagement: React.FC = () => {
       {/* Filters */}
       <Row className="mb-4">
         <Col>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ 
+            border: `1px solid ${theme.colors.border}`, 
+            backgroundColor: theme.colors.surface,
+            boxShadow: theme.isDark 
+              ? '0 1px 3px rgba(0,0,0,0.3)' 
+              : '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
             <Card.Body>
               <Row className="align-items-center">
                 <Col md={2}>
                   <Form.Group>
-                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <Form.Label style={{ 
+                      fontSize: '12px', 
+                      fontWeight: '600', 
+                      marginBottom: '4px',
+                      color: theme.colors.onSurface
+                    }}>
                       <Search size={14} style={{ marginRight: '6px' }} />
                       Search
                     </Form.Label>
@@ -307,12 +410,22 @@ const TasksManagement: React.FC = () => {
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       size="sm"
+                      style={{
+                        backgroundColor: theme.colors.surface,
+                        borderColor: theme.colors.border,
+                        color: theme.colors.onSurface
+                      }}
                     />
                   </Form.Group>
                 </Col>
                 <Col md={2}>
                   <Form.Group>
-                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <Form.Label style={{ 
+                      fontSize: '12px', 
+                      fontWeight: '600', 
+                      marginBottom: '4px',
+                      color: theme.colors.onSurface
+                    }}>
                       <BookOpen size={14} style={{ marginRight: '6px' }} />
                       Story
                     </Form.Label>
@@ -320,6 +433,11 @@ const TasksManagement: React.FC = () => {
                       value={filterStory}
                       onChange={(e) => setFilterStory(e.target.value)}
                       size="sm"
+                      style={{
+                        backgroundColor: theme.colors.surface,
+                        borderColor: theme.colors.border,
+                        color: theme.colors.onSurface
+                      }}
                     >
                       <option value="all">All Stories</option>
                       <option value="unlinked">Unlinked Tasks</option>
@@ -333,7 +451,12 @@ const TasksManagement: React.FC = () => {
                 </Col>
                 <Col md={2}>
                   <Form.Group>
-                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <Form.Label style={{ 
+                      fontSize: '12px', 
+                      fontWeight: '600', 
+                      marginBottom: '4px',
+                      color: theme.colors.onSurface
+                    }}>
                       <Target size={14} style={{ marginRight: '6px' }} />
                       Goal
                     </Form.Label>
@@ -341,6 +464,11 @@ const TasksManagement: React.FC = () => {
                       value={filterGoal}
                       onChange={(e) => setFilterGoal(e.target.value)}
                       size="sm"
+                      style={{
+                        backgroundColor: theme.colors.surface,
+                        borderColor: theme.colors.border,
+                        color: theme.colors.onSurface
+                      }}
                     >
                       <option value="all">All Goals</option>
                       <option value="unlinked">No Goal Connection</option>
@@ -354,7 +482,12 @@ const TasksManagement: React.FC = () => {
                 </Col>
                 <Col md={2}>
                   <Form.Group>
-                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <Form.Label style={{ 
+                      fontSize: '12px', 
+                      fontWeight: '600', 
+                      marginBottom: '4px',
+                      color: theme.colors.onSurface
+                    }}>
                       <Calendar size={14} style={{ marginRight: '6px' }} />
                       Sprint
                     </Form.Label>
@@ -362,6 +495,11 @@ const TasksManagement: React.FC = () => {
                       value={filterSprint}
                       onChange={(e) => setFilterSprint(e.target.value)}
                       size="sm"
+                      style={{
+                        backgroundColor: theme.colors.surface,
+                        borderColor: theme.colors.border,
+                        color: theme.colors.onSurface
+                      }}
                     >
                       <option value="all">All Sprints</option>
                       <option value="">No Sprint (Backlog)</option>
@@ -375,7 +513,12 @@ const TasksManagement: React.FC = () => {
                 </Col>
                 <Col md={2}>
                   <Form.Group>
-                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <Form.Label style={{ 
+                      fontSize: '12px', 
+                      fontWeight: '600', 
+                      marginBottom: '4px',
+                      color: theme.colors.onSurface
+                    }}>
                       <Filter size={14} style={{ marginRight: '6px' }} />
                       Status
                     </Form.Label>
@@ -383,6 +526,11 @@ const TasksManagement: React.FC = () => {
                       value={filterStatus}
                       onChange={(e) => setFilterStatus(e.target.value)}
                       size="sm"
+                      style={{
+                        backgroundColor: theme.colors.surface,
+                        borderColor: theme.colors.border,
+                        color: theme.colors.onSurface
+                      }}
                     >
                       <option value="all">All Status</option>
                       <option value="0">To Do</option>
@@ -404,6 +552,11 @@ const TasksManagement: React.FC = () => {
                         setFilterStatus('all');
                         setSearchTerm('');
                       }}
+                      style={{
+                        borderColor: theme.colors.border,
+                        backgroundColor: theme.colors.surface,
+                        color: theme.colors.onSurface
+                      }}
                     >
                       Clear Filters
                     </Button>
@@ -418,13 +571,24 @@ const TasksManagement: React.FC = () => {
       {/* Tasks Table */}
       <Row>
         <Col>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ 
+            border: `1px solid ${theme.colors.border}`, 
+            backgroundColor: theme.colors.surface,
+            boxShadow: theme.isDark 
+              ? '0 1px 3px rgba(0,0,0,0.3)' 
+              : '0 1px 3px rgba(0,0,0,0.1)'
+          }}>
             <Card.Header style={{ 
-              backgroundColor: '#fff', 
-              borderBottom: '1px solid #e5e7eb', 
+              backgroundColor: theme.colors.surface, 
+              borderBottom: `1px solid ${theme.colors.border}`, 
               padding: '20px 24px' 
             }}>
-              <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
+              <h5 style={{ 
+                margin: 0, 
+                fontSize: '18px', 
+                fontWeight: '600',
+                color: theme.colors.onSurface
+              }}>
                 Tasks ({filteredTasks.length})
               </h5>
             </Card.Header>
@@ -451,9 +615,9 @@ const TasksManagement: React.FC = () => {
           <Col>
             <Card style={{ border: 'none', textAlign: 'center', padding: '60px 20px' }}>
               <Card.Body>
-                <BookOpen size={48} style={{ color: '#9ca3af', marginBottom: '16px' }} />
-                <h5 style={{ color: '#374151', marginBottom: '8px' }}>No tasks found</h5>
-                <p style={{ color: '#6b7280', marginBottom: '24px' }}>
+                <BookOpen size={48} style={{ color: theme.colors.onSurface, marginBottom: '16px' }} />
+                <h5 style={{ color: theme.colors.onSurface, marginBottom: '8px' }}>No tasks found</h5>
+                <p style={{ color: theme.colors.onSurface, marginBottom: '24px' }}>
                   Create your first task or adjust your filters to see tasks.
                 </p>
                 <Button variant="primary" href="/tasks/new">

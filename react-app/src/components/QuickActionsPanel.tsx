@@ -10,12 +10,14 @@ import { ActivityStreamService } from '../services/ActivityStreamService';
 import { Story, Goal, Sprint } from '../types';
 import AddGoalModal from './AddGoalModal';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface QuickActionsProps {
   onAction?: (type: string, data: any) => void;
 }
 
 const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   

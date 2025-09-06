@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import ModernTaskTable from './ModernTaskTable';
 import { Task } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 // Sample data for testing
 const sampleTasks: Task[] = [
@@ -127,6 +128,7 @@ const sampleTasks: Task[] = [
 ];
 
 const ModernTableDemo: React.FC = () => {
+  const { theme } = useTheme();
   const [tasks, setTasks] = useState<Task[]>(sampleTasks);
 
   const handleTaskUpdate = async (taskId: string, updates: Partial<Task>): Promise<void> => {
@@ -174,7 +176,7 @@ const ModernTableDemo: React.FC = () => {
         </div>
 
         <div style={{ 
-          backgroundColor: 'white', 
+          backgroundColor: theme.colors.surface, 
           borderRadius: '8px', 
           boxShadow: '0 4px 6px rgba(0,0,0,0.1)', 
           padding: '24px',
@@ -192,7 +194,7 @@ const ModernTableDemo: React.FC = () => {
         </div>
 
         <div style={{ 
-          backgroundColor: 'white', 
+          backgroundColor: theme.colors.surface, 
           borderRadius: '8px', 
           boxShadow: '0 4px 6px rgba(0,0,0,0.1)', 
           padding: '24px' 
@@ -210,7 +212,7 @@ const ModernTableDemo: React.FC = () => {
             gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
             gap: '16px' 
           }}>
-            <div style={{ padding: '16px', backgroundColor: '#f8f9fa', borderRadius: '6px' }}>
+            <div style={{ padding: '16px', backgroundColor: theme.colors.background, borderRadius: '6px' }}>
               <h3 style={{ fontWeight: '500', color: '#333', marginBottom: '8px' }}>
                 ✨ Drag & Drop
               </h3>
@@ -218,7 +220,7 @@ const ModernTableDemo: React.FC = () => {
                 Drag rows to reorder task priorities
               </p>
             </div>
-            <div style={{ padding: '16px', backgroundColor: '#f8f9fa', borderRadius: '6px' }}>
+            <div style={{ padding: '16px', backgroundColor: theme.colors.background, borderRadius: '6px' }}>
               <h3 style={{ fontWeight: '500', color: '#333', marginBottom: '8px' }}>
                 ✏️ Inline Editing
               </h3>
@@ -226,7 +228,7 @@ const ModernTableDemo: React.FC = () => {
                 Click cells to edit values directly
               </p>
             </div>
-            <div style={{ padding: '16px', backgroundColor: '#f8f9fa', borderRadius: '6px' }}>
+            <div style={{ padding: '16px', backgroundColor: theme.colors.background, borderRadius: '6px' }}>
               <h3 style={{ fontWeight: '500', color: '#333', marginBottom: '8px' }}>
                 ⚙️ Configurable Columns
               </h3>
@@ -234,7 +236,7 @@ const ModernTableDemo: React.FC = () => {
                 Show/hide columns using the settings panel
               </p>
             </div>
-            <div style={{ padding: '16px', backgroundColor: '#f8f9fa', borderRadius: '6px' }}>
+            <div style={{ padding: '16px', backgroundColor: theme.colors.background, borderRadius: '6px' }}>
               <h3 style={{ fontWeight: '500', color: '#333', marginBottom: '8px' }}>
                 🎨 Modern Design
               </h3>

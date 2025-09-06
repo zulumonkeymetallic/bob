@@ -1,6 +1,8 @@
 import React from 'react';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const TestFirebase: React.FC = () => {
+  const { theme } = useTheme();
   return (
     <div>
       <h3>Firebase Test</h3>

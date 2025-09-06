@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Dropdown, Form, Button, Modal, Badge } from 'react-bootstrap';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 export interface ColumnConfig {
   id: string;
@@ -22,6 +23,7 @@ const ColumnCustomizer: React.FC<ColumnCustomizerProps> = ({
   onColumnsChange,
   tableId
 }) => {
+  const { theme } = useTheme();
   const [showModal, setShowModal] = useState(false);
   const [localColumns, setLocalColumns] = useState<ColumnConfig[]>(columns);
 

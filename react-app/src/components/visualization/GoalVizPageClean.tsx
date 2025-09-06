@@ -12,7 +12,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useTheme } from '../../contexts/ThemeContext';
+import { useTheme } from '../../contexts/ModernThemeContext';
 import GoalTimelineGrid from './GoalTimelineGrid';
 import SprintMarkers from './SprintMarkers';
 import ShareLinkDialog from './ShareLinkDialog';

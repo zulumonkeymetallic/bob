@@ -25,6 +25,7 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface PersonalItem {
   id: string;
@@ -129,6 +130,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onItemUpdate, 
   onItemDelete 
 }) => {
+  const { theme } = useTheme();
   const {
     attributes,
     listeners,
@@ -184,7 +186,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                   border: '1px solid #3b82f6',
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: 'white',
+                  backgroundColor: theme.colors.surface,
                   outline: 'none',
                   boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
                 }}
@@ -214,7 +216,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 border: '1px solid #3b82f6',
                 borderRadius: '4px',
                 fontSize: '14px',
-                backgroundColor: 'white',
+                backgroundColor: theme.colors.surface,
                 outline: 'none',
                 boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
               }}
@@ -231,7 +233,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         style={{ 
           width: column.width,
           padding: '12px 8px',
-          borderRight: '1px solid #f3f4f6',
+          borderRight: `1px solid ${theme.colors.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
         }}
@@ -250,7 +252,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <div style={{
           minHeight: '20px',
           fontSize: '14px',
-          color: '#374151',
+          color: theme.colors.onSurface,
           wordBreak: 'break-word',
           whiteSpace: 'normal',
           lineHeight: '1.4',
@@ -266,7 +268,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       ref={setNodeRef}
       style={{
         ...style,
-        backgroundColor: 'white',
+        backgroundColor: theme.colors.surface,
         borderBottom: '1px solid #f3f4f6',
         transition: 'background-color 0.15s ease',
       }}
@@ -285,13 +287,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
-        borderRight: '1px solid #f3f4f6',
+        borderRight: `1px solid ${theme.colors.border}`,
         width: '48px',
       }}>
         <button
           {...listeners}
           style={{
-            color: '#9ca3af',
+            color: theme.colors.onSurface,
             padding: '4px',
             borderRadius: '4px',
             border: 'none',
@@ -424,9 +426,9 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
   return (
     <div style={{ 
       position: 'relative', 
-      backgroundColor: 'white', 
+      backgroundColor: theme.colors.surface, 
       borderRadius: '8px', 
-      border: '1px solid #e5e7eb', 
+      border: `1px solid ${theme.colors.border}`, 
       boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
       overflow: 'hidden' 
     }}>
@@ -436,14 +438,14 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '16px',
-        borderBottom: '1px solid #e5e7eb',
+        borderBottom: `1px solid ${theme.colors.border}`,
         backgroundColor: '#f9fafb',
       }}>
         <div>
           <h3 style={{ 
             fontSize: '18px', 
             fontWeight: '600', 
-            color: '#111827', 
+            color: theme.colors.onBackground, 
             margin: 0, 
             marginBottom: '4px' 
           }}>
@@ -451,7 +453,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
           </h3>
           <p style={{ 
             fontSize: '14px', 
-            color: '#6b7280', 
+            color: theme.colors.onSurface, 
             margin: 0 
           }}>
             {items.length} items • {visibleColumnsCount} columns visible
@@ -508,7 +510,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
             }}>
               <thead style={{ 
                 backgroundColor: '#f9fafb', 
-                borderBottom: '1px solid #e5e7eb' 
+                borderBottom: `1px solid ${theme.colors.border}` 
               }}>
                 <tr>
                   <th style={{
@@ -516,10 +518,10 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: theme.colors.onSurface,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
-                    borderRight: '1px solid #f3f4f6',
+                    borderRight: `1px solid ${theme.colors.border}`,
                     width: '48px',
                   }}>
                     Order
@@ -532,10 +534,10 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                         textAlign: 'left',
                         fontSize: '12px',
                         fontWeight: '500',
-                        color: '#6b7280',
+                        color: theme.colors.onSurface,
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em',
-                        borderRight: '1px solid #f3f4f6',
+                        borderRight: `1px solid ${theme.colors.border}`,
                         width: column.width,
                       }}
                     >
@@ -547,7 +549,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     textAlign: 'center',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: theme.colors.onSurface,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     width: '96px',
@@ -584,7 +586,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
           right: 0,
           height: '100%',
           width: '320px',
-          backgroundColor: 'white',
+          backgroundColor: theme.colors.surface,
           borderLeft: '1px solid #e5e7eb',
           transition: 'transform 0.3s ease',
           boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
@@ -609,7 +611,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: theme.colors.onBackground,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -671,13 +673,13 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                               </svg>
                             )}
                           </div>
-                          <span style={{ fontSize: '14px', color: '#111827' }}>{column.label}</span>
+                          <span style={{ fontSize: '14px', color: theme.colors.onBackground }}>{column.label}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {column.visible ? (
-                            <Eye size={14} style={{ color: '#9ca3af' }} />
+                            <Eye size={14} style={{ color: theme.colors.onSurface }} />
                           ) : (
-                            <EyeOff size={14} style={{ color: '#9ca3af' }} />
+                            <EyeOff size={14} style={{ color: theme.colors.onSurface }} />
                           )}
                         </div>
                       </div>
@@ -699,7 +701,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: theme.colors.onBackground,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -732,14 +734,14 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: theme.colors.onBackground, 
                         margin: '0 0 8px 0' 
                       }}>
                         Personal Organization
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: theme.colors.onSurface, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>

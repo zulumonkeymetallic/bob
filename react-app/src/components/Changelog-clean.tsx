@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Alert, ProgressBar } from 'react-bootstrap';
 import { fetchProjectStatus, ProjectStats } from '../services/dataService';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const Changelog: React.FC = () => {
+  const { theme } = useTheme();
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');

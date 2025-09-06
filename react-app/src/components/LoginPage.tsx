@@ -3,8 +3,10 @@ import { Container, Row, Col, Card, Button, Form, Alert, Spinner } from 'react-b
 import { useAuth } from '../contexts/AuthContext';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const LoginPage: React.FC = () => {
+  const { theme } = useTheme();
   const { signInWithGoogle } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

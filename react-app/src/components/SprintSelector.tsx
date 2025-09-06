@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Sprint } from '../types';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
@@ -17,6 +18,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   onSprintChange,
   className = ''
 }) => {
+  const { theme } = useTheme();
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();

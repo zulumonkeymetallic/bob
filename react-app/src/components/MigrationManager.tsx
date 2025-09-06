@@ -3,12 +3,14 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { DatabaseMigration } from '../utils/databaseMigration';
 import { Modal, Button, ProgressBar, Alert } from 'react-bootstrap';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface MigrationManagerProps {
   children: React.ReactNode;
 }
 
 export const MigrationManager: React.FC<MigrationManagerProps> = ({ children }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [showMigrationModal, setShowMigrationModal] = useState(false);

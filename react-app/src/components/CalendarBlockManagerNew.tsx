@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { CalendarBlock, Story, Task, IHabit } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form, Alert } from 'react-bootstrap';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface CalendarEvent {
     id: string;
@@ -19,6 +20,7 @@ interface CalendarEvent {
 }
 
 const CalendarBlockManager: React.FC = () => {
+  const { theme } = useTheme();
     const { currentUser } = useAuth();
     const [blocks, setBlocks] = useState<CalendarBlock[]>([]);
     const [stories, setStories] = useState<Story[]>([]);

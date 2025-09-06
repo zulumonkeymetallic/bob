@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Container, Card, Button, Alert, Row, Col, Form } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const CalendarAPITest: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const [testResults, setTestResults] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);

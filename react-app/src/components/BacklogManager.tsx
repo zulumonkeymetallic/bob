@@ -8,6 +8,7 @@ import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'f
 import { Goal, Sprint } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 
 interface BacklogItem {
@@ -43,6 +44,7 @@ interface BacklogItem {
 type BacklogType = 'games' | 'movies' | 'shows' | 'books' | 'custom';
 
 const BacklogManager: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [activeTab, setActiveTab] = useState<BacklogType>('games');

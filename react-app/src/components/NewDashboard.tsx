@@ -10,8 +10,10 @@ import ImportExportModal from './ImportExportModal';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import '../styles/MaterialDesign.css';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const Dashboard: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [tasks, setTasks] = useState<Task[]>([]);

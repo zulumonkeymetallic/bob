@@ -22,6 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Calendar, Target, Filter, Plus, ArrowUpDown, ArrowRight } from 'lucide-react';
 import { getThemeName, getStatusName, getPriorityName } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 // Sortable Story Card Component
 const SortableStoryCard: React.FC<{
@@ -73,7 +74,7 @@ const SortableStoryCard: React.FC<{
     >
       <Card 
         style={{ 
-          border: '1px solid #e5e7eb',
+          border: `1px solid ${theme.colors.border}`,
           borderRadius: '8px',
           cursor: 'grab',
           transition: 'all 0.2s ease',
@@ -87,7 +88,7 @@ const SortableStoryCard: React.FC<{
                 margin: 0, 
                 fontSize: '14px', 
                 fontWeight: '600', 
-                color: '#1f2937',
+                color: theme.colors.onBackground,
                 lineHeight: '1.3'
               }}>
                 {story.title}
@@ -96,7 +97,7 @@ const SortableStoryCard: React.FC<{
                 <p style={{ 
                   margin: '4px 0 0 0', 
                   fontSize: '12px', 
-                  color: '#6b7280',
+                  color: theme.colors.onSurface,
                   lineHeight: '1.3'
                 }}>
                   {story.description.length > 80 
@@ -130,7 +131,7 @@ const SortableStoryCard: React.FC<{
           
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '11px', color: '#6b7280', fontWeight: '500' }}>
+              <span style={{ fontSize: '11px', color: theme.colors.onSurface, fontWeight: '500' }}>
                 {story.ref}
               </span>
               {story.points && (
@@ -142,8 +143,8 @@ const SortableStoryCard: React.FC<{
             
             {goal && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Target size={12} style={{ color: '#6b7280' }} />
-                <span style={{ fontSize: '10px', color: '#6b7280' }}>
+                <Target size={12} style={{ color: theme.colors.onSurface }} />
+                <span style={{ fontSize: '10px', color: theme.colors.onSurface }}>
                   {goal.title.length > 20 ? `${goal.title.substring(0, 20)}...` : goal.title}
                 </span>
               </div>
@@ -165,15 +166,15 @@ const SprintColumn: React.FC<{
   const sprintId = sprint?.id || 'backlog';
   
   const getSprintStatus = () => {
-    if (isBacklog) return { color: '#6b7280', text: 'BACKLOG' };
-    if (!sprint) return { color: '#6b7280', text: 'UNKNOWN' };
+    if (isBacklog) return { color: theme.colors.onSurface, text: 'BACKLOG' };
+    if (!sprint) return { color: theme.colors.onSurface, text: 'UNKNOWN' };
     
     switch (sprint.status) {
       case 0: return { color: '#f59e0b', text: 'PLANNING' };
       case 1: return { color: '#059669', text: 'ACTIVE' };
-      case 2: return { color: '#6b7280', text: 'COMPLETE' };
+      case 2: return { color: theme.colors.onSurface, text: 'COMPLETE' };
       case 3: return { color: '#dc2626', text: 'CANCELLED' };
-      default: return { color: '#6b7280', text: 'UNKNOWN' };
+      default: return { color: theme.colors.onSurface, text: 'UNKNOWN' };
     }
   };
 
@@ -194,7 +195,7 @@ const SprintColumn: React.FC<{
       {/* Column Header */}
       <div style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-          <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+          <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: theme.colors.onBackground }}>
             {isBacklog ? 'Backlog' : sprint?.name || 'Unknown Sprint'}
           </h5>
           <Badge 
@@ -209,16 +210,16 @@ const SprintColumn: React.FC<{
         </div>
         
         {sprint && !isBacklog && (
-          <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px' }}>
+          <div style={{ fontSize: '12px', color: theme.colors.onSurface, marginBottom: '8px' }}>
             {new Date(sprint.startDate).toLocaleDateString()} - {new Date(sprint.endDate).toLocaleDateString()}
           </div>
         )}
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '12px', color: '#6b7280' }}>
+          <span style={{ fontSize: '12px', color: theme.colors.onSurface }}>
             {stories.length} stories
           </span>
-          <span style={{ fontSize: '12px', color: '#6b7280' }}>
+          <span style={{ fontSize: '12px', color: theme.colors.onSurface }}>
             {totalPoints} points
           </span>
         </div>
@@ -246,7 +247,7 @@ const SprintColumn: React.FC<{
         <div style={{ 
           textAlign: 'center', 
           padding: '40px 20px',
-          color: '#9ca3af'
+          color: theme.colors.onSurface
         }}>
           <Calendar size={24} style={{ marginBottom: '8px' }} />
           <div style={{ fontSize: '14px' }}>
@@ -262,6 +263,7 @@ const SprintColumn: React.FC<{
 };
 
 const SprintPlanningMatrix: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   
@@ -400,7 +402,7 @@ const SprintPlanningMatrix: React.FC = () => {
       <Container fluid className="p-4">
         <div style={{ textAlign: 'center', padding: '60px 20px' }}>
           <div className="spinner-border text-primary" />
-          <p style={{ marginTop: '16px', color: '#6b7280' }}>Loading sprint planning data...</p>
+          <p style={{ marginTop: '16px', color: theme.colors.onSurface }}>Loading sprint planning data...</p>
         </div>
       </Container>
     );
@@ -413,7 +415,7 @@ const SprintPlanningMatrix: React.FC = () => {
         <Col>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: '#1f2937' }}>
+              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: theme.colors.onBackground }}>
                 Sprint Planning Matrix
               </h2>
               <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
@@ -570,9 +572,9 @@ const SprintPlanningMatrix: React.FC = () => {
           <Col>
             <Card style={{ border: 'none', textAlign: 'center', padding: '60px 20px' }}>
               <Card.Body>
-                <Calendar size={48} style={{ color: '#9ca3af', marginBottom: '16px' }} />
-                <h5 style={{ color: '#374151', marginBottom: '8px' }}>No stories found</h5>
-                <p style={{ color: '#6b7280', marginBottom: '24px' }}>
+                <Calendar size={48} style={{ color: theme.colors.onSurface, marginBottom: '16px' }} />
+                <h5 style={{ color: theme.colors.onSurface, marginBottom: '8px' }}>No stories found</h5>
+                <p style={{ color: theme.colors.onSurface, marginBottom: '24px' }}>
                   Create stories to start planning your sprints, or adjust your filters.
                 </p>
                 <Button variant="primary" href="/stories">

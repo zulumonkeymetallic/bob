@@ -5,6 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
 import { collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface CalendarEvent {
   id: string;
@@ -34,6 +35,7 @@ interface CalendarBlock {
 }
 
 const CalendarSyncManager: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);

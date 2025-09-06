@@ -1,5 +1,5 @@
 // Theme-aware utilities for text colors and backgrounds
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 export interface ThemeAwareTextColors {
   primary: string;
@@ -15,38 +15,31 @@ export interface ThemeAwareTextColors {
 export const useThemeAwareColors = () => {
   const { theme } = useTheme();
   
-  // Get computed theme (resolving 'system')
-  const getComputedTheme = (): 'light' | 'dark' => {
-    if (theme === 'system') {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    return theme;
-  };
-  
-  const isDark = getComputedTheme() === 'dark';
+  // Get computed theme from the new theme config
+  const isDark = theme.isDark;
   
   const colors: ThemeAwareTextColors = {
-    primary: isDark ? '#ffffff' : '#212529',
-    secondary: isDark ? '#adb5bd' : '#6c757d', 
+    primary: theme.colors.onSurface,
+    secondary: theme.colors.onSecondary, 
     muted: isDark ? '#6c757d' : '#868e96',
     inverse: isDark ? '#212529' : '#ffffff',
-    onBackground: isDark ? '#ffffff' : '#212529',
-    onSurface: isDark ? '#ffffff' : '#212529',
-    onPrimary: '#ffffff', // Always white on primary colors
-    onSecondary: isDark ? '#ffffff' : '#212529'
+    onBackground: theme.colors.onBackground,
+    onSurface: theme.colors.onSurface,
+    onPrimary: theme.colors.onPrimary,
+    onSecondary: theme.colors.onSecondary
   };
   
   const backgrounds = {
-    primary: isDark ? '#212529' : '#ffffff',
-    secondary: isDark ? '#343a40' : '#f8f9fa',
-    surface: isDark ? '#495057' : '#ffffff',
-    card: isDark ? '#343a40' : '#ffffff',
-    modal: isDark ? '#495057' : '#ffffff'
+    primary: theme.colors.surface,
+    secondary: theme.colors.background,
+    surface: theme.colors.surface,
+    card: theme.colors.surface,
+    modal: theme.colors.surface
   };
   
   const borders = {
-    primary: isDark ? '#495057' : '#dee2e6',
-    secondary: isDark ? '#6c757d' : '#e9ecef'
+    primary: theme.colors.border,
+    secondary: theme.colors.divider
   };
   
   return {
@@ -54,7 +47,7 @@ export const useThemeAwareColors = () => {
     colors,
     backgrounds,
     borders,
-    theme: getComputedTheme()
+    theme: theme.mode
   };
 };
 

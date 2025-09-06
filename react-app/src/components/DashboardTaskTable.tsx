@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/f
 import { db } from '../firebase';
 import { Task } from '../types';
 import { Edit2, Save, X, Calendar, Clock } from 'lucide-react';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface DashboardTaskTableProps {
   maxTasks?: number;
@@ -13,6 +14,7 @@ interface DashboardTaskTableProps {
 }
 
 const DashboardTaskTable: React.FC<DashboardTaskTableProps> = ({ maxTasks = 10, showDueToday = false }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   

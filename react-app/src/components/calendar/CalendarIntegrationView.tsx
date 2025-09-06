@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
+import { useTheme } from '../../contexts/ModernThemeContext';
 
 // BOB v3.5.2 - Calendar Integration
 // FTR-03 Implementation - Scaffold with Google Calendar integration
@@ -68,6 +69,7 @@ interface Task {
 }
 
 const CalendarIntegrationView: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   

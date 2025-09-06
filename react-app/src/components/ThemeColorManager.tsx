@@ -3,7 +3,7 @@ import { Container, Row, Col, Card, Button, Form, Modal, Alert, Nav, Tab, Badge 
 import { db } from '../firebase';
 import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
 import CalendarSyncManager from './CalendarSyncManager';
@@ -17,7 +17,7 @@ interface GlobalThemeSettings {
 
 const ThemeColorManager: React.FC = () => {
   const { currentUser } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, setThemeMode } = useTheme();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -391,12 +391,10 @@ const ThemeColorManager: React.FC = () => {
                     <Form.Group className="mb-3">
                       <Form.Label style={{ color: colors.primary }}>Theme Mode</Form.Label>
                       <Form.Select 
-                        value={theme} 
+                        value={theme.mode} 
                         onChange={(e) => {
-                          const newTheme = e.target.value as 'light' | 'dark' | 'system';
-                          if (newTheme !== theme) {
-                            toggleTheme();
-                          }
+                          const newTheme = e.target.value as 'light' | 'dark' | 'auto';
+                          setThemeMode(newTheme);
                         }}
                         style={{ 
                           backgroundColor: backgrounds.surface, 
@@ -406,13 +404,13 @@ const ThemeColorManager: React.FC = () => {
                       >
                         <option value="light">Light</option>
                         <option value="dark">Dark</option>
-                        <option value="system">System</option>
+                        <option value="auto">Auto</option>
                       </Form.Select>
                     </Form.Group>
 
                     <Alert variant="info">
-                      <strong>Current Theme:</strong> {theme} mode
-                      {theme === 'system' && ` (resolved to ${isDark ? 'dark' : 'light'})`}
+                      <strong>Current Theme:</strong> {theme.mode} mode
+                      {theme.mode === 'auto' && ` (resolved to ${isDark ? 'dark' : 'light'})`}
                     </Alert>
                   </Card.Body>
                 </Card>

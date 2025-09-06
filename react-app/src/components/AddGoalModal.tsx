@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 import { generateRef } from '../utils/referenceGenerator';
 import { GLOBAL_THEMES, migrateThemeValue } from '../constants/globalThemes';
 
@@ -15,6 +16,7 @@ interface AddGoalModalProps {
 const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { theme } = useTheme();
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -206,10 +208,17 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
 
   return (
     <Modal show={show} onHide={handleClose} centered size="lg">
-      <Modal.Header closeButton>
+      <Modal.Header 
+        closeButton
+        style={{ 
+          backgroundColor: theme.colors.surface, 
+          color: theme.colors.onSurface,
+          borderBottom: `1px solid ${theme.colors.border}`
+        }}
+      >
         <Modal.Title>Add New Goal</Modal.Title>
       </Modal.Header>
-      <Modal.Body>
+      <Modal.Body style={{ backgroundColor: theme.colors.background, color: theme.colors.onBackground }}>
         {currentPersona !== 'personal' && (
           <Alert variant="warning">
             Goals are only available for the Personal persona. Switch to Personal to create goals.
@@ -218,7 +227,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         
         <Form>
           <Form.Group className="mb-3">
-            <Form.Label>Title *</Form.Label>
+            <Form.Label style={{ color: theme.colors.onBackground }}>Title *</Form.Label>
             <Form.Control
               type="text"
               value={formData.title}
@@ -226,11 +235,16 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
               placeholder="Enter goal title..."
               autoFocus
               disabled={currentPersona !== 'personal'}
+              style={{
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.border,
+                color: theme.colors.onSurface
+              }}
             />
           </Form.Group>
 
           <Form.Group className="mb-3">
-            <Form.Label>Description</Form.Label>
+            <Form.Label style={{ color: theme.colors.onBackground }}>Description</Form.Label>
             <Form.Control
               as="textarea"
               rows={3}
@@ -238,6 +252,11 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               placeholder="Describe this goal in detail..."
               disabled={currentPersona !== 'personal'}
+              style={{
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.border,
+                color: theme.colors.onSurface
+              }}
             />
           </Form.Group>
 
@@ -438,14 +457,32 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
           </Alert>
         )}
       </Modal.Body>
-      <Modal.Footer>
-        <Button variant="secondary" onClick={handleClose}>
+      <Modal.Footer 
+        style={{ 
+          backgroundColor: theme.colors.surface, 
+          borderTop: `1px solid ${theme.colors.border}`
+        }}
+      >
+        <Button 
+          variant="secondary" 
+          onClick={handleClose}
+          style={{
+            backgroundColor: theme.colors.secondary,
+            borderColor: theme.colors.secondary,
+            color: theme.colors.onSecondary
+          }}
+        >
           Cancel
         </Button>
         <Button
           variant="primary"
           onClick={handleSubmit}
           disabled={isSubmitting || !formData.title.trim() || currentPersona !== 'personal'}
+          style={{
+            backgroundColor: theme.colors.primary,
+            borderColor: theme.colors.primary,
+            color: theme.colors.onPrimary
+          }}
         >
           {isSubmitting ? 'Creating...' : 'Create Goal'}
         </Button>

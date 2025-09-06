@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { Story, Task, Goal, Sprint } from '../types';
 import { ChoiceHelper, StoryStatus } from '../config/choices';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface SprintMetrics {
   totalStories: number;
@@ -31,6 +32,7 @@ interface DashboardStats {
 }
 
 const SprintDashboard: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [stats, setStats] = useState<DashboardStats>({

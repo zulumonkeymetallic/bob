@@ -3,8 +3,10 @@ import ModernTaskTable from './ModernTaskTable';
 import ModernGoalsTable from './ModernGoalsTable';
 import ModernStoriesTable from './ModernStoriesTable';
 import ModernPersonalListsTable from './ModernPersonalListsTable';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const ModernTablesShowcase: React.FC = () => {
+  const { theme } = useTheme();
   const [activeTab, setActiveTab] = useState<'tasks' | 'stories' | 'goals' | 'personal'>('personal');
 
   // Mock sample data for personal items (simplest to implement)
@@ -89,14 +91,14 @@ const ModernTablesShowcase: React.FC = () => {
           <h1 style={{ 
             fontSize: '32px', 
             fontWeight: '700', 
-            color: '#111827', 
+            color: theme.colors.onBackground, 
             margin: '0 0 8px 0',
           }}>
             Modern Table Components Showcase
           </h1>
           <p style={{ 
             fontSize: '18px', 
-            color: '#6b7280', 
+            color: theme.colors.onSurface, 
             margin: 0,
           }}>
             Consistent drag-and-drop tables across all content types
@@ -108,7 +110,7 @@ const ModernTablesShowcase: React.FC = () => {
           display: 'flex',
           gap: '4px',
           marginBottom: '24px',
-          borderBottom: '1px solid #e5e7eb',
+          borderBottom: `1px solid ${theme.colors.border}`,
         }}>
           <button
             onClick={() => setActiveTab('personal')}
@@ -144,7 +146,7 @@ const ModernTablesShowcase: React.FC = () => {
 
         {/* Tab Content */}
         <div style={{ 
-          backgroundColor: 'white', 
+          backgroundColor: theme.colors.surface, 
           borderRadius: '0 8px 8px 8px',
           padding: '24px',
           boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
@@ -154,14 +156,14 @@ const ModernTablesShowcase: React.FC = () => {
               <h2 style={{ 
                 fontSize: '24px', 
                 fontWeight: '600', 
-                color: '#111827', 
+                color: theme.colors.onBackground, 
                 margin: '0 0 16px 0',
               }}>
                 Personal Lists Management
               </h2>
               <p style={{ 
                 fontSize: '14px', 
-                color: '#6b7280', 
+                color: theme.colors.onSurface, 
                 margin: '0 0 24px 0',
               }}>
                 Manage personal tasks across life categories with priority sorting. Drag to reorder, click to edit inline.
@@ -179,7 +181,7 @@ const ModernTablesShowcase: React.FC = () => {
             <div style={{ 
               textAlign: 'center', 
               padding: '60px 20px',
-              color: '#6b7280',
+              color: theme.colors.onSurface,
             }}>
               <h3 style={{ 
                 fontSize: '20px', 
@@ -203,7 +205,7 @@ const ModernTablesShowcase: React.FC = () => {
           gap: '16px',
         }}>
           <div style={{ 
-            backgroundColor: 'white', 
+            backgroundColor: theme.colors.surface, 
             padding: '20px', 
             borderRadius: '8px',
             boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
@@ -211,14 +213,14 @@ const ModernTablesShowcase: React.FC = () => {
             <h3 style={{ 
               fontSize: '18px', 
               fontWeight: '600', 
-              color: '#111827', 
+              color: theme.colors.onBackground, 
               margin: '0 0 12px 0',
             }}>
               ✅ Modern Components Created
             </h3>
             <p style={{ 
               fontSize: '14px', 
-              color: '#6b7280', 
+              color: theme.colors.onSurface, 
               margin: 0,
               lineHeight: '1.5',
             }}>
@@ -227,7 +229,7 @@ const ModernTablesShowcase: React.FC = () => {
           </div>
 
           <div style={{ 
-            backgroundColor: 'white', 
+            backgroundColor: theme.colors.surface, 
             padding: '20px', 
             borderRadius: '8px',
             boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
@@ -235,14 +237,14 @@ const ModernTablesShowcase: React.FC = () => {
             <h3 style={{ 
               fontSize: '18px', 
               fontWeight: '600', 
-              color: '#111827', 
+              color: theme.colors.onBackground, 
               margin: '0 0 12px 0',
             }}>
               🎨 Design System Compliant
             </h3>
             <p style={{ 
               fontSize: '14px', 
-              color: '#6b7280', 
+              color: theme.colors.onSurface, 
               margin: 0,
               lineHeight: '1.5',
             }}>
@@ -251,7 +253,7 @@ const ModernTablesShowcase: React.FC = () => {
           </div>
 
           <div style={{ 
-            backgroundColor: 'white', 
+            backgroundColor: theme.colors.surface, 
             padding: '20px', 
             borderRadius: '8px',
             boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
@@ -259,14 +261,14 @@ const ModernTablesShowcase: React.FC = () => {
             <h3 style={{ 
               fontSize: '18px', 
               fontWeight: '600', 
-              color: '#111827', 
+              color: theme.colors.onBackground, 
               margin: '0 0 12px 0',
             }}>
               🚀 Live on Firebase
             </h3>
             <p style={{ 
               fontSize: '14px', 
-              color: '#6b7280', 
+              color: theme.colors.onSurface, 
               margin: 0,
               lineHeight: '1.5',
             }}>

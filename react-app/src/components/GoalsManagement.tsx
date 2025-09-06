@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useTheme } from '../contexts/ModernThemeContext';
+import { useThemeAwareColors } from '../hooks/useThemeAwareColors';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Goal } from '../types';
@@ -10,6 +12,8 @@ import ModernGoalsTable from './ModernGoalsTable';
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { theme } = useTheme();
+  const colors = useThemeAwareColors();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
@@ -106,9 +110,10 @@ const GoalsManagement: React.FC = () => {
   return (
     <div style={{ 
       padding: '24px', 
-      backgroundColor: '#f8f9fa',
+      backgroundColor: theme.colors.background,
       minHeight: '100vh',
-      width: '100%'
+      width: '100%',
+      color: theme.colors.onBackground
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
         {/* Header */}
@@ -119,14 +124,31 @@ const GoalsManagement: React.FC = () => {
           marginBottom: '24px' 
         }}>
           <div>
-            <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
+            <h2 style={{ 
+              margin: '0 0 8px 0', 
+              fontSize: '28px', 
+              fontWeight: '600',
+              color: theme.colors.onBackground
+            }}>
               Goals Management
             </h2>
-            <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
+            <p style={{ 
+              margin: 0, 
+              color: theme.colors.onSecondary, 
+              fontSize: '16px' 
+            }}>
               Manage your life goals across different themes
             </p>
           </div>
-          <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
+          <Button 
+            variant="primary" 
+            onClick={() => alert('Add new goal - coming soon')}
+            style={{
+              backgroundColor: theme.colors.primary,
+              borderColor: theme.colors.primary,
+              color: theme.colors.onPrimary
+            }}
+          >
             Add Goal
           </Button>
         </div>
@@ -134,48 +156,116 @@ const GoalsManagement: React.FC = () => {
         {/* Dashboard Cards */}
         <Row className="mb-4">
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ 
+              height: '100%', 
+              border: `1px solid ${theme.colors.border}`, 
+              backgroundColor: theme.colors.surface,
+              boxShadow: theme.isDark 
+                ? '0 2px 4px rgba(0,0,0,0.3)' 
+                : '0 2px 4px rgba(0,0,0,0.1)'
+            }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
+                <h3 style={{ 
+                  margin: '0 0 8px 0', 
+                  fontSize: '32px', 
+                  fontWeight: '700', 
+                  color: theme.colors.onSurface
+                }}>
                   {goalCounts.total}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ 
+                  margin: 0, 
+                  color: theme.colors.onSecondary, 
+                  fontSize: '14px', 
+                  fontWeight: '500' 
+                }}>
                   Total Goals
                 </p>
               </Card.Body>
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ 
+              height: '100%', 
+              border: `1px solid ${theme.colors.border}`, 
+              backgroundColor: theme.colors.surface,
+              boxShadow: theme.isDark 
+                ? '0 2px 4px rgba(0,0,0,0.3)' 
+                : '0 2px 4px rgba(0,0,0,0.1)'
+            }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+                <h3 style={{ 
+                  margin: '0 0 8px 0', 
+                  fontSize: '32px', 
+                  fontWeight: '700', 
+                  color: theme.colors.success
+                }}>
                   {goalCounts.active}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ 
+                  margin: 0, 
+                  color: theme.colors.onSecondary, 
+                  fontSize: '14px', 
+                  fontWeight: '500' 
+                }}>
                   Active
                 </p>
               </Card.Body>
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ 
+              height: '100%', 
+              border: `1px solid ${theme.colors.border}`, 
+              backgroundColor: theme.colors.surface,
+              boxShadow: theme.isDark 
+                ? '0 2px 4px rgba(0,0,0,0.3)' 
+                : '0 2px 4px rgba(0,0,0,0.1)'
+            }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
+                <h3 style={{ 
+                  margin: '0 0 8px 0', 
+                  fontSize: '32px', 
+                  fontWeight: '700', 
+                  color: theme.colors.primary
+                }}>
                   {goalCounts.done}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ 
+                  margin: 0, 
+                  color: theme.colors.onSecondary, 
+                  fontSize: '14px', 
+                  fontWeight: '500' 
+                }}>
                   Done
                 </p>
               </Card.Body>
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ 
+              height: '100%', 
+              border: `1px solid ${theme.colors.border}`, 
+              backgroundColor: theme.colors.surface,
+              boxShadow: theme.isDark 
+                ? '0 2px 4px rgba(0,0,0,0.3)' 
+                : '0 2px 4px rgba(0,0,0,0.1)'
+            }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#f59e0b' }}>
+                <h3 style={{ 
+                  margin: '0 0 8px 0', 
+                  fontSize: '32px', 
+                  fontWeight: '700', 
+                  color: theme.colors.warning
+                }}>
                   {goalCounts.paused}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ 
+                  margin: 0, 
+                  color: theme.colors.onSecondary, 
+                  fontSize: '14px', 
+                  fontWeight: '500' 
+                }}>
                   Paused
                 </p>
               </Card.Body>
@@ -196,7 +286,7 @@ const GoalsManagement: React.FC = () => {
                       placeholder="Search by title..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      style={{ border: '1px solid #d1d5db' }}
+                      style={{ border: `1px solid ${theme.colors.border}` }}
                     />
                   </InputGroup>
                 </Form.Group>
@@ -207,7 +297,7 @@ const GoalsManagement: React.FC = () => {
                   <Form.Select
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: `1px solid ${theme.colors.border}` }}
                   >
                     <option value="all">All Status</option>
                     <option value="new">New</option>
@@ -224,7 +314,7 @@ const GoalsManagement: React.FC = () => {
                   <Form.Select
                     value={filterTheme}
                     onChange={(e) => setFilterTheme(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: `1px solid ${theme.colors.border}` }}
                   >
                     <option value="all">All Themes</option>
                     <option value="Health">Health</option>
@@ -257,8 +347,8 @@ const GoalsManagement: React.FC = () => {
         {/* Modern Goals Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
           <Card.Header style={{ 
-            backgroundColor: '#fff', 
-            borderBottom: '1px solid #e5e7eb', 
+            backgroundColor: theme.colors.surface, 
+            borderBottom: `1px solid ${theme.colors.border}`, 
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
@@ -276,7 +366,7 @@ const GoalsManagement: React.FC = () => {
                 justifyContent: 'center'
               }}>
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading goals...</p>
+                <p style={{ margin: 0, color: theme.colors.onSurface }}>Loading goals...</p>
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }}>

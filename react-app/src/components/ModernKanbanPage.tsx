@@ -4,8 +4,10 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Task } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const ModernKanbanPage: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);

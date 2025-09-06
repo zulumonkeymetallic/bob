@@ -7,6 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface StoryTasksPanelProps {
   story: Story;
@@ -14,6 +15,7 @@ interface StoryTasksPanelProps {
 }
 
 const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [tasks, setTasks] = useState<Task[]>([]);

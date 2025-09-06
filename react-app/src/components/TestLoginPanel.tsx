@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Button, Card, Form, Alert } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const TestLoginPanel: React.FC = () => {
+  const { theme } = useTheme();
   const { signInWithGoogle } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

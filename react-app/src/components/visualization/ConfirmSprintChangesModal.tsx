@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertTriangle, X } from 'lucide-react';
+import { useTheme } from '../../contexts/ModernThemeContext';
 
 interface Props {
   visible: boolean;
@@ -24,6 +25,7 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
   onConfirm,
   onCancel
 }) => {
+  const { theme } = useTheme();
   if (!visible || !pendingChanges) return null;
 
   const formatDate = (timestamp: number) => {

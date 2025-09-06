@@ -10,6 +10,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import { getThemeClass, getThemeName, getStatusName, getPriorityName } from '../utils/statusHelpers';
 import { getDeadlineInfo } from '../utils/deadlineUtils';
 import ModernTaskTable from './ModernTaskTable';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface DashboardModernTaskTableProps {
   maxTasks?: number;
@@ -24,6 +25,7 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
   title = "Upcoming Tasks",
   showMetrics = true
 }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   
@@ -391,10 +393,10 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
           <div style={{ 
             padding: '40px 20px', 
             textAlign: 'center', 
-            color: '#6b7280' 
+            color: theme.colors.onSurface 
           }}>
             <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.5 }}>📋</div>
-            <h6 style={{ marginBottom: '8px', color: '#374151' }}>
+            <h6 style={{ marginBottom: '8px', color: theme.colors.onSurface }}>
               {showDueToday ? 'No tasks due today' : 'No upcoming tasks'}
             </h6>
             <p style={{ marginBottom: '20px', fontSize: '14px' }}>

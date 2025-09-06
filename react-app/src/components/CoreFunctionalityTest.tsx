@@ -5,6 +5,7 @@ import { useTestMode } from '../contexts/TestModeContext';
 import { collection, addDoc, query, where, onSnapshot, updateDoc, doc, deleteDoc, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Goal, Story, Task, Sprint } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface TestResult {
   name: string;
@@ -20,6 +21,7 @@ interface TestSuite {
 }
 
 const CoreFunctionalityTest: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { isTestMode, toggleTestMode } = useTestMode();
   const [isRunning, setIsRunning] = useState(false);

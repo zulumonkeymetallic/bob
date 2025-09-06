@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Container, Row, Col, Card, Table, Button, Modal, Form, Badge, Alert } from 'react-bootstrap';
 import { Edit3, Plus, Trash2, Save, X } from 'lucide-react';
 import { ChoiceHelper } from '../config/choices';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface ChoiceItem {
   value: number;
@@ -20,6 +21,7 @@ interface EditingChoice {
 }
 
 const ChoiceManager: React.FC = () => {
+  const { theme } = useTheme();
   const [selectedTable, setSelectedTable] = useState<string>('goal');
   const [selectedField, setSelectedField] = useState<string>('status');
   const [showEditModal, setShowEditModal] = useState(false);

@@ -11,10 +11,12 @@ import DevTools from './DevTools';
 import PriorityPane from './PriorityPane';
 import AddGoalModal from './AddGoalModal';
 import AddStoryModal from './AddStoryModal';
+import { useTheme } from '../contexts/ModernThemeContext';
 // import { VERSION, BUILD_TIME } from '../version';
 import '../styles/MaterialDesign.css';
 
 const Dashboard: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [tasks, setTasks] = useState<Task[]>([]);

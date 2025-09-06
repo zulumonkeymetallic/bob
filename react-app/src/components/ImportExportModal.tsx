@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, addDoc, doc, setDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface ImportExportModalProps {
   show: boolean;
@@ -185,6 +186,7 @@ const TASK_TEMPLATES = {
 };
 
 const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [activeTab, setActiveTab] = useState('templates');

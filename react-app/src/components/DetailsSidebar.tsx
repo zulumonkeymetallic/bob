@@ -3,6 +3,7 @@ import { Card, Button, Badge, Form, Row, Col } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, User, Target, BookOpen, Clock, AlertCircle, Hash } from 'lucide-react';
 import { Story, Goal, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface DetailsSidebarProps {
   item: Story | Task | null;
@@ -25,6 +26,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   onUpdate,
   isVisible
 }) => {
+  const { theme } = useTheme();
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
 
@@ -105,7 +107,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
         right: isVisible ? 0 : '-400px',
         width: '400px',
         height: '100vh',
-        backgroundColor: 'white',
+        backgroundColor: theme.colors.surface,
         boxShadow: '-4px 0 8px rgba(0,0,0,0.1)',
         zIndex: 1000,
         transition: 'right 0.3s ease',
@@ -118,7 +120,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
           backgroundColor: themeColor,
           color: 'white',
           padding: '20px',
-          borderBottom: '1px solid #e5e7eb'
+          borderBottom: `1px solid ${theme.colors.border}`
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -173,7 +175,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
       <div style={{ padding: '20px' }}>
         {/* Title */}
         <div style={{ marginBottom: '20px' }}>
-          <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+          <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
             Title
           </label>
           {isEditing ? (
@@ -184,7 +186,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
               style={{ fontSize: '16px', fontWeight: '600' }}
             />
           ) : (
-            <h4 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#111827' }}>
+            <h4 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: theme.colors.onBackground }}>
               {item.title}
             </h4>
           )}
@@ -192,7 +194,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
 
         {/* Description */}
         <div style={{ marginBottom: '20px' }}>
-          <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+          <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
             Description
           </label>
           {isEditing ? (
@@ -203,7 +205,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
               onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
             />
           ) : (
-            <p style={{ margin: 0, color: '#6b7280', lineHeight: '1.5' }}>
+            <p style={{ margin: 0, color: theme.colors.onSurface, lineHeight: '1.5' }}>
               {item.description || 'No description provided'}
             </p>
           )}
@@ -212,7 +214,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
         {/* Status and Priority */}
         <Row style={{ marginBottom: '20px' }}>
           <Col xs={6}>
-            <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+            <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
               Status
             </label>
             {isEditing ? (
@@ -240,7 +242,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
             )}
           </Col>
           <Col xs={6}>
-            <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+            <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
               Priority
             </label>
             {isEditing ? (
@@ -278,7 +280,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
           <>
             <Row style={{ marginBottom: '20px' }}>
               <Col xs={6}>
-                <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
                   Story Points
                 </label>
                 {isEditing ? (
@@ -296,7 +298,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                 )}
               </Col>
               <Col xs={6}>
-                <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
                   WIP Limit
                 </label>
                 {isEditing ? (
@@ -308,7 +310,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                     onChange={(e) => setEditForm({ ...editForm, wipLimit: parseInt(e.target.value) })}
                   />
                 ) : (
-                  <span style={{ color: '#6b7280' }}>
+                  <span style={{ color: theme.colors.onSurface }}>
                     {(item as Story).wipLimit}
                   </span>
                 )}
@@ -317,7 +319,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
 
             {/* Goal Assignment */}
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+              <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
                 Linked Goal
               </label>
               {isEditing ? (
@@ -333,7 +335,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
               ) : goal ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Target size={16} color={themeColor} />
-                  <span style={{ color: '#374151', fontWeight: '500' }}>{goal.title}</span>
+                  <span style={{ color: theme.colors.onSurface, fontWeight: '500' }}>{goal.title}</span>
                   <Badge 
                     style={{ 
                       backgroundColor: themeColor, 
@@ -345,7 +347,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                   </Badge>
                 </div>
               ) : (
-                <span style={{ color: '#9ca3af' }}>No goal linked</span>
+                <span style={{ color: theme.colors.onSurface }}>No goal linked</span>
               )}
             </div>
           </>
@@ -356,7 +358,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
           <>
             <Row style={{ marginBottom: '20px' }}>
               <Col xs={6}>
-                <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
                   Effort
                 </label>
                 {isEditing ? (
@@ -369,13 +371,13 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                     <option value="L">L - Large</option>
                   </Form.Select>
                 ) : (
-                  <Badge bg="outline-secondary" style={{ fontSize: '12px', padding: '6px 12px', border: '1px solid #d1d5db' }}>
+                  <Badge bg="outline-secondary" style={{ fontSize: '12px', padding: '6px 12px', border: `1px solid ${theme.colors.border}` }}>
                     {(item as Task).effort}
                   </Badge>
                 )}
               </Col>
               <Col xs={6}>
-                <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
                   Estimate
                 </label>
                 {isEditing ? (
@@ -388,7 +390,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Clock size={14} color="#6b7280" />
-                    <span style={{ color: '#6b7280' }}>
+                    <span style={{ color: theme.colors.onSurface }}>
                       {(item as Task).estimateMin} minutes
                     </span>
                   </div>
@@ -398,7 +400,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
 
             {/* Parent Story */}
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+              <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
                 Parent Story
               </label>
               {isEditing ? (
@@ -414,16 +416,16 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
               ) : story ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <BookOpen size={16} color={themeColor} />
-                  <span style={{ color: '#374151', fontWeight: '500' }}>{story.title}</span>
+                  <span style={{ color: theme.colors.onSurface, fontWeight: '500' }}>{story.title}</span>
                 </div>
               ) : (
-                <span style={{ color: '#9ca3af' }}>No parent story</span>
+                <span style={{ color: theme.colors.onSurface }}>No parent story</span>
               )}
             </div>
 
             {/* Due Date */}
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+              <label style={{ fontSize: '14px', fontWeight: '500', color: theme.colors.onSurface, marginBottom: '6px', display: 'block' }}>
                 Due Date
               </label>
               {isEditing ? (
@@ -435,12 +437,12 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
               ) : (item as Task).dueDate ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar size={14} color="#6b7280" />
-                  <span style={{ color: '#6b7280' }}>
+                  <span style={{ color: theme.colors.onSurface }}>
                     {new Date((item as Task).dueDate!).toLocaleDateString()}
                   </span>
                 </div>
               ) : (
-                <span style={{ color: '#9ca3af' }}>No due date set</span>
+                <span style={{ color: theme.colors.onSurface }}>No due date set</span>
               )}
             </div>
           </>
@@ -448,11 +450,11 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
 
         {/* Metadata */}
         <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '20px', marginTop: '20px' }}>
-          <h6 style={{ fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '12px' }}>
+          <h6 style={{ fontSize: '14px', fontWeight: '600', color: theme.colors.onSurface, marginBottom: '12px' }}>
             Metadata
           </h6>
           
-          <div style={{ fontSize: '13px', color: '#6b7280', lineHeight: '1.6' }}>
+          <div style={{ fontSize: '13px', color: theme.colors.onSurface, lineHeight: '1.6' }}>
             <div style={{ marginBottom: '8px' }}>
               <strong>ID:</strong> <code style={{ fontSize: '11px' }}>{item.id}</code>
             </div>

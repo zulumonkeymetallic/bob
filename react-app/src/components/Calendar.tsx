@@ -6,8 +6,10 @@ import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { CalendarBlock } from '../types';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 const Calendar: React.FC = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [blocks, setBlocks] = useState<CalendarBlock[]>([]);

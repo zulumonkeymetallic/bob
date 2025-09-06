@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
 import { Upload, Download, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 interface ImportModalProps {
   show: boolean;
@@ -16,6 +17,7 @@ interface ImportModalProps {
 }
 
 const ImportModal: React.FC<ImportModalProps> = ({ show, onHide, entityType, onImportComplete }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   

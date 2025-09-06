@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Copy, Check } from 'lucide-react';
+import { useTheme } from '../../contexts/ModernThemeContext';
 
 interface Props {
   visible: boolean;
@@ -9,6 +10,7 @@ interface Props {
 }
 
 const ShareLinkDialog: React.FC<Props> = ({ visible, onClose, themes, goals }) => {
+  const { theme } = useTheme();
   const [shareUrl, setShareUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [expiryDays, setExpiryDays] = useState(7);

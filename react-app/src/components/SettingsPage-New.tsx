@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Nav, Tab } from 'react-bootstrap';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -15,7 +15,7 @@ interface ThemeColors {
 }
 
 const SettingsPage: React.FC = () => {
-  const { theme, setTheme } = useTheme();
+  const { theme, setThemeMode } = useTheme();
   const { currentUser } = useAuth();
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
   const [steamConnected, setSteamConnected] = useState(false);
@@ -72,8 +72,8 @@ const SettingsPage: React.FC = () => {
     localStorage.setItem('bobSettings', JSON.stringify(settings));
   };
 
-  const handleThemeChange = (newTheme: 'light' | 'dark' | 'system') => {
-    setTheme(newTheme);
+  const handleThemeChange = (newTheme: 'light' | 'dark' | 'auto') => {
+    setThemeMode(newTheme);
     saveSettings();
   };
 
@@ -158,8 +158,8 @@ const SettingsPage: React.FC = () => {
                         <label className="form-label">Light/Dark Mode</label>
                         <select 
                           className="form-select"
-                          value={theme}
-                          onChange={(e) => handleThemeChange(e.target.value as 'light' | 'dark' | 'system')}
+                          value={theme.mode}
+                          onChange={(e) => handleThemeChange(e.target.value as 'light' | 'dark' | 'auto')}
                         >
                           <option value="light">Light Mode</option>
                           <option value="dark">Dark Mode</option>
