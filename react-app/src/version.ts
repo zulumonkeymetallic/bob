@@ -10,3 +10,14 @@ console.log(`🎯 Features: Standardized Delete Actions, Consistent Field Layout
 console.log(`🚀 Architecture: Git-based versioning with modern UI patterns`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 console.log(`🔨 Build hash: ${BUILD_HASH}`);
+
+// Version checking service for compatibility
+export const checkForUpdates = async () => {
+  try {
+    console.log(`🔍 Version check: Current ${VERSION}, Build ${BUILD_HASH}`);
+    return { hasUpdate: false, current: VERSION };
+  } catch (error) {
+    console.warn('Version check failed:', error);
+    return { hasUpdate: false, current: VERSION };
+  }
+};
