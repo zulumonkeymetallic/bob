@@ -335,6 +335,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStorySelect,
   onEditStory
 }) => {
+  const { theme } = useTheme();
   const {
     attributes,
     listeners,
@@ -707,6 +708,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onEditStory,
   goalId,
 }) => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);

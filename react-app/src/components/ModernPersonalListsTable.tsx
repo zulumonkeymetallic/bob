@@ -381,6 +381,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
   onItemDelete,
   onItemPriorityChange,
 }) => {
+  const { theme } = useTheme();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({

@@ -72,6 +72,7 @@ const SortableStoryCard: React.FC<{
   onDelete: (story: Story) => void;
   onItemClick: (story: Story) => void;
 }> = ({ story, goal, taskCount, themeColor, onEdit, onDelete, onItemClick }) => {
+  const { theme } = useTheme();
   const {
     attributes,
     listeners,
@@ -198,6 +199,7 @@ const SortableTaskCard: React.FC<{
   onEdit: (task: Task) => void;
   onItemClick: (task: Task) => void;
 }> = ({ task, story, themeColor, onEdit, onItemClick }) => {
+  const { theme } = useTheme();
   const {
     attributes,
     listeners,
