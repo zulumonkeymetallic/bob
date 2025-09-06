@@ -6,7 +6,6 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
-import { isStatus, isTheme } from '../utils/statusHelpers';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -84,8 +83,8 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
-    if (filterTheme !== 'all' && !isTheme(goal.theme, filterTheme)) return false;
+    if (filterStatus !== 'all' && goal.status !== parseInt(filterStatus)) return false;
+    if (filterTheme !== 'all' && goal.theme !== parseInt(filterTheme)) return false;
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -93,9 +92,9 @@ const GoalsManagement: React.FC = () => {
   // Get counts for dashboard cards
   const goalCounts = {
     total: filteredGoals.length,
-    active: filteredGoals.filter(g => isStatus(g.status, 'Work in Progress')).length,
-    done: filteredGoals.filter(g => isStatus(g.status, 'Complete')).length,
-    paused: filteredGoals.filter(g => isStatus(g.status, 'Blocked') || isStatus(g.status, 'Deferred')).length
+    active: filteredGoals.filter(g => g.status === 1).length, // Work in Progress
+    done: filteredGoals.filter(g => g.status === 2).length, // Complete
+    paused: filteredGoals.filter(g => g.status === 3).length // Blocked
   };
 
   return (
@@ -171,11 +170,11 @@ const GoalsManagement: React.FC = () => {
                   onChange={(e) => setFilterStatus(e.target.value)}
                 >
                   <option value="all">All Status</option>
-                  <option value="New">New</option>
-                  <option value="Work in Progress">Work in Progress</option>
-                  <option value="Complete">Complete</option>
-                  <option value="Blocked">Blocked</option>
-                  <option value="Deferred">Deferred</option>
+                  <option value="new">New</option>
+                  <option value="active">Active</option>
+                  <option value="done">Done</option>
+                  <option value="paused">Paused</option>
+                  <option value="dropped">Dropped</option>
                 </Form.Select>
               </Form.Group>
             </Col>

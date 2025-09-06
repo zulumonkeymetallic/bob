@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Modal, Button, Form, Alert } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
@@ -132,8 +132,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         kpis: formData.kpis,
         persona: 'personal',
         ownerUid: currentUser.uid, // Ensure ownerUid is included
-        createdAt: new Date(),
-        updatedAt: new Date()
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       };
 
       console.log('💾 AddGoalModal: Saving GOAL to database', {

@@ -21,6 +21,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     size: 'M',
     timeToMasterHours: 40,
     confidence: 0.5,
+    startDate: '',
     targetDate: '',
     status: 'New',
     priority: 2,
@@ -58,6 +59,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
         timeToMasterHours: goal.timeToMasterHours || 40,
         confidence: goal.confidence || 0.5,
+        startDate: goal.startDate ? (typeof goal.startDate === 'string' ? goal.startDate : '') : '',
         targetDate: goal.targetDate ? (typeof goal.targetDate === 'string' ? goal.targetDate : '') : '',
         status: statusMap[goal.status as keyof typeof statusMap] || 'New',
         priority: goal.priority || 2,
@@ -114,6 +116,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
+        startDate: formData.startDate ? new Date(formData.startDate) : null,
         targetDate: formData.targetDate ? new Date(formData.targetDate) : null,
         status: statusMap[formData.status as keyof typeof statusMap] || 0,
         priority: formData.priority,
@@ -243,6 +246,19 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 <Form.Text className="text-muted">
                   {Math.round(formData.confidence * 100)}% - How confident are you about achieving this?
                 </Form.Text>
+              </Form.Group>
+            </div>
+          </div>
+
+          <div className="row">
+            <div className="col-md-6">
+              <Form.Group className="mb-3">
+                <Form.Label>Start Date (Optional)</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={formData.startDate}
+                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                />
               </Form.Group>
             </div>
             <div className="col-md-6">

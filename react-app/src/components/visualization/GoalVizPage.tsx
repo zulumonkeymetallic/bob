@@ -194,8 +194,7 @@ const GoalVizPage: React.FC = () => {
           currentUser.uid,
           currentUser.email || undefined,
           undefined, // persona
-          goal.ref,
-          goal.title
+          goal.ref
         );
       }
       

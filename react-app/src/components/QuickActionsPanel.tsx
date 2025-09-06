@@ -55,7 +55,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         // Load goals
         const goalsQuery = query(
           collection(db, 'goals'),
-          where('userId', '==', currentUser.uid),
+          where('ownerUid', '==', currentUser.uid),
           orderBy('createdAt', 'desc')
         );
         const goalsSnapshot = await getDocs(goalsQuery);
@@ -65,7 +65,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         // Load sprints
         const sprintsQuery = query(
           collection(db, 'sprints'),
-          where('userId', '==', currentUser.uid),
+          where('ownerUid', '==', currentUser.uid),
           orderBy('createdAt', 'desc')
         );
         const sprintsSnapshot = await getDocs(sprintsQuery);
@@ -79,7 +79,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         // Load stories
         const storiesQuery = query(
           collection(db, 'stories'),
-          where('userId', '==', currentUser.uid),
+          where('ownerUid', '==', currentUser.uid),
           orderBy('createdAt', 'desc')
         );
         const storiesSnapshot = await getDocs(storiesQuery);

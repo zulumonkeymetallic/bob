@@ -36,6 +36,7 @@ import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
 import { checkForUpdates, VERSION } from './version';
+// import { versionTimeoutService } from './services/versionTimeoutService';
 import ComprehensiveTest from './components/ComprehensiveTest';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
 import { clickTrackingService } from './services/ClickTrackingService';
@@ -106,8 +107,13 @@ function AppContent() {
     setForceRender(prev => prev + 1);
   }, [location.pathname, location.key]);
 
-  // Check for updates on app load
+  // Check for updates on app load and initialize version timeout service
   useEffect(() => {
+    // Initialize enhanced version timeout service
+    console.log('🕐 Initializing Version Timeout Service');
+    // versionTimeoutService.forceVersionCheck(); // Temporarily disabled to fix cache loop
+    
+    // Legacy update check as fallback
     checkForUpdates();
     
     // Add keyboard shortcut for force refresh (Ctrl+Shift+R or Cmd+Shift+R)
@@ -135,7 +141,12 @@ function AppContent() {
     };
     
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    
+    // Cleanup function
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      // versionTimeoutService.destroy(); // Temporarily disabled to fix cache loop
+    };
   }, []);
 
   if (!currentUser) {

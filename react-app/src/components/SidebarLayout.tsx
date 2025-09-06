@@ -7,7 +7,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useTestMode } from '../contexts/TestModeContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
-import { VERSION } from '../version';
+import VersionDisplay from './VersionDisplay';
 import SprintSelector from './SprintSelector';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import { isStatus, isTheme } from '../utils/statusHelpers';
@@ -40,7 +40,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const location = useLocation();
   const { trackClick } = useActivityTracking();
   const [showSidebar, setShowSidebar] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Main Dashboard', 'Goals', 'Tasks']);
   const [selectedSprintId, setSelectedSprintId] = useState<string>('');
   
   // Check if side-door test mode is active
@@ -48,55 +48,68 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const isSideDoorActive = false;
 
   const navigationGroups: NavigationGroup[] = [
+    // Main Dashboard at the top
     {
-      label: 'Dashboards',
-      icon: 'chart-bar',
+      label: 'Main Dashboard',
+      icon: 'home',
       items: [
         { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' },
-        { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' },
-        { label: 'Goals Dashboard', path: '/goals', icon: 'target' },
         { label: 'Mobile View', path: '/mobile-view', icon: 'mobile-alt' }
       ]
     },
+    // Goals section with all goal-related items
+    {
+      label: 'Goals',
+      icon: 'target',
+      items: [
+        { label: 'Goals Dashboard', path: '/goals', icon: 'chart-pie' },
+        { label: 'Goals Management', path: '/goals-management', icon: 'target' },
+        { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'timeline' },
+        { label: 'Goals Visualization', path: '/canvas', icon: 'share-alt' }
+      ]
+    },
+    // Sprints section with management, dashboard, and related items
     {
       label: 'Sprints',
-      icon: 'calendar-alt',
+      icon: 'chart-gantt',
       items: [
+        { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' },
         { label: 'Sprint Management', path: '/sprints/management', icon: 'chart-gantt' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'play' },
         { label: 'Sprint Stories', path: '/sprints/stories', icon: 'book' }
       ]
     },
+    // Tasks section
     {
-      label: 'Planning',
-      icon: 'calendar-alt',
+      label: 'Tasks',
+      icon: 'list-check',
       items: [
-        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
-        { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'calendar' },
-        { label: 'Calendar Integration', path: '/calendar/integration', icon: 'calendar-sync' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar-alt' },
-        { label: 'Routes & Routines', path: '/routes', icon: 'route' }
-      ]
-    },
-    {
-      label: 'Lists',
-      icon: 'list',
-      items: [
-        { label: 'Goals', path: '/goals-management', icon: 'target' },
         { label: 'Tasks Management', path: '/tasks-management', icon: 'list-check' },
-        { label: 'Task List', path: '/task-list', icon: 'list-alt' },
-        { label: 'Stories', path: '/stories', icon: 'book' },
+        { label: 'Task List View', path: '/task-list', icon: 'list-alt' },
         { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' }
       ]
     },
+    // Stories section
     {
-      label: 'Visualization',
-      icon: 'share-alt',
+      label: 'Stories',
+      icon: 'book',
       items: [
-        { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'timeline' },
-        { label: 'Canvas', path: '/canvas', icon: 'share-alt' }
+        { label: 'Stories Management', path: '/stories', icon: 'book' }
       ]
     },
+    // Planning & Calendar section
+    {
+      label: 'Planning & Calendar',
+      icon: 'calendar-alt',
+      items: [
+        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar-alt' },
+        { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'calendar' },
+        { label: 'Calendar Integration', path: '/calendar/integration', icon: 'calendar-sync' },
+        { label: 'Routes & Routines', path: '/routes', icon: 'route' }
+      ]
+    },
+    // Settings & Administration
     {
       label: 'Settings',
       icon: 'cog',
@@ -269,7 +282,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             overflowY: 'auto',
             overflowX: 'hidden',
             scrollBehavior: 'smooth',
-            maxHeight: 'calc(100vh - 280px)' // Account for header and footer space
+            maxHeight: 'calc(100vh - 200px)', // Reduced from 280px to allow more scroll space
+            minHeight: '400px' // Ensure minimum scrollable area
           }}>
             <Nav className="flex-column">
               {navigationGroups.map((group) => (
@@ -375,11 +389,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             <Button 
               size="sm" 
               onClick={onSignOut || signOut}
-              className="w-100"
+              className="w-100 btn-signout"
               style={{
-                background: 'transparent',
-                border: '1px solid var(--notion-border)',
-                color: 'var(--notion-text)',
                 borderRadius: '6px'
               }}
             >
@@ -387,13 +398,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </Button>
             
             {/* Version Display */}
-            <div className="text-center mt-2" style={{ 
-              fontSize: '0.75rem', 
-              color: 'var(--notion-text-gray)',
-              padding: '4px 0'
-            }}>
-              {VERSION}
-            </div>
+            <VersionDisplay 
+              className="mt-2"
+              variant="compact"
+              showSessionInfo={true}
+            />
           </div>
         </div>
       </div>
@@ -544,21 +553,19 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </Button>
             </div>
             <Button 
-              variant="outline-danger" 
               size="sm" 
               onClick={signOut}
-              className="w-100"
+              className="w-100 btn-signout"
             >
               Sign Out
             </Button>
             
             {/* Version Display Mobile */}
-            <div className="text-center mt-2" style={{ 
-              fontSize: '0.75rem', 
-              color: 'rgba(255,255,255,0.6)'
-            }}>
-              {VERSION}
-            </div>
+            <VersionDisplay 
+              className="mt-2"
+              variant="compact"
+              showSessionInfo={true}
+            />
           </div>
         </Offcanvas.Body>
       </Offcanvas>

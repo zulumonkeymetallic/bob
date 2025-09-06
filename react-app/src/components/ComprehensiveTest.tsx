@@ -6,8 +6,6 @@ import { db } from '../firebase';
 import { Goal, Story, Task, Sprint } from '../types';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { ChoiceHelper } from '../config/choices';
-import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 
 interface TestData {
   goals: Goal[];

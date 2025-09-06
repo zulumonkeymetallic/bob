@@ -91,53 +91,63 @@ const ThemeBasedGanttChart: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    const loadData = async () => {
-      try {
-        setLoading(true);
+    setLoading(true);
 
-        // Load goals
-        const goalsQuery = query(
-          collection(db, 'goals'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        
-        const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-          const goalsData = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          })) as Goal[];
-          setGoals(goalsData);
-          console.log('🎯 ThemeBasedGanttChart: Loaded goals:', goalsData.length);
-        });
-
-        // Load sprints for timeline markers
-        const sprintsQuery = query(
-          collection(db, 'sprints'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        
-        const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-          const sprintsData = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          })) as Sprint[];
-          setSprints(sprintsData);
-          console.log('🏃 ThemeBasedGanttChart: Loaded sprints:', sprintsData.length);
-        });
-
-        setLoading(false);
-
-        return () => {
-          unsubscribeGoals();
-          unsubscribeSprints();
+    // Load goals
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      const goalsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
         };
-      } catch (error) {
-        console.error('Error loading Gantt data:', error);
-        setLoading(false);
-      }
-    };
+      }) as Goal[];
+      setGoals(goalsData);
+      console.log('🎯 ThemeBasedGanttChart: Loaded goals:', goalsData.length);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error loading goals:', error);
+      setLoading(false);
+    });
 
-    loadData();
+    // Load sprints for timeline markers
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    
+    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
+      const sprintsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+          startDate: data.startDate?.toDate?.() || data.startDate,
+          endDate: data.endDate?.toDate?.() || data.endDate,
+        };
+      }) as Sprint[];
+      setSprints(sprintsData);
+      console.log('🏃 ThemeBasedGanttChart: Loaded sprints:', sprintsData.length);
+    }, (error) => {
+      console.error('Error loading sprints:', error);
+    });
+
+    // Return cleanup function directly from useEffect
+    return () => {
+      unsubscribeGoals();
+      unsubscribeSprints();
+    };
   }, [currentUser]);
 
   // Calculate timeline bounds based on zoom level
@@ -236,12 +246,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         goal.id,
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'status',
         goal.status.toString(),
         '4',
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ action: 'archived', title: goal.title })
+        'personal',
+        JSON.stringify({ action: 'archived', title: goal.title }),
+        'human'
       );
     } catch (error) {
       console.error('Error archiving goal:', error);
@@ -258,12 +270,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         goal.id,
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'status',
         goal.status.toString(),
         '2',
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ action: 'completed', title: goal.title })
+        'personal',
+        JSON.stringify({ action: 'completed', title: goal.title }),
+        'human'
       );
     } catch (error) {
       console.error('Error completing goal:', error);
@@ -286,12 +300,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         'new-goal',
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'status',
         '',
         '0',
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ action: 'duplicated', originalTitle: goal.title, newTitle: duplicatedGoal.title })
+        'personal',
+        JSON.stringify({ action: 'duplicated', originalTitle: goal.title, newTitle: duplicatedGoal.title }),
+        'human'
       );
     } catch (error) {
       console.error('Error duplicating goal:', error);
@@ -306,12 +322,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         deletingGoal.id,
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'status',
         deletingGoal.status,
         -1,
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ action: 'deleted', title: deletingGoal.title })
+        'personal',
+        JSON.stringify({ action: 'deleted', title: deletingGoal.title }),
+        'human'
       );
       setShowDeleteConfirm(false);
       setDeletingGoal(null);
@@ -405,12 +423,14 @@ const ThemeBasedGanttChart: React.FC = () => {
       await ActivityStreamService.logFieldChange(
         dragState.goalId,
         'goal',
+        currentUser?.uid || '',
+        currentUser?.email || '',
         'timeline',
         `${dragState.originalTheme}`,
         JSON.stringify(updateData),
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        JSON.stringify({ dragType: dragState.dragType, ganttView: true })
+        'personal',
+        JSON.stringify({ dragType: dragState.dragType, ganttView: true }),
+        'human'
       );
 
     } catch (error) {
@@ -635,7 +655,7 @@ const ThemeBasedGanttChart: React.FC = () => {
               key={themeRow.id}
               className="goal-row border-bottom d-flex"
               data-theme-id={themeRow.id}
-              style={{ minHeight: '60px' }}
+              style={{ minHeight: '70px' }} // Increased from 60px to accommodate taller goal bars
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => {
                 e.preventDefault();
@@ -674,14 +694,18 @@ const ThemeBasedGanttChart: React.FC = () => {
                   const goalStyle: React.CSSProperties = {
                     left: `${goal.left}%`,
                     width: `${Math.max(goal.width || 10, 5)}%`,
-                    top: `${goalIndex * 35 + 10}px`,
-                    minWidth: '100px',
-                    height: '30px',
+                    top: `${goalIndex * 40 + 10}px`, // Increased spacing for flatter bars
+                    minWidth: '120px',
+                    height: '32px', // Slightly taller for better text visibility
                     backgroundColor: themeAwareColors.background,
                     color: themeAwareColors.text,
                     opacity: isDragging ? 0.7 : 1,
-                    transform: isDragging ? 'scale(1.05)' : 'scale(1)',
-                    zIndex: isDragging ? 1000 : 1
+                    transform: isDragging ? 'scale(1.02)' : 'scale(1)', // Less dramatic scaling
+                    zIndex: isDragging ? 1000 : 1,
+                    borderRadius: '8px', // Rounded corners like cards
+                    border: `1px solid rgba(0,0,0,0.1)`, // Simple border
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)', // Subtle shadow like cards
+                    transition: 'all 0.2s ease' // Smooth transitions
                   };
 
                   return (
@@ -715,11 +739,20 @@ const ThemeBasedGanttChart: React.FC = () => {
                       />
                       
                       {/* Goal content */}
-                      <div className="goal-content px-2 text-truncate flex-grow-1 d-flex align-items-center justify-content-between"
+                      <div className="goal-content px-3 text-truncate flex-grow-1 d-flex align-items-center justify-content-between"
                            style={{ color: themeAwareColors.text }}>
-                        <span className="text-truncate me-2" style={{ fontSize: '13px' }}>
-                          {goal.title}
-                        </span>
+                        <div className="d-flex flex-column">
+                          <span className="text-truncate me-2" style={{ fontSize: '13px', fontWeight: '500' }}>
+                            {goal.title}
+                          </span>
+                          <small className="text-truncate" style={{ 
+                            fontSize: '11px', 
+                            color: `${themeAwareColors.text}80`,
+                            marginTop: '2px'
+                          }}>
+                            {getThemeById(goal.theme || 0)?.name || 'General'} Goal
+                          </small>
+                        </div>
                         
                         {/* Action dropdown */}
                         <Dropdown>
@@ -868,14 +901,36 @@ const ThemeBasedGanttChart: React.FC = () => {
           style={{
             left: `${getDatePosition(new Date())}%`,
             top: '0',
-            width: '2px',
+            width: '3px', // Thicker line for better visibility
             height: '100%',
             backgroundColor: '#ef4444',
             zIndex: 4,
-            pointerEvents: 'none'
+            pointerEvents: 'none',
+            boxShadow: '0 0 6px rgba(239, 68, 68, 0.4)' // Glow effect
           }}
           title={`Today: ${new Date().toLocaleDateString()}`}
         />
+        
+        {/* Today label */}
+        <div
+          className="today-label position-absolute"
+          style={{
+            left: `${getDatePosition(new Date())}%`,
+            top: '-25px',
+            transform: 'translateX(-50%)',
+            backgroundColor: '#ef4444',
+            color: 'white',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: '500',
+            zIndex: 5,
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          TODAY
+        </div>
         
         {/* Original sprint markers for goal rows */}
         {sprints.map(sprint => {

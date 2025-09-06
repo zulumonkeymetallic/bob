@@ -4,12 +4,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Story, Task } from '../types';
+import { Story, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { ChoiceHelper } from '../config/choices';
 import QuickActionsPanel from './QuickActionsPanel';
 import DashboardSprintKanban from './DashboardSprintKanban';
 import DashboardModernTaskTable from './DashboardModernTaskTable';
+import SprintSelector from './SprintSelector';
 
 interface DashboardStats {
   activeGoals: number;
@@ -42,6 +43,8 @@ const Dashboard: React.FC = () => {
   const [upcomingTasks, setUpcomingTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [selectedSprintId, setSelectedSprintId] = useState<string | null>(null);
+  const [sprints, setSprints] = useState<Sprint[]>([]);
 
   useEffect(() => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
@@ -78,10 +81,16 @@ const Dashboard: React.FC = () => {
     );
 
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
-      const storiesData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Story[];
+      const storiesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+        };
+      }) as Story[];
       setRecentStories(storiesData);
       
       // Calculate stats from stories
@@ -96,10 +105,17 @@ const Dashboard: React.FC = () => {
     });
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const allTasks = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
+      const allTasks = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+          dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
+        };
+      }) as Task[];
       
       // Filter out 'done' tasks on client side while indexes are building
       const tasksData = allTasks.filter(task => !isStatus(task.status, 'done')).slice(0, 5);
@@ -164,7 +180,14 @@ const Dashboard: React.FC = () => {
       <Row>
         <Col>
           <div className="d-flex justify-content-between align-items-center mb-4">
-            <h2>Dashboard</h2>
+            <div className="d-flex align-items-center gap-3">
+              <h2 className="mb-0">Dashboard</h2>
+              <SprintSelector
+                selectedSprintId={selectedSprintId || ''}
+                onSprintChange={(sprintId: string) => setSelectedSprintId(sprintId)}
+                className="ms-3"
+              />
+            </div>
             <div>
               <small className="text-muted me-3">
                 Last updated: {lastUpdated.toLocaleTimeString()}
@@ -227,7 +250,10 @@ const Dashboard: React.FC = () => {
           {/* Sprint Kanban Board */}
           <Row className="mb-4">
             <Col md={12}>
-              <DashboardSprintKanban maxStories={8} />
+              <DashboardSprintKanban 
+                maxStories={8} 
+                selectedSprintId={selectedSprintId}
+              />
             </Col>
           </Row>
 

@@ -5,6 +5,7 @@ import { collection, addDoc, getDocs, query, where, orderBy } from 'firebase/fir
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
+import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import '../styles/MaterialDesign.css';
 
@@ -251,16 +252,36 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           ref: taskRef
         });
         
-        await addDoc(collection(db, 'tasks'), taskData);
-        
-        console.log('✅ FloatingActionButton: TASK saved successfully', {
-          action: 'task_save_success',
-          timestamp: new Date().toISOString(),
-          ref: taskRef
+        // Use emergency task creation with fallback system
+        const result = await emergencyCreateTask(taskData, currentUser.uid, {
+          maxRetries: 3,
+          retryDelay: 1000,
+          fallbackMethod: true
         });
+        
+        if (result.success) {
+          console.log('✅ FloatingActionButton: TASK saved successfully', {
+            action: 'task_save_success',
+            timestamp: new Date().toISOString(),
+            ref: taskRef,
+            method: result.method,
+            taskId: result.id
+          });
+          
+          if (result.warning) {
+            setSubmitResult(`⚠️ Task created locally: ${result.warning}`);
+          } else {
+            setSubmitResult(`✅ Task created successfully!`);
+          }
+        } else {
+          throw new Error(result.error || 'Emergency task creation failed');
+        }
+      } else {
+        // For goals and stories, use standard success message after creation
+        const itemTypeCapitalized = quickAddType === 'goal' ? 'Goal' : 'Story';
+        setSubmitResult(`✅ ${itemTypeCapitalized} created successfully!`);
       }
 
-      setSubmitResult(`✅ ${quickAddType.charAt(0).toUpperCase() + quickAddType.slice(1)} created successfully!`);
       setQuickAddData({ title: '', description: '', theme: 'Growth', effort: 'M', priority: 'med', goalId: '', sprintId: '' });
       
       // Auto-close after success

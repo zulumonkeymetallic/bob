@@ -1,6 +1,6 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.7.0",
+  "version": "3.8.0",
   "description": "AI-Powered Personal Productivity Platform with Revolutionary Theme-Based Gantt Chart - Themes as Rows, Goals as Draggable Bars with Edit/Delete Actions",
   "private": true,
   "dependencies": {

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Modal, Button, Form, Alert } from 'react-bootstrap';
+import React, { useState, useCallback, useEffect } from 'react';
+import { Modal, Button, Form, Alert, Dropdown, DropdownButton } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
@@ -234,8 +234,8 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         orderIndex: Date.now(), // Simple ordering by creation time
         tags: [],
         acceptanceCriteria: [],
-        createdAt: new Date(),
-        updatedAt: new Date()
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       };
 
       console.log('💾 AddStoryModal: Saving STORY to database', {

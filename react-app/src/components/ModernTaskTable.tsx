@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -129,12 +129,22 @@ const defaultColumns: Column[] = [
     type: 'select',
     options: ['Health', 'Growth', 'Wealth', 'Tribe', 'Home']
   },
+  { 
+    key: 'storyTitle', 
+    label: 'Story', 
+    width: '15%', 
+    visible: true, 
+    editable: true, 
+    type: 'select',
+    options: []
+  },
 ];
 
 interface SortableRowProps {
   task: TaskTableRow;
   columns: Column[];
   index: number;
+  stories: Story[];
   onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
   onTaskDelete: (taskId: string) => Promise<void>;
 }
@@ -143,11 +153,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
   task, 
   columns, 
   index, 
+  stories,
   onTaskUpdate, 
   onTaskDelete 
 }) => {
   const { showSidebar } = useSidebar();
-  const { trackClick, trackFieldChange } = useActivityTracking();
+  const { trackCRUD, trackFieldChange } = useActivityTracking();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
     attributes,
@@ -178,21 +189,59 @@ const SortableRow: React.FC<SortableRowProps> = ({
       
       // Only proceed if the value actually changed
       if (oldValue !== editValue) {
-        const updates: Partial<Task> = { [key]: editValue };
+        let updates: Partial<Task>;
+        
+        // Special handling for story selection
+        if (key === 'storyTitle') {
+          // Find the story by title and update storyId instead
+          const selectedStory = stories.find(story => story.title === editValue);
+          if (selectedStory) {
+            updates = { storyId: selectedStory.id };
+            
+            // Track the field change with story title for display
+            trackFieldChange(
+              task.id,
+              'task',
+              'story',
+              task.storyTitle || 'No story',
+              editValue,
+              task.ref
+            );
+            
+            console.log(`🎯 Task story changed: from "${task.storyTitle || 'No story'}" to "${editValue}" (ID: ${selectedStory.id}) for task ${task.id}`);
+          } else {
+            // Clear story assignment
+            updates = { storyId: '' };
+            
+            trackFieldChange(
+              task.id,
+              'task',
+              'story',
+              task.storyTitle || 'No story',
+              'No story',
+              task.ref
+            );
+            
+            console.log(`🎯 Task story cleared for task ${task.id}`);
+          }
+        } else {
+          // Regular field update
+          updates = { [key]: editValue };
+          
+          // Track the field change for activity stream
+          trackFieldChange(
+            task.id,
+            'task',
+            key,
+            oldValue,
+            editValue,
+            task.ref
+          );
+          
+          console.log(`🎯 Task field changed: ${key} from "${oldValue}" to "${editValue}" for task ${task.id}`);
+        }
+        
         await onTaskUpdate(task.id, updates);
-        
-        // Track the field change for activity stream
-        trackFieldChange(
-          task.id,
-          'task',
-          key,
-          oldValue,
-          editValue,
-          task.title,
-          task.ref
-        );
-        
-        console.log(`🎯 Task field changed: ${key} from "${oldValue}" to "${editValue}" for task ${task.id}`);
       }
       
       setEditingCell(null);
@@ -401,20 +450,6 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 timestamp: new Date().toISOString()
               });
               
-              // 🎯 BOB v3.2.4: Enhanced Activity Tracking
-              await trackClick({
-                elementId: 'task-edit-btn',
-                elementType: 'edit',
-                entityId: task.id,
-                entityType: 'task',
-                entityTitle: task.title,
-                additionalData: {
-                  taskStatus: task.status,
-                  taskPriority: task.priority,
-                  action: 'edit_button_clicked'
-                }
-              });
-              
               showSidebar(task, 'task');
             }}
             style={{
@@ -492,7 +527,6 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   defaultColumns: defaultColumnKeys,
   compact = false,
 }) => {
-  const { trackClick } = useActivityTracking();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   
   // Initialize columns based on defaultColumns prop or use all columns
@@ -515,6 +549,17 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     display: false,
   });
 
+  // Update story column options when stories change
+  useEffect(() => {
+    setColumns(prev => 
+      prev.map(col => 
+        col.key === 'storyTitle' 
+          ? { ...col, options: stories.map(story => story.title) }
+          : col
+      )
+    );
+  }, [stories]);
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -522,11 +567,15 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
-  // Convert tasks to table rows with sort order
-  const tableRows: TaskTableRow[] = tasks.map((task, index) => ({
-    ...task,
-    sortOrder: index,
-  }));
+  // Convert tasks to table rows with sort order and story titles
+  const tableRows: TaskTableRow[] = tasks.map((task, index) => {
+    const story = stories.find(s => s.id === task.storyId);
+    return {
+      ...task,
+      sortOrder: index,
+      storyTitle: story?.title || '',
+    };
+  });
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -737,6 +786,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       task={task}
                       columns={columns}
                       index={index}
+                      stories={stories}
                       onTaskUpdate={onTaskUpdate}
                       onTaskDelete={onTaskDelete}
                     />

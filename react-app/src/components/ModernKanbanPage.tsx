@@ -1,16 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table, Dropdown } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task } from '../types';
-import { generateRef } from '../utils/referenceGenerator';
-import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 
 const ModernKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
-  const { showSidebar, setUpdateHandler } = useSidebar();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -21,16 +17,16 @@ const ModernKanbanPage: React.FC = () => {
   
   // Configurable swim lanes
   const [swimLanes] = useState([
-    { id: 'backlog', title: 'Backlog', status: 'backlog' },
-    { id: 'active', title: 'Active', status: 'active' },
-    { id: 'done', title: 'Done', status: 'done' }
+    { id: 'backlog', title: 'Backlog', status: 0 }, // 0 = Backlog
+    { id: 'active', title: 'Active', status: 2 }, // 2 = In Progress
+    { id: 'done', title: 'Done', status: 4 } // 4 = Done
   ]);
 
   const [newStory, setNewStory] = useState({
     title: '',
     description: '',
     goalId: '',
-    priority: 'P2' as 'P1' | 'P2' | 'P3',
+    priority: 2, // P2 = Medium
     points: 1
   });
   
@@ -38,14 +34,14 @@ const ModernKanbanPage: React.FC = () => {
     title: '',
     description: '',
     effort: 'M' as 'S' | 'M' | 'L',
-    priority: 'med' as 'low' | 'med' | 'high'
+    priority: 2 // 2 = Medium
   });
 
   const [editStory, setEditStory] = useState({
     title: '',
     description: '',
     goalId: '',
-    priority: 'P2' as 'P1' | 'P2' | 'P3',
+    priority: 2, // P2 = Medium
     points: 1
   });
 
@@ -101,48 +97,15 @@ const ModernKanbanPage: React.FC = () => {
     };
   }, [currentUser]);
 
-  // Set up the update handler for the global sidebar
-  useEffect(() => {
-    const handleItemUpdate = async (item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => {
-      try {
-        const collection_name = type === 'story' ? 'stories' : type === 'task' ? 'tasks' : 'goals';
-        await updateDoc(doc(db, collection_name, item.id), {
-          ...updates,
-          updatedAt: serverTimestamp()
-        });
-        console.log(`${type} updated successfully`);
-      } catch (error) {
-        console.error('Error updating item:', error);
-        throw error;
-      }
-    };
-
-    setUpdateHandler(handleItemUpdate);
-  }, [setUpdateHandler]);
-
   const handleAddStory = async () => {
     if (!currentUser || !newStory.title.trim()) return;
 
     try {
-      // Get existing story references for unique ref generation
-      const existingStoriesQuery = query(
-        collection(db, 'stories'),
-        where('ownerUid', '==', currentUser.uid)
-      );
-      const existingSnapshot = await getDocs(existingStoriesQuery);
-      const existingRefs = existingSnapshot.docs
-        .map(doc => doc.data().ref)
-        .filter(ref => ref);
-      
-      // Generate unique reference number
-      const ref = generateRef('story', existingRefs);
-
       await addDoc(collection(db, 'stories'), {
-        ref: ref, // Add reference number
         title: newStory.title,
         description: newStory.description,
         goalId: newStory.goalId,
-        status: 'backlog',
+        status: 0, // 0 = Backlog
         priority: newStory.priority,
         points: newStory.points,
         orderIndex: stories.length,
@@ -155,7 +118,7 @@ const ModernKanbanPage: React.FC = () => {
         title: '',
         description: '',
         goalId: '',
-        priority: 'P2',
+        priority: 2, // P2 = Medium
         points: 1
       });
       setShowAddStory(false);
@@ -168,21 +131,7 @@ const ModernKanbanPage: React.FC = () => {
     if (!currentUser || !newTask.title.trim() || !selectedStory) return;
 
     try {
-      // Get existing task references for unique ref generation
-      const existingTasksQuery = query(
-        collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid)
-      );
-      const existingSnapshot = await getDocs(existingTasksQuery);
-      const existingRefs = existingSnapshot.docs
-        .map(doc => doc.data().ref)
-        .filter(ref => ref);
-      
-      // Generate unique reference number
-      const ref = generateRef('task', existingRefs);
-
       await addDoc(collection(db, 'tasks'), {
-        ref: ref, // Add reference number
         persona: 'personal',
         parentType: 'story',
         parentId: selectedStory.id,
@@ -204,7 +153,7 @@ const ModernKanbanPage: React.FC = () => {
         title: '',
         description: '',
         effort: 'M',
-        priority: 'med'
+        priority: 2 // 2 = Medium
       });
       setShowAddTask(false);
     } catch (error) {
@@ -212,7 +161,7 @@ const ModernKanbanPage: React.FC = () => {
     }
   };
 
-  const updateStoryStatus = async (storyId: string, newStatus: string) => {
+  const updateStoryStatus = async (storyId: string, newStatus: number) => {
     try {
       await updateDoc(doc(db, 'stories', storyId), {
         status: newStatus,
@@ -223,7 +172,7 @@ const ModernKanbanPage: React.FC = () => {
     }
   };
 
-  const updateTaskStatus = async (taskId: string, newStatus: string) => {
+  const updateTaskStatus = async (taskId: string, newStatus: number) => {
     try {
       await updateDoc(doc(db, 'tasks', taskId), {
         status: newStatus,
@@ -236,7 +185,6 @@ const ModernKanbanPage: React.FC = () => {
 
   const handleStoryClick = (story: Story) => {
     setSelectedStory(story);
-    showSidebar(story, 'story');
   };
 
   const openEditStory = (story: Story) => {
@@ -244,7 +192,7 @@ const ModernKanbanPage: React.FC = () => {
       title: story.title,
       description: story.description || '',
       goalId: story.goalId || '',
-      priority: getPriorityName(story.priority) as 'P1' | 'P2' | 'P3',
+      priority: story.priority,
       points: story.points || 1
     });
     setSelectedStory(story);
@@ -259,7 +207,7 @@ const ModernKanbanPage: React.FC = () => {
         title: editStory.title,
         description: editStory.description,
         goalId: editStory.goalId,
-        priority: editStory.priority === "P1" ? 1 : editStory.priority === "P2" ? 2 : 3,
+        priority: editStory.priority,
         points: editStory.points,
         updatedAt: serverTimestamp()
       });
@@ -376,12 +324,12 @@ const ModernKanbanPage: React.FC = () => {
                 <Card.Header className="bg-light">
                   <h5 className="mb-0">{lane.title}</h5>
                   <small className="text-muted">
-                    {stories.filter(s => isStatus(s.status, lane.status)).length} stories
+                    {stories.filter(s => s.status === lane.status).length} stories
                   </small>
                 </Card.Header>
                 <Card.Body style={{ maxHeight: '60vh', overflowY: 'auto' }}>
                   {stories
-                    .filter(story => isStatus(story.status, lane.status))
+                    .filter(story => story.status === lane.status)
                     .map((story) => {
                       const goalTheme = getGoalTheme(story.goalId);
                       const taskCount = getTaskCount(story.id);
@@ -396,14 +344,7 @@ const ModernKanbanPage: React.FC = () => {
                         >
                           <Card.Body className="p-3">
                             <div className="d-flex justify-content-between align-items-start mb-2">
-                              <div>
-                                <div className="d-flex align-items-center gap-2 mb-1">
-                                  <span style={{ fontSize: '12px', fontWeight: '600', color: getThemeColor(goalTheme) }}>
-                                    {story.ref || `STRY-${story.id.slice(-3).toUpperCase()}`}
-                                  </span>
-                                  <h6 className="mb-0">{story.title}</h6>
-                                </div>
-                              </div>
+                              <h6 className="mb-1">{story.title}</h6>
                               <div>
                                 <Badge bg={getThemeColor(goalTheme)} className="me-1">
                                   {goalTheme}
@@ -444,13 +385,13 @@ const ModernKanbanPage: React.FC = () => {
                                     Move
                                   </Dropdown.Toggle>
                                   <Dropdown.Menu>
-                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 'backlog'); }}>
+                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 0); }}>
                                       Backlog
                                     </Dropdown.Item>
-                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 'active'); }}>
+                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 2); }}>
                                       Active
                                     </Dropdown.Item>
-                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 'done'); }}>
+                                    <Dropdown.Item onClick={(e) => { e.stopPropagation(); updateStoryStatus(story.id, 4); }}>
                                       Done
                                     </Dropdown.Item>
                                   </Dropdown.Menu>
@@ -484,7 +425,7 @@ const ModernKanbanPage: React.FC = () => {
                       );
                     })}
 
-                  {stories.filter(s => isStatus(s.status, lane.status)).length === 0 && (
+                  {stories.filter(s => s.status === lane.status).length === 0 && (
                     <div className="text-center text-muted py-4">
                       <p>No stories in {lane.title.toLowerCase()}</p>
                     </div>
@@ -533,11 +474,7 @@ const ModernKanbanPage: React.FC = () => {
                     </thead>
                     <tbody>
                       {getTasksForSelectedStory().map((task) => (
-                        <tr 
-                          key={task.id} 
-                          style={{ cursor: 'pointer' }}
-                          onClick={() => showSidebar(task, 'task')}
-                        >
+                        <tr key={task.id}>
                           <td>
                             <div>
                               <strong>{task.title}</strong>
@@ -548,28 +485,24 @@ const ModernKanbanPage: React.FC = () => {
                           </td>
                           <td onClick={(e) => e.stopPropagation()}>
                             <Dropdown>
-                              <Dropdown.Toggle as={Badge} bg={isStatus(task.status, 'done') ? 'success' : 
-                                  isStatus(task.status, 'in-progress') ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
-                                {isStatus(task.status, 'in-progress') ? 'In Progress' : 
-                                 isStatus(task.status, 'done') ? 'Done' : 
-                                 isStatus(task.status, 'planned') ? 'Planned' :
-                                 isStatus(task.status, 'todo') ? 'To Do' :
-                                 isStatus(task.status, 'blocked') ? 'Blocked' : 'Unknown'}
+                              <Dropdown.Toggle as={Badge} bg={task.status === 2 ? 'success' : 
+                                  task.status === 1 ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                                {task.status === 1 ? 'In Progress' : 
+                                 task.status === 2 ? 'Done' : 
+                                 task.status === 3 ? 'Blocked' :
+                                 task.status === 0 ? 'To Do' : 'Unknown'}
                               </Dropdown.Toggle>
                               <Dropdown.Menu>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'todo')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 0)}>
                                   To Do
                                 </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'planned')}>
-                                  Planned
-                                </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'in-progress')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 1)}>
                                   In Progress
                                 </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'blocked')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 3)}>
                                   Blocked
                                 </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 'done')}>
+                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 2)}>
                                   Done
                                 </Dropdown.Item>
                               </Dropdown.Menu>
@@ -581,9 +514,11 @@ const ModernKanbanPage: React.FC = () => {
                             </Badge>
                           </td>
                           <td>
-                            <Badge bg={isPriority(task.priority, 'high') ? 'danger' : 
-                                isPriority(task.priority, 'med') ? 'warning' : 'secondary'}>
-                              {isPriority(task.priority, 'med') ? 'medium' : task.priority}
+                            <Badge bg={task.priority === 1 ? 'danger' : 
+                                task.priority === 2 ? 'warning' : 'secondary'}>
+                              {task.priority === 1 ? 'High' : 
+                               task.priority === 2 ? 'Medium' : 
+                               task.priority === 3 ? 'Low' : 'Unknown'}
                             </Badge>
                           </td>
                           <td>
@@ -655,11 +590,11 @@ const ModernKanbanPage: React.FC = () => {
                   <Form.Label>Priority</Form.Label>
                   <Form.Select
                     value={newStory.priority}
-                    onChange={(e) => setNewStory({...newStory, priority: e.target.value as 'P1' | 'P2' | 'P3'})}
+                    onChange={(e) => setNewStory({...newStory, priority: parseInt(e.target.value)})}
                   >
-                    <option value="P1">P1 - High</option>
-                    <option value="P2">P2 - Medium</option>
-                    <option value="P3">P3 - Low</option>
+                    <option value="1">P1 - High</option>
+                    <option value="2">P2 - Medium</option>
+                    <option value="3">P3 - Low</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -741,11 +676,11 @@ const ModernKanbanPage: React.FC = () => {
                   <Form.Label>Priority</Form.Label>
                   <Form.Select
                     value={editStory.priority}
-                    onChange={(e) => setEditStory({...editStory, priority: e.target.value as 'P1' | 'P2' | 'P3'})}
+                    onChange={(e) => setEditStory({...editStory, priority: parseInt(e.target.value)})}
                   >
-                    <option value="P1">P1 - High</option>
-                    <option value="P2">P2 - Medium</option>
-                    <option value="P3">P3 - Low</option>
+                    <option value="1">P1 - High</option>
+                    <option value="2">P2 - Medium</option>
+                    <option value="3">P3 - Low</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -825,11 +760,11 @@ const ModernKanbanPage: React.FC = () => {
                   <Form.Label>Priority</Form.Label>
                   <Form.Select
                     value={newTask.priority}
-                    onChange={(e) => setNewTask({...newTask, priority: e.target.value as 'low' | 'med' | 'high'})}
+                    onChange={(e) => setNewTask({...newTask, priority: parseInt(e.target.value)})}
                   >
-                    <option value="low">Low</option>
-                    <option value="med">Medium</option>
-                    <option value="high">High</option>
+                    <option value="3">Low</option>
+                    <option value="2">Medium</option>
+                    <option value="1">High</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
