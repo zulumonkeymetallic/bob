@@ -18,8 +18,121 @@
     };
     document.head.appendChild(s2);
   };
+  s.onerror = function() {
+    // Firebase failed to load, initialize basic navigation anyway
+    initBasicNavigation();
+  };
   document.head.appendChild(s);
 })();
+
+// Basic navigation that works without Firebase
+function initBasicNavigation() {
+  console.log('Initializing basic navigation (Firebase unavailable)');
+  
+  // Nav
+  document.querySelectorAll('.nav-btn[data-view]').forEach(function(btn){
+    btn.onclick = function(){
+      document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      var view = btn.getAttribute('data-view');
+      document.querySelectorAll('.view').forEach(v=>v.classList.remove('visible'));
+      var el = document.getElementById('view-' + view);
+      if (el) el.classList.add('visible');
+      if (view === 'calendar') refreshCalendarView();
+    };
+  });
+  
+  // Set up basic routine UI without Firebase
+  setupBasicRoutineUI();
+}
+
+function setupBasicRoutineUI() {
+  var createBtn = document.getElementById('createRoutine');
+  if (createBtn) {
+    createBtn.onclick = function() {
+      var title = prompt('Routine name:');
+      if (title) {
+        // Show demo routine builder
+        showDemoRoutineBuilder(title);
+      }
+    };
+  }
+}
+
+function showDemoRoutineBuilder(routineName) {
+  var builder = document.getElementById('routineBuilder');
+  if (!builder) return;
+  
+  builder.innerHTML = '<div class="routine-meta">' +
+    '<label>Title:<br><input id="routineTitle" value="' + routineName + '" placeholder="Routine name"></label>' +
+    '<label>Theme:<br><select id="routineTheme">' +
+    '<option value="Health" selected>Health</option>' +
+    '<option value="Growth">Growth</option>' +
+    '<option value="Wealth">Wealth</option>' +
+    '<option value="Tribe">Tribe</option>' +
+    '<option value="Home">Home</option>' +
+    '</select></label>' +
+    '<label>Recurrence:<br><select id="routineRecurrence">' +
+    '<option value="daily" selected>Daily</option>' +
+    '<option value="weekly">Weekly</option>' +
+    '</select></label>' +
+    '<button onclick="saveDemoRoutine()">Save Routine</button>' +
+    '</div>' +
+    '<div><strong>Steps:</strong> <button onclick="addDemoStep()">+ Add Step</button></div>' +
+    '<div id="routineSteps">' +
+    '<div class="routine-step">' +
+    '<div><strong>Meditation</strong><div class="step-info">10min · Priority 8</div></div>' +
+    '<div class="step-actions"><button onclick="editDemoStep(this)">Edit</button><button onclick="deleteDemoStep(this)">Delete</button></div>' +
+    '</div>' +
+    '<div class="routine-step">' +
+    '<div><strong>Exercise</strong><div class="step-info">30min · Priority 9</div></div>' +
+    '<div class="step-actions"><button onclick="editDemoStep(this)">Edit</button><button onclick="deleteDemoStep(this)">Delete</button></div>' +
+    '</div>' +
+    '<div class="routine-step">' +
+    '<div><strong>Journaling</strong><div class="step-info">15min · Priority 7</div></div>' +
+    '<div class="step-actions"><button onclick="editDemoStep(this)">Edit</button><button onclick="deleteDemoStep(this)">Delete</button></div>' +
+    '</div>' +
+    '</div>';
+}
+
+window.addDemoStep = function() {
+  var title = prompt('Step name:');
+  if (!title) return;
+  var effort = parseInt(prompt('Duration (minutes):', '10')) || 10;
+  var importance = parseInt(prompt('Importance (1-10):', '5')) || 5;
+  
+  var stepsDiv = document.getElementById('routineSteps');
+  if (stepsDiv) {
+    var step = document.createElement('div');
+    step.className = 'routine-step';
+    step.innerHTML = '<div><strong>' + title + '</strong><div class="step-info">' + effort + 'min · Priority ' + importance + '</div></div>' +
+      '<div class="step-actions"><button onclick="editDemoStep(this)">Edit</button><button onclick="deleteDemoStep(this)">Delete</button></div>';
+    stepsDiv.appendChild(step);
+  }
+};
+
+window.saveDemoRoutine = function() {
+  var title = document.getElementById('routineTitle').value;
+  var theme = document.getElementById('routineTheme').value;
+  var recurrence = document.getElementById('routineRecurrence').value;
+  
+  alert('Demo: Routine "' + title + '" saved with theme "' + theme + '" and recurrence "' + recurrence + '".\n\nThis would create the routine in the backend when Firebase is connected.');
+};
+
+window.editDemoStep = function(button) {
+  var step = button.closest('.routine-step');
+  var stepTitle = step.querySelector('strong').textContent;
+  var newTitle = prompt('Edit step name:', stepTitle);
+  if (newTitle) {
+    step.querySelector('strong').textContent = newTitle;
+  }
+};
+
+window.deleteDemoStep = function(button) {
+  if (confirm('Delete this step?')) {
+    button.closest('.routine-step').remove();
+  }
+};
 
 function init() {
   var config = { apiKey:"AIzaSyDsuR1TNHUE74awnbFaU5cA0FGya0voVFk", authDomain:"bob20250810.firebaseapp.com", projectId:"bob20250810" };
