@@ -3,5 +3,8 @@
   "dependencies": {
     "react-dnd": "^16.0.1",
     "react-dnd-html5-backend": "^16.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
   }
 }
