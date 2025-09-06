@@ -42,3 +42,15 @@ input[type=search]{background:var(--panel);border:1px solid var(--line);color:va
 .calendar-cell{border-left:1px solid var(--line);min-height:48px;padding:6px 8px}
 .calendar-hour{color:var(--muted);padding:6px 8px}
 .event{background:var(--brand);color:#000;border-radius:8px;padding:2px 6px;display:inline-block;margin:2px 0}
+
+.routine-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.routine-builder{min-height:300px;border:2px dashed var(--line);border-radius:12px;padding:16px}
+.builder-empty{color:var(--muted);text-align:center;padding:60px 0}
+.routine-step{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:4px 0;cursor:move;display:flex;justify-content:space-between;align-items:center}
+.routine-step:hover{border-color:var(--brand)}
+.routine-step.dragging{opacity:0.5}
+.step-info{font-size:12px;color:var(--muted)}
+.step-actions{display:flex;gap:4px}
+.step-actions button{padding:4px 8px;font-size:12px}
+.routine-meta{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:16px}
+.routine-meta input, .routine-meta select{background:var(--card);border:1px solid var(--line);color:var(--text);padding:6px 8px;border-radius:6px;margin:4px 0;width:100%}

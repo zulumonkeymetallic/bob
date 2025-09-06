@@ -11,6 +11,8 @@ service cloud.firestore {
     match /tasks/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /routines/{id}  { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /routine_steps/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 
     // Per-user integration profile
     match /profiles/{uid} {

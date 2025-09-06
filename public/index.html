@@ -19,6 +19,7 @@
         <button data-view="calendar" class="nav-btn">Calendar</button>
         <button data-view="kanban" class="nav-btn">Kanban</button>
         <button data-view="goals" class="nav-btn">Goals & OKRs</button>
+        <button data-view="routines" class="nav-btn">Routines</button>
         <button data-view="imports" class="nav-btn" onclick="window.location.href='/admin.html'">Imports</button>
       </nav>
       <div class="sidebar-foot">
@@ -84,6 +85,22 @@
         <div class="pane">
           <h2>OKRs</h2>
           <div id="okrsList" class="list"></div>
+        </div>
+      </section>
+
+      <section id="view-routines" class="view">
+        <div class="pane">
+          <div class="routine-header">
+            <h2>My Routines</h2>
+            <button id="createRoutine" class="primary">+ Create Routine</button>
+          </div>
+          <div id="routinesList" class="list"></div>
+        </div>
+        <div class="pane">
+          <h2>Routine Builder</h2>
+          <div id="routineBuilder" class="routine-builder">
+            <div class="builder-empty">Select a routine to edit or create a new one</div>
+          </div>
         </div>
       </section>
     </main>

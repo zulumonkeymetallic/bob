@@ -56,7 +56,7 @@ function init() {
     if (signoutBtn) signoutBtn.style.display = user ? '' : 'none';
     if (signoutBtn) signoutBtn.onclick = function(){ auth.signOut().catch(console.error); };
     if (user) {
-      loadBoard(user, db); loadGoalsOkrs(user, db); loadToday(user, db);
+      loadBoard(user, db); loadGoalsOkrs(user, db); loadToday(user, db); loadRoutines(user, db, functions);
       // Wire calendar buttons
       if (connectBtn) connectBtn.onclick = function(){ startServerOAuth(user.uid); };
       if (addTodayBtn) addTodayBtn.onclick = function(){
@@ -208,6 +208,112 @@ function loadGoalsOkrs(user, db){
     });
   });
 }
+
+function loadRoutines(user, db, functions){
+  db.collection('routines').where('ownerUid','==',user.uid).orderBy('createdAt','desc').limit(50).onSnapshot(function(snap){
+    var list = document.getElementById('routinesList'); if (!list) return; list.innerHTML='';
+    snap.forEach(function(doc){
+      var d=doc.data(); var item=document.createElement('div'); item.className='item';
+      item.textContent = (d.title||'(routine)') + (d.themeId? ' · '+d.themeId : '');
+      item.style.cursor = 'pointer';
+      item.onclick = function(){ loadRoutineBuilder(doc.id, d, user, db, functions); };
+      list.appendChild(item);
+    });
+  });
+  
+  var createBtn = document.getElementById('createRoutine');
+  if (createBtn) createBtn.onclick = function(){ createNewRoutine(user, db, functions); };
+}
+
+function createNewRoutine(user, db, functions){
+  var title = prompt('Routine name:');
+  if (!title) return;
+  
+  functions.httpsCallable('createRoutine')({
+    title: title,
+    themeId: 'Health',
+    recurrenceRule: 'daily',
+    importanceScore: 5
+  }).then(function(result){
+    if (result.data.ok) {
+      console.log('Routine created:', result.data.id);
+    }
+  }).catch(console.error);
+}
+
+function loadRoutineBuilder(routineId, routine, user, db, functions){
+  var builder = document.getElementById('routineBuilder'); if (!builder) return;
+  
+  builder.innerHTML = '<div class="routine-meta">' +
+    '<label>Title:<br><input id="routineTitle" value="'+(routine.title||'')+'" placeholder="Routine name"></label>' +
+    '<label>Theme:<br><select id="routineTheme">' +
+    '<option value="Health"'+(routine.themeId==='Health'?' selected':'')+'>Health</option>' +
+    '<option value="Growth"'+(routine.themeId==='Growth'?' selected':'')+'>Growth</option>' +
+    '<option value="Wealth"'+(routine.themeId==='Wealth'?' selected':'')+'>Wealth</option>' +
+    '<option value="Tribe"'+(routine.themeId==='Tribe'?' selected':'')+'>Tribe</option>' +
+    '<option value="Home"'+(routine.themeId==='Home'?' selected':'')+'>Home</option>' +
+    '</select></label>' +
+    '<label>Recurrence:<br><select id="routineRecurrence">' +
+    '<option value="daily"'+(routine.recurrenceRule==='daily'?' selected':'')+'>Daily</option>' +
+    '<option value="weekly"'+(routine.recurrenceRule==='weekly'?' selected':'')+'>Weekly</option>' +
+    '</select></label>' +
+    '<button onclick="saveRoutineMeta(\''+routineId+'\')">Save Changes</button>' +
+    '</div>' +
+    '<div><strong>Steps:</strong> <button onclick="addRoutineStep(\''+routineId+'\')">+ Add Step</button></div>' +
+    '<div id="routineSteps"></div>';
+  
+  // Load steps
+  db.collection('routine_steps').where('routineId','==',routineId).where('ownerUid','==',user.uid).orderBy('orderIndex').onSnapshot(function(snap){
+    var stepsDiv = document.getElementById('routineSteps'); if (!stepsDiv) return;
+    stepsDiv.innerHTML = '';
+    snap.forEach(function(doc){
+      var s = doc.data();
+      var step = document.createElement('div');
+      step.className = 'routine-step';
+      step.innerHTML = '<div><strong>'+s.title+'</strong><div class="step-info">'+s.effortMinutes+'min · Priority '+s.importanceScore+'</div></div>' +
+        '<div class="step-actions"><button onclick="editStep(\''+doc.id+'\')">Edit</button><button onclick="deleteStep(\''+doc.id+'\')">Delete</button></div>';
+      stepsDiv.appendChild(step);
+    });
+  });
+}
+
+window.addRoutineStep = function(routineId){
+  var title = prompt('Step name:');
+  if (!title) return;
+  var effort = parseInt(prompt('Duration (minutes):', '10')) || 10;
+  var importance = parseInt(prompt('Importance (1-10):', '5')) || 5;
+  
+  firebase.functions("europe-west2").httpsCallable('createRoutineStep')({
+    routineId: routineId,
+    title: title,
+    effortMinutes: effort,
+    importanceScore: importance,
+    orderIndex: Date.now() // Simple ordering
+  }).catch(console.error);
+};
+
+window.saveRoutineMeta = function(routineId){
+  var title = document.getElementById('routineTitle').value;
+  var theme = document.getElementById('routineTheme').value;
+  var recurrence = document.getElementById('routineRecurrence').value;
+  
+  firebase.firestore().collection('routines').doc(routineId).update({
+    title: title,
+    themeId: theme,
+    recurrenceRule: recurrence
+  }).catch(console.error);
+};
+
+window.editStep = function(stepId){
+  // Simple edit for now
+  alert('Edit functionality coming soon');
+};
+
+window.deleteStep = function(stepId){
+  if (confirm('Delete this step?')) {
+    firebase.firestore().collection('routine_steps').doc(stepId).delete().catch(console.error);
+  }
+};
 
 function loadToday(user, db){
   db.collection('tasks').where('ownerUid','==',user.uid).where('status','in',['backlog','doing']).limit(20).get().then(function(qs){
