@@ -1,7 +1,7 @@
 // Version tracking for cache busting - Auto-generated from git
-export const VERSION = 'v1.0-backup';
-export const BUILD_TIME = '2025-09-06T12:06:02.000Z';
-export const BUILD_HASH = 'b44ffb4';
+export const VERSION = 'v1.0-backup-1-g07c30e4';
+export const BUILD_TIME = '2025-09-06T12:08:50.000Z';
+export const BUILD_HASH = '07c30e4';
 export const GIT_BRANCH = 'v1.1-development';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
