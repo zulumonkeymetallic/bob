@@ -35,7 +35,7 @@ import { TestModeProvider } from './contexts/TestModeContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
-import { checkForUpdates, VERSION } from './version';
+import { VERSION } from './version';
 // import { versionTimeoutService } from './services/versionTimeoutService';
 import ComprehensiveTest from './components/ComprehensiveTest';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
@@ -113,8 +113,8 @@ function AppContent() {
     console.log('🕐 Initializing Version Timeout Service');
     // versionTimeoutService.forceVersionCheck(); // Temporarily disabled to fix cache loop
     
-    // Legacy update check as fallback
-    checkForUpdates();
+    // Version info logging
+    console.log(`📦 BOB v${VERSION} loaded successfully`);
     
     // Add keyboard shortcut for force refresh (Ctrl+Shift+R or Cmd+Shift+R)
     const handleKeyDown = (event: KeyboardEvent) => {

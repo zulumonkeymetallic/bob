@@ -12,7 +12,7 @@ import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import { Settings, Eye, EyeOff, Plus, Edit, Trash2, Move } from 'lucide-react';
 import ModernTaskTable from './ModernTaskTable';
 
-const EnhancedKanbanPage: React.FC = () => {
+const EnhancedKanbanPage: React.FC = (): JSX.Element => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
