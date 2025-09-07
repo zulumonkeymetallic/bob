@@ -440,7 +440,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
               {/* Theme Inheritance Chain */}
               {goal && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--notion-text-gray)' }}>
                   <Target size={12} />
                   <span>{goal.title}</span>
                   {story && selectedType === 'task' && (
