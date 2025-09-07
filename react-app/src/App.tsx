@@ -27,6 +27,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
+import { SprintProvider } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 
 // Import theme-aware styles
@@ -64,11 +65,13 @@ function App() {
   return (
     <TestModeProvider>
       <PersonaProvider>
-        <SidebarProvider>
-          <Router>
-            <AppContent />
-          </Router>
-        </SidebarProvider>
+        <SprintProvider>
+          <SidebarProvider>
+            <Router>
+              <AppContent />
+            </Router>
+          </SidebarProvider>
+        </SprintProvider>
       </PersonaProvider>
     </TestModeProvider>
   );

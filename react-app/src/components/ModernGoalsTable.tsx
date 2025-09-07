@@ -40,6 +40,7 @@ import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import ModernStoriesTable from './ModernStoriesTable';
+import EditGoalModal from './EditGoalModal';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -1121,83 +1122,16 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
         </div>
       </div>
 
-      {/* Edit Goal Modal */}
-      <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
-        <Modal.Header closeButton>
-          <Modal.Title>Edit Goal</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          {editingGoal && (
-            <Form>
-              <Form.Group className="mb-3">
-                <Form.Label>Goal Title</Form.Label>
-                <Form.Control
-                  type="text"
-                  defaultValue={editingGoal.title}
-                  onChange={(e) => setEditingGoal({...editingGoal, title: e.target.value})}
-                />
-              </Form.Group>
-              <Form.Group className="mb-3">
-                <Form.Label>Description</Form.Label>
-                <Form.Control
-                  as="textarea"
-                  rows={3}
-                  defaultValue={editingGoal.description}
-                  onChange={(e) => setEditingGoal({...editingGoal, description: e.target.value})}
-                />
-              </Form.Group>
-              <Form.Group className="mb-3">
-                <Form.Label>Theme</Form.Label>
-                <Form.Select
-                  defaultValue={editingGoal.theme}
-                  onChange={(e) => setEditingGoal({...editingGoal, theme: parseInt(e.target.value) || 0})}
-                >
-                  {GLOBAL_THEMES.map((theme) => (
-                    <option key={theme.id} value={theme.id}>
-                      {theme.label}
-                    </option>
-                  ))}
-                </Form.Select>
-              </Form.Group>
-              <Form.Group className="mb-3">
-                <Form.Label>Status</Form.Label>
-                <Form.Select
-                  defaultValue={editingGoal.status}
-                  onChange={(e) => setEditingGoal({...editingGoal, status: e.target.value as any})}
-                >
-                  <option value="New">New</option>
-                  <option value="Work in Progress">Work in Progress</option>
-                  <option value="Complete">Complete</option>
-                  <option value="Blocked">Blocked</option>
-                  <option value="Deferred">Deferred</option>
-                </Form.Select>
-              </Form.Group>
-            </Form>
-          )}
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowEditModal(false)}>
-            Cancel
-          </Button>
-          <Button 
-            variant="primary" 
-            onClick={() => {
-              if (editingGoal) {
-                onGoalUpdate(editingGoal.id, {
-                  title: editingGoal.title,
-                  description: editingGoal.description,
-                  theme: editingGoal.theme,
-                  status: editingGoal.status
-                });
-                setShowEditModal(false);
-                setEditingGoal(null);
-              }
-            }}
-          >
-            Save Changes
-          </Button>
-        </Modal.Footer>
-      </Modal>
+      {/* Unified Edit Goal Modal */}
+      <EditGoalModal
+        goal={editingGoal}
+        show={showEditModal}
+        onClose={() => {
+          setShowEditModal(false);
+          setEditingGoal(null);
+        }}
+        currentUserId={currentUser?.uid || ''}
+      />
     </div>
   );
 };

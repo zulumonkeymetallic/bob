@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
 import VersionDisplay from './VersionDisplay';
+import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
 import { useTestMode } from '../contexts/TestModeContext';
 
@@ -33,7 +34,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
-  const [globalSprintId, setGlobalSprintId] = useState<string>('');
+  const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
 
   const navigationGroups: NavigationGroup[] = [
     {
