@@ -148,10 +148,14 @@ log "✅ Deployment record created"
 log "🔨 Building React application..."
 npm run build || error_exit "Build failed"
 
-# Run tests if they exist
-if [ -f "package.json" ] && jq -e '.scripts.test' package.json > /dev/null; then
-    log "🧪 Running tests..."
-    CI=true npm test -- --coverage --watchAll=false || error_exit "Tests failed"
+# Run tests if they exist (allow bypass with SKIP_TESTS=1)
+if [ "${SKIP_TESTS:-0}" != "1" ]; then
+    if [ -f "package.json" ] && jq -e '.scripts.test' package.json > /dev/null; then
+        log "🧪 Running tests..."
+        CI=true npm test -- --coverage --watchAll=false || error_exit "Tests failed"
+    fi
+else
+    log "🔕 Skipping tests due to SKIP_TESTS=1"
 fi
 
 # Deploy to Firebase
