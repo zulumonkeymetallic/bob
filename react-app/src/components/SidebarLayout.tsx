@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
+import VersionDisplay from './VersionDisplay';
 import { useTestMode } from '../contexts/TestModeContext';
 
 interface SidebarLayoutProps {
@@ -307,6 +308,24 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             >
               Sign Out
             </Button>
+
+            {/* App Version */}
+            <div style={{ marginTop: '8px', textAlign: 'center' }}>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '2px 8px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: '1px solid var(--notion-border)',
+                background: 'var(--notion-hover)',
+                color: 'var(--notion-text)'
+              }}>
+                <VersionDisplay variant="badge-only" showSessionInfo={false} />
+              </span>
+            </div>
           </div>
         </div>
       </div>

@@ -23,8 +23,8 @@ try {
     builtAt: new Date().toISOString()
   };
   
-  // Ensure build directory exists
-  const buildDir = './react-app/build';
+  // Ensure build directory exists (resolve relative to repo root)
+  const buildDir = path.join(__dirname, '..', 'react-app', 'build');
   if (!fs.existsSync(buildDir)) {
     fs.mkdirSync(buildDir, { recursive: true });
   }

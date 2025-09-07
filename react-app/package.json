@@ -49,8 +49,11 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
+    "prestart": "node ../scripts/sync-version.js",
     "start": "react-scripts start",
+    "prebuild": "node ../scripts/sync-version.js",
     "build": "react-scripts build && node ../scripts/generate-version.js",
+    "version": "node ../scripts/sync-version.js",
     "build:dev": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",

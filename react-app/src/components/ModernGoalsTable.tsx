@@ -274,8 +274,15 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
-    if (key === 'targetDate' && typeof value === 'number') {
-      return new Date(value).toLocaleDateString();
+    if (key === 'targetDate') {
+      // Support number (ms), Date, or Firestore Timestamp-like objects
+      if (typeof value === 'number') return new Date(value).toLocaleDateString();
+      if (value instanceof Date) return value.toLocaleDateString();
+      if (value && typeof value === 'object' && 'seconds' in value && 'nanoseconds' in value) {
+        const ms = (value.seconds as number) * 1000 + Math.floor((value.nanoseconds as number) / 1e6);
+        return new Date(ms).toLocaleDateString();
+      }
+      return '';
     }
     if (key === 'storiesCount') {
       return `${value || 0} stories`;
