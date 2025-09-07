@@ -6,6 +6,8 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
+import GoalsCardView from './GoalsCardView';
+import EditGoalModal from './EditGoalModal';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -15,6 +17,8 @@ const GoalsManagement: React.FC = () => {
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -132,9 +136,32 @@ const GoalsManagement: React.FC = () => {
               Manage your life goals across different themes
             </p>
           </div>
-          <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
-            Add Goal
-          </Button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* View Mode Toggle */}
+            <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
+              <Button
+                size="sm"
+                id="button-list"
+                variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
+                onClick={() => setViewMode('list')}
+                style={{ borderRadius: 0 }}
+              >
+                List
+              </Button>
+              <Button
+                size="sm"
+                id="button-cards"
+                variant={viewMode === 'cards' ? 'primary' : 'outline-secondary'}
+                onClick={() => setViewMode('cards')}
+                style={{ borderRadius: 0 }}
+              >
+                Cards
+              </Button>
+            </div>
+            <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
+              Add Goal
+            </Button>
+          </div>
         </div>
 
         {/* Dashboard Cards */}
@@ -286,16 +313,34 @@ const GoalsManagement: React.FC = () => {
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }}>
-                <ModernGoalsTable
-                  goals={filteredGoals}
-                  onGoalUpdate={handleGoalUpdate}
-                  onGoalDelete={handleGoalDelete}
-                  onGoalPriorityChange={handleGoalPriorityChange}
-                />
+                {viewMode === 'list' ? (
+                  <ModernGoalsTable
+                    goals={filteredGoals}
+                    onGoalUpdate={handleGoalUpdate}
+                    onGoalDelete={handleGoalDelete}
+                    onGoalPriorityChange={handleGoalPriorityChange}
+                    onEditModal={(goal) => setEditGoal(goal)}
+                  />
+                ) : (
+                  <GoalsCardView
+                    goals={filteredGoals}
+                    onGoalUpdate={handleGoalUpdate}
+                    onGoalDelete={handleGoalDelete}
+                    onGoalPriorityChange={handleGoalPriorityChange}
+                  />
+                )}
               </div>
             )}
           </Card.Body>
         </Card>
+
+        {/* Shared Edit Goal Modal */}
+        <EditGoalModal
+          goal={editGoal}
+          show={!!editGoal}
+          onClose={() => setEditGoal(null)}
+          currentUserId={currentUser?.uid || ''}
+        />
       </div>
     </div>
   );
