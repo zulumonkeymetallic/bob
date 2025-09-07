@@ -5,6 +5,7 @@ import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Goal } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
+import { toDate } from '../utils/firestoreAdapters';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -21,6 +22,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     size: 'M',
     timeToMasterHours: 40,
     confidence: 0.5,
+    startDate: '',
+    endDate: '',
     targetDate: '',
     status: 'New',
     priority: 2,
@@ -51,6 +54,15 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       const sizeMap = { 1: 'XS', 2: 'S', 3: 'M', 4: 'L', 5: 'XL' };
       const statusMap = { 0: 'New', 1: 'Work in Progress', 2: 'Complete', 3: 'Blocked', 4: 'Deferred' };
       
+      const startDateStr = (() => {
+        const d = toDate((goal as any).startDate);
+        return d ? d.toISOString().slice(0, 10) : '';
+      })();
+      const endDateStr = (() => {
+        const d = toDate((goal as any).endDate);
+        return d ? d.toISOString().slice(0, 10) : '';
+      })();
+
       setFormData({
         title: goal.title || '',
         description: goal.description || '',
@@ -58,6 +70,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
         timeToMasterHours: goal.timeToMasterHours || 40,
         confidence: goal.confidence || 0.5,
+        startDate: startDateStr,
+        endDate: endDateStr,
         targetDate: goal.targetDate ? (typeof goal.targetDate === 'string' ? goal.targetDate : '') : '',
         status: statusMap[goal.status as keyof typeof statusMap] || 'New',
         priority: goal.priority || 2,
@@ -114,6 +128,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
+        startDate: formData.startDate ? new Date(formData.startDate).getTime() : null,
+        endDate: formData.endDate ? new Date(formData.endDate).getTime() : null,
         targetDate: formData.targetDate ? new Date(formData.targetDate) : null,
         status: statusMap[formData.status as keyof typeof statusMap] || 0,
         priority: formData.priority,
@@ -225,6 +241,29 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     <option key={size.value} value={size.value}>{size.label}</option>
                   ))}
                 </Form.Select>
+              </Form.Group>
+            </div>
+          </div>
+
+          <div className="row">
+            <div className="col-md-6">
+              <Form.Group className="mb-3">
+                <Form.Label>Start Date</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={formData.startDate}
+                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                />
+              </Form.Group>
+            </div>
+            <div className="col-md-6">
+              <Form.Group className="mb-3">
+                <Form.Label>End Date (Planned)</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={formData.endDate}
+                  onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                />
               </Form.Group>
             </div>
           </div>
