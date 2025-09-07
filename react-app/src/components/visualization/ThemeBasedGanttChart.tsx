@@ -22,6 +22,7 @@ import { db } from '../../firebase';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
 import { Goal, Sprint, Story, Task } from '../../types';
 import EditGoalModal from '../EditGoalModal';
+import ModernStoriesTable from '../ModernStoriesTable';
 import { GLOBAL_THEMES, getThemeById } from '../../constants/globalThemes';
 import useThemeAwareColors, { getThemeAwareGoalColor } from '../../hooks/useThemeAwareColors';
 import './EnhancedGanttChart.css';
@@ -81,12 +82,17 @@ const ThemeBasedGanttChart: React.FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingGoal, setDeletingGoal] = useState<Goal | null>(null);
   const [stories, setStories] = useState<Story[]>([]);
+  const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   
   // Timeline refs
   const timelineRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   
   // Theme definitions - now using global themes
   const themes = GLOBAL_THEMES;
+
+  // Current sprint
+  const currentSprint = useMemo(() => sprints.find(s => s.status === 1) || null, [sprints]);
 
   // Load data
   useEffect(() => {
@@ -238,6 +244,12 @@ const ThemeBasedGanttChart: React.FC = () => {
     }
   }, [stories, sprints]);
 
+  // Count stories for a goal in the current sprint
+  const getCurrentSprintStoryCount = useCallback((goalId: string) => {
+    if (!currentSprint) return 0;
+    return stories.filter(story => story.goalId === goalId && story.sprintId === currentSprint.id).length;
+  }, [stories, currentSprint]);
+
   // Organize goals by theme
   const themeRows: ThemeRow[] = useMemo(() => {
     const filteredGoals = goals.filter(goal => {
@@ -278,6 +290,11 @@ const ThemeBasedGanttChart: React.FC = () => {
   const handleEditGoal = useCallback((goal: Goal) => {
     setEditingGoal(goal);
     setShowEditModal(true);
+  }, []);
+
+  // Handle select goal to show linked stories
+  const handleSelectGoal = useCallback((goal: Goal) => {
+    setSelectedGoal(goal);
   }, []);
 
   // Handle goal deletion
@@ -504,6 +521,64 @@ const ThemeBasedGanttChart: React.FC = () => {
     document.removeEventListener('touchend', handleDragEnd);
   }, [dragState, currentUser, handleDragMove]);
 
+  // Scroll container to today's position when mounted or zoom changes
+  useEffect(() => {
+    const container = containerRef.current;
+    const timeline = timelineRef.current;
+    if (!container || !timeline) return;
+    const todayPct = getDatePosition(new Date());
+    const scrollLeft = (todayPct / 100) * timeline.scrollWidth - container.clientWidth * 0.4; // center-ish
+    container.scrollTo({ left: Math.max(scrollLeft, 0), behavior: 'smooth' });
+  }, [zoomLevel, timelineBounds, getDatePosition]);
+
+  // Zoom with wheel and pinch
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const levels: Array<typeof zoomLevel> = ['day', 'week', 'month', 'quarter'];
+    const clamp = (i: number) => Math.min(Math.max(i, 0), levels.length - 1);
+
+    function zoomIn() {
+      const idx = levels.indexOf(zoomLevel);
+      setZoomLevel(levels[clamp(idx - 1)]);
+    }
+    function zoomOut() {
+      const idx = levels.indexOf(zoomLevel);
+      setZoomLevel(levels[clamp(idx + 1)]);
+    }
+
+    let lastTouchDist = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.deltaY > 0) zoomOut(); else zoomIn();
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const dist = Math.hypot(dx, dy);
+        if (lastTouchDist !== 0) {
+          if (dist < lastTouchDist) zoomOut(); else zoomIn();
+        }
+        lastTouchDist = dist;
+        e.preventDefault();
+      }
+    };
+    const onTouchEnd = () => { lastTouchDist = 0; };
+
+    container.addEventListener('wheel', onWheel, { passive: false });
+    container.addEventListener('touchmove', onTouchMove, { passive: false });
+    container.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      container.removeEventListener('wheel', onWheel as any);
+      container.removeEventListener('touchmove', onTouchMove as any);
+      container.removeEventListener('touchend', onTouchEnd as any);
+    };
+  }, [zoomLevel, getDatePosition]);
+
   // Generate timeline headers
   const generateTimelineHeaders = () => {
     const { start, end } = timelineBounds;
@@ -675,7 +750,7 @@ const ThemeBasedGanttChart: React.FC = () => {
       </Card>
 
       {/* Timeline Container */}
-      <div className="timeline-container" style={{ height: 'calc(100vh - 300px)', overflow: 'auto' }}>
+      <div ref={containerRef} className="timeline-container" style={{ height: 'calc(100vh - 300px)', overflow: 'auto' }}>
         {/* Timeline Header */}
         <div className="timeline-header sticky-top bg-white border-bottom" style={{ zIndex: 5 }}>
           <div className="d-flex">
@@ -694,6 +769,23 @@ const ThemeBasedGanttChart: React.FC = () => {
                   </div>
                 ))}
               </div>
+              {/* Current sprint label under month header */}
+              {currentSprint && (
+                <div className="position-absolute w-100" style={{ top: '24px' }}>
+                  <div
+                    className="position-absolute text-center"
+                    style={{
+                      left: `${getDatePosition(new Date(currentSprint.startDate))}%`,
+                      width: `${getDatePosition(new Date(currentSprint.endDate)) - getDatePosition(new Date(currentSprint.startDate))}%`,
+                      color: '#1e40af',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {currentSprint.name || 'Current Sprint'}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -745,8 +837,8 @@ const ThemeBasedGanttChart: React.FC = () => {
                     left: `${goal.left}%`,
                     width: `${Math.max(goal.width || 10, 5)}%`,
                     top: `${goalIndex * 42 + 8}px`, // Slightly more spacing for better separation
-                    minWidth: '140px',
-                    height: '36px', // Taller for better text visibility and modern look
+                    minWidth: '160px',
+                    height: '44px', // a bit taller to fit two lines and badges
                     backgroundColor: themeAwareColors.background,
                     color: themeAwareColors.text,
                     opacity: isDragging ? 0.8 : 1,
@@ -768,6 +860,12 @@ const ThemeBasedGanttChart: React.FC = () => {
                       style={goalStyle}
                       onMouseDown={(e) => handleDragStart(e, goal, 'move')}
                       onTouchStart={(e) => handleDragStart(e, goal, 'move')}
+                      onDoubleClick={() => handleEditGoal(goal)}
+                      onClick={(e) => {
+                        // Single click selects goal to show linked stories
+                        e.stopPropagation();
+                        if (!dragState.isDragging) handleSelectGoal(goal);
+                      }}
                     >
                       {/* Resize handle - start */}
                       <div
@@ -800,19 +898,26 @@ const ThemeBasedGanttChart: React.FC = () => {
                       />
                       
                       {/* Goal content */}
-                      <div className="goal-content px-3 text-truncate flex-grow-1 d-flex align-items-center justify-content-between"
-                           style={{ color: themeAwareColors.text }}>
-                        <div className="d-flex flex-column">
-                          <span className="text-truncate me-2" style={{ fontSize: '13px', fontWeight: '500' }}>
+                      <div className="goal-content px-2 flex-grow-1 d-flex align-items-center justify-content-between" style={{ color: themeAwareColors.text }}>
+                        <div className="d-flex flex-column overflow-hidden" style={{ minWidth: 0 }}>
+                          <span className="goal-title-wrap me-2" style={{ fontSize: '13px', fontWeight: 600 }}>
                             {goal.title}
                           </span>
-                          <small className="text-truncate" style={{ 
-                            fontSize: '11px', 
-                            color: `${themeAwareColors.text}80`,
-                            marginTop: '2px'
-                          }}>
-                            {getGoalSprintInfo(goal.id) || `${getThemeById(goal.theme || 0)?.name || 'General'} Goal`}
-                          </small>
+                          <div className="d-flex align-items-center gap-2" style={{ marginTop: 2 }}>
+                            <small className="text-muted" style={{ fontSize: '11px' }}>
+                              {getGoalSprintInfo(goal.id) || `${getThemeById(goal.theme || 0)?.name || 'General'} Goal`}
+                            </small>
+                            {/* Status badge */}
+                            <span className="badge rounded-pill" style={{ background: `${themeAwareColors.text}22`, color: themeAwareColors.text, fontSize: 10 }}>
+                              {typeof goal.status === 'string' ? goal.status : ['New','Work in Progress','Complete','Blocked','Deferred'][goal.status || 0]}
+                            </span>
+                            {/* Stories in current sprint */}
+                            {currentSprint && (
+                              <span className="badge rounded-pill" style={{ background: '#1f2937', color: '#fff', fontSize: 10 }}>
+                                {getCurrentSprintStoryCount(goal.id)} in sprint
+                              </span>
+                            )}
+                          </div>
                         </div>
                         
                         {/* Action dropdown */}
@@ -1064,6 +1169,55 @@ const ThemeBasedGanttChart: React.FC = () => {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {/* Linked Stories Table */}
+      {selectedGoal && (
+        <Card className="mt-3">
+          <Card.Header>
+            <div className="d-flex justify-content-between align-items-center">
+              <h5 className="mb-0">Stories for: {selectedGoal.title}</h5>
+              <Button size="sm" variant="outline-secondary" onClick={() => setSelectedGoal(null)}>Close</Button>
+            </div>
+          </Card.Header>
+          <Card.Body className="p-0">
+            <ModernStoriesTable
+              stories={stories.filter(s => s.goalId === selectedGoal.id)}
+              goals={[selectedGoal] as any}
+              onStoryUpdate={async (storyId, updates) => {
+                try {
+                  await updateDoc(doc(db, 'stories', storyId), { ...updates, updatedAt: serverTimestamp() });
+                } catch (e) { console.error('Update story error', e); }
+              }}
+              onStoryDelete={async (storyId) => {
+                try { await deleteDoc(doc(db, 'stories', storyId)); } catch (e) { console.error('Delete story error', e); }
+              }}
+              onStoryPriorityChange={async (storyId, newPriority) => {
+                try { await updateDoc(doc(db, 'stories', storyId), { priority: newPriority, updatedAt: serverTimestamp() }); } catch (e) { console.error('Priority change error', e); }
+              }}
+              onStoryAdd={async (storyData) => {
+                try {
+                  const payload: any = {
+                    ...storyData,
+                    goalId: selectedGoal.id,
+                    ownerUid: currentUser?.uid,
+                    persona: 'personal',
+                    status: storyData.status || 0,
+                    priority: storyData.priority || 3,
+                    points: storyData.points || 1,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                    ref: `STY-${Date.now()}`,
+                  };
+                  await addDoc(collection(db, 'stories'), payload);
+                } catch (e) { console.error('Add story error', e); }
+              }}
+              onStorySelect={(story) => console.log('Selected story', story.id)}
+              onEditStory={(story) => console.log('Edit story requested', story.id)}
+              goalId={selectedGoal.id}
+            />
+          </Card.Body>
+        </Card>
+      )}
     </Container>
   );
 };

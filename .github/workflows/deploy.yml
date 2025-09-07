@@ -1,0 +1,123 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      channelId:
+        description: "Firebase Hosting channel (e.g., preview or live)"
+        required: false
+        default: ""
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CHANNEL_ID: ${{ github.event.inputs.channelId || secrets.FIREBASE_CHANNEL || 'live' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install root deps (Playwright)
+        run: npm ci
+
+      - name: Install app deps (CRA)
+        run: npm ci --prefix react-app
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Unit tests (CRA)
+        run: npm test --prefix react-app -- --watchAll=false
+
+      - name: Pre-clean test data (admin)
+        if: always()
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TEST_USER_UID: agentic-ai-test-user
+        run: node scripts/cleanup-e2e-data.js || true
+
+      - name: Build app
+        run: npm run build --prefix react-app
+
+      - name: Gate with E2E
+        env:
+          CI: true
+          PW_USE_BUILD: '1'
+          APP_BASE_URL: http://localhost:4173
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+        run: npx playwright test
+
+      - name: Firebase Deploy
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          channelId: ${{ env.CHANNEL_ID }}
+          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+
+      - name: Post release notes
+        if: ${{ success() }}
+        run: echo "Deployed $(git rev-parse --short HEAD) to ${{ secrets.FIREBASE_PROJECT_ID }} (channel: ${{ env.CHANNEL_ID }})"
+
+      - name: Notify Telegram success
+        if: ${{ success() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            MSG="✅ Deploy success: ${GITHUB_REPOSITORY}@${SHORT_SHA} to ${{ secrets.FIREBASE_PROJECT_ID }} (channel: ${{ env.CHANNEL_ID }})%0ARun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            curl -s --max-time 15 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="${MSG}" \
+              -d parse_mode="HTML" >/dev/null || true
+          else
+            echo "Telegram secrets not set; skipping notification."
+          fi
+
+      - name: Open issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = `Deployment gate failed for ${context.sha}
+            See CI artifacts in the run.`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Deploy Failure: ${context.workflow} / ${context.job}`,
+              body,
+              labels: ['ci','e2e','regression']
+            });
+
+      - name: Notify Telegram failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            MSG="❌ Deploy failed for ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}%0ARun: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            curl -s --max-time 15 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="${MSG}" \
+              -d parse_mode="HTML" >/dev/null || true
+          else
+            echo "Telegram secrets not set; skipping notification."
+          fi
+
+      - name: Post-clean test data (admin)
+        if: always()
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TEST_USER_UID: agentic-ai-test-user
+        run: node scripts/cleanup-e2e-data.js || true

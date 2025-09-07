@@ -455,6 +455,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     <>
       <tr
       ref={setNodeRef}
+      data-testid={`goal-row-${goal.id}`}
       style={{
         ...style,
         backgroundColor: backgrounds.surface,
@@ -563,6 +564,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.color = '#2563eb';
             }}
             title="Edit goal"
+            data-testid="goal-edit-btn"
           >
             Edit
           </button>
@@ -588,6 +590,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.color = '#dc2626';
             }}
             title="Delete goal"
+            data-testid="goal-delete-btn"
           >
             Delete
           </button>

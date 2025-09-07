@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ feature/**, fix/** ]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install root deps (Playwright)
+        run: npm ci
+
+      - name: Install app deps (CRA)
+        run: npm ci --prefix react-app
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Unit tests (CRA)
+        run: npm test --prefix react-app -- --watchAll=false
+
+      - name: Pre-clean test data (admin)
+        if: always()
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TEST_USER_UID: agentic-ai-test-user
+        run: node scripts/cleanup-e2e-data.js || true
+
+      - name: Build app
+        run: npm run build --prefix react-app
+
+      - name: Run E2E
+        env:
+          CI: true
+          PW_USE_BUILD: '1'
+          APP_BASE_URL: http://localhost:4173
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+
+      - name: Upload test results (JUnit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-results
+          path: test-results/junit.xml
+
+      - name: Post-clean test data (admin)
+        if: always()
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TEST_USER_UID: agentic-ai-test-user
+        run: node scripts/cleanup-e2e-data.js || true
+
+      - name: Open issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = `CI failed for ${context.sha}
+            Workflow: ${context.workflow}
+            Job: ${context.job}
+            See attached artifacts for HTML report and JUnit XML.`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `CI Failure: ${context.workflow} / ${context.job}`,
+              body,
+              labels: ['ci','e2e','regression']
+            });

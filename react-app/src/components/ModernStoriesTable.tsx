@@ -258,7 +258,7 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
       backgroundColor: '#f0f9ff',
       borderBottom: '2px solid #3b82f6',
       border: '2px solid #3b82f6',
-    }}>
+    }} data-testid={`new-story-row`}>
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
@@ -546,7 +546,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   return (
-    <tr
+    <tr 
       ref={setNodeRef}
       style={{
         ...style,
@@ -555,6 +555,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         transition: 'background-color 0.15s ease',
         cursor: onStorySelect ? 'pointer' : 'default',
       }}
+      data-testid={`story-row-${story.id}`}
       {...attributes}
       onClick={(e) => {
         // Don't trigger story selection if clicking on buttons or form elements
@@ -661,10 +662,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 e.currentTarget.style.backgroundColor = 'transparent';
                 e.currentTarget.style.color = '#059669';
               }}
-              title="Edit story in modal"
-            >
-              Edit
-            </button>
+            title="Edit story in modal"
+            data-testid="story-edit-btn"
+          >
+            Edit
+          </button>
           )}
           <button
             onClick={() => onStoryDelete(story.id)}
@@ -688,6 +690,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.color = '#dc2626';
             }}
             title="Delete story"
+            data-testid="story-delete-btn"
           >
             Delete
           </button>

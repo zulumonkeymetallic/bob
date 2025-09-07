@@ -3,38 +3,29 @@
 // Empty export to make this a module
 export {};
 
-export const VERSION = "1.1.2";
-export const BUILD_TIME = "2025-09-06T21:00:00.000Z";
-export const BUILD_DATE = "2025-09-06";
-export const BUILD_HASH = "sprint-management-fix-20250906";
-export const CACHE_TIMESTAMP = 1725659200000; // September 6, 2025 21:00:00 UTC
+export const VERSION = "1.1.3";
+export const BUILD_TIME = new Date().toISOString();
+export const BUILD_DATE = BUILD_TIME.slice(0,10);
+export const BUILD_HASH = "gantt-enhancements-20250907";
+export const CACHE_TIMESTAMP = Date.now();
 
 export const RELEASE_NOTES = `
-## BOB v1.1.2 - Sprint Management and Navigation Enhancement
+## BOB v1.1.3 — Goals Roadmap Enhancements
 
-### 🎯 Sprint Management Improvements (Issue #58):
-- Enhanced Sprint Kanban page with ModernTaskTable integration
-- Story selection displays filtered tasks below Kanban board
-- Improved UI consistency between Goals and Sprint modules
-- Fixed story-task relationship display and management
+### 🗺️ Gantt Improvements
+- Goal cards wrap to two lines with ellipsis
+- Double‑click a goal to open Edit Goal
+- Drag/resize updates start/end dates and reassigns theme when dropped onto another theme row
+- Current Sprint label appears beneath month header across sprint range
+- Zoom via ctrl/cmd+wheel and two‑finger pinch; buttons still supported
+- Timeline autoscroll centers on Today on load and zoom changes
 
-### 🧭 Navigation Improvements:
-- Restructured navigation by entity types (Overview → Goals → Stories → Tasks → Sprints)
-- Removed inconsistent dark theme toggle and test mode buttons
-- Implemented sticky sign out button with version display
-- Clean, logical navigation grouping for better user experience
+### 🔗 Linked Stories Pane
+- Clicking a goal shows a full ModernStoriesTable of linked stories under the chart
+- Inline editing, delete, priority change, and quick add supported (persisted to Firestore)
 
-### 🎨 UI/UX Enhancements:
-- Consistent styling across Goals and Sprint modules
-- Collapsible task display with story context
-- Modern card-based design with proper spacing
-- Version display under sign out button
-
-### 🌓 Theme System:
-- Ground-up dark/light theme implementation
-- Auto theme detection based on system preference
-- Theme persistence across sessions
-- Consistent theme-aware components
+### 🎨 Theme
+- Unified theme provider + hydration guard to eliminate mismatches
 `;
 
 // Version Timeout Configuration

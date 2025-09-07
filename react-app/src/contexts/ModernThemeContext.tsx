@@ -219,16 +219,23 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     isDark: actualTheme === 'dark'
   };
   
-  // Apply CSS custom properties to document root
+  // Apply CSS custom properties and root attributes
   useEffect(() => {
     const root = document.documentElement;
     Object.entries(theme.colors).forEach(([key, value]) => {
       root.style.setProperty(`--theme-${key}`, value);
     });
-    
-    // Apply theme class to body
-    document.body.className = document.body.className.replace(/\btheme-(light|dark)\b/g, '');
-    document.body.classList.add(`theme-${actualTheme}`);
+    // Set data-theme on html for CSS contracts, and Tailwind dark class
+    root.setAttribute('data-theme', actualTheme);
+    if (actualTheme === 'dark') {
+      root.classList.add('dark');
+      document.body.setAttribute('data-bs-theme', 'dark');
+      document.body.setAttribute('data-theme', 'dark');
+    } else {
+      root.classList.remove('dark');
+      document.body.setAttribute('data-bs-theme', 'light');
+      document.body.setAttribute('data-theme', 'light');
+    }
   }, [theme.colors, actualTheme]);
   
   return (

@@ -5,7 +5,6 @@ import App from './App';
 import reportWebVitals from './reportWebVitals';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './styles/themeConsistency.css';
-import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
 
 // Temporarily disable service worker for debugging
@@ -34,11 +33,9 @@ const root = ReactDOM.createRoot(
 root.render(
   // Temporarily disable StrictMode for react-beautiful-dnd compatibility
   // <React.StrictMode>
-    <ThemeProvider>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </ThemeProvider>
+    <AuthProvider>
+      <App />
+    </AuthProvider>
   // </React.StrictMode>
 );
 

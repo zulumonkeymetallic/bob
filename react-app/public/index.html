@@ -24,6 +24,23 @@
       user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
     -->
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('bob-theme-mode') || 'auto';
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var mode = saved === 'auto' ? (prefersDark ? 'dark' : 'light') : saved;
+          var html = document.documentElement;
+          html.setAttribute('data-theme', mode);
+          if (mode === 'dark') {
+            html.classList.add('dark');
+          } else {
+            html.classList.remove('dark');
+          }
+          // Body may not exist yet; ModernThemeContext will set data-bs-theme on mount
+        } catch (e) {}
+      })();
+    </script>
     <!--
       Notice the use of %PUBLIC_URL% in the tags above.
       It will be replaced with the URL of the `public` folder during the build.

@@ -509,6 +509,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               e.currentTarget.style.color = '#dc2626';
             }}
             title="Delete task"
+            data-testid="task-delete-btn"
           >
             Delete
           </button>

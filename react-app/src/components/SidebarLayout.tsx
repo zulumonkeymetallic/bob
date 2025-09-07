@@ -483,20 +483,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
           {/* Bottom Actions Mobile */}
           <div className="mt-auto pt-3 border-top border-secondary">
-            <Button 
-              size="sm" 
-              onClick={signOut}
-              className="w-100 btn-signout"
-              style={{
-                background: '#dc3545',
-                border: '1px solid #dc3545',
-                color: 'white'
-              }}
-            >
-              Sign Out
-            </Button>
-            
-            {/* Theme Toggle and Sign Out Mobile */}
+            {/* Theme Toggle and Sticky Sign Out Only */}
             <div style={{ marginTop: '20px' }}>
               <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'center' }}>
                 <ThemeToggle variant="dropdown" showLabel={true} />

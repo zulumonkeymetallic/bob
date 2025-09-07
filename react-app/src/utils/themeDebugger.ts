@@ -1,6 +1,6 @@
 // Theme debugging utility for identifying theme inconsistencies
 import { useThemeAwareColors } from '../hooks/useThemeAwareColors';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme } from '../contexts/ModernThemeContext';
 
 export interface ThemeDebugInfo {
   currentTheme: string;
@@ -81,7 +81,7 @@ export const useThemeDebugger = (componentName: string = 'Unknown Component') =>
     if (!THEME_DEBUG_ENABLED) return;
     
     const debugInfo: ThemeDebugInfo = {
-      currentTheme: theme,
+      currentTheme: theme.mode,
       isDark,
       resolvedTheme: isDark ? 'dark' : 'light',
       colors,
@@ -94,7 +94,7 @@ export const useThemeDebugger = (componentName: string = 'Unknown Component') =>
     if (THEME_DEBUG_ENABLED) {
       console.group(`🎨 Theme Debug [${componentName}] - ${eventType.toUpperCase()}`);
       console.log('📊 Theme State:', {
-        currentTheme: theme,
+        currentTheme: theme.mode,
         isDark,
         resolvedTheme: isDark ? 'dark' : 'light'
       });

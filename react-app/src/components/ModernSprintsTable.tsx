@@ -310,7 +310,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <h5 className="mb-0">Sprint Management</h5>
-          <Button variant="primary" onClick={openCreateModal}>
+          <Button variant="primary" onClick={openCreateModal} data-testid="create-sprint-button">
             <Plus size={16} className="me-1" />
             New Sprint
           </Button>
@@ -351,6 +351,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                       key={sprint.id}
                       className={isSelected ? 'table-active' : ''}
                       style={{ cursor: 'pointer' }}
+                      data-testid={`sprint-row-${sprint.id}`}
                       onClick={() => onSprintSelect?.(sprint.id)}
                     >
                       <td>
@@ -373,6 +374,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                             as={Badge} 
                             bg={getSprintStatusVariant(sprint.status)}
                             style={{ cursor: 'pointer' }}
+                            data-testid={`sprint-status-${sprint.id}`}
                           >
                             {getSprintStatusLabel(sprint.status)}
                           </Dropdown.Toggle>
@@ -466,6 +468,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                               size="sm" 
                               variant="outline-danger"
                               onClick={() => handleDelete(sprint)}
+                              data-testid="sprint-delete-btn"
                             >
                               <Trash2 size={14} />
                             </Button>
