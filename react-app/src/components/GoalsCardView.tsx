@@ -14,6 +14,7 @@ import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import { toDate, formatDate } from '../utils/firestoreAdapters';
 
 interface GoalsCardViewProps {
   goals: Goal[];
@@ -527,14 +528,24 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                       <Calendar size={12} style={{ marginRight: '4px' }} />
-                      Created: {goal.createdAt && new Date(goal.createdAt.toDate()).toLocaleDateString()}
+                      {(() => {
+                        const d = toDate(goal.createdAt);
+                        return (
+                          <span>Created: {d ? formatDate(d) : '—'}</span>
+                        );
+                      })()}
                     </div>
-                    {goal.updatedAt && goal.updatedAt.toDate && (
-                      <div style={{ display: 'flex', alignItems: 'center', color: '#059669', fontWeight: '500' }}>
-                        <Calendar size={12} style={{ marginRight: '4px' }} />
-                        Updated: {new Date(goal.updatedAt.toDate()).toLocaleDateString()} at {new Date(goal.updatedAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </div>
-                    )}
+                    {(() => {
+                      const d = toDate(goal.updatedAt);
+                      return d ? (
+                        <div style={{ display: 'flex', alignItems: 'center', color: '#059669', fontWeight: '500' }}>
+                          <Calendar size={12} style={{ marginRight: '4px' }} />
+                          <span>
+                            Updated: {formatDate(d)} at {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Button
