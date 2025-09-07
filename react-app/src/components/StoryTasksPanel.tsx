@@ -1,27 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Form, Row, Col } from 'react-bootstrap';
-import { ChevronDown, ChevronUp, Plus, Edit3, Save, X } from 'lucide-react';
-import { Task, Story } from '../types';
+import { ChevronUp, Plus, Save, X } from 'lucide-react';
+import { Task, Story, Goal, Sprint } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
 import { useTheme } from '../contexts/ModernThemeContext';
+import ModernTaskTable from './ModernTaskTable';
 
 interface StoryTasksPanelProps {
   story: Story;
   onClose: () => void;
+  stories?: Story[];
+  goals?: Goal[];
+  sprints?: Sprint[];
 }
 
-const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => {
+const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose, stories = [], goals = [], sprints = [] }) => {
   const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [editingValues, setEditingValues] = useState<Partial<Task>>({});
   const [isAddingTask, setIsAddingTask] = useState(false);
   const [newTask, setNewTask] = useState({
     title: '',
@@ -53,45 +55,45 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
       );
       
       console.log(`📋 Loaded ${storyTasks.length} tasks for story:`, story.ref || story.id);
-      setTasks(storyTasks.sort((a, b) => {
-        const priorityOrder = { high: 3, medium: 2, low: 1 };
-        return priorityOrder[b.priority] - priorityOrder[a.priority];
-      }));
+      setTasks(storyTasks);
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, [currentUser, currentPersona, story.id]);
 
-  const handleStartEdit = (task: Task) => {
-    setEditingTaskId(task.id);
-    setEditingValues({
-      title: task.title,
-      description: task.description,
-      status: task.status,
-      priority: task.priority
-    });
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingTaskId || !editingValues.title?.trim()) return;
-
+  // ModernTaskTable callbacks
+  const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
     try {
-      await updateDoc(doc(db, 'tasks', editingTaskId), {
-        ...editingValues,
+      await updateDoc(doc(db, 'tasks', taskId), {
+        ...updates,
         updatedAt: serverTimestamp()
       });
-      
-      setEditingTaskId(null);
-      setEditingValues({});
     } catch (error) {
       console.error('Error updating task:', error);
     }
   };
 
-  const handleCancelEdit = () => {
-    setEditingTaskId(null);
-    setEditingValues({});
+  const handleTaskDelete = async (taskId: string) => {
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        deleted: true,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error deleting task:', error);
+    }
+  };
+
+  const handleTaskPriorityChange = async (taskId: string, newPriority: number) => {
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        priority: newPriority,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error changing task priority:', error);
+    }
   };
 
   const handleAddTask = async () => {
@@ -136,43 +138,9 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
     }
   };
 
-  const getStatusColor = (status: number) => {
-    switch (status) {
-      case 0: return 'secondary'; // To Do
-      case 1: return 'primary';   // In Progress
-      case 2: return 'success';   // Done
-      case 3: return 'warning';   // Blocked
-      default: return 'secondary';
-    }
-  };
-
-  const getStatusName = (status: number) => {
-    switch (status) {
-      case 0: return 'To Do';
-      case 1: return 'In Progress';
-      case 2: return 'Done';
-      case 3: return 'Blocked';
-      default: return 'Unknown';
-    }
-  };
-
-  const getPriorityColor = (priority: number) => {
-    switch (priority) {
-      case 1: return 'danger';    // High
-      case 2: return 'warning';   // Medium
-      case 3: return 'info';      // Low
-      default: return 'secondary';
-    }
-  };
-
-  const getPriorityName = (priority: number) => {
-    switch (priority) {
-      case 1: return 'High';
-      case 2: return 'Medium';
-      case 3: return 'Low';
-      default: return 'Unknown';
-    }
-  };
+  // Helpers preserved for header badges
+  const getStatusName = (status: number) => (status === 0 ? 'To Do' : status === 1 ? 'In Progress' : status === 2 ? 'Done' : status === 3 ? 'Blocked' : 'Unknown');
+  const getPriorityName = (priority: number) => (priority === 1 ? 'High' : priority === 2 ? 'Medium' : priority === 3 ? 'Low' : 'Unknown');
 
   return (
     <Card style={{ 
@@ -300,114 +268,17 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
           </div>
         ) : (
           <div className="tasks-list">
-            {tasks.map((task) => (
-              <Card 
-                key={task.id} 
-                className="mb-3"
-                style={{ 
-                  border: editingTaskId === task.id ? '2px solid #007bff' : '1px solid #dee2e6',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <Card.Body>
-                  {editingTaskId === task.id ? (
-                    // Edit mode
-                    <>
-                      <Row>
-                        <Col md={6}>
-                          <Form.Group className="mb-2">
-                            <Form.Label>Title</Form.Label>
-                            <Form.Control
-                              type="text"
-                              value={editingValues.title || ''}
-                              onChange={(e) => setEditingValues({...editingValues, title: e.target.value})}
-                            />
-                          </Form.Group>
-                        </Col>
-                        <Col md={3}>
-                          <Form.Group className="mb-2">
-                            <Form.Label>Status</Form.Label>
-                            <Form.Select
-                              value={editingValues.status || 0}
-                              onChange={(e) => setEditingValues({...editingValues, status: parseInt(e.target.value)})}
-                            >
-                              <option value={0}>To Do</option>
-                              <option value={1}>In Progress</option>
-                              <option value={2}>Done</option>
-                              <option value={3}>Blocked</option>
-                            </Form.Select>
-                          </Form.Group>
-                        </Col>
-                        <Col md={3}>
-                          <Form.Group className="mb-2">
-                            <Form.Label>Priority</Form.Label>
-                            <Form.Select
-                              value={editingValues.priority || 2}
-                              onChange={(e) => setEditingValues({...editingValues, priority: parseInt(e.target.value)})}
-                            >
-                              <option value={1}>High</option>
-                              <option value={2}>Medium</option>
-                              <option value={3}>Low</option>
-                            </Form.Select>
-                          </Form.Group>
-                        </Col>
-                      </Row>
-                      <Form.Group className="mb-3">
-                        <Form.Label>Description</Form.Label>
-                        <Form.Control
-                          as="textarea"
-                          rows={2}
-                          value={editingValues.description || ''}
-                          onChange={(e) => setEditingValues({...editingValues, description: e.target.value})}
-                        />
-                      </Form.Group>
-                      <div className="d-flex gap-2">
-                        <Button variant="success" size="sm" onClick={handleSaveEdit}>
-                          <Save size={16} className="me-1" />
-                          Save
-                        </Button>
-                        <Button variant="outline-secondary" size="sm" onClick={handleCancelEdit}>
-                          <X size={16} className="me-1" />
-                          Cancel
-                        </Button>
-                      </div>
-                    </>
-                  ) : (
-                    // View mode
-                    <>
-                      <div className="d-flex justify-content-between align-items-start mb-2">
-                        <div className="flex-grow-1">
-                          <h6 className="mb-1">{task.title}</h6>
-                          <div className="d-flex gap-2 mb-2">
-                            <Badge bg={getStatusColor(task.status)}>
-                              {getStatusName(task.status)}
-                            </Badge>
-                            <Badge bg={getPriorityColor(task.priority)}>
-                              {getPriorityName(task.priority)} Priority
-                            </Badge>
-                            {task.ref && (
-                              <Badge bg="light" text="dark">
-                                {task.ref}
-                              </Badge>
-                            )}
-                          </div>
-                          {task.description && (
-                            <p className="text-muted small mb-2">{task.description}</p>
-                          )}
-                        </div>
-                        <Button
-                          variant="outline-primary"
-                          size="sm"
-                          onClick={() => handleStartEdit(task)}
-                        >
-                          <Edit3 size={14} />
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </Card.Body>
-              </Card>
-            ))}
+            <ModernTaskTable
+              tasks={tasks}
+              stories={stories}
+              goals={goals}
+              sprints={sprints}
+              onTaskUpdate={handleTaskUpdate}
+              onTaskDelete={handleTaskDelete}
+              onTaskPriorityChange={handleTaskPriorityChange}
+              defaultColumns={[ 'ref','title','description','status','priority','effort','dueDate','theme' ]}
+              compact={true}
+            />
           </div>
         )}
       </Card.Body>

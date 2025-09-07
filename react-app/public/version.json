@@ -1,7 +1,7 @@
 {
-  "version": "1.1.2",
-  "buildTime": "2025-09-06T20:00:00.000Z",
-  "buildHash": "sprint-management-fix",
+  "version": "1.1.3",
+  "buildTime": "2025-09-07T12:30:00.000Z",
+  "buildHash": "gantt-enhancements-20250907",
   "features": [
     "Comprehensive Dark/Light Theme System",
     "Sticky Sign Out Component", 

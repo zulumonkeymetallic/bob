@@ -588,7 +588,7 @@ exports.importItems = httpsV2.onCall(async (req) => {
 
 exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const items = req.data?.items || [];
+  let items = req.data?.items || [];
   if (!Array.isArray(items) || items.length === 0) return { ok: true, written: 0 };
   if (items.length > 500) items = items.slice(0,500);
 

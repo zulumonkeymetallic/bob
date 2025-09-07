@@ -659,6 +659,9 @@ const StoriesManagement: React.FC = () => {
         <StoryTasksPanel
           story={selectedStory}
           onClose={() => setSelectedStory(null)}
+          stories={stories}
+          goals={goals}
+          sprints={[]}
         />
       )}
 
