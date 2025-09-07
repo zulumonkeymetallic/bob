@@ -12,6 +12,9 @@ import DashboardSprintKanban from './DashboardSprintKanban';
 import DashboardModernTaskTable from './DashboardModernTaskTable';
 import SprintSelector from './SprintSelector';
 import { useTheme } from '../contexts/ModernThemeContext';
+import PriorityPane from './PriorityPane';
+import FEATURE_FLAGS from '../config/featureFlags';
+import { Link } from 'react-router-dom';
 
 interface DashboardStats {
   activeGoals: number;
@@ -194,9 +197,16 @@ const Dashboard: React.FC = () => {
               <small className="text-muted me-3">
                 Last updated: {lastUpdated.toLocaleTimeString()}
               </small>
-              <Button variant="outline-primary" size="sm" onClick={loadDashboardData}>
+              <Button variant="outline-primary" size="sm" onClick={loadDashboardData} className="me-2">
                 Refresh
               </Button>
+              <Link
+                to={`/sprints/management${selectedSprintId ? `?sprintId=${selectedSprintId}` : ''}`}
+              >
+                <Button variant="primary" size="sm">
+                  Manage Sprint
+                </Button>
+              </Link>
             </div>
           </div>
 
@@ -250,14 +260,16 @@ const Dashboard: React.FC = () => {
           </Row>
 
           {/* Sprint Kanban Board */}
-          <Row className="mb-4">
-            <Col md={12}>
-              <DashboardSprintKanban 
-                maxStories={8} 
-                selectedSprintId={selectedSprintId}
-              />
-            </Col>
-          </Row>
+          {FEATURE_FLAGS['dashboard.kanban'] && (
+            <Row className="mb-4">
+              <Col md={12}>
+                <DashboardSprintKanban 
+                  maxStories={8} 
+                  selectedSprintId={selectedSprintId}
+                />
+              </Col>
+            </Row>
+          )}
 
           {/* Tasks and Quick Actions */}
           <Row className="mb-4">
@@ -280,11 +292,16 @@ const Dashboard: React.FC = () => {
             </Col>
           </Row>
 
-          {/* Tasks Due Today */}
+          {/* Tasks Due Today + Priorities Widget */}
           <Row className="mb-4">
-            <Col md={12}>
+            <Col md={FEATURE_FLAGS['widget.priorities'] ? 8 : 12}>
               <DashboardModernTaskTable maxTasks={5} showDueToday={true} title="Tasks Due Today" />
             </Col>
+            {FEATURE_FLAGS['widget.priorities'] && (
+              <Col md={4}>
+                <PriorityPane tasks={upcomingTasks} />
+              </Col>
+            )}
           </Row>
 
           {/* Quick Actions */}

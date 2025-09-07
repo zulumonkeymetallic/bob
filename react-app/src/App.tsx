@@ -52,9 +52,11 @@ import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
 import AIUsageDashboard from './components/AIUsageDashboard';
+import FEATURE_FLAGS from './config/featureFlags';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
+import GoalVizPageClean from './components/visualization/GoalVizPageClean';
 import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
@@ -206,7 +208,7 @@ function AppContent() {
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals" element={<GoalsManagement />} />
-            <Route path="/goals/roadmap" element={<ThemeBasedGanttChart />} />
+            <Route path="/goals/roadmap" element={FEATURE_FLAGS['goals.roadmap.v2'] ? <GoalVizPageClean /> : <ThemeBasedGanttChart />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
             {/* BOB v3.5.2 - New Scaffolding Components */}

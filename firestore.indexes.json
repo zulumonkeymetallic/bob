@@ -176,6 +176,15 @@
         { "fieldPath": "persona", "order": "ASCENDING" },
         { "fieldPath": "start", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "themes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "sort", "order": "ASCENDING" },
+        { "fieldPath": "labelLower", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
