@@ -41,7 +41,7 @@
     "react-bootstrap-icons": "^1.11.6",
     "react-chartjs-2": "^5.3.0",
     "react-dom": "^18.0.0",
-    "react-router-dom": "^7.8.0",
+    "react-router-dom": "^6.26.2",
     "react-scripts": "5.0.1",
     "react-stately": "^3.40.0",
     "typescript": "^4.9.5",
@@ -49,8 +49,11 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
+    "prestart": "node ../scripts/sync-version.js",
     "start": "react-scripts start",
+    "prebuild": "node ../scripts/sync-version.js",
     "build": "react-scripts build && node ../scripts/generate-version.js",
+    "version": "node ../scripts/sync-version.js",
     "build:dev": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
