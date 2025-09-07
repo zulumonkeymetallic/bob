@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
 import VersionDisplay from './VersionDisplay';
+import SprintSelector from './SprintSelector';
 import { useTestMode } from '../contexts/TestModeContext';
 
 interface SidebarLayoutProps {
@@ -32,6 +33,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
+  const [globalSprintId, setGlobalSprintId] = useState<string>('');
 
   const navigationGroups: NavigationGroup[] = [
     {
@@ -357,6 +359,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             )}
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
+            <SprintSelector
+              selectedSprintId={globalSprintId}
+              onSprintChange={setGlobalSprintId}
+            />
             <Button
               variant={isTestMode ? "danger" : "outline-secondary"}
               size="sm"
@@ -497,6 +503,21 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
       {/* Main Content Area */}
       <div className="flex-grow-1" style={{ paddingTop: window.innerWidth < 992 ? '60px' : '0' }}>
+        {/* Desktop top toolbar with global Sprint selector */}
+        <div className="d-none d-lg-block" style={{
+          borderBottom: '1px solid var(--notion-border)',
+          background: 'var(--notion-bg)'
+        }}>
+          <div className="container-fluid" style={{ padding: '8px 16px' }}>
+            <div className="d-flex justify-content-end align-items-center">
+              <SprintSelector
+                selectedSprintId={globalSprintId}
+                onSprintChange={setGlobalSprintId}
+              />
+            </div>
+          </div>
+        </div>
+
         <main className="h-100">
           {children}
         </main>

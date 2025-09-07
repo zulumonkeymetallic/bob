@@ -43,6 +43,7 @@ import { clickTrackingService } from './services/ClickTrackingService';
 
 // BOB v3.5.2 - New Scaffolding Components
 import GoalsVisualizationView from './components/visualization/GoalsVisualizationView';
+import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
 import CalendarIntegrationView from './components/calendar/CalendarIntegrationView';
 import SprintManagementView from './components/sprints/SprintManagementView';
 import SprintsPage from './components/sprints/SprintsPage';
@@ -204,11 +205,11 @@ function AppContent() {
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
-            <Route path="/goals/roadmap" element={<ThemeBasedGanttChart />} />
+            <Route path="/goals/roadmap" element={<EnhancedGanttChart />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
-            {/* BOB v3.5.2 - New Scaffolding Components */}
-            <Route path="/goals/timeline" element={<GoalsVisualizationView />} />
+            {/* Goals Timeline now uses Enhanced Gantt */}
+            <Route path="/goals/timeline" element={<EnhancedGanttChart />} />
             <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
             <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
             <Route path="/routes" element={<RoutesManagementView />} />
