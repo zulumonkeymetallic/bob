@@ -27,6 +27,35 @@ class ErrorBoundary extends Component<Props, State> {
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('🚨 ErrorBoundary caught an error:', error, errorInfo);
     
+    // Enhanced logging for React Error #31 and other issues
+    console.error('🚨 ErrorBoundary: Detailed Error Analysis', {
+      error: error,
+      errorMessage: error.message,
+      errorStack: error.stack,
+      errorInfo: errorInfo,
+      componentStack: errorInfo.componentStack,
+      timestamp: new Date().toISOString(),
+      isReactError31: error.message.includes('Objects are not valid as a React child') || 
+                     error.message.includes('object as a React child'),
+      potentialCause: error.message.includes('Objects are not valid as a React child') ? 
+                     'Firebase Timestamp objects being rendered directly' : 'Unknown',
+      isCacheError: error.message.includes('Unexpected token') || 
+                   error.message.includes('Loading chunk') ||
+                   error.message.includes('Loading CSS chunk')
+    });
+
+    // Additional specific logging for React Error #31
+    if (error.message.includes('Objects are not valid as a React child')) {
+      console.error('🚨 REACT ERROR #31 DETECTED!', {
+        message: 'Objects are not valid as a React child',
+        likelyCause: 'Firebase Timestamp objects {seconds, nanoseconds} being rendered directly',
+        solution: 'Convert Firebase Timestamps to Date objects before rendering',
+        componentStack: errorInfo.componentStack,
+        fullError: error,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     // Log error details
     this.setState({
       error,

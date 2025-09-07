@@ -26,12 +26,13 @@ import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
 import SprintMetricsPanel from '../SprintMetricsPanel';
 import ModernSprintsTable from '../ModernSprintsTable';
-import { useTheme } from '../contexts/ModernThemeContext';
+import { useTheme } from '../../contexts/ModernThemeContext';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
 // Replaces /kanban route with comprehensive sprint management
 
 const SprintManagementView = () => {
+  const { theme } = useTheme();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();

@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, Button, Row, Col, Badge } from 'react-bootstrap';
 import { 
-import { useTheme } from '../contexts/ModernThemeContext';
   ChevronDown, 
   ChevronRight, 
   Calendar,

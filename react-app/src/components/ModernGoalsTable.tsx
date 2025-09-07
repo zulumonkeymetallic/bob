@@ -39,6 +39,7 @@ import {
 import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { getStatusName, getThemeName } from '../utils/statusHelpers';
+import { toDisplayDate } from '../utils/date';
 import ModernStoriesTable from './ModernStoriesTable';
 import { useTheme } from '../contexts/ModernThemeContext';
 
@@ -191,6 +192,21 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const { trackCRUD, trackClick, trackFieldChange } = useActivityTracking();
   const { currentUser } = useAuth();
 
+  // LOGGING: Individual goal row rendering
+  console.log(`🏆 Goal Row ${index + 1} Rendering`, {
+    component: 'SortableRow',
+    goalId: goal.id,
+    goalTitle: goal.title,
+    theme: theme,
+    isDark: isDark,
+    colors: colors,
+    backgrounds: backgrounds,
+    goalData: goal,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+    timestamp: new Date().toISOString()
+  });
+
   // Note: Removed view tracking to focus activity stream on meaningful changes only
 
   const style = {
@@ -284,11 +300,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
-    if (key === 'startDate' && typeof value === 'number') {
-      return new Date(value).toLocaleDateString();
-    }
-    if (key === 'targetDate' && typeof value === 'number') {
-      return new Date(value).toLocaleDateString();
+    // Wrap all date-like fields with toDisplayDate
+    if ([
+      'createdAt', 'updatedAt', 'startDate', 'targetDate', 'dueDate', 'completedAt', 'timestamp', 'endDate'
+    ].includes(key)) {
+      return toDisplayDate(value);
     }
     if (key === 'storiesCount') {
       return `${value || 0} stories`;
@@ -640,6 +656,39 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+
+  // LOGGING: Component load and theme info
+  console.log('📊 ModernGoalsTable Component Loading', {
+    component: 'ModernGoalsTable',
+    theme: theme,
+    isDark: isDark,
+    colors: colors,
+    backgrounds: backgrounds,
+    goalsCount: goals?.length || 0,
+    goals: goals,
+    currentPersona: currentPersona,
+    currentUser: currentUser?.email,
+    timestamp: new Date().toISOString()
+  });
+
+  // LOGGING: Check for React Error #31 issues in goals data
+  if (goals && goals.length > 0) {
+    goals.forEach((goal, index) => {
+      console.log(`🔍 Goal ${index + 1} Analysis for React Error #31`, {
+        goalId: goal.id,
+        goalTitle: goal.title,
+        createdAt: goal.createdAt,
+        createdAtType: typeof goal.createdAt,
+        updatedAt: goal.updatedAt,
+        updatedAtType: typeof goal.updatedAt,
+        isCreatedAtObject: typeof goal.createdAt === 'object' && goal.createdAt !== null && !(goal.createdAt instanceof Date),
+        isUpdatedAtObject: typeof goal.updatedAt === 'object' && goal.updatedAt !== null && !(goal.updatedAt instanceof Date),
+        potentialIssue: (typeof goal.createdAt === 'object' && goal.createdAt !== null && !(goal.createdAt instanceof Date)) || 
+                        (typeof goal.updatedAt === 'object' && goal.updatedAt !== null && !(goal.updatedAt instanceof Date)),
+        fullGoalData: goal
+      });
+    });
+  }
 
   // Load stories for expanded goals
   useEffect(() => {

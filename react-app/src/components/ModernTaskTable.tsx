@@ -529,6 +529,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   defaultColumns: defaultColumnKeys,
   compact = false,
 }) => {
+  const { theme } = useTheme();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   
   // Initialize columns based on defaultColumns prop or use all columns

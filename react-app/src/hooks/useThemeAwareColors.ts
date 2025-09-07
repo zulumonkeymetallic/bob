@@ -18,6 +18,16 @@ export const useThemeAwareColors = () => {
   // Get computed theme from the new theme config
   const isDark = theme.isDark;
   
+  // LOGGING: Theme-aware colors computation
+  console.log('🎨 useThemeAwareColors Hook Executing', {
+    hook: 'useThemeAwareColors',
+    theme: theme,
+    isDark: isDark,
+    themeMode: theme.mode,
+    themeColors: theme.colors,
+    timestamp: new Date().toISOString()
+  });
+  
   const colors: ThemeAwareTextColors = {
     primary: theme.colors.onSurface,
     secondary: theme.colors.onSecondary, 
@@ -41,6 +51,13 @@ export const useThemeAwareColors = () => {
     primary: theme.colors.border,
     secondary: theme.colors.divider
   };
+  
+  console.log('🎨 useThemeAwareColors: Computed colors', {
+    colors: colors,
+    backgrounds: backgrounds,
+    borders: borders,
+    timestamp: new Date().toISOString()
+  });
   
   return {
     isDark,

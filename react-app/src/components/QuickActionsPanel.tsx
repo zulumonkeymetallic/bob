@@ -61,7 +61,16 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
           orderBy('createdAt', 'desc')
         );
         const goalsSnapshot = await getDocs(goalsQuery);
-        const goalsData = goalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
+        const goalsData = goalsSnapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+            updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+          };
+        }) as Goal[];
         setGoals(goalsData);
 
         // Load sprints
@@ -71,7 +80,16 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
           orderBy('createdAt', 'desc')
         );
         const sprintsSnapshot = await getDocs(sprintsQuery);
-        const sprintsData = sprintsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
+        const sprintsData = sprintsSnapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+            updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+          };
+        }) as Sprint[];
         setSprints(sprintsData);
         
         // Find active sprint
@@ -85,7 +103,16 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
           orderBy('createdAt', 'desc')
         );
         const storiesSnapshot = await getDocs(storiesQuery);
-        const storiesData = storiesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
+        const storiesData = storiesSnapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+            updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+          };
+        }) as Story[];
         setStories(storiesData);
 
       } catch (error) {

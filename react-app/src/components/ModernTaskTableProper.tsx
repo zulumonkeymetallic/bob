@@ -378,6 +378,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   onTaskDelete,
   onTaskPriorityChange,
 }) => {
+  const { theme } = useTheme();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({

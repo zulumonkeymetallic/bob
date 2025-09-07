@@ -54,10 +54,16 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
       );
       
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-        const tasksData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Task[];
+        const tasksData = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+            updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+          };
+        }) as Task[];
         
         let filteredTasks = tasksData.filter(task => !task.deleted);
         
@@ -102,10 +108,16 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
       );
       
       const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
-        const storiesData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Story[];
+        const storiesData = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+            updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+          };
+        }) as Story[];
         setStories(storiesData.filter(story => !(story as any).deleted));
       });
 

@@ -29,6 +29,7 @@ const SortableStoryCard: React.FC<{
   story: Story;
   goal?: Goal;
 }> = ({ story, goal }) => {
+  const { theme } = useTheme();
   const {
     attributes,
     listeners,
@@ -163,6 +164,7 @@ const SprintColumn: React.FC<{
   goals: Goal[];
   isBacklog?: boolean;
 }> = ({ sprint, stories, goals, isBacklog = false }) => {
+  const { theme } = useTheme();
   const sprintId = sprint?.id || 'backlog';
   
   const getSprintStatus = () => {

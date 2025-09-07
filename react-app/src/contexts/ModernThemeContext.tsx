@@ -109,25 +109,65 @@ interface ThemeProviderProps {
 }
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
-  const [themeMode, setThemeMode] = useState<ThemeMode>('light');
+  // (Removed duplicate useState for themeMode)
+  
+  // LOGGING: Theme provider initialization
+  console.log('🎨 ThemeProvider Initializing', {
+    component: 'ThemeProvider',
+    timestamp: new Date().toISOString()
+  });
   
   // Check system preference and saved preference
-  useEffect(() => {
+  const getInitialThemeMode = (): ThemeMode => {
     const savedTheme = localStorage.getItem('bob-theme-mode') as ThemeMode;
     if (savedTheme && ['light', 'dark', 'auto'].includes(savedTheme)) {
-      setThemeMode(savedTheme);
-    } else {
-      // Default to auto mode
-      setThemeMode('auto');
+      return savedTheme;
     }
+    return 'auto';
+  };
+  const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
+
+  // LOGGING: Theme provider initialization
+  useEffect(() => {
+    console.log('🎨 ThemeProvider Initializing', {
+      component: 'ThemeProvider',
+      initialThemeMode: themeMode,
+      timestamp: new Date().toISOString()
+    });
   }, []);
+
+  // Watch for changes in localStorage (multi-tab)
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'bob-theme-mode') {
+        const newMode = (e.newValue as ThemeMode) || 'auto';
+        setThemeMode(newMode);
+        console.log('🎨 ThemeProvider: Detected themeMode change from storage', { newMode });
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // Save theme preference
+  useEffect(() => {
+    localStorage.setItem('bob-theme-mode', themeMode);
+    console.log('🎨 ThemeProvider: Saved themeMode to localStorage', { themeMode });
+  }, [themeMode]);
   
   // Determine actual theme based on mode
   const getActualTheme = (mode: ThemeMode): 'light' | 'dark' => {
-    if (mode === 'auto') {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    return mode;
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const result = mode === 'auto' ? (systemPrefersDark ? 'dark' : 'light') : mode;
+    
+    console.log('🎨 ThemeProvider: Determining actual theme', {
+      mode: mode,
+      systemPrefersDark: systemPrefersDark,
+      result: result,
+      timestamp: new Date().toISOString()
+    });
+    
+    return result;
   };
   
   const [actualTheme, setActualTheme] = useState<'light' | 'dark'>(() => 
@@ -137,7 +177,14 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   // Update actual theme when mode changes or system preference changes
   useEffect(() => {
     const updateActualTheme = () => {
-      setActualTheme(getActualTheme(themeMode));
+      const newTheme = getActualTheme(themeMode);
+      console.log('🎨 ThemeProvider: Updating actual theme', {
+        previousTheme: actualTheme,
+        newTheme: newTheme,
+        themeMode: themeMode,
+        timestamp: new Date().toISOString()
+      });
+      setActualTheme(newTheme);
     };
     
     updateActualTheme();

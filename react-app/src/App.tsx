@@ -205,7 +205,7 @@ function AppContent() {
             <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
-            <Route path="/goals-management" element={<GoalsManagement />} />
+            <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals/roadmap" element={<ThemeBasedGanttChart />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             

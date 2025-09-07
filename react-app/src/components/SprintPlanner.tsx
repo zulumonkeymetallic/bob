@@ -5,8 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
 import { getThemeName, getStatusName, getPriorityName, isStatus } from '../utils/statusHelpers';
-import {
 import { useTheme } from '../contexts/ModernThemeContext';
+import {
   DndContext,
   closestCenter,
   KeyboardSensor,

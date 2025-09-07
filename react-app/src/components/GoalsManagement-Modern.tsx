@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+console.log('🟢 GoalsManagement-Modern.tsx loaded', { timestamp: new Date().toISOString() });
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import { useTheme } from '../contexts/ModernThemeContext';
+import ErrorBoundary from './ErrorBoundary';
 
 const GoalsManagement: React.FC = () => {
   const { theme } = useTheme();
@@ -17,6 +19,15 @@ const GoalsManagement: React.FC = () => {
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+
+  // LOGGING: Component load and theme info
+  console.log('🎯 GoalsManagement-Modern Component Loading', {
+    component: 'GoalsManagement-Modern',
+    theme: theme,
+    currentPersona: currentPersona,
+    currentUser: currentUser?.email,
+    timestamp: new Date().toISOString()
+  });
 
   useEffect(() => {
     if (!currentUser) return;
@@ -38,10 +49,31 @@ const GoalsManagement: React.FC = () => {
     
     // Subscribe to real-time updates
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const goalsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Goal[];
+      console.log('🔥 GoalsManagement Firebase onSnapshot triggered', {
+        component: 'GoalsManagement-Modern',
+        docsCount: snapshot.docs.length,
+        timestamp: new Date().toISOString()
+      });
+      
+      const { sanitizeFirestoreData } = require('../utils/firestoreUtils');
+      console.log('🟡 About to sanitize all goals', { count: snapshot.docs.length, timestamp: new Date().toISOString() });
+      const goalsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        console.log('🟠 Raw goal data before sanitizeFirestoreData', { goalId: doc.id, data });
+        const sanitizedGoal = sanitizeFirestoreData({ id: doc.id, ...data });
+        console.log('🧹 Goal Data After sanitizeFirestoreData', {
+          goalId: doc.id,
+          sanitizedGoal,
+        });
+        return sanitizedGoal;
+      }) as Goal[];
+      console.log('📋 Final Goals Data Set (after sanitization)', {
+        component: 'GoalsManagement-Modern',
+        goalsCount: goalsData.length,
+        goalIds: goalsData.map(g => g.id),
+        allGoalsData: goalsData,
+        timestamp: new Date().toISOString()
+      });
       setGoals(goalsData);
     });
 
@@ -100,7 +132,7 @@ const GoalsManagement: React.FC = () => {
   };
 
   return (
-    <Container fluid className="py-4">
+  <Container fluid className="py-4" style={{ background: theme.colors.background, color: theme.colors.onBackground, minHeight: '100vh' }}>
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
           <h2 className="mb-1">Goals Management</h2>
@@ -148,7 +180,7 @@ const GoalsManagement: React.FC = () => {
       </Row>
 
       {/* Filters */}
-      <Card className="mb-4">
+      <Card className="mb-4" style={{ background: theme.colors.surface, color: theme.colors.onSurface }}>
         <Card.Body>
           <Row>
             <Col md={4}>
@@ -215,23 +247,25 @@ const GoalsManagement: React.FC = () => {
       </Card>
 
       {/* Modern Goals Table */}
-      <Card>
-        <Card.Header>
+      <Card style={{ background: theme.colors.surface, color: theme.colors.onSurface }}>
+        <Card.Header style={{ background: theme.colors.surface, color: theme.colors.onSurface }}>
           <h5 className="mb-0">Goals ({filteredGoals.length})</h5>
         </Card.Header>
-        <Card.Body className="p-0">
+        <Card.Body className="p-0" style={{ background: theme.colors.surface, color: theme.colors.onSurface }}>
           {loading ? (
             <div className="text-center p-4">
               <div className="spinner-border" />
               <p className="mt-2">Loading goals...</p>
             </div>
           ) : (
-            <ModernGoalsTable
-              goals={filteredGoals}
-              onGoalUpdate={handleGoalUpdate}
-              onGoalDelete={handleGoalDelete}
-              onGoalPriorityChange={handleGoalPriorityChange}
-            />
+            <ErrorBoundary>
+              <ModernGoalsTable
+                goals={filteredGoals}
+                onGoalUpdate={handleGoalUpdate}
+                onGoalDelete={handleGoalDelete}
+                onGoalPriorityChange={handleGoalPriorityChange}
+              />
+            </ErrorBoundary>
           )}
         </Card.Body>
       </Card>
