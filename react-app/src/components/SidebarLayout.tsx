@@ -7,6 +7,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import VersionDisplay from './VersionDisplay';
 import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
+import CompactSprintMetrics from './CompactSprintMetrics';
 import { useTestMode } from '../contexts/TestModeContext';
 
 interface SidebarLayoutProps {
@@ -510,11 +511,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           background: 'var(--notion-bg)'
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
-            <div className="d-flex justify-content-end align-items-center">
+            <div className="d-flex justify-content-end align-items-center gap-3">
               <SprintSelector
                 selectedSprintId={globalSprintId}
                 onSprintChange={setGlobalSprintId}
               />
+              <CompactSprintMetrics selectedSprintId={globalSprintId} />
             </div>
           </div>
         </div>
