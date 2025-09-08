@@ -512,11 +512,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
             <div className="d-flex justify-content-end align-items-center gap-3">
+              {/* Metrics first, then selector so metrics appear to the left of the selector */}
+              <CompactSprintMetrics selectedSprintId={globalSprintId} />
               <SprintSelector
                 selectedSprintId={globalSprintId}
                 onSprintChange={setGlobalSprintId}
               />
-              <CompactSprintMetrics selectedSprintId={globalSprintId} />
             </div>
           </div>
         </div>
