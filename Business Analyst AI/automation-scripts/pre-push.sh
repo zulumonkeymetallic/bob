@@ -121,6 +121,7 @@ guard_protected_branches() {
   local current_branch=$(git branch --show-current)
   # Add any branch names here that must be protected from direct pushes
   local protected_branches=(
+    "main"
     "main-baseline"
   )
 
