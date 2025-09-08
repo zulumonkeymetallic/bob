@@ -1,13 +1,14 @@
 // Version tracking for cache busting
-export const VERSION = '3.8.6';
+// Align version with branch build
+export const VERSION = '3.8.9';
 export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'stable-v3.8.6-main.firebase-permission-fixes';
+export const BUILD_HASH = 'ui/metrics-header';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
 console.log(`✅ Status: Firebase Permission Fixes & React Error Resolution`);
 console.log(`🔧 Fixes: QuickActionsPanel permission error, Firebase index optimization, timestamp serialization`);
 console.log(`🎯 Features: Consistent field naming (ownerUid), zero permission errors, stable data loading`);
-console.log(`🚀 Architecture: Stable v3.8.6 with Firebase security alignment`);
+console.log(`🚀 Architecture: Stable v3.8.9 baseline with Firebase security alignment`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force refresh if version mismatch detected

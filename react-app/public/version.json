@@ -1,7 +1,7 @@
 {
-  "version": "3.8.6",
-  "buildTime": "2025-09-04T12:00:00.000Z",
-  "buildHash": "cache-loop-fix",
+  "version": "3.8.9",
+  "buildTime": "",
+  "buildHash": "ui/metrics-header",
   "features": [
     "Cache Loop Prevention System",
     "Safe Cache Management", 
