@@ -1,19 +1,13 @@
 {
-  "version": "3.8.6",
-  "buildTime": "2025-09-04T12:00:00.000Z",
-  "buildHash": "cache-loop-fix",
+  "version": "3.8.9",
+  "buildTime": "",
+  "buildHash": "gantt-activity-v3.8.7",
   "features": [
-    "Cache Loop Prevention System",
-    "Safe Cache Management",
-    "Login Issue Resolution",
-    "Enhanced Error Recovery",
-    "Production Stability Improvements",
-    "Version Synchronization"
+    "Gantt: Weekend shading + Today line",
+    "Gantt: Card resizing + duration width",
+    "Sprint selector global sync",
+    "Reference format unified (ST/GR-XXXXXX)"
   ],
-  "description": "Critical Cache Loop Fix for Login Issues",
-  "githubIssues": [
-    "#Cache Loop - Fixed infinite cache clearing preventing login",
-    "#Login Issues - Resolved cache busting loop conflicts",
-    "#Production Stability - Enhanced cache management safety"
-  ]
+  "description": "Gantt + Global Activity Stream integration across goals, stories, and tasks.",
+  "githubIssues": []
 }

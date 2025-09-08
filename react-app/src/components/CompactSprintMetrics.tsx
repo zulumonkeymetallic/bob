@@ -20,18 +20,52 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
+  const [resolvedSprintId, setResolvedSprintId] = useState<string | undefined>(undefined);
 
-  // Load sprint data
+  // Resolve sprint: use provided ID or auto-detect active sprint
   useEffect(() => {
-    if (!selectedSprintId || !currentUser) {
+    if (!currentUser) {
+      setResolvedSprintId(undefined);
       setSprint(null);
       setLoading(false);
       return;
     }
 
+    // If caller provided an ID, use it directly
+    if (selectedSprintId) {
+      setResolvedSprintId(selectedSprintId);
+      return;
+    }
+
+    // Auto-detect active sprint when not supplied
+    const activeQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid),
+      where('status', '==', 1)
+    );
+
+    const unsub = onSnapshot(activeQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        const docSnap = snapshot.docs[0];
+        setResolvedSprintId(docSnap.id);
+        setSprint({ id: docSnap.id, ...docSnap.data() } as Sprint);
+      } else {
+        setResolvedSprintId(undefined);
+        setSprint(null);
+      }
+      setLoading(false);
+    });
+
+    return () => unsub();
+  }, [selectedSprintId, currentUser]);
+
+  // Load sprint by resolved ID when provided
+  useEffect(() => {
+    if (!resolvedSprintId || !currentUser) return;
+
     const sprintQuery = query(
       collection(db, 'sprints'),
-      where('__name__', '==', selectedSprintId),
+      where('__name__', '==', resolvedSprintId),
       where('ownerUid', '==', currentUser.uid)
     );
 
@@ -46,18 +80,18 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     });
 
     return () => unsubscribe();
-  }, [selectedSprintId, currentUser]);
+  }, [resolvedSprintId, currentUser]);
 
   // Load stories for this sprint
   useEffect(() => {
-    if (!selectedSprintId || !currentUser) {
+    if (!resolvedSprintId || !currentUser) {
       setStories([]);
       return;
     }
 
     const storiesQuery = query(
       collection(db, 'stories'),
-      where('sprintId', '==', selectedSprintId),
+      where('sprintId', '==', resolvedSprintId),
       where('ownerUid', '==', currentUser.uid)
     );
 
@@ -70,7 +104,7 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     });
 
     return () => unsubscribe();
-  }, [selectedSprintId, currentUser]);
+  }, [resolvedSprintId, currentUser]);
 
   // Load tasks (both linked to stories and standalone)
   useEffect(() => {

@@ -7,7 +7,8 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
 import CalendarSyncManager from './CalendarSyncManager';
-import { Settings, Palette, Database, Calendar } from 'lucide-react';
+import { Settings, Palette, Database, Calendar, Wand2 } from 'lucide-react';
+import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 
 interface GlobalThemeSettings {
@@ -261,6 +262,16 @@ const SettingsPage: React.FC = () => {
               </Nav.Item>
               <Nav.Item>
                 <Nav.Link 
+                  eventKey="ai"
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Wand2 size={20} className="me-2" />
+                  AI: Story & KPI
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
                   eventKey="system" 
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
@@ -428,6 +439,11 @@ const SettingsPage: React.FC = () => {
               {/* Calendar Integration Tab */}
               <Tab.Pane eventKey="calendar">
                 <CalendarSyncManager />
+              </Tab.Pane>
+
+              {/* AI Story/KPI Settings */}
+              <Tab.Pane eventKey="ai">
+                <AIStoryKPISettings />
               </Tab.Pane>
 
               {/* System Preferences Tab */}

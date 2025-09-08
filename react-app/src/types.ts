@@ -15,6 +15,9 @@ export interface Goal {
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
+  // Relationships
+  parentGoalId?: string | null; // Optional parent goal relationship
+  dependsOnGoalIds?: string[]; // Optional dependency links
   // Legacy fields for backward compatibility
   dueDate?: number;
   category?: string;

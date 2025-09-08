@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Form, Row, Col } from 'react-bootstrap';
-import { ChevronDown, ChevronUp, Plus, Edit3, Save, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Edit3, Save, X, Activity } from 'lucide-react';
 import { Task, Story } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
+import { useSidebar } from '../contexts/SidebarContext';
 
 interface StoryTasksPanelProps {
   story: Story;
@@ -16,6 +17,7 @@ interface StoryTasksPanelProps {
 const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { showSidebar } = useSidebar();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -393,13 +395,24 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
                             <p className="text-muted small mb-2">{task.description}</p>
                           )}
                         </div>
-                        <Button
-                          variant="outline-primary"
-                          size="sm"
-                          onClick={() => handleStartEdit(task)}
-                        >
-                          <Edit3 size={14} />
-                        </Button>
+                        <div className="d-flex align-items-center gap-2">
+                          <Button
+                            variant="outline-secondary"
+                            size="sm"
+                            onClick={() => { try { showSidebar(task as any, 'task'); } catch {} }}
+                            title="Activity"
+                          >
+                            <Activity size={14} />
+                          </Button>
+                          <Button
+                            variant="outline-primary"
+                            size="sm"
+                            onClick={() => handleStartEdit(task)}
+                            title="Edit Task"
+                          >
+                            <Edit3 size={14} />
+                          </Button>
+                        </div>
                       </div>
                     </>
                   )}

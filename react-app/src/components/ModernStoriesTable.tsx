@@ -31,6 +31,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { Story, Goal, Sprint } from '../types';
+import StoryTasksPanel from './StoryTasksPanel';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 
 interface StoryTableRow extends Story {
@@ -315,6 +316,7 @@ interface SortableRowProps {
   onStoryDelete: (storyId: string) => Promise<void>;
   onStorySelect?: (story: Story) => void;
   onEditStory?: (story: Story) => void;
+  onToggleExpand?: (storyId: string) => void;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -326,7 +328,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryUpdate, 
   onStoryDelete,
   onStorySelect,
-  onEditStory
+  onEditStory,
+  onToggleExpand
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
@@ -559,6 +562,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
           !e.target.closest('select')
         ) {
           onStorySelect(story);
+          onToggleExpand && onToggleExpand(story.id);
         }
       }}
       onMouseEnter={(e) => {
@@ -986,6 +990,12 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
   const visibleColumnsCount = columns.filter(col => col.visible).length;
 
+  // Inline tasks expansion state
+  const [expandedStoryId, setExpandedStoryId] = useState<string | null>(null);
+  const handleToggleExpand = (storyId: string) => {
+    setExpandedStoryId(prev => (prev === storyId ? null : storyId));
+  };
+
   return (
     <div 
       data-component="ModernStoriesTable"
@@ -1348,18 +1358,42 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                   strategy={verticalListSortingStrategy}
                 >
                   {sortedRows.map((story, index) => (
-                    <SortableRow
-                      key={story.id}
-                      story={story}
-                      columns={columns}
-                      index={index}
-                      sprints={sprints}
-                      goals={goals}
-                      onStoryUpdate={onStoryUpdate}
-                      onStoryDelete={onStoryDelete}
-                      onStorySelect={onStorySelect}
-                      onEditStory={onEditStory}
-                    />
+                    <React.Fragment key={story.id}>
+                      <SortableRow
+                        story={story}
+                        columns={columns}
+                        index={index}
+                        sprints={sprints}
+                        goals={goals}
+                        onStoryUpdate={onStoryUpdate}
+                        onStoryDelete={onStoryDelete}
+                        onStorySelect={onStorySelect}
+                        onEditStory={onEditStory}
+                        onToggleExpand={handleToggleExpand}
+                      />
+                      {expandedStoryId === story.id && (
+                        <tr>
+                          <td colSpan={columns.filter(col => col.visible).length + 2} style={{ padding: 0, borderTop: 'none' }}>
+                            <div style={{ 
+                              backgroundColor: '#f8fafc', 
+                              padding: '16px',
+                              borderLeft: '4px solid #2563eb',
+                              borderBottom: '1px solid #e5e7eb'
+                            }}>
+                              <h4 style={{ 
+                                margin: '0 0 12px 0', 
+                                fontSize: '14px', 
+                                fontWeight: '600', 
+                                color: '#374151'
+                              }}>
+                                📋 Tasks for: {story.title}
+                              </h4>
+                              <StoryTasksPanel story={story} onClose={() => setExpandedStoryId(null)} />
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                 </SortableContext>
                 

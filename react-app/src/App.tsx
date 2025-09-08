@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from 'react-bootstrap';
-import { Routes, Route, BrowserRouter as Router, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, BrowserRouter as Router, Navigate } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import SprintDashboard from './components/SprintDashboard';
 import TaskListView from './components/TaskListView';
 import GoalsManagement from './components/GoalsManagement';
-import Admin from './components/Admin';
 import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import TasksList from './components/TasksList';
@@ -17,47 +16,28 @@ import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
 import PersonalListsManagement from './components/PersonalListsManagement';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
-// import ModernTableDemo from './components/ModernTableDemo';
+import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
-import SettingsPage from './components/SettingsPage';
-import LoginPage from './components/LoginPage';
-import ErrorBoundary from './components/ErrorBoundary';
+import ThemeColorManager from './components/ThemeColorManager';
+import ThemeBasedGanttChart from './components/visualization/ThemeBasedGanttChart';
+import SprintKanbanPage from './components/SprintKanbanPage';
+import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider } from './contexts/PersonaContext';
-import { SprintProvider } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
-
-// Import theme-aware styles
-import './styles/theme-aware.css';
 import { TestModeProvider } from './contexts/TestModeContext';
+import { SprintProvider } from './contexts/SprintContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
 import { checkForUpdates, VERSION } from './version';
-// import { versionTimeoutService } from './services/versionTimeoutService';
 import ComprehensiveTest from './components/ComprehensiveTest';
-import SprintPlannerSimple from './components/SprintPlannerSimple';
-import { clickTrackingService } from './services/ClickTrackingService';
-
-// BOB v3.5.2 - New Scaffolding Components
-import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
-import CalendarIntegrationView from './components/calendar/CalendarIntegrationView';
-import SprintManagementView from './components/sprints/SprintManagementView';
-import SprintsPage from './components/sprints/SprintsPage';
-import RoutesManagementView from './components/routes/RoutesManagementView';
-import CurrentSprintKanban from './components/CurrentSprintKanban';
-import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
-import MobileView from './components/MobileView';
-import AIUsageDashboard from './components/AIUsageDashboard';
-import SprintPlannerMatrix from './components/SprintPlannerMatrix';
-import MigrationManager from './components/MigrationManager';
-import GoalVizPage from './components/visualization/GoalVizPage';
-import SprintKanbanPage from './components/SprintKanbanPage';
-import TasksManagement from './components/TasksManagement';
-import SprintPlanningMatrix from './components/SprintPlanningMatrix';
+import { useVersionCheck } from './hooks/useVersionCheck';
+import { UpdateAvailableToast } from './components/UpdateAvailableToast';
+import { registerServiceWorker } from './utils/serviceWorker';
 
 function App() {
   return (
@@ -78,45 +58,40 @@ function App() {
 function AppContent() {
   const { theme, toggleTheme } = useTheme();
   const { currentUser, signInWithGoogle, signOut } = useAuth();
-  const location = useLocation();
   const deviceInfo = useDeviceInfo();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [forceRender, setForceRender] = useState(0);
   
   // Data for the global sidebar
   const [goals, setGoals] = useState([]);
   const [stories, setStories] = useState([]);
   const [sprints, setSprints] = useState([]);
 
-  // 🖱️ Initialize global click tracking service
-  useEffect(() => {
-    console.log('🖱️ CLICK TRACKING: Initializing global interaction tracking');
-    clickTrackingService.initialize();
-    
-    return () => {
-      console.log('🖱️ CLICK TRACKING: Cleaning up interaction tracking');
-      clickTrackingService.destroy();
-    };
-  }, []);
+  // Version checking and update management
+  const {
+    updateAvailable,
+    newVersion,
+    currentVersion,
+    applyUpdate,
+    dismissUpdate
+  } = useVersionCheck({
+    onUpdateAvailable: (current, latest) => {
+      console.log('🆕 Update available:', { current, latest });
+    }
+  });
 
-  // Debug location changes and force re-render
+  // Initialize service worker and check for updates on app load
   useEffect(() => {
-    console.log('🔄 BOB v3.1.1: Location changed to:', location.pathname);
-    console.log('🔄 Location key:', location.key);
-    
-    // Force component re-render by updating state
-    setForceRender(prev => prev + 1);
-  }, [location.pathname, location.key]);
-
-  // Check for updates on app load and initialize version timeout service
-  useEffect(() => {
-    // Initialize enhanced version timeout service
-    console.log('🕐 Initializing Version Timeout Service');
-    // versionTimeoutService.forceVersionCheck(); // Temporarily disabled to fix cache loop
-    
-    // Legacy update check as fallback
     checkForUpdates();
+    
+    // Register service worker
+    registerServiceWorker().then((result) => {
+      if (result.isRegistered) {
+        console.log('✅ Service worker registered successfully');
+      } else {
+        console.log('ℹ️ Service worker not available or failed to register');
+      }
+    });
     
     // Add keyboard shortcut for force refresh (Ctrl+Shift+R or Cmd+Shift+R)
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -143,16 +118,32 @@ function AppContent() {
     };
     
     window.addEventListener('keydown', handleKeyDown);
-    
-    // Cleanup function
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      // versionTimeoutService.destroy(); // Temporarily disabled to fix cache loop
-    };
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const handleSignIn = async () => {
+    try {
+      console.log('Attempting to sign in...');
+      await signInWithGoogle();
+      console.log('Sign in successful');
+    } catch (error) {
+      console.error('Sign in failed:', error);
+      alert('Sign in failed: ' + error.message);
+    }
+  };
+
   if (!currentUser) {
-    return <LoginPage />;
+    return (
+      <div className={`app-container ${theme} vh-100 d-flex justify-content-center align-items-center`}>
+        <div className="text-center">
+          <h1>Welcome to BOB</h1>
+          <p>Your personal productivity assistant.</p>
+          <Button variant="primary" size="lg" onClick={handleSignIn}>
+            Sign in with Google
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   const handleSignOut = async () => {
@@ -165,68 +156,38 @@ function AppContent() {
   };
 
   return (
-    <ErrorBoundary>
-      <MigrationManager>
-        <SidebarLayout onSignOut={handleSignOut}>
-          {/* Debug current route */}
-          
-          <div key={`${location.pathname}-${forceRender}`}>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/sprint-dashboard" element={<SprintDashboard />} />
-              <Route path="/tasks" element={<TasksList />} />
-              <Route path="/task-list" element={<TaskListView />} />
-              <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
-            {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
-            {/* Legacy sprint routes - redirect to consolidated */}
-            <Route path="/kanban" element={<Navigate to="/sprints/kanban" replace />} />
-            <Route path="/kanban-old" element={<Navigate to="/sprints/kanban" replace />} />
-            <Route path="/sprint-planning" element={<Navigate to="/sprints/management" replace />} />
-            <Route path="/sprint-simple" element={<Navigate to="/sprints/management" replace />} />
-            <Route path="/sprint-kanban" element={<Navigate to="/sprints/kanban" replace />} />
-            <Route path="/sprint-matrix" element={<Navigate to="/sprints/management" replace />} />
-            <Route path="/current-sprint" element={<Navigate to="/sprints/kanban" replace />} />
-            
-            {/* New consolidated sprint routes */}
-            <Route path="/sprints" element={<SprintsPage />} />
-            <Route path="/sprints/management" element={<SprintsPage />} />
-            <Route path="/sprints/kanban" element={<SprintsPage />} />
-            <Route path="/sprints/stories" element={<SprintsPage />} />
-            
-            <Route path="/tasks-management" element={<TasksManagement />} />
-            <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
-            <Route path="/mobile-view" element={<MobileView />} />
-            <Route path="/ai-planner" element={<PlanningDashboard />} />
-            <Route path="/ai-usage" element={<AIUsageDashboard />} />
-            <Route path="/planning" element={<PlanningDashboard />} />
-            <Route path="/stories" element={<StoriesManagement />} />
-            <Route path="/personal-lists" element={<BacklogManager />} />
-            <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
-            <Route path="/personal-backlogs" element={<BacklogManager />} />
-            <Route path="/goals" element={<GoalsManagement />} />
-            <Route path="/goals-management" element={<GoalsManagement />} />
-            <Route path="/goals/roadmap" element={<EnhancedGanttChart />} />
-            <Route path="/goals/viz" element={<EnhancedGanttChart />} />
-            
-            {/* Goals Timeline now uses Enhanced Gantt */}
-            <Route path="/goals/timeline" element={<EnhancedGanttChart />} />
-            <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
-            <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
-            <Route path="/routes" element={<RoutesManagementView />} />
-            <Route path="/routines" element={<RoutesManagementView />} />
-            <Route path="/routes/optimization" element={<RoutesManagementView />} />
-            
-            <Route path="/canvas" element={<VisualCanvas />} />
-            <Route path="/visual-canvas" element={<VisualCanvas />} />
-            <Route path="/calendar" element={<Calendar />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
-            <Route path="/admin" element={<Admin />} />
-            <Route path="/test" element={<ComprehensiveTest />} />
-            <Route path="/changelog" element={<Changelog />} />
-          </Routes>
-        </div>
+      <SidebarLayout onSignOut={handleSignOut}>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/sprint-dashboard" element={<SprintDashboard />} />
+          <Route path="/tasks" element={<TasksList />} />
+          <Route path="/task-list" element={<TaskListView />} />
+          <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
+          <Route path="/modern-table" element={<ModernTableDemo />} />
+          <Route path="/kanban" element={<SprintKanbanPage />} />
+          <Route path="/kanban-old" element={<KanbanPage />} />
+          <Route path="/ai-planner" element={<PlanningDashboard />} />
+          <Route path="/planning" element={<PlanningDashboard />} />
+          <Route path="/stories" element={<StoriesManagement />} />
+          <Route path="/personal-lists" element={<BacklogManager />} />
+          <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
+          <Route path="/personal-backlogs" element={<BacklogManager />} />
+          <Route path="/goals" element={<GoalsManagement />} />
+          <Route path="/goals-management" element={<GoalsManagement />} />
+          <Route path="/goals/visualization" element={<ThemeBasedGanttChart />} />
+          <Route path="/goals/gantt" element={<ThemeBasedGanttChart />} />
+          <Route path="/canvas" element={<VisualCanvas />} />
+          <Route path="/visual-canvas" element={<VisualCanvas />} />
+          <Route path="/calendar" element={<Calendar />} />
+          <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
+          <Route path="/sprints/management" element={<SprintKanbanPage />} />
+          <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
+          <Route path="/settings" element={<Navigate to="/theme-colors" replace />} />
+          <Route path="/theme-colors" element={<ThemeColorManager />} />
+          <Route path="/test" element={<ComprehensiveTest />} />
+          <Route path="/changelog" element={<Changelog />} />
+        </Routes>
 
         {/* Floating Action Button for quick adds */}
         <FloatingActionButton onImportClick={() => setShowImportModal(true)} />
@@ -243,9 +204,16 @@ function AppContent() {
           stories={stories}
           sprints={sprints}
         />
+
+        {/* Update Available Toast */}
+        <UpdateAvailableToast
+          show={updateAvailable}
+          currentVersion={currentVersion}
+          newVersion={newVersion}
+          onReload={applyUpdate}
+          onDismiss={dismissUpdate}
+        />
       </SidebarLayout>
-    </MigrationManager>
-    </ErrorBoundary>
   );
 }
 

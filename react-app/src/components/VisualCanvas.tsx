@@ -51,10 +51,16 @@ const VisualCanvas: React.FC = () => {
       where('ownerUid', '==', currentUser.uid)
     );
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const goalsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Goal));
+      const goalsData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+        };
+      }) as Goal[];
       setGoals(goalsData);
     });
 
@@ -63,10 +69,16 @@ const VisualCanvas: React.FC = () => {
       where('ownerUid', '==', currentUser.uid)
     );
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
-      const storiesData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Story));
+      const storiesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+        };
+      }) as Story[];
       setStories(storiesData);
     });
 
@@ -75,10 +87,17 @@ const VisualCanvas: React.FC = () => {
       where('ownerUid', '==', currentUser.uid)
     );
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Task));
+      const tasksData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+          dueDate: data.dueDate?.toDate?.() || data.dueDate,
+        };
+      }) as Task[];
       setTasks(tasksData);
     });
 

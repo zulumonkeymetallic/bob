@@ -5,12 +5,14 @@ import SprintManagementView from './SprintManagementView';
 import SprintKanbanPage from '../SprintKanbanPage';
 import StoriesManagement from '../StoriesManagement';
 import SprintSelector from '../SprintSelector';
+import { useSprint } from '../../contexts/SprintContext';
 
 const SprintsPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('management');
-  const [selectedSprintId, setSelectedSprintId] = useState<string>('');
+  // Use global sprint context so all selectors stay in sync
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
 
   // Parse active tab from URL
   useEffect(() => {
@@ -64,7 +66,8 @@ const SprintsPage: React.FC = () => {
 
             <Tab.Content>
               <Tab.Pane eventKey="management">
-                <SprintManagementView />
+                {/* Use the unified Sprint Kanban component for Management tab as well */}
+                <SprintKanbanPage selectedSprintId={selectedSprintId} />
               </Tab.Pane>
               
               <Tab.Pane eventKey="kanban">

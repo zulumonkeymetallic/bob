@@ -150,6 +150,137 @@ exports.planCalendar = functionsV2.https.onCall(async (request) => {
   }
 });
 
+// ===== AI: Generate Stories & KPIs for a Goal
+exports.generateGoalStoriesAndKPIs = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError("unauthenticated", "Must be authenticated");
+  }
+
+  const { goalId, apply } = request.data || {};
+  if (!goalId) throw new httpsV2.HttpsError("invalid-argument", "Missing goalId");
+
+  const db = admin.firestore();
+  const goalSnap = await db.collection('goals').doc(goalId).get();
+  if (!goalSnap.exists) throw new httpsV2.HttpsError("not-found", "Goal not found");
+  const goal = goalSnap.data();
+  if (goal.ownerUid && goal.ownerUid !== uid) throw new httpsV2.HttpsError("permission-denied", "Not goal owner");
+
+  // Load user AI settings
+  let settings = { provider: 'openai', model: 'gpt-4o-mini', vertexLocation: 'us-central1', prompt: null, applyByDefault: true };
+  try {
+    const s = await db.collection('ai_settings').doc(uid).get();
+    if (s.exists) settings = { ...settings, ...s.data() };
+  } catch {}
+  const provider = (settings.provider || 'openai').toLowerCase();
+  const model = request.data?.model || settings.model || (provider === 'vertex' ? 'gemini-1.5-flash' : 'gpt-4o-mini');
+  const vertexLocation = settings.vertexLocation || 'us-central1';
+  const userPrompt = settings.prompt || '';
+  const shouldApply = typeof apply === 'boolean' ? apply : Boolean(settings.applyByDefault);
+
+  // Build prompt
+  const system = `You are an assistant that outputs JSON only. Generate agile user stories and KPIs for a personal goal. Keep outputs concise and actionable.`;
+  const user = {
+    goal: {
+      title: goal.title,
+      description: goal.description || '',
+      theme: goal.theme,
+      size: goal.size,
+      priority: goal.priority || 2,
+      status: goal.status,
+      timeToMasterHours: goal.timeToMasterHours || 40
+    }
+  };
+  const instruction = `${userPrompt}\n\nReturn JSON with fields: {
+    "kpis": [ { "name": string, "target": number, "unit": string } ],
+    "stories": [ { "title": string, "description": string, "points": number, "priority": 1|2|3 } ]
+  }
+  - 3-6 stories, small/medium in size.
+  - KPIs should match the goal and be measurable.`;
+
+  let content;
+  try {
+    if (provider === 'vertex') {
+      const { VertexAI } = require('@google-cloud/vertexai');
+      const vertexAI = new VertexAI({ project: process.env.GCLOUD_PROJECT, location: vertexLocation });
+      const modelRef = vertexAI.getGenerativeModel({ model });
+      const result = await modelRef.generateContent({
+        contents: [
+          { role: 'user', parts: [{ text: system }] },
+          { role: 'user', parts: [{ text: JSON.stringify(user) }] },
+          { role: 'user', parts: [{ text: instruction }] }
+        ],
+        generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
+        safetySettings: []
+      });
+      content = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    } else {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const res = await openai.chat.completions.create({
+        model,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: JSON.stringify(user) },
+          { role: 'user', content: instruction }
+        ]
+      });
+      content = res.choices?.[0]?.message?.content || '{}';
+    }
+  } catch (e) {
+    console.error('OpenAI error:', e);
+    throw new httpsV2.HttpsError('internal', 'LLM generation failed');
+  }
+
+  let parsed = { kpis: [], stories: [] };
+  try { parsed = JSON.parse(content); } catch {}
+  const kpis = Array.isArray(parsed.kpis) ? parsed.kpis.slice(0, 6) : [];
+  const stories = Array.isArray(parsed.stories) ? parsed.stories.slice(0, 8) : [];
+
+  const result = { generated: { kpis, stories } };
+
+  if (shouldApply) {
+    const batch = db.batch();
+    // Update goal KPIs
+    batch.update(db.collection('goals').doc(goalId), {
+      kpis,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    // Create stories
+    for (const s of stories) {
+      const ref = db.collection('stories').doc();
+      batch.set(ref, {
+        title: s.title,
+        description: s.description || '',
+        goalId,
+        theme: goal.theme || null,
+        status: 1, // planned
+        priority: Math.min(3, Math.max(1, Number(s.priority) || 2)),
+        points: Math.min(21, Math.max(0, Number(s.points) || 3)),
+        persona: 'personal',
+        ownerUid: uid,
+        orderIndex: 0,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    await batch.commit();
+
+    // Log activity
+    try {
+      await aiUsageLogger.logAIUsage({
+        userId: uid,
+        endpoint: 'generateGoalStoriesAndKPIs',
+        tokensIn: content?.length || 0,
+        tokensOut: (stories.length + kpis.length) || 0,
+        timestamp: Date.now()
+      });
+    } catch {}
+  }
+
+  return { ...result, provider, model };
+});
+
 async function assemblePlanningContext(uid, persona, horizonDays) {
   const db = admin.firestore();
   const startDate = new Date();

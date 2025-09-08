@@ -15,8 +15,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
-  Target,
-  Edit3
+  Target
 } from 'lucide-react';
 import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
@@ -24,8 +23,6 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { collection, query, where, getDocs, doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import EditGoalModal from '../../components/EditGoalModal';
-import ModernStoriesTable from '../../components/ModernStoriesTable';
 import { Goal, Sprint, Story, Task } from '../../types';
 import './EnhancedGanttChart.css';
 
@@ -40,8 +37,6 @@ interface GanttItem {
   goalId?: string;
   sprintId?: string;
   linkedItems?: GanttItem[];
-  priority?: number;
-  confidence?: number;
 }
 
 interface DragState {
@@ -94,8 +89,6 @@ const EnhancedGanttChart: React.FC = () => {
   const [showActivityStream, setShowActivityStream] = useState(false);
   const [activityStreamItems, setActivityStreamItems] = useState<ActivityStreamItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
-  const [editGoal, setEditGoal] = useState<Goal | null>(null);
   
   // Modals
   const [showImpactModal, setShowImpactModal] = useState(false);
@@ -105,7 +98,6 @@ const EnhancedGanttChart: React.FC = () => {
   // Refs
   const canvasRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   
   // Theme definitions
   const themes = [
@@ -123,15 +115,6 @@ const EnhancedGanttChart: React.FC = () => {
     const end = new Date(now.getFullYear() + 2, 11, 31); // 2 years ahead
     return { start, end };
   }, []);
-
-  // Scroll to today's date on mount and when zoom/data changes
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const today = new Date();
-    const left = 250 + getDatePosition(today) - el.clientWidth * 0.3;
-    el.scrollLeft = Math.max(0, left);
-  }, [zoomLevel, goals.length, sprints.length]);
 
   // Load data with real-time subscriptions
   useEffect(() => {
@@ -210,9 +193,7 @@ const EnhancedGanttChart: React.FC = () => {
         theme: goal.theme,
         startDate,
         endDate,
-        status: goal.status,
-        priority: (goal as any).priority,
-        confidence: (goal as any).confidence
+        status: goal.status
       });
     });
 
@@ -242,7 +223,6 @@ const EnhancedGanttChart: React.FC = () => {
   // Handle item click for activity stream
   const handleItemClick = useCallback(async (item: GanttItem) => {
     setSelectedItemId(item.id);
-    if (item.type === 'goal') setSelectedGoalId(item.id);
     setShowActivityStream(true);
 
     // Find all linked items
@@ -530,16 +510,6 @@ const EnhancedGanttChart: React.FC = () => {
     return headers;
   };
 
-  const zoomLevels: Array<typeof zoomLevel> = ['month', 'quarter', 'half', 'year'];
-  const handleWheelZoom: React.WheelEventHandler<HTMLDivElement> = (e) => {
-    if (!e.ctrlKey && Math.abs(e.deltaY) < 35) return;
-    e.preventDefault();
-    const dir = e.deltaY > 0 ? 1 : -1;
-    const idx = zoomLevels.indexOf(zoomLevel);
-    const next = Math.min(zoomLevels.length - 1, Math.max(0, idx + dir));
-    if (next !== idx) setZoomLevel(zoomLevels[next]);
-  };
-
   if (loading) {
     return (
       <Container fluid className="p-4">
@@ -554,7 +524,6 @@ const EnhancedGanttChart: React.FC = () => {
   }
 
   return (
-    <>
     <Container fluid className="enhanced-gantt-chart p-0">
       {/* Header */}
       <Card className="border-0 shadow-sm">
@@ -638,7 +607,7 @@ const EnhancedGanttChart: React.FC = () => {
       </Card>
 
       {/* Main Timeline */}
-      <div ref={containerRef} className="timeline-container" style={{ height: 'calc(100vh - 250px)', overflow: 'auto' }} onWheel={handleWheelZoom}>
+      <div className="timeline-container" style={{ height: 'calc(100vh - 250px)', overflow: 'auto' }}>
         {/* Timeline Header */}
         <div className="timeline-header sticky-top bg-white border-bottom" style={{ zIndex: 10 }}>
           <div className="d-flex">
@@ -750,24 +719,9 @@ const EnhancedGanttChart: React.FC = () => {
                       }}
                     />
                     
-                    <div className="goal-content px-2 text-white text-truncate flex-grow-1" style={{ fontSize: 12 }}>
-                      <strong>{goal.title}</strong>
-                      {typeof goal.priority !== 'undefined' && (
-                        <span className="ms-2">P{goal.priority}</span>
-                      )}
+                    <div className="goal-content px-2 text-white text-truncate flex-grow-1">
+                      <small>{goal.title}</small>
                     </div>
-                    <button
-                      className="btn btn-sm btn-light position-absolute"
-                      style={{ right: 10, top: 6, padding: '2px 6px' }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const full = goals.find(g => g.id === goal.id) || null;
-                        setEditGoal(full as any);
-                      }}
-                      title="Edit Goal"
-                    >
-                      <Edit3 size={12} />
-                    </button>
                     
                     <div
                       className="resize-handle resize-end position-absolute"
@@ -796,30 +750,6 @@ const EnhancedGanttChart: React.FC = () => {
           })}
         </div>
       </div>
-
-      {/* Selected Goal Stories Panel */}
-      {selectedGoalId && (
-        <Card className="border-top rounded-0" style={{ maxHeight: '40vh', overflow: 'auto' }}>
-          <Card.Header className="d-flex justify-content-between align-items-center">
-            <div>
-              <strong>Stories for goal</strong>
-              <span className="ms-2 text-muted">{goals.find(g => g.id === selectedGoalId)?.title}</span>
-            </div>
-            <Button size="sm" variant="outline-secondary" onClick={() => setSelectedGoalId(null)}>Close</Button>
-          </Card.Header>
-          <Card.Body>
-            <ModernStoriesTable
-              stories={stories.filter(s => (s as any).goalId === selectedGoalId)}
-              goals={[]}
-              goalId={selectedGoalId}
-              onStoryUpdate={async () => {}}
-              onStoryDelete={async () => {}}
-              onStoryPriorityChange={async () => {}}
-              onStoryAdd={() => Promise.resolve()}
-            />
-          </Card.Body>
-        </Card>
-      )}
 
       {/* Activity Stream Sidebar */}
       {showActivityStream && (
@@ -923,14 +853,6 @@ const EnhancedGanttChart: React.FC = () => {
         </Modal.Footer>
       </Modal>
     </Container>
-    {/* Edit Modal outside Container to avoid clipping */}
-    <EditGoalModal
-      goal={editGoal}
-      show={!!editGoal}
-      onClose={() => setEditGoal(null)}
-      currentUserId={currentUser?.uid || ''}
-    />
-    </>
   );
 };
 
