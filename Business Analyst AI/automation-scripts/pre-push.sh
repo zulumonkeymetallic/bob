@@ -116,6 +116,23 @@ check_branch_status() {
   fi
 }
 
+# Prevent pushing directly to protected branches
+guard_protected_branches() {
+  local current_branch=$(git branch --show-current)
+  # Add any branch names here that must be protected from direct pushes
+  local protected_branches=(
+    "main-baseline"
+  )
+
+  for b in "${protected_branches[@]}"; do
+    if [[ "$current_branch" == "$b" ]]; then
+      error "Direct pushes to protected branch '$b' are blocked."
+      echo -e "${YELLOW}➡️  Create a feature branch and open a Pull Request into '$b'.${NC}"
+      exit 1
+    fi
+  done
+}
+
 # Validate project structure
 validate_project_structure() {
   log "Validating project structure..."
@@ -453,6 +470,7 @@ main() {
   check_git_repo
   check_uncommitted_changes
   check_branch_status
+  guard_protected_branches
   validate_project_structure
   check_node_environment
   validate_package_json
