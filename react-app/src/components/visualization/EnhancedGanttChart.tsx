@@ -544,30 +544,7 @@ const EnhancedGanttChart: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const updateGoalDates = async (goalId: string, startDate: Date, endDate: Date) => {
-    try {
-      await updateDoc(doc(db, 'goals', goalId), {
-        startDate: startDate.getTime(),
-        endDate: endDate.getTime(),
-        updatedAt: Date.now()
-      });
-
-      // Log activity
-      await ActivityStreamService.logFieldChange(
-        goalId,
-        'goal',
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        'personal',
-        'startDate',
-        null,
-        startDate.toLocaleDateString(),
-        `Updated goal timeline: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`
-      );
-    } catch (error) {
-      console.error('Error updating goal dates:', error);
-    }
-  };
+  // duplicate updateGoalDates removed
 
   const confirmGoalUpdate = async () => {
     if (pendingGoalUpdate) {
