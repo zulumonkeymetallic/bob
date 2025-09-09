@@ -88,11 +88,14 @@ const EnhancedGanttChart: React.FC = () => {
   const [showLinks, setShowLinks] = useState<boolean>(true);
   const [autoFitSprintGoals, setAutoFitSprintGoals] = useState<boolean>(true);
   const [collapsedGoals, setCollapsedGoals] = useState<Set<string>>(new Set());
+  const [groupByTheme, setGroupByTheme] = useState<boolean>(true);
   const [storiesByGoal, setStoriesByGoal] = useState<Record<string, number>>({});
   const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<any[]>([]);
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
+  const [liveAnnouncement, setLiveAnnouncement] = useState('');
+  const [dragOverlay, setDragOverlay] = useState<{ left: number; width: number; text: string } | null>(null);
   
   // Drag and drop state
   const [dragState, setDragState] = useState<DragState>({
@@ -272,6 +275,16 @@ const EnhancedGanttChart: React.FC = () => {
     });
   }, [goals, sprints, stories, selectedThemes, searchTerm]);
 
+  // Group goals by theme for rendering bands/headers
+  const goalsByTheme = useMemo(() => {
+    const grouped: Record<number, GanttItem[]> = {};
+    ganttItems.filter(i => i.type === 'goal').forEach(g => {
+      grouped[g.theme] = grouped[g.theme] || [];
+      grouped[g.theme].push(g);
+    });
+    return grouped;
+  }, [ganttItems]);
+
   // Handle item click for activity stream
   const handleItemClick = useCallback(async (item: GanttItem) => {
     setSelectedItemId(item.id);
@@ -372,7 +385,6 @@ const EnhancedGanttChart: React.FC = () => {
   const handleDragMove = useCallback((e: MouseEvent | TouchEvent) => {
     if (!dragState.isDragging || !dragState.itemId) return;
     
-    e.preventDefault();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const deltaX = clientX - dragState.startX;
     
@@ -404,6 +416,7 @@ const EnhancedGanttChart: React.FC = () => {
       const endPos = getDatePosition(newEndDate);
       goalElement.style.left = `${startPos}px`;
       goalElement.style.width = `${endPos - startPos}px`;
+      setDragOverlay({ left: 250 + startPos, width: endPos - startPos, text: `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}` });
     }
   }, [dragState, zoomLevel]);
 
@@ -431,6 +444,9 @@ const EnhancedGanttChart: React.FC = () => {
     // Snap to whole-day boundaries
     newStartDate.setHours(0,0,0,0);
     newEndDate.setHours(0,0,0,0);
+
+    // Clear drag overlay
+    setDragOverlay(null);
 
     // Check for impacted stories/tasks in current sprints
     const goal = goals.find(g => g.id === dragState.itemId);
@@ -528,6 +544,7 @@ const EnhancedGanttChart: React.FC = () => {
       lastChangeRef.current = { goalId, prevStart: (prev as any).startDate || 0, prevEnd: (prev as any).endDate || 0 };
     }
     await updateDoc(doc(db, 'goals', goalId), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: Date.now() });
+    setLiveAnnouncement(`Updated ${goals.find(g=>g.id===goalId)?.title || 'goal'} to ${newStart.toLocaleDateString()} – ${newEnd.toLocaleDateString()}`);
   };
 
   useEffect(() => {
@@ -677,6 +694,7 @@ const EnhancedGanttChart: React.FC = () => {
                   </div>
                   <Form.Check type="switch" id="toggle-links" label="Show links" checked={showLinks} onChange={(e) => setShowLinks(e.target.checked)} />
                   <Form.Check type="switch" id="toggle-autofit" label="Auto-fit sprint goals" checked={autoFitSprintGoals} onChange={(e) => setAutoFitSprintGoals(e.target.checked)} />
+                  <Form.Check type="switch" id="toggle-group" label="Group by Theme" checked={groupByTheme} onChange={(e) => setGroupByTheme(e.target.checked)} />
                 </Card.Body>
               </Card>
             </Col>
@@ -706,6 +724,8 @@ const EnhancedGanttChart: React.FC = () => {
 
       {/* Main Timeline */}
       <div ref={containerRef} className="timeline-container" style={{ height: 'calc(100vh - 250px)', overflow: 'auto' }} onWheel={handleWheelZoom}>
+        {/* Live region for a11y announcements */}
+        <div aria-live="polite" className="visually-hidden">{liveAnnouncement}</div>
         {/* Timeline Header */}
         <div className="timeline-header sticky-top bg-white border-bottom" style={{ zIndex: 10 }}>
           <div className="d-flex">
@@ -758,9 +778,24 @@ const EnhancedGanttChart: React.FC = () => {
           ))}
         </div>
 
+        {/* Ghost drag tooltip */}
+        {dragOverlay && (
+          <div className="drag-tooltip" style={{ left: dragOverlay.left, top: 60 }}>
+            {dragOverlay.text}
+          </div>
+        )}
+
         {/* Goals Rows */}
         <div ref={canvasRef} className="goals-canvas">
-          {ganttItems.filter(item => item.type === 'goal').map((goal, index) => {
+          {(groupByTheme ? Object.keys(goalsByTheme).map(k => parseInt(k,10)).sort((a,b)=>a-b) : [null]).map(groupKey => (
+            <React.Fragment key={groupKey === null ? 'all' : `theme-${groupKey}`}>
+              {groupByTheme && (
+                <div className="d-flex align-items-center" style={{ height: 28 }}>
+                  <div style={{ width: 250, minWidth: 250 }} className="px-2 text-muted fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
+                  <div className="flex-grow-1" style={{ borderBottom: '1px solid #eee' }} />
+                </div>
+              )}
+          {(groupByTheme ? (goalsByTheme[groupKey as number] || []) : ganttItems.filter(g => g.type==='goal')).map((goal, index) => {
             const theme = themes.find(t => t.id === goal.theme);
             const startPos = getDatePosition(goal.startDate);
             const endPos = getDatePosition(goal.endDate);
@@ -904,6 +939,8 @@ const EnhancedGanttChart: React.FC = () => {
               </div>
             );
           })}
+          </React.Fragment>
+          ))}
         </div>
       </div>
 
