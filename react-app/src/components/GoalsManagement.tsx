@@ -6,7 +6,8 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
-import CompactSprintMetrics from './CompactSprintMetrics';
+import GoalsCardView from './GoalsCardView';
+import EditGoalModal from './EditGoalModal';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -16,6 +17,8 @@ const GoalsManagement: React.FC = () => {
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -45,6 +48,11 @@ const GoalsManagement: React.FC = () => {
           // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+          targetDate: data.targetDate?.toDate 
+            ? data.targetDate.toDate().getTime() 
+            : (typeof data.targetDate === 'object' && data.targetDate?.seconds != null
+                ? (data.targetDate.seconds * 1000 + Math.floor((data.targetDate.nanoseconds || 0) / 1e6))
+                : data.targetDate)
         };
       }) as Goal[];
       setGoals(goalsData);
@@ -107,7 +115,8 @@ const GoalsManagement: React.FC = () => {
   return (
     <div style={{ 
       padding: '24px', 
-      backgroundColor: '#f8f9fa',
+      backgroundColor: 'var(--notion-bg)',
+      color: 'var(--notion-text)',
       minHeight: '100vh',
       width: '100%'
     }}>
@@ -123,12 +132,32 @@ const GoalsManagement: React.FC = () => {
             <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
               Goals Management
             </h2>
-            <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
+            <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '16px' }}>
               Manage your life goals across different themes
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <CompactSprintMetrics />
+            {/* View Mode Toggle */}
+            <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
+              <Button
+                size="sm"
+                id="button-list"
+                variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
+                onClick={() => setViewMode('list')}
+                style={{ borderRadius: 0 }}
+              >
+                List
+              </Button>
+              <Button
+                size="sm"
+                id="button-cards"
+                variant={viewMode === 'cards' ? 'primary' : 'outline-secondary'}
+                onClick={() => setViewMode('cards')}
+                style={{ borderRadius: 0 }}
+              >
+                Cards
+              </Button>
+            </div>
             <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
               Add Goal
             </Button>
@@ -138,48 +167,48 @@ const GoalsManagement: React.FC = () => {
         {/* Dashboard Cards */}
         <Row className="mb-4">
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--notion-text)' }}>
                   {goalCounts.total}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px', fontWeight: '500' }}>
                   Total Goals
                 </p>
               </Card.Body>
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--notion-text)' }}>
                   {goalCounts.active}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px', fontWeight: '500' }}>
                   Active
                 </p>
               </Card.Body>
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--notion-text)' }}>
                   {goalCounts.done}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px', fontWeight: '500' }}>
                   Done
                 </p>
               </Card.Body>
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#f59e0b' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--notion-text)' }}>
                   {goalCounts.paused}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px', fontWeight: '500' }}>
                   Paused
                 </p>
               </Card.Body>
@@ -188,8 +217,8 @@ const GoalsManagement: React.FC = () => {
         </Row>
 
         {/* Filters */}
-        <Card style={{ marginBottom: '24px', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-          <Card.Body style={{ padding: '24px' }}>
+        <Card style={{ marginBottom: '24px', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+          <Card.Body style={{ padding: '24px', color: 'var(--notion-text)' }}>
             <Row>
               <Col md={4}>
                 <Form.Group>
@@ -200,7 +229,7 @@ const GoalsManagement: React.FC = () => {
                       placeholder="Search by title..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      style={{ border: '1px solid #d1d5db' }}
+                      style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
                     />
                   </InputGroup>
                 </Form.Group>
@@ -211,7 +240,7 @@ const GoalsManagement: React.FC = () => {
                   <Form.Select
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
                   >
                     <option value="all">All Status</option>
                     <option value="new">New</option>
@@ -228,7 +257,7 @@ const GoalsManagement: React.FC = () => {
                   <Form.Select
                     value={filterTheme}
                     onChange={(e) => setFilterTheme(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
                   >
                     <option value="all">All Themes</option>
                     <option value="Health">Health</option>
@@ -249,7 +278,7 @@ const GoalsManagement: React.FC = () => {
                     setFilterTheme('all');
                     setSearchTerm('');
                   }}
-                  style={{ borderColor: '#d1d5db' }}
+                  style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
                 >
                   Clear Filters
                 </Button>
@@ -259,13 +288,13 @@ const GoalsManagement: React.FC = () => {
         </Card>
 
         {/* Modern Goals Table - Full Width */}
-        <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
+        <Card style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', minHeight: '600px' }}>
           <Card.Header style={{ 
-            backgroundColor: '#fff', 
-            borderBottom: '1px solid #e5e7eb', 
+            backgroundColor: 'var(--notion-bg)', 
+            borderBottom: '1px solid var(--notion-border)', 
             padding: '20px 24px' 
           }}>
-            <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
+            <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: 'var(--notion-text)' }}>
               Goals ({filteredGoals.length})
             </h5>
           </Card.Header>
@@ -284,16 +313,34 @@ const GoalsManagement: React.FC = () => {
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }}>
-                <ModernGoalsTable
-                  goals={filteredGoals}
-                  onGoalUpdate={handleGoalUpdate}
-                  onGoalDelete={handleGoalDelete}
-                  onGoalPriorityChange={handleGoalPriorityChange}
-                />
+                {viewMode === 'list' ? (
+                  <ModernGoalsTable
+                    goals={filteredGoals}
+                    onGoalUpdate={handleGoalUpdate}
+                    onGoalDelete={handleGoalDelete}
+                    onGoalPriorityChange={handleGoalPriorityChange}
+                    onEditModal={(goal) => setEditGoal(goal)}
+                  />
+                ) : (
+                  <GoalsCardView
+                    goals={filteredGoals}
+                    onGoalUpdate={handleGoalUpdate}
+                    onGoalDelete={handleGoalDelete}
+                    onGoalPriorityChange={handleGoalPriorityChange}
+                  />
+                )}
               </div>
             )}
           </Card.Body>
         </Card>
+
+        {/* Shared Edit Goal Modal */}
+        <EditGoalModal
+          goal={editGoal}
+          show={!!editGoal}
+          onClose={() => setEditGoal(null)}
+          currentUserId={currentUser?.uid || ''}
+        />
       </div>
     </div>
   );
