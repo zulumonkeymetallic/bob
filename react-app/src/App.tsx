@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Button } from 'react-bootstrap';
 import { Routes, Route, BrowserRouter as Router, Navigate, useLocation } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
-import SprintDashboard from './components/SprintDashboard';
 import TaskListView from './components/TaskListView';
 import GoalsManagement from './components/GoalsManagement';
 import Admin from './components/Admin';
@@ -176,7 +175,6 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/sprint-dashboard" element={<SprintDashboard />} />
               <Route path="/tasks" element={<TasksList />} />
               <Route path="/task-list" element={<TaskListView />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />

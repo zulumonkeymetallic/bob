@@ -150,6 +150,104 @@ exports.planCalendar = functionsV2.https.onCall(async (request) => {
   }
 });
 
+// ===== Story Generation for Goal (AI)
+exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY] }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
+  }
+  const { goalId, promptOverride } = request.data || {};
+  if (!goalId) {
+    throw new functionsV2.https.HttpsError('invalid-argument', 'goalId is required');
+  }
+
+  try {
+    const db = admin.firestore();
+    const goalSnap = await db.collection('goals').doc(goalId).get();
+    if (!goalSnap.exists) {
+      throw new Error('Goal not found');
+    }
+    const goal = goalSnap.data();
+    if (goal.ownerUid !== uid) {
+      throw new functionsV2.https.HttpsError('permission-denied', 'Not your goal');
+    }
+
+    // Optional per-user prompt
+    let basePrompt = null;
+    try {
+      const settingsDoc = await db.collection('user_settings').doc(uid).get();
+      basePrompt = settingsDoc.exists ? (settingsDoc.data().storyGenPrompt || null) : null;
+    } catch {}
+
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const prompt = promptOverride || basePrompt || (
+      `Generate between 3 and 6 user stories for the following personal goal. ` +
+      `Each story must include a clear title and a 1-2 sentence description. ` +
+      `Return STRICT JSON: {"stories":[{"title":"...","description":"..."}, ...]}. ` +
+      `Do not include markdown or prose, JSON only.`
+    );
+
+    const userContent = `Goal Title: ${goal.title}\nGoal Description: ${goal.description || ''}\nTheme: ${goal.theme}\nPriority: ${goal.priority || ''}`;
+    const requestData = {
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: prompt },
+        { role: 'user', content: userContent }
+      ],
+      response_format: { type: 'json_object' }
+    };
+
+    const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
+    const resp = await aiWrapper(() => openai.chat.completions.create(requestData));
+    const text = resp?.choices?.[0]?.message?.content || '{}';
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      throw new Error('AI did not return valid JSON');
+    }
+    const stories = Array.isArray(parsed?.stories) ? parsed.stories : [];
+
+    const batch = db.batch();
+    const now = Date.now();
+    let created = 0;
+    for (const s of stories) {
+      if (!s?.title) continue;
+      const ref = db.collection('stories').doc();
+      batch.set(ref, {
+        id: ref.id,
+        ref: `STY-${now}-${Math.floor(Math.random()*10000)}`,
+        persona: 'personal',
+        title: String(s.title).slice(0, 140),
+        description: String(s.description || ''),
+        goalId: goalId,
+        theme: goal.theme,
+        status: 0, // backlog
+        priority: 2,
+        points: 1,
+        wipLimit: 10,
+        orderIndex: now + created,
+        ownerUid: uid,
+        createdAt: now,
+        updatedAt: now,
+        taskCount: 0,
+        doneTaskCount: 0,
+        aiGenerated: true
+      });
+      created += 1;
+    }
+    if (created > 0) {
+      await batch.commit();
+    }
+
+    return { created };
+  } catch (error) {
+    console.error('generateStoriesForGoal error:', error);
+    throw new functionsV2.https.HttpsError('internal', error.message);
+  }
+});
+
 async function assemblePlanningContext(uid, persona, horizonDays) {
   const db = admin.firestore();
   const startDate = new Date();
