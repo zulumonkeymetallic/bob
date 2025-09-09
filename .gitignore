@@ -8,3 +8,13 @@ backups/
 /ios-app/**/DerivedData/
 /ios-app/**/build/
 /ios-app/**/index-build/
+
+# Common archive formats – do not track in git
+*.zip
+*.tar
+*.tgz
+*.gz
+*.bz2
+*.xz
+*.7z
+*.rar
