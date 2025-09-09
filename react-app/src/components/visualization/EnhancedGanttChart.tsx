@@ -587,8 +587,8 @@ const EnhancedGanttChart: React.FC = () => {
 
   const zoomLevels: Array<typeof zoomLevel> = ['month', 'quarter', 'half', 'year'];
   const handleWheelZoom: React.WheelEventHandler<HTMLDivElement> = (e) => {
+    // Avoid calling preventDefault on passive wheel listeners (noise in console)
     if (!e.ctrlKey && Math.abs(e.deltaY) < 35) return;
-    e.preventDefault();
     const dir = e.deltaY > 0 ? 1 : -1;
     const idx = zoomLevels.indexOf(zoomLevel);
     const next = Math.min(zoomLevels.length - 1, Math.max(0, idx + dir));
@@ -884,8 +884,8 @@ const EnhancedGanttChart: React.FC = () => {
           </Card.Header>
           <Card.Body>
             <ModernStoriesTable
-              stories={stories.filter(s => (s as any).goalId === selectedGoalId)}
-              goals={[]}
+              stories={stories}
+              goals={goals}
               goalId={selectedGoalId}
               onStoryUpdate={async () => {}}
               onStoryDelete={async () => {}}
