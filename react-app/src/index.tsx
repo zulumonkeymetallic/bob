@@ -7,6 +7,9 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 import './styles/themeConsistency.css';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
+import { installGlobalErrorHandlers } from './utils/globalErrorHandlers';
+import logger from './utils/logger';
+import { startLagMonitor } from './utils/lagMonitor';
 
 // Temporarily disable service worker for debugging
 /*
@@ -27,6 +30,17 @@ if ('serviceWorker' in navigator) {
   });
 }
 */
+
+// Install global error handlers and log startup
+installGlobalErrorHandlers();
+logger.info('global', 'BOB app booting...');
+
+try {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('perf') === '1' || params.get('log') === '1') {
+    startLagMonitor(1000, 200);
+  }
+} catch {}
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement

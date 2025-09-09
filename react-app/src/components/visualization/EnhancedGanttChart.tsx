@@ -37,6 +37,7 @@ import EditGoalModal from '../../components/EditGoalModal';
 import ModernStoriesTable from '../../components/ModernStoriesTable';
 import { Goal, Sprint, Story, Task } from '../../types';
 import './EnhancedGanttChart.css';
+import logger from '../../utils/logger';
 
 interface GanttItem {
   id: string;
@@ -99,7 +100,10 @@ const EnhancedGanttChart: React.FC = () => {
   const [noteDraft, setNoteDraft] = useState('');
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
   const [dragOverlay, setDragOverlay] = useState<{ left: number; width: number; text: string } | null>(null);
+  const dragTooltipRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const renderCountRef = useRef(0);
+  const dragLogRef = useRef({ lastMoveLogAt: 0 });
   
   // Drag and drop state
   const [dragState, setDragState] = useState<DragState>({
@@ -116,6 +120,17 @@ const EnhancedGanttChart: React.FC = () => {
   const [activityStreamItems, setActivityStreamItems] = useState<ActivityStreamItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
+  const storiesPanelRef = useRef<HTMLDivElement>(null);
+
+  // When a goal is selected, scroll its stories panel into view
+  useEffect(() => {
+    if (selectedGoalId && storiesPanelRef.current) {
+      // Defer to allow panel to render
+      setTimeout(() => {
+        storiesPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 0);
+    }
+  }, [selectedGoalId]);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   
   // Modals
@@ -181,6 +196,18 @@ const EnhancedGanttChart: React.FC = () => {
   }, [isFullscreen, enterFullscreen, exitFullscreen]);
 
   useEffect(() => {
+    renderCountRef.current += 1;
+    if (logger.isEnabled('debug', 'gantt')) {
+      logger.debug('gantt', 'Render', { count: renderCountRef.current });
+    }
+  });
+
+  useEffect(() => {
+    logger.info('gantt', 'EnhancedGanttChart mounted');
+    return () => logger.info('gantt', 'EnhancedGanttChart unmounted');
+  }, []);
+
+  useEffect(() => {
     const onFsChange = () => {
       const active = Boolean(document.fullscreenElement);
       setIsFullscreen(active);
@@ -189,6 +216,7 @@ const EnhancedGanttChart: React.FC = () => {
       } else {
         document.body.classList.add('gantt-full-active');
       }
+      logger.debug('gantt', 'Fullscreen change', { active });
     };
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
@@ -201,6 +229,7 @@ const EnhancedGanttChart: React.FC = () => {
     const today = new Date();
     const left = 250 + getDatePosition(today) - el.clientWidth * 0.3;
     el.scrollLeft = Math.max(0, left);
+    logger.debug('gantt', 'Auto-scroll to today', { left: el.scrollLeft, width: el.clientWidth });
   }, [zoomLevel, goals.length, sprints.length]);
 
   // Map stories per goal for quick indicators
@@ -234,6 +263,7 @@ const EnhancedGanttChart: React.FC = () => {
     const unsubGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
       setGoals(goalsData);
+      logger.debug('gantt', 'Goals snapshot', { count: goalsData.length });
     });
     unsubscribes.push(unsubGoals);
 
@@ -245,6 +275,7 @@ const EnhancedGanttChart: React.FC = () => {
     const unsubSprints = onSnapshot(sprintsQuery, (snapshot) => {
       const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
       setSprints(sprintsData);
+      logger.debug('gantt', 'Sprints snapshot', { count: sprintsData.length });
     });
     unsubscribes.push(unsubSprints);
 
@@ -256,6 +287,7 @@ const EnhancedGanttChart: React.FC = () => {
     const unsubStories = onSnapshot(storiesQuery, (snapshot) => {
       const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
       setStories(storiesData);
+      logger.debug('gantt', 'Stories snapshot', { count: storiesData.length });
     });
     unsubscribes.push(unsubStories);
 
@@ -267,18 +299,22 @@ const EnhancedGanttChart: React.FC = () => {
     const unsubTasks = onSnapshot(tasksQuery, (snapshot) => {
       const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
       setTasks(tasksData);
+      logger.debug('gantt', 'Tasks snapshot', { count: tasksData.length });
     });
     unsubscribes.push(unsubTasks);
 
     setLoading(false);
+    logger.info('gantt', 'Realtime subscriptions established');
 
     return () => {
       unsubscribes.forEach(unsub => unsub());
+      logger.info('gantt', 'Realtime subscriptions cleaned up');
     };
   }, [currentUser?.uid]);
 
   // Generate timeline data
   const ganttItems = useMemo<GanttItem[]>(() => {
+    const t = logger.time('gantt', 'build-gantt-items');
     const items: GanttItem[] = [];
 
     // Add goals
@@ -316,7 +352,7 @@ const EnhancedGanttChart: React.FC = () => {
       });
     });
 
-    return items.sort((a, b) => {
+    const result = items.sort((a, b) => {
       if (a.type !== b.type) {
         const order = { goal: 0, story: 1, sprint: 2 };
         return order[a.type] - order[b.type];
@@ -324,6 +360,9 @@ const EnhancedGanttChart: React.FC = () => {
       if (a.theme !== b.theme) return a.theme - b.theme;
       return a.startDate.getTime() - b.startDate.getTime();
     });
+    t.end();
+    logger.debug('gantt', 'Gantt items built', { total: result.length });
+    return result;
   }, [goals, sprints, stories, selectedThemes, searchTerm]);
 
   // Group goals by theme for rendering bands/headers
@@ -416,6 +455,8 @@ const EnhancedGanttChart: React.FC = () => {
     
     e.preventDefault();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    logger.debug('gantt', 'Drag start', { id: item.id, dragType, clientX, start: item.startDate, end: item.endDate });
+    logger.perfMark('gantt-drag-start');
     
     setDragState({
       isDragging: true,
@@ -467,7 +508,27 @@ const EnhancedGanttChart: React.FC = () => {
       const endPos = getDatePosition(newEndDate);
       goalElement.style.left = `${startPos}px`;
       goalElement.style.width = `${endPos - startPos}px`;
-      setDragOverlay({ left: 250 + startPos, width: endPos - startPos, text: `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}` });
+      // Update tooltip via ref to avoid React re-render on each move
+      const tooltip = dragTooltipRef.current;
+      if (tooltip) {
+        tooltip.style.left = `${250 + startPos}px`;
+        tooltip.textContent = `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}`;
+      } else {
+        setDragOverlay({ left: 250 + startPos, width: endPos - startPos, text: `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}` });
+      }
+    }
+
+    // Throttled logging to avoid spam during drag
+    const now = performance.now();
+    if (now - dragLogRef.current.lastMoveLogAt > 120) {
+      dragLogRef.current.lastMoveLogAt = now;
+      logger.debug('gantt', 'Drag move', {
+        id: dragState.itemId,
+        dragType: dragState.dragType,
+        deltaX,
+        newStart: newStartDate.toISOString(),
+        newEnd: newEndDate.toISOString(),
+      });
     }
   }, [dragState, zoomLevel]);
 
@@ -498,6 +559,20 @@ const EnhancedGanttChart: React.FC = () => {
 
     // Clear drag overlay
     setDragOverlay(null);
+    const tooltip = dragTooltipRef.current;
+    if (tooltip) {
+      tooltip.style.left = `-9999px`;
+    }
+
+    logger.debug('gantt', 'Drag end', {
+      id: dragState.itemId,
+      dragType: dragState.dragType,
+      deltaX,
+      newStart: newStartDate.toISOString(),
+      newEnd: newEndDate.toISOString(),
+    });
+    logger.perfMark('gantt-drag-end');
+    logger.perfMeasure('gantt-drag', 'gantt-drag-start', 'gantt-drag-end');
 
     // Check for impacted stories/tasks in current sprints
     const goal = goals.find(g => g.id === dragState.itemId);
@@ -505,6 +580,7 @@ const EnhancedGanttChart: React.FC = () => {
       const impacted = checkImpactedItems(goal.id, newStartDate, newEndDate);
       
       if (impacted.length > 0) {
+        logger.warn('gantt', 'Drag impact detected', { goalId: goal.id, impacted: impacted.length });
         setImpactedItems(impacted);
         setPendingGoalUpdate({ goalId: goal.id, startDate: newStartDate, endDate: newEndDate });
         setShowImpactModal(true);
@@ -594,17 +670,25 @@ const EnhancedGanttChart: React.FC = () => {
       }
     });
     
+    logger.debug('gantt', 'checkImpactedItems', { goalId, count: impacted.length });
     return impacted;
   };
 
   // Simple undo buffer for last timeline change
   const lastChangeRef = useRef<{ goalId: string; prevStart: number; prevEnd: number } | null>(null);
   const updateGoalDates = async (goalId: string, newStart: Date, newEnd: Date) => {
+    logger.info('gantt', 'Updating goal dates', { goalId, newStart: newStart.toISOString(), newEnd: newEnd.toISOString() });
     const prev = goals.find(g => g.id === goalId);
     if (prev) {
       lastChangeRef.current = { goalId, prevStart: (prev as any).startDate || 0, prevEnd: (prev as any).endDate || 0 };
     }
-    await updateDoc(doc(db, 'goals', goalId), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: Date.now() });
+    try {
+      await updateDoc(doc(db, 'goals', goalId), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: Date.now() });
+      logger.info('gantt', 'Goal dates updated', { goalId });
+    } catch (err) {
+      logger.error('gantt', 'Failed to update goal dates', { goalId, err });
+      throw err;
+    }
     setLiveAnnouncement(`Updated ${goals.find(g=>g.id===goalId)?.title || 'goal'} to ${newStart.toLocaleDateString()} – ${newEnd.toLocaleDateString()}`);
   };
 
@@ -836,9 +920,9 @@ const EnhancedGanttChart: React.FC = () => {
 
         {/* Today marker moved into canvas so it doesn't overlay header */}
         {/* Ghost drag tooltip */}
-        {dragOverlay && (
-          <div className="drag-tooltip" style={{ left: dragOverlay.left, top: 60 }}>
-            {dragOverlay.text}
+        {(dragOverlay || true) && (
+          <div ref={dragTooltipRef} className="drag-tooltip" style={{ left: dragOverlay?.left ?? -9999, top: 60 }}>
+            {dragOverlay?.text}
           </div>
         )}
 
@@ -907,14 +991,14 @@ const EnhancedGanttChart: React.FC = () => {
                   </div>
                 </div>
                 
-                <div className="goal-timeline position-relative" style={{ height: '40px', flex: 1 }}>
+                <div className="goal-timeline position-relative" style={{ minHeight: '80px', flex: 1 }}>
                   <div
                     data-goal-id={goal.id}
                     className={`goal-bar position-absolute cursor-move d-flex align-items-center ${dragState.isDragging && dragState.itemId === goal.id ? 'dragging' : ''}`}
                     style={{
                       left: `${startPos}px`,
                       width: `${width}px`,
-                      height: '40px',
+                      height: '60px',
                       backgroundColor: theme?.color,
                       border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid #ef4444' : 'none',
                       borderRadius: '4px',
@@ -1035,7 +1119,7 @@ const EnhancedGanttChart: React.FC = () => {
 
       {/* Selected Goal Stories Panel */}
       {selectedGoalId && (
-        <Card className="border-top rounded-0" style={{ maxHeight: '40vh', overflow: 'auto' }}>
+        <Card ref={storiesPanelRef} className="border-top rounded-0" style={{ maxHeight: '40vh', overflow: 'auto' }}>
           <Card.Header className="d-flex justify-content-between align-items-center">
             <div>
               <strong>Stories for goal</strong>
