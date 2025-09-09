@@ -393,6 +393,10 @@ const EnhancedGanttChart: React.FC = () => {
       newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
     }
     
+    // Snap to whole-day boundaries
+    newStartDate.setHours(0,0,0,0);
+    newEndDate.setHours(0,0,0,0);
+
     // Update the visual representation
     const goalElement = document.querySelector(`[data-goal-id="${dragState.itemId}"]`) as HTMLElement;
     if (goalElement) {
@@ -423,6 +427,10 @@ const EnhancedGanttChart: React.FC = () => {
     } else if (dragState.dragType === 'resize-end') {
       newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
     }
+
+    // Snap to whole-day boundaries
+    newStartDate.setHours(0,0,0,0);
+    newEndDate.setHours(0,0,0,0);
 
     // Check for impacted stories/tasks in current sprints
     const goal = goals.find(g => g.id === dragState.itemId);
@@ -468,13 +476,14 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Helper functions
   const getMillisecondsPerPixel = (zoom: string): number => {
-    switch (zoom) {
-      case 'month': return 24 * 60 * 60 * 1000 / 30; // 1 day per 30px
-      case 'quarter': return 24 * 60 * 60 * 1000 / 10; // 1 day per 10px
-      case 'half': return 24 * 60 * 60 * 1000 / 5; // 1 day per 5px
-      case 'year': return 24 * 60 * 60 * 1000 / 2; // 1 day per 2px
-      default: return 24 * 60 * 60 * 1000 / 10;
-    }
+    // Align with getDatePosition: use canvas width vs overall time
+    const totalDuration = timeRange.end.getTime() - timeRange.start.getTime();
+    const canvasWidth = canvasRef.current?.scrollWidth || 1000;
+    const msPerPxBase = totalDuration / canvasWidth;
+    // Zoom levels scale
+    const scales: Record<string, number> = { month: 0.5, quarter: 1, half: 2, year: 4 };
+    const scale = scales[zoom] ?? 1;
+    return msPerPxBase * scale;
   };
 
   const getDatePosition = (date: Date): number => {
@@ -510,6 +519,30 @@ const EnhancedGanttChart: React.FC = () => {
     
     return impacted;
   };
+
+  // Simple undo buffer for last timeline change
+  const lastChangeRef = useRef<{ goalId: string; prevStart: number; prevEnd: number } | null>(null);
+  const updateGoalDates = async (goalId: string, newStart: Date, newEnd: Date) => {
+    const prev = goals.find(g => g.id === goalId);
+    if (prev) {
+      lastChangeRef.current = { goalId, prevStart: (prev as any).startDate || 0, prevEnd: (prev as any).endDate || 0 };
+    }
+    await updateDoc(doc(db, 'goals', goalId), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: Date.now() });
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        const last = lastChangeRef.current;
+        if (last) {
+          updateDoc(doc(db, 'goals', last.goalId), { startDate: last.prevStart, endDate: last.prevEnd, updatedAt: Date.now() });
+          lastChangeRef.current = null;
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const updateGoalDates = async (goalId: string, startDate: Date, endDate: Date) => {
     try {
@@ -716,6 +749,16 @@ const EnhancedGanttChart: React.FC = () => {
           </div>
         </div>
 
+        {/* Today marker */}
+        <div className="position-absolute" style={{
+          left: `${250 + getDatePosition(new Date())}px`,
+          top: 0,
+          bottom: 0,
+          width: '2px',
+          backgroundColor: '#ef4444',
+          zIndex: 2
+        }} title={`Today: ${new Date().toLocaleDateString()}`} />
+
         {/* Sprint Lines */}
         <div className="sprint-lines position-relative">
           {sprints.map(sprint => (
@@ -769,7 +812,7 @@ const EnhancedGanttChart: React.FC = () => {
                 <div className="goal-timeline position-relative" style={{ height: '40px', flex: 1 }}>
                   <div
                     data-goal-id={goal.id}
-                    className="goal-bar position-absolute cursor-move d-flex align-items-center"
+                    className={`goal-bar position-absolute cursor-move d-flex align-items-center ${dragState.isDragging && dragState.itemId === goal.id ? 'dragging' : ''}`}
                     style={{
                       left: `${startPos}px`,
                       width: `${width}px`,
@@ -781,10 +824,25 @@ const EnhancedGanttChart: React.FC = () => {
                       opacity: dragState.isDragging && dragState.itemId === goal.id ? 0.7 : 1,
                       zIndex: 5
                     }}
+                    tabIndex={0}
+                    draggable={false}
                     onMouseDown={(e) => handleDragStart(e, goal, 'move')}
                     onTouchStart={(e) => handleDragStart(e, goal, 'move')}
+                    onDragStart={(e) => e.preventDefault()}
                     onClick={() => handleItemClick(goal)}
-                    title={`${goal.title}: ${goal.startDate.toLocaleDateString()} - ${goal.endDate.toLocaleDateString()}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                        e.preventDefault();
+                        const step = (e.shiftKey ? 7 : 1) * (e.key === 'ArrowLeft' ? -1 : 1);
+                        const s = new Date(goal.startDate);
+                        const en = new Date(goal.endDate);
+                        s.setHours(0,0,0,0); en.setHours(0,0,0,0);
+                        s.setDate(s.getDate() + step);
+                        en.setDate(en.getDate() + step);
+                        updateGoalDates(goal.id, s, en);
+                      }
+                    }}
+                    title={`${goal.title}: ${goal.startDate.toLocaleDateString()} - ${goal.endDate.toLocaleDateString()}${(storiesByGoal[goal.id]||0)===0 ? ' • No linked stories' : ''}`}
                   >
                     {/* Resize handles */}
                     <div
@@ -808,9 +866,9 @@ const EnhancedGanttChart: React.FC = () => {
                       }}
                     />
                     
-                    <div className="goal-content px-2 text-white text-truncate flex-grow-1" style={{ fontSize: 12 }}>
+                    <div className="goal-content px-2 text-white flex-grow-1" style={{ fontSize: 12 }}>
                       <div className="d-flex align-items-center justify-content-between">
-                        <div className="text-truncate">
+                        <div style={{ whiteSpace: 'normal', overflow: 'visible' }}>
                           <strong>{goal.title}</strong>
                           {typeof goal.priority !== 'undefined' && (<span className="ms-2">P{goal.priority}</span>)}
                         </div>
