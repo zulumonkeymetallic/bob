@@ -42,8 +42,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Dashboards',
       icon: 'chart-bar',
       items: [
-        { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' },
-        { label: 'Sprint Dashboard', path: '/sprint-dashboard', icon: 'chart-line' }
+        { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' }
       ]
     },
     {
