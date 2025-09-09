@@ -437,6 +437,9 @@ const SettingsPage: React.FC = () => {
                     <h4 className="mb-0">System Preferences</h4>
                   </Card.Header>
                   <Card.Body>
+                    {/* AI Story Generation Prompt */}
+                    <AISettings />
+
                     <Form.Group className="mb-3">
                       <Form.Label style={{ color: colors.primary }}>Theme Mode</Form.Label>
                       <Form.Select 
@@ -529,3 +532,52 @@ const SettingsPage: React.FC = () => {
 };
 
 export default SettingsPage;
+
+// --- Inline AI settings component ---
+const AISettings: React.FC = () => {
+  const { currentUser } = useAuth();
+  const [prompt, setPrompt] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      if (!currentUser) return;
+      try {
+        const snap = await getDoc(doc(db, 'user_settings', currentUser.uid));
+        if (snap.exists()) {
+          setPrompt(snap.data().storyGenPrompt || '');
+        }
+      } catch (e) {
+        console.warn('Failed to load user_settings', e);
+      }
+    };
+    load();
+  }, [currentUser]);
+
+  const save = async () => {
+    if (!currentUser) return;
+    try {
+      await setDoc(doc(db, 'user_settings', currentUser.uid), { storyGenPrompt: prompt, updatedAt: serverTimestamp() }, { merge: true });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      console.error('Failed to save prompt', e);
+    }
+  };
+
+  return (
+    <Card className="mb-3">
+      <Card.Body>
+        <div className="d-flex justify-content-between align-items-center mb-2">
+          <div>
+            <h5 className="mb-0">AI Story Generation</h5>
+            <small className="text-muted">Prompt used by the wand button on Gantt goals</small>
+          </div>
+          <Button size="sm" variant="primary" onClick={save}>Save Prompt</Button>
+        </div>
+        <Form.Control as="textarea" rows={4} placeholder="Write a system prompt for story generation..." value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        {saved && <div className="text-success mt-2">Saved</div>}
+      </Card.Body>
+    </Card>
+  );
+};
