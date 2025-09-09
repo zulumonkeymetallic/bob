@@ -15,14 +15,23 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
-  Target
+  Target,
+  Edit3,
+  Wand2,
+  MessageSquareText,
+  List as ListIcon
 } from 'lucide-react';
 import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSprint } from '../../contexts/SprintContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { collection, query, where, getDocs, doc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { db, functions } from '../../firebase';
+import { httpsCallable } from 'firebase/functions';
+import SprintSelector from '../SprintSelector';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
+import EditGoalModal from '../../components/EditGoalModal';
+import ModernStoriesTable from '../../components/ModernStoriesTable';
 import { Goal, Sprint, Story, Task } from '../../types';
 import './EnhancedGanttChart.css';
 
@@ -37,6 +46,8 @@ interface GanttItem {
   goalId?: string;
   sprintId?: string;
   linkedItems?: GanttItem[];
+  priority?: number;
+  confidence?: number;
 }
 
 interface DragState {
@@ -60,6 +71,7 @@ interface ActivityStreamItem {
 
 const EnhancedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
   const { theme } = useTheme();
   
   // Core data
@@ -73,7 +85,17 @@ const EnhancedGanttChart: React.FC = () => {
   const [zoomLevel, setZoomLevel] = useState<'month' | 'quarter' | 'half' | 'year'>('quarter');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedThemes, setSelectedThemes] = useState<number[]>([]);
+  const [showLinks, setShowLinks] = useState<boolean>(true);
+  const [autoFitSprintGoals, setAutoFitSprintGoals] = useState<boolean>(true);
   const [collapsedGoals, setCollapsedGoals] = useState<Set<string>>(new Set());
+  const [groupByTheme, setGroupByTheme] = useState<boolean>(true);
+  const [storiesByGoal, setStoriesByGoal] = useState<Record<string, number>>({});
+  const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
+  const [activityItems, setActivityItems] = useState<any[]>([]);
+  const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [liveAnnouncement, setLiveAnnouncement] = useState('');
+  const [dragOverlay, setDragOverlay] = useState<{ left: number; width: number; text: string } | null>(null);
   
   // Drag and drop state
   const [dragState, setDragState] = useState<DragState>({
@@ -89,15 +111,20 @@ const EnhancedGanttChart: React.FC = () => {
   const [showActivityStream, setShowActivityStream] = useState(false);
   const [activityStreamItems, setActivityStreamItems] = useState<ActivityStreamItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
   
   // Modals
   const [showImpactModal, setShowImpactModal] = useState(false);
   const [impactedItems, setImpactedItems] = useState<(Story | Task)[]>([]);
   const [pendingGoalUpdate, setPendingGoalUpdate] = useState<{ goalId: string; startDate: Date; endDate: Date } | null>(null);
+  const [tasksModalGoalId, setTasksModalGoalId] = useState<string | null>(null);
+  const [tasksForModal, setTasksForModal] = useState<Task[]>([]);
   
   // Refs
   const canvasRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   
   // Theme definitions
   const themes = [
@@ -115,6 +142,32 @@ const EnhancedGanttChart: React.FC = () => {
     const end = new Date(now.getFullYear() + 2, 11, 31); // 2 years ahead
     return { start, end };
   }, []);
+
+  // Scroll to today's date on mount and when zoom/data changes
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const today = new Date();
+    const left = 250 + getDatePosition(today) - el.clientWidth * 0.3;
+    el.scrollLeft = Math.max(0, left);
+  }, [zoomLevel, goals.length, sprints.length]);
+
+  // Map stories per goal for quick indicators
+  useEffect(() => {
+    const counts: Record<string, number> = {};
+    stories.forEach((s) => {
+      if (!s.goalId) return;
+      counts[s.goalId] = (counts[s.goalId] || 0) + 1;
+    });
+    setStoriesByGoal(counts);
+  }, [stories]);
+
+  // Subscribe to activity when opening modal
+  useEffect(() => {
+    if (!activityGoalId) return;
+    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems);
+    return () => unsub();
+  }, [activityGoalId]);
 
   // Load data with real-time subscriptions
   useEffect(() => {
@@ -193,7 +246,9 @@ const EnhancedGanttChart: React.FC = () => {
         theme: goal.theme,
         startDate,
         endDate,
-        status: goal.status
+        status: goal.status,
+        priority: (goal as any).priority,
+        confidence: (goal as any).confidence
       });
     });
 
@@ -220,9 +275,20 @@ const EnhancedGanttChart: React.FC = () => {
     });
   }, [goals, sprints, stories, selectedThemes, searchTerm]);
 
+  // Group goals by theme for rendering bands/headers
+  const goalsByTheme = useMemo(() => {
+    const grouped: Record<number, GanttItem[]> = {};
+    ganttItems.filter(i => i.type === 'goal').forEach(g => {
+      grouped[g.theme] = grouped[g.theme] || [];
+      grouped[g.theme].push(g);
+    });
+    return grouped;
+  }, [ganttItems]);
+
   // Handle item click for activity stream
   const handleItemClick = useCallback(async (item: GanttItem) => {
     setSelectedItemId(item.id);
+    if (item.type === 'goal') setSelectedGoalId(item.id);
     setShowActivityStream(true);
 
     // Find all linked items
@@ -270,6 +336,16 @@ const EnhancedGanttChart: React.FC = () => {
       ...linkedItems
     ]);
 
+    // Prepare open tasks modal for goals
+    if (item.type === 'goal') {
+      const goalStories = stories.filter(story => story.goalId === item.id);
+      const storyIds = new Set(goalStories.map(s => s.id));
+      const open = tasks.filter(t => (t.goalId === item.id) || (t.parentType === 'story' && storyIds.has(t.parentId)));
+      const openOnly = open.filter(t => t.status !== 2);
+      setTasksForModal(openOnly);
+      setTasksModalGoalId(item.id);
+    }
+
     // Log activity
     await ActivityStreamService.addActivity({
       entityId: item.id,
@@ -309,7 +385,6 @@ const EnhancedGanttChart: React.FC = () => {
   const handleDragMove = useCallback((e: MouseEvent | TouchEvent) => {
     if (!dragState.isDragging || !dragState.itemId) return;
     
-    e.preventDefault();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const deltaX = clientX - dragState.startX;
     
@@ -330,6 +405,10 @@ const EnhancedGanttChart: React.FC = () => {
       newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
     }
     
+    // Snap to whole-day boundaries
+    newStartDate.setHours(0,0,0,0);
+    newEndDate.setHours(0,0,0,0);
+
     // Update the visual representation
     const goalElement = document.querySelector(`[data-goal-id="${dragState.itemId}"]`) as HTMLElement;
     if (goalElement) {
@@ -337,6 +416,7 @@ const EnhancedGanttChart: React.FC = () => {
       const endPos = getDatePosition(newEndDate);
       goalElement.style.left = `${startPos}px`;
       goalElement.style.width = `${endPos - startPos}px`;
+      setDragOverlay({ left: 250 + startPos, width: endPos - startPos, text: `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}` });
     }
   }, [dragState, zoomLevel]);
 
@@ -360,6 +440,13 @@ const EnhancedGanttChart: React.FC = () => {
     } else if (dragState.dragType === 'resize-end') {
       newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
     }
+
+    // Snap to whole-day boundaries
+    newStartDate.setHours(0,0,0,0);
+    newEndDate.setHours(0,0,0,0);
+
+    // Clear drag overlay
+    setDragOverlay(null);
 
     // Check for impacted stories/tasks in current sprints
     const goal = goals.find(g => g.id === dragState.itemId);
@@ -391,15 +478,28 @@ const EnhancedGanttChart: React.FC = () => {
     document.removeEventListener('touchend', handleDragEnd);
   }, [dragState, goals, zoomLevel]);
 
+  // Trigger AI story generation for a goal via Cloud Function
+  const handleGenerateStories = useCallback(async (goal: GanttItem) => {
+    try {
+      if (!currentUser) return;
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      await callable({ goalId: goal.id });
+    } catch (e: any) {
+      console.error('generateStoriesForGoal failed', e);
+      alert('Failed to trigger AI story generation: ' + (e?.message || 'unknown'));
+    }
+  }, [currentUser]);
+
   // Helper functions
   const getMillisecondsPerPixel = (zoom: string): number => {
-    switch (zoom) {
-      case 'month': return 24 * 60 * 60 * 1000 / 30; // 1 day per 30px
-      case 'quarter': return 24 * 60 * 60 * 1000 / 10; // 1 day per 10px
-      case 'half': return 24 * 60 * 60 * 1000 / 5; // 1 day per 5px
-      case 'year': return 24 * 60 * 60 * 1000 / 2; // 1 day per 2px
-      default: return 24 * 60 * 60 * 1000 / 10;
-    }
+    // Align with getDatePosition: use canvas width vs overall time
+    const totalDuration = timeRange.end.getTime() - timeRange.start.getTime();
+    const canvasWidth = canvasRef.current?.scrollWidth || 1000;
+    const msPerPxBase = totalDuration / canvasWidth;
+    // Zoom levels scale
+    const scales: Record<string, number> = { month: 0.5, quarter: 1, half: 2, year: 4 };
+    const scale = scales[zoom] ?? 1;
+    return msPerPxBase * scale;
   };
 
   const getDatePosition = (date: Date): number => {
@@ -436,30 +536,32 @@ const EnhancedGanttChart: React.FC = () => {
     return impacted;
   };
 
-  const updateGoalDates = async (goalId: string, startDate: Date, endDate: Date) => {
-    try {
-      await updateDoc(doc(db, 'goals', goalId), {
-        startDate: startDate.getTime(),
-        endDate: endDate.getTime(),
-        updatedAt: Date.now()
-      });
-
-      // Log activity
-      await ActivityStreamService.logFieldChange(
-        goalId,
-        'goal',
-        currentUser?.uid || '',
-        currentUser?.email || '',
-        'personal',
-        'startDate',
-        null,
-        startDate.toLocaleDateString(),
-        `Updated goal timeline: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`
-      );
-    } catch (error) {
-      console.error('Error updating goal dates:', error);
+  // Simple undo buffer for last timeline change
+  const lastChangeRef = useRef<{ goalId: string; prevStart: number; prevEnd: number } | null>(null);
+  const updateGoalDates = async (goalId: string, newStart: Date, newEnd: Date) => {
+    const prev = goals.find(g => g.id === goalId);
+    if (prev) {
+      lastChangeRef.current = { goalId, prevStart: (prev as any).startDate || 0, prevEnd: (prev as any).endDate || 0 };
     }
+    await updateDoc(doc(db, 'goals', goalId), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: Date.now() });
+    setLiveAnnouncement(`Updated ${goals.find(g=>g.id===goalId)?.title || 'goal'} to ${newStart.toLocaleDateString()} – ${newEnd.toLocaleDateString()}`);
   };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        const last = lastChangeRef.current;
+        if (last) {
+          updateDoc(doc(db, 'goals', last.goalId), { startDate: last.prevStart, endDate: last.prevEnd, updatedAt: Date.now() });
+          lastChangeRef.current = null;
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // duplicate updateGoalDates removed
 
   const confirmGoalUpdate = async () => {
     if (pendingGoalUpdate) {
@@ -510,6 +612,16 @@ const EnhancedGanttChart: React.FC = () => {
     return headers;
   };
 
+  const zoomLevels: Array<typeof zoomLevel> = ['month', 'quarter', 'half', 'year'];
+  const handleWheelZoom: React.WheelEventHandler<HTMLDivElement> = (e) => {
+    // Avoid calling preventDefault on passive wheel listeners (noise in console)
+    if (!e.ctrlKey && Math.abs(e.deltaY) < 35) return;
+    const dir = e.deltaY > 0 ? 1 : -1;
+    const idx = zoomLevels.indexOf(zoomLevel);
+    const next = Math.min(zoomLevels.length - 1, Math.max(0, idx + dir));
+    if (next !== idx) setZoomLevel(zoomLevels[next]);
+  };
+
   if (loading) {
     return (
       <Container fluid className="p-4">
@@ -524,6 +636,7 @@ const EnhancedGanttChart: React.FC = () => {
   }
 
   return (
+    <>
     <Container fluid className="enhanced-gantt-chart p-0">
       {/* Header */}
       <Card className="border-0 shadow-sm">
@@ -557,57 +670,62 @@ const EnhancedGanttChart: React.FC = () => {
         </Card.Header>
         
         <Card.Body className="p-3">
-          <Row className="mb-3">
-            <Col md={4}>
-              <Form.Control
-                type="text"
-                placeholder="Search goals..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+          <Row className="mb-3 g-3">
+            {/* Left sticky controls */}
+            <Col md={3} style={{ position: 'sticky', top: 72, alignSelf: 'flex-start' }}>
+              <Card className="shadow-sm">
+                <Card.Body>
+                  <div className="fw-semibold mb-2">Timeline Controls</div>
+                  <div className="mb-3">
+                    <SprintSelector selectedSprintId={selectedSprintId} onSprintChange={setSelectedSprintId} />
+                  </div>
+                  <div className="mb-3">
+                    <div className="small text-muted mb-1">Zoom</div>
+                    <div className="d-flex gap-2 align-items-center">
+                      <Form.Select value={zoomLevel} onChange={(e) => setZoomLevel(e.target.value as any)} size="sm" style={{ maxWidth: 160 }}>
+                        <option value="month">Fit</option>
+                        <option value="quarter">Quarter</option>
+                        <option value="half">Half Year</option>
+                        <option value="year">Year</option>
+                      </Form.Select>
+                      <Button size="sm" variant="outline-secondary" onClick={() => setZoomLevel('month')} title="Zoom In"><ZoomIn size={14} /></Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => setZoomLevel('year')} title="Zoom Out"><ZoomOut size={14} /></Button>
+                    </div>
+                  </div>
+                  <Form.Check type="switch" id="toggle-links" label="Show links" checked={showLinks} onChange={(e) => setShowLinks(e.target.checked)} />
+                  <Form.Check type="switch" id="toggle-autofit" label="Auto-fit sprint goals" checked={autoFitSprintGoals} onChange={(e) => setAutoFitSprintGoals(e.target.checked)} />
+                  <Form.Check type="switch" id="toggle-group" label="Group by Theme" checked={groupByTheme} onChange={(e) => setGroupByTheme(e.target.checked)} />
+                </Card.Body>
+              </Card>
             </Col>
-            <Col md={4}>
-              <Form.Select
-                value={zoomLevel}
-                onChange={(e) => setZoomLevel(e.target.value as any)}
-              >
-                <option value="month">Month View</option>
-                <option value="quarter">Quarter View</option>
-                <option value="half">Half Year View</option>
-                <option value="year">Year View</option>
-              </Form.Select>
-            </Col>
-            <Col md={4}>
-              <div className="d-flex gap-2 flex-wrap">
-                {themes.map(theme => (
-                  <Badge
-                    key={theme.id}
-                    bg={selectedThemes.includes(theme.id) ? 'primary' : 'outline-secondary'}
-                    className="cursor-pointer"
-                    onClick={() => {
-                      setSelectedThemes(prev => 
-                        prev.includes(theme.id) 
-                          ? prev.filter(t => t !== theme.id)
-                          : [...prev, theme.id]
-                      );
-                    }}
-                    style={{ 
-                      backgroundColor: selectedThemes.includes(theme.id) ? theme.color : 'transparent',
-                      borderColor: theme.color,
-                      color: selectedThemes.includes(theme.id) ? 'white' : theme.color
-                    }}
-                  >
-                    {theme.name}
-                  </Badge>
-                ))}
-              </div>
+            {/* Right filters */}
+            <Col md={9}>
+              <Row className="g-2">
+                <Col md={6}>
+                  <Form.Control type="text" placeholder="Search goals..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                </Col>
+                <Col md={6}>
+                  <div className="d-flex justify-content-end gap-2 flex-wrap">
+                    {themes.map(theme => (
+                      <Badge key={theme.id} bg={selectedThemes.includes(theme.id) ? 'primary' : 'outline-secondary'}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedThemes(prev => prev.includes(theme.id) ? prev.filter(t => t !== theme.id) : [...prev, theme.id])}
+                        style={{ backgroundColor: selectedThemes.includes(theme.id) ? theme.color : 'transparent', borderColor: theme.color, color: selectedThemes.includes(theme.id) ? 'white' : theme.color }}>
+                        {theme.name}
+                      </Badge>
+                    ))}
+                  </div>
+                </Col>
+              </Row>
             </Col>
           </Row>
         </Card.Body>
       </Card>
 
       {/* Main Timeline */}
-      <div className="timeline-container" style={{ height: 'calc(100vh - 250px)', overflow: 'auto' }}>
+      <div ref={containerRef} className="timeline-container" style={{ height: 'calc(100vh - 250px)', overflow: 'auto' }} onWheel={handleWheelZoom}>
+        {/* Live region for a11y announcements */}
+        <div aria-live="polite" className="visually-hidden">{liveAnnouncement}</div>
         {/* Timeline Header */}
         <div className="timeline-header sticky-top bg-white border-bottom" style={{ zIndex: 10 }}>
           <div className="d-flex">
@@ -627,6 +745,8 @@ const EnhancedGanttChart: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Today marker moved into canvas so it doesn't overlay header */}
 
         {/* Sprint Lines */}
         <div className="sprint-lines position-relative">
@@ -650,9 +770,33 @@ const EnhancedGanttChart: React.FC = () => {
           ))}
         </div>
 
+        {/* Ghost drag tooltip */}
+        {dragOverlay && (
+          <div className="drag-tooltip" style={{ left: dragOverlay.left, top: 60 }}>
+            {dragOverlay.text}
+          </div>
+        )}
+
         {/* Goals Rows */}
-        <div ref={canvasRef} className="goals-canvas">
-          {ganttItems.filter(item => item.type === 'goal').map((goal, index) => {
+        <div ref={canvasRef} className="goals-canvas" style={{ position: 'relative' }}>
+          {/* Today marker within canvas */}
+          <div className="position-absolute" style={{
+            left: `${getDatePosition(new Date())}px`,
+            top: 0,
+            bottom: 0,
+            width: '2px',
+            backgroundColor: '#ef4444',
+            zIndex: 2
+          }} title={`Today: ${new Date().toLocaleDateString()}`} />
+          {(groupByTheme ? Object.keys(goalsByTheme).map(k => parseInt(k,10)).sort((a,b)=>a-b) : [null]).map(groupKey => (
+            <React.Fragment key={groupKey === null ? 'all' : `theme-${groupKey}`}>
+              {groupByTheme && (
+                <div className="d-flex align-items-center" style={{ height: 28 }}>
+                  <div style={{ width: 250, minWidth: 250 }} className="px-2 text-muted fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
+                  <div className="flex-grow-1" style={{ borderBottom: '1px solid #eee' }} />
+                </div>
+              )}
+          {(groupByTheme ? (goalsByTheme[groupKey as number] || []) : ganttItems.filter(g => g.type==='goal')).map((goal, index) => {
             const theme = themes.find(t => t.id === goal.theme);
             const startPos = getDatePosition(goal.startDate);
             const endPos = getDatePosition(goal.endDate);
@@ -681,21 +825,37 @@ const EnhancedGanttChart: React.FC = () => {
                 <div className="goal-timeline position-relative" style={{ height: '40px', flex: 1 }}>
                   <div
                     data-goal-id={goal.id}
-                    className="goal-bar position-absolute cursor-move d-flex align-items-center"
+                    className={`goal-bar position-absolute cursor-move d-flex align-items-center ${dragState.isDragging && dragState.itemId === goal.id ? 'dragging' : ''}`}
                     style={{
                       left: `${startPos}px`,
                       width: `${width}px`,
-                      height: '30px',
+                      height: '40px',
                       backgroundColor: theme?.color,
+                      border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid #ef4444' : 'none',
                       borderRadius: '4px',
                       top: '5px',
                       opacity: dragState.isDragging && dragState.itemId === goal.id ? 0.7 : 1,
                       zIndex: 5
                     }}
+                    tabIndex={0}
+                    draggable={false}
                     onMouseDown={(e) => handleDragStart(e, goal, 'move')}
                     onTouchStart={(e) => handleDragStart(e, goal, 'move')}
+                    onDragStart={(e) => e.preventDefault()}
                     onClick={() => handleItemClick(goal)}
-                    title={`${goal.title}: ${goal.startDate.toLocaleDateString()} - ${goal.endDate.toLocaleDateString()}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                        e.preventDefault();
+                        const step = (e.shiftKey ? 7 : 1) * (e.key === 'ArrowLeft' ? -1 : 1);
+                        const s = new Date(goal.startDate);
+                        const en = new Date(goal.endDate);
+                        s.setHours(0,0,0,0); en.setHours(0,0,0,0);
+                        s.setDate(s.getDate() + step);
+                        en.setDate(en.getDate() + step);
+                        updateGoalDates(goal.id, s, en);
+                      }
+                    }}
+                    title={`${goal.title}: ${goal.startDate.toLocaleDateString()} - ${goal.endDate.toLocaleDateString()}${(storiesByGoal[goal.id]||0)===0 ? ' • No linked stories' : ''}`}
                   >
                     {/* Resize handles */}
                     <div
@@ -719,9 +879,41 @@ const EnhancedGanttChart: React.FC = () => {
                       }}
                     />
                     
-                    <div className="goal-content px-2 text-white text-truncate flex-grow-1">
-                      <small>{goal.title}</small>
+                    <div className="goal-content px-2 text-white flex-grow-1" style={{ fontSize: 13, lineHeight: '16px' }}>
+                      <div className="d-flex align-items-center justify-content-between">
+                        <div style={{ whiteSpace: 'normal', overflow: 'visible' }}>
+                          <strong>{goal.title}</strong>
+                          {typeof goal.priority !== 'undefined' && (<span className="ms-2">P{goal.priority}</span>)}
+                        </div>
+                        <div className="d-flex align-items-center gap-1">
+                          <button className="btn btn-light btn-sm py-0 px-1" title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal); }}>
+                            <Wand2 size={14} />
+                          </button>
+                          <button className="btn btn-light btn-sm py-0 px-1" title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); }}>
+                            <ListIcon size={14} />
+                          </button>
+                          <button className="btn btn-light btn-sm py-0 px-1" title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(goal.id); setNoteDraft(''); }}>
+                            <MessageSquareText size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      {(goals.find(g => g.id === goal.id) as any)?.recentNote && (
+                        <div className="small">📝 {(goals.find(g => g.id === goal.id) as any)?.recentNote}</div>
+                      )}
+                      <div className="small">{(storiesByGoal[goal.id] || 0) === 0 ? 'No linked stories' : `${storiesByGoal[goal.id]} stories`}</div>
                     </div>
+                    <button
+                      className="btn btn-sm btn-light position-absolute"
+                      style={{ right: 10, top: 6, padding: '2px 6px' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const full = goals.find(g => g.id === goal.id) || null;
+                        setEditGoal(full as any);
+                      }}
+                      title="Edit Goal"
+                    >
+                      <Edit3 size={12} />
+                    </button>
                     
                     <div
                       className="resize-handle resize-end position-absolute"
@@ -748,8 +940,34 @@ const EnhancedGanttChart: React.FC = () => {
               </div>
             );
           })}
+          </React.Fragment>
+          ))}
         </div>
       </div>
+
+      {/* Selected Goal Stories Panel */}
+      {selectedGoalId && (
+        <Card className="border-top rounded-0" style={{ maxHeight: '40vh', overflow: 'auto' }}>
+          <Card.Header className="d-flex justify-content-between align-items-center">
+            <div>
+              <strong>Stories for goal</strong>
+              <span className="ms-2 text-muted">{goals.find(g => g.id === selectedGoalId)?.title}</span>
+            </div>
+            <Button size="sm" variant="outline-secondary" onClick={() => setSelectedGoalId(null)}>Close</Button>
+          </Card.Header>
+          <Card.Body>
+            <ModernStoriesTable
+              stories={stories}
+              goals={goals}
+              goalId={selectedGoalId}
+              onStoryUpdate={async () => {}}
+              onStoryDelete={async () => {}}
+              onStoryPriorityChange={async () => {}}
+              onStoryAdd={() => Promise.resolve()}
+            />
+          </Card.Body>
+        </Card>
+      )}
 
       {/* Activity Stream Sidebar */}
       {showActivityStream && (
@@ -852,7 +1070,96 @@ const EnhancedGanttChart: React.FC = () => {
           </Button>
         </Modal.Footer>
       </Modal>
-    </Container>
+  </Container>
+    {/* Activity Modal */}
+    <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
+      <Modal.Header closeButton>
+        <Modal.Title>Goal Activity</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        {activityItems.length === 0 && <div className="text-muted">No recent activity.</div>}
+        {activityItems.map((a) => (
+          <div key={a.id} className="d-flex align-items-center gap-2 py-1 border-bottom">
+            <span>{ActivityStreamService.formatActivityIcon(a.activityType)}</span>
+            <div className="flex-grow-1">
+              <div className="small">{a.description}</div>
+              <div className="text-muted" style={{ fontSize: 12 }}>{a.userEmail || a.userId}</div>
+            </div>
+          </div>
+        ))}
+      </Modal.Body>
+    </Modal>
+
+    {/* Add Note Modal */}
+    <Modal show={!!noteGoalId} onHide={() => setNoteGoalId(null)}>
+      <Modal.Header closeButton>
+        <Modal.Title>Add Note</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <Form.Control as="textarea" rows={4} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="Write a quick note about this goal..." />
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="secondary" onClick={() => setNoteGoalId(null)}>Cancel</Button>
+        <Button variant="primary" onClick={async () => {
+          if (!noteGoalId || !currentUser) return;
+          try {
+            await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft, recentNoteAt: Date.now() });
+            await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft, currentUser.uid, currentUser.email || undefined, 'personal', '', 'human');
+            setNoteGoalId(null);
+            setNoteDraft('');
+          } catch (e) {
+            console.error('Add note failed', e);
+          }
+        }}>Save Note</Button>
+      </Modal.Footer>
+    </Modal>
+
+    {/* Edit Modal outside Container to avoid clipping */}
+    <EditGoalModal
+      goal={editGoal}
+      show={!!editGoal}
+      onClose={() => setEditGoal(null)}
+      currentUserId={currentUser?.uid || ''}
+    />
+
+    {/* Open Tasks Modal */}
+    <Modal show={!!tasksModalGoalId} onHide={() => setTasksModalGoalId(null)} size="lg">
+      <Modal.Header closeButton>
+        <Modal.Title>Open Tasks</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        {tasksForModal.length === 0 ? (
+          <div className="text-muted">No open tasks.</div>
+        ) : (
+          <div className="table-responsive">
+            <table className="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Ref</th>
+                  <th>Title</th>
+                  <th>Status</th>
+                  <th>Priority</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tasksForModal.map(t => (
+                  <tr key={t.id}>
+                    <td className="text-muted">{t.ref || '-'}</td>
+                    <td>{t.title}</td>
+                    <td>{t.status === 2 ? 'Done' : t.status === 1 ? 'In Progress' : t.status === 3 ? 'Blocked' : 'To Do'}</td>
+                    <td>P{t.priority}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="secondary" onClick={() => setTasksModalGoalId(null)}>Close</Button>
+      </Modal.Footer>
+    </Modal>
+    </>
   );
 };
 

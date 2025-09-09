@@ -4,8 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { useTestMode } from '../contexts/TestModeContext';
+import VersionDisplay from './VersionDisplay';
+import { useSprint } from '../contexts/SprintContext';
+import SprintSelector from './SprintSelector';
 import CompactSprintMetrics from './CompactSprintMetrics';
+import { useTestMode } from '../contexts/TestModeContext';
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -31,15 +34,15 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboard']);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
+  const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
 
   const navigationGroups: NavigationGroup[] = [
     {
-      label: 'Dashboard',
-      icon: 'home',
+      label: 'Dashboards',
+      icon: 'chart-bar',
       items: [
-        { label: 'Overview', path: '/dashboard', icon: 'home' },
-        { label: 'Kanban', path: '/kanban', icon: 'kanban' }
+        { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' }
       ]
     },
     {
@@ -47,37 +50,56 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'target',
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
-        { label: 'Goals Visualization', path: '/goals/visualization', icon: 'chart-gantt' }
+        { label: 'Gantt Chart', path: '/goals/timeline', icon: 'chart-gantt' },
+        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },
     {
       label: 'Stories',
       icon: 'book',
       items: [
-        { label: 'Stories List', path: '/stories', icon: 'list' }
+        { label: 'Stories List', path: '/stories', icon: 'list' },
+        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
       ]
     },
     {
       label: 'Tasks',
       icon: 'list-check',
       items: [
-        { label: 'Tasks List', path: '/tasks', icon: 'clipboard' }
+        { label: 'Tasks List', path: '/task-list', icon: 'list' },
+        { label: 'Task Board', path: '/tasks', icon: 'clipboard' }
       ]
     },
     {
       label: 'Sprints',
       icon: 'calendar-alt',
       items: [
-        { label: 'Sprint Planning', path: '/sprints/planning', icon: 'th' },
-        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' }
+        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
+        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
       ]
     },
     {
-      label: 'Settings',
+      label: 'Planning & AI',
+      icon: 'cpu',
+      items: [
+        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' }
+      ]
+    },
+    {
+      label: 'Data Management',
+      icon: 'list',
+      items: [
+        { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' }
+      ]
+    },
+    {
+      label: 'System',
       icon: 'cog',
       items: [
-        { label: 'Theme Settings', path: '/theme-colors', icon: 'cog' },
-        { label: 'Test Suite', path: '/test', icon: 'vial' }
+        { label: 'Settings', path: '/theme-colors', icon: 'cog' },
+        { label: 'Test Suite', path: '/test', icon: 'vial' },
+        { label: 'Changelog', path: '/changelog', icon: 'file-text' }
       ]
     }
   ];
@@ -289,6 +311,24 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             >
               Sign Out
             </Button>
+
+            {/* App Version */}
+            <div style={{ marginTop: '8px', textAlign: 'center' }}>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '2px 8px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: '1px solid var(--notion-border)',
+                background: 'var(--notion-hover)',
+                color: 'var(--notion-text)'
+              }}>
+                <VersionDisplay variant="badge-only" showSessionInfo={false} />
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -320,6 +360,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             )}
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
+            <SprintSelector
+              selectedSprintId={globalSprintId}
+              onSprintChange={setGlobalSprintId}
+            />
             <Button
               variant={isTestMode ? "danger" : "outline-secondary"}
               size="sm"
@@ -460,18 +504,23 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
       {/* Main Content Area */}
       <div className="flex-grow-1" style={{ paddingTop: window.innerWidth < 992 ? '60px' : '0' }}>
-        {/* Global header bar with sprint metrics */}
-        <div style={{
-          position: 'sticky',
-          top: window.innerWidth < 992 ? 60 : 0,
-          zIndex: 5,
-          background: 'var(--notion-bg)',
-          borderBottom: '1px solid var(--notion-border)'
+        {/* Desktop top toolbar with global Sprint selector */}
+        <div className="d-none d-lg-block" style={{
+          borderBottom: '1px solid var(--notion-border)',
+          background: 'var(--notion-bg)'
         }}>
-          <div className="d-flex justify-content-end align-items-center px-3 py-2">
-            <CompactSprintMetrics />
+          <div className="container-fluid" style={{ padding: '8px 16px' }}>
+            <div className="d-flex justify-content-end align-items-center gap-3">
+              {/* Metrics first, then selector so metrics appear to the left of the selector */}
+              <CompactSprintMetrics selectedSprintId={globalSprintId} />
+              <SprintSelector
+                selectedSprintId={globalSprintId}
+                onSprintChange={setGlobalSprintId}
+              />
+            </div>
           </div>
         </div>
+
         <main className="h-100">
           {children}
         </main>

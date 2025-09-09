@@ -116,6 +116,41 @@ check_branch_status() {
   fi
 }
 
+# Prevent pushing directly to protected branches
+guard_protected_branches() {
+  local current_branch=$(git branch --show-current)
+  # Only allow direct pushes from whitelisted branches
+  local allow_branches=(
+    "ui/metrics-header"
+  )
+  local protected_branches=("main" "main-baseline")
+
+  # Always block protected branches
+  for b in "${protected_branches[@]}"; do
+    if [[ "$current_branch" == "$b" ]]; then
+      error "Direct pushes to protected branch '$b' are blocked."
+      echo -e "${YELLOW}➡️  Open a Pull Request into '$b'.${NC}"
+      exit 1
+    fi
+  done
+
+  # If branch is not explicitly allowed, block push
+  local allowed=false
+  for b in "${allow_branches[@]}"; do
+    if [[ "$current_branch" == "$b" ]]; then
+      allowed=true; break
+    fi
+  done
+  if [[ "$allowed" != true ]]; then
+    error "Pushes are locked down. Branch '$current_branch' is not in allowlist."
+    echo -e "${YELLOW}Allowed branches:${NC} ${allow_branches[*]}"
+    echo -e "${YELLOW}Set BOB_ALLOW_PUSH=1 to override locally (not recommended).${NC}"
+    if [[ "$BOB_ALLOW_PUSH" != "1" ]]; then
+      exit 1
+    fi
+  fi
+}
+
 # Validate project structure
 validate_project_structure() {
   log "Validating project structure..."
@@ -453,6 +488,7 @@ main() {
   check_git_repo
   check_uncommitted_changes
   check_branch_status
+  guard_protected_branches
   validate_project_structure
   check_node_environment
   validate_package_json

@@ -45,6 +45,8 @@ export class ActivityStreamService {
     try {
       await addDoc(collection(db, 'activity_stream'), {
         ...activity,
+        // Firestore rules require ownerUid for create; match to userId
+        ownerUid: activity.userId,
         timestamp: serverTimestamp(),
       });
     } catch (error) {
