@@ -1,6 +1,6 @@
 // Version tracking for cache busting
 // Align version with branch build
-export const VERSION = '3.8.9';
+export const VERSION = '3.8.6';
 export const BUILD_TIME = new Date().toISOString();
 export const BUILD_HASH = 'ui/metrics-header';
 
