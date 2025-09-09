@@ -37,7 +37,7 @@ const EnhancedKanbanPage: React.FC = () => {
     title: '',
     description: '',
     goalId: '',
-    priority: 'P2' as 'P1' | 'P2' | 'P3',
+    priority: 2 as number,
     points: 1
   });
   
@@ -45,15 +45,15 @@ const EnhancedKanbanPage: React.FC = () => {
     title: '',
     description: '',
     goalId: '',
-    priority: 'P2' as 'P1' | 'P2' | 'P3',
+    priority: 2 as number,
     points: 1
   });
   
   // Swim lanes configuration
   const swimLanes = [
-    { id: 'backlog', title: 'Backlog', status: 'backlog', color: '#6b7280' },
-    { id: 'active', title: 'Active', status: 'active', color: '#3b82f6' },
-    { id: 'done', title: 'Done', status: 'done', color: '#059669' }
+    { id: 'backlog', title: 'Backlog', status: 0, color: '#6b7280' },
+    { id: 'active', title: 'Active', status: 1, color: '#3b82f6' },
+    { id: 'done', title: 'Done', status: 2, color: '#059669' }
   ];
 
   useEffect(() => {
@@ -195,6 +195,8 @@ const EnhancedKanbanPage: React.FC = () => {
   const getTaskCount = (storyId: string) => {
     return tasks.filter(task => task.parentId === storyId && task.parentType === 'story').length;
   };
+
+  const handleAddStory = async () => {
     if (!currentUser || !newStory.title.trim()) return;
 
     try {
@@ -202,7 +204,7 @@ const EnhancedKanbanPage: React.FC = () => {
         title: newStory.title,
         description: newStory.description,
         goalId: newStory.goalId,
-        status: 'backlog',
+        status: 0,
         priority: newStory.priority,
         points: newStory.points,
         orderIndex: stories.length,
@@ -216,7 +218,7 @@ const EnhancedKanbanPage: React.FC = () => {
         title: '',
         description: '',
         goalId: '',
-        priority: 'P2',
+        priority: 2,
         points: 1
       });
       setShowAddStory(false);
@@ -256,7 +258,7 @@ const EnhancedKanbanPage: React.FC = () => {
     }
   };
 
-  const updateStoryStatus = async (storyId: string, newStatus: string) => {
+  const updateStoryStatus = async (storyId: string, newStatus: number) => {
     try {
       await updateDoc(doc(db, 'stories', storyId), {
         status: newStatus,
@@ -278,7 +280,7 @@ const EnhancedKanbanPage: React.FC = () => {
       title: story.title,
       description: story.description || '',
       goalId: story.goalId || '',
-      priority: story.priority,
+      priority: (story as any).priority || 2,
       points: story.points || 1
     });
     setSelectedStory(story);
@@ -346,16 +348,24 @@ const EnhancedKanbanPage: React.FC = () => {
             }}>
               {goalTheme}
             </span>
-            <span style={{
-              backgroundColor: story.priority === 'P1' ? '#fecaca' : story.priority === 'P2' ? '#fed7aa' : '#d1fae5',
-              color: story.priority === 'P1' ? '#991b1b' : story.priority === 'P2' ? '#9a3412' : '#065f46',
-              padding: '2px 8px',
-              borderRadius: '12px',
-              fontSize: '11px',
-              fontWeight: '500',
-            }}>
-              {story.priority}
-            </span>
+            {(() => {
+              const p = (story as any).priority as number;
+              const label = p === 1 ? 'P1' : p === 2 ? 'P2' : 'P3';
+              const bg = p === 1 ? '#fecaca' : p === 2 ? '#fed7aa' : '#d1fae5';
+              const fg = p === 1 ? '#991b1b' : p === 2 ? '#9a3412' : '#065f46';
+              return (
+                <span style={{
+                  backgroundColor: bg,
+                  color: fg,
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  fontSize: '11px',
+                  fontWeight: '500',
+                }}>
+                  {label}
+                </span>
+              );
+            })()}
           </div>
         </div>
 
@@ -655,12 +665,12 @@ const EnhancedKanbanPage: React.FC = () => {
                   overflowY: 'auto' 
                 }}>
                   {filteredStories
-                    .filter(story => story.status === lane.status)
+                    .filter(story => (story as any).status === lane.status)
                     .map((story) => (
                       <StoryCard key={story.id} story={story} lane={lane} />
                     ))}
                   
-                  {filteredStories.filter(s => s.status === lane.status).length === 0 && (
+                  {filteredStories.filter(s => (s as any).status === lane.status).length === 0 && (
                     <div style={{
                       textAlign: 'center',
                       padding: '40px 20px',
@@ -707,6 +717,9 @@ const EnhancedKanbanPage: React.FC = () => {
           </div>
           
           <ModernTaskTable
+            stories={stories}
+            goals={goals}
+            sprints={sprints}
             tasks={tasks.filter(task => task.parentId === selectedStory.id && task.parentType === 'story')}
             onTaskUpdate={async () => {}} // Implement task update logic
             onTaskDelete={async () => {}} // Implement task delete logic
@@ -767,11 +780,11 @@ const EnhancedKanbanPage: React.FC = () => {
                   <Form.Label>Priority</Form.Label>
                   <Form.Select
                     value={newStory.priority}
-                    onChange={(e) => setNewStory(prev => ({ ...prev, priority: e.target.value as 'P1' | 'P2' | 'P3' }))}
+                    onChange={(e) => setNewStory(prev => ({ ...prev, priority: parseInt(e.target.value) || 2 }))}
                   >
-                    <option value="P1">P1 - High</option>
-                    <option value="P2">P2 - Medium</option>
-                    <option value="P3">P3 - Low</option>
+                    <option value={1}>P1 - High</option>
+                    <option value={2}>P2 - Medium</option>
+                    <option value={3}>P3 - Low</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -857,11 +870,11 @@ const EnhancedKanbanPage: React.FC = () => {
                   <Form.Label>Priority</Form.Label>
                   <Form.Select
                     value={editStory.priority}
-                    onChange={(e) => setEditStory(prev => ({ ...prev, priority: e.target.value as 'P1' | 'P2' | 'P3' }))}
+                    onChange={(e) => setEditStory(prev => ({ ...prev, priority: parseInt(e.target.value) || 2 }))}
                   >
-                    <option value="P1">P1 - High</option>
-                    <option value="P2">P2 - Medium</option>
-                    <option value="P3">P3 - Low</option>
+                    <option value={1}>P1 - High</option>
+                    <option value={2}>P2 - Medium</option>
+                    <option value={3}>P3 - Low</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
