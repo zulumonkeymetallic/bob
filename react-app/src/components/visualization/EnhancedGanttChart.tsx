@@ -16,13 +16,19 @@ import {
   CheckCircle2,
   Clock,
   Target,
-  Edit3
+  Edit3,
+  Wand2,
+  MessageSquareText,
+  List as ListIcon
 } from 'lucide-react';
 import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSprint } from '../../contexts/SprintContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { collection, query, where, getDocs, doc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { db, functions } from '../../firebase';
+import { httpsCallable } from 'firebase/functions';
+import SprintSelector from '../SprintSelector';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
 import EditGoalModal from '../../components/EditGoalModal';
 import ModernStoriesTable from '../../components/ModernStoriesTable';
@@ -65,6 +71,7 @@ interface ActivityStreamItem {
 
 const EnhancedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
   const { theme } = useTheme();
   
   // Core data
@@ -78,7 +85,14 @@ const EnhancedGanttChart: React.FC = () => {
   const [zoomLevel, setZoomLevel] = useState<'month' | 'quarter' | 'half' | 'year'>('quarter');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedThemes, setSelectedThemes] = useState<number[]>([]);
+  const [showLinks, setShowLinks] = useState<boolean>(true);
+  const [autoFitSprintGoals, setAutoFitSprintGoals] = useState<boolean>(true);
   const [collapsedGoals, setCollapsedGoals] = useState<Set<string>>(new Set());
+  const [storiesByGoal, setStoriesByGoal] = useState<Record<string, number>>({});
+  const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
+  const [activityItems, setActivityItems] = useState<any[]>([]);
+  const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
   
   // Drag and drop state
   const [dragState, setDragState] = useState<DragState>({
@@ -101,6 +115,8 @@ const EnhancedGanttChart: React.FC = () => {
   const [showImpactModal, setShowImpactModal] = useState(false);
   const [impactedItems, setImpactedItems] = useState<(Story | Task)[]>([]);
   const [pendingGoalUpdate, setPendingGoalUpdate] = useState<{ goalId: string; startDate: Date; endDate: Date } | null>(null);
+  const [tasksModalGoalId, setTasksModalGoalId] = useState<string | null>(null);
+  const [tasksForModal, setTasksForModal] = useState<Task[]>([]);
   
   // Refs
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -132,6 +148,23 @@ const EnhancedGanttChart: React.FC = () => {
     const left = 250 + getDatePosition(today) - el.clientWidth * 0.3;
     el.scrollLeft = Math.max(0, left);
   }, [zoomLevel, goals.length, sprints.length]);
+
+  // Map stories per goal for quick indicators
+  useEffect(() => {
+    const counts: Record<string, number> = {};
+    stories.forEach((s) => {
+      if (!s.goalId) return;
+      counts[s.goalId] = (counts[s.goalId] || 0) + 1;
+    });
+    setStoriesByGoal(counts);
+  }, [stories]);
+
+  // Subscribe to activity when opening modal
+  useEffect(() => {
+    if (!activityGoalId) return;
+    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems);
+    return () => unsub();
+  }, [activityGoalId]);
 
   // Load data with real-time subscriptions
   useEffect(() => {
@@ -290,6 +323,16 @@ const EnhancedGanttChart: React.FC = () => {
       ...linkedItems
     ]);
 
+    // Prepare open tasks modal for goals
+    if (item.type === 'goal') {
+      const goalStories = stories.filter(story => story.goalId === item.id);
+      const storyIds = new Set(goalStories.map(s => s.id));
+      const open = tasks.filter(t => (t.goalId === item.id) || (t.parentType === 'story' && storyIds.has(t.parentId)));
+      const openOnly = open.filter(t => t.status !== 2);
+      setTasksForModal(openOnly);
+      setTasksModalGoalId(item.id);
+    }
+
     // Log activity
     await ActivityStreamService.addActivity({
       entityId: item.id,
@@ -410,6 +453,18 @@ const EnhancedGanttChart: React.FC = () => {
     document.removeEventListener('touchmove', handleDragMove);
     document.removeEventListener('touchend', handleDragEnd);
   }, [dragState, goals, zoomLevel]);
+
+  // Trigger AI story generation for a goal via Cloud Function
+  const handleGenerateStories = useCallback(async (goal: GanttItem) => {
+    try {
+      if (!currentUser) return;
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      await callable({ goalId: goal.id });
+    } catch (e: any) {
+      console.error('generateStoriesForGoal failed', e);
+      alert('Failed to trigger AI story generation: ' + (e?.message || 'unknown'));
+    }
+  }, [currentUser]);
 
   // Helper functions
   const getMillisecondsPerPixel = (zoom: string): number => {
@@ -588,50 +643,52 @@ const EnhancedGanttChart: React.FC = () => {
         </Card.Header>
         
         <Card.Body className="p-3">
-          <Row className="mb-3">
-            <Col md={4}>
-              <Form.Control
-                type="text"
-                placeholder="Search goals..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+          <Row className="mb-3 g-3">
+            {/* Left sticky controls */}
+            <Col md={3} style={{ position: 'sticky', top: 72, alignSelf: 'flex-start' }}>
+              <Card className="shadow-sm">
+                <Card.Body>
+                  <div className="fw-semibold mb-2">Timeline Controls</div>
+                  <div className="mb-3">
+                    <SprintSelector selectedSprintId={selectedSprintId} onSprintChange={setSelectedSprintId} />
+                  </div>
+                  <div className="mb-3">
+                    <div className="small text-muted mb-1">Zoom</div>
+                    <div className="d-flex gap-2 align-items-center">
+                      <Form.Select value={zoomLevel} onChange={(e) => setZoomLevel(e.target.value as any)} size="sm" style={{ maxWidth: 160 }}>
+                        <option value="month">Fit</option>
+                        <option value="quarter">Quarter</option>
+                        <option value="half">Half Year</option>
+                        <option value="year">Year</option>
+                      </Form.Select>
+                      <Button size="sm" variant="outline-secondary" onClick={() => setZoomLevel('month')} title="Zoom In"><ZoomIn size={14} /></Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => setZoomLevel('year')} title="Zoom Out"><ZoomOut size={14} /></Button>
+                    </div>
+                  </div>
+                  <Form.Check type="switch" id="toggle-links" label="Show links" checked={showLinks} onChange={(e) => setShowLinks(e.target.checked)} />
+                  <Form.Check type="switch" id="toggle-autofit" label="Auto-fit sprint goals" checked={autoFitSprintGoals} onChange={(e) => setAutoFitSprintGoals(e.target.checked)} />
+                </Card.Body>
+              </Card>
             </Col>
-            <Col md={4}>
-              <Form.Select
-                value={zoomLevel}
-                onChange={(e) => setZoomLevel(e.target.value as any)}
-              >
-                <option value="month">Month View</option>
-                <option value="quarter">Quarter View</option>
-                <option value="half">Half Year View</option>
-                <option value="year">Year View</option>
-              </Form.Select>
-            </Col>
-            <Col md={4}>
-              <div className="d-flex gap-2 flex-wrap">
-                {themes.map(theme => (
-                  <Badge
-                    key={theme.id}
-                    bg={selectedThemes.includes(theme.id) ? 'primary' : 'outline-secondary'}
-                    className="cursor-pointer"
-                    onClick={() => {
-                      setSelectedThemes(prev => 
-                        prev.includes(theme.id) 
-                          ? prev.filter(t => t !== theme.id)
-                          : [...prev, theme.id]
-                      );
-                    }}
-                    style={{ 
-                      backgroundColor: selectedThemes.includes(theme.id) ? theme.color : 'transparent',
-                      borderColor: theme.color,
-                      color: selectedThemes.includes(theme.id) ? 'white' : theme.color
-                    }}
-                  >
-                    {theme.name}
-                  </Badge>
-                ))}
-              </div>
+            {/* Right filters */}
+            <Col md={9}>
+              <Row className="g-2">
+                <Col md={6}>
+                  <Form.Control type="text" placeholder="Search goals..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                </Col>
+                <Col md={6}>
+                  <div className="d-flex justify-content-end gap-2 flex-wrap">
+                    {themes.map(theme => (
+                      <Badge key={theme.id} bg={selectedThemes.includes(theme.id) ? 'primary' : 'outline-secondary'}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedThemes(prev => prev.includes(theme.id) ? prev.filter(t => t !== theme.id) : [...prev, theme.id])}
+                        style={{ backgroundColor: selectedThemes.includes(theme.id) ? theme.color : 'transparent', borderColor: theme.color, color: selectedThemes.includes(theme.id) ? 'white' : theme.color }}>
+                        {theme.name}
+                      </Badge>
+                    ))}
+                  </div>
+                </Col>
+              </Row>
             </Col>
           </Row>
         </Card.Body>
@@ -718,6 +775,7 @@ const EnhancedGanttChart: React.FC = () => {
                       width: `${width}px`,
                       height: '30px',
                       backgroundColor: theme?.color,
+                      border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid #ef4444' : 'none',
                       borderRadius: '4px',
                       top: '5px',
                       opacity: dragState.isDragging && dragState.itemId === goal.id ? 0.7 : 1,
@@ -751,10 +809,27 @@ const EnhancedGanttChart: React.FC = () => {
                     />
                     
                     <div className="goal-content px-2 text-white text-truncate flex-grow-1" style={{ fontSize: 12 }}>
-                      <strong>{goal.title}</strong>
-                      {typeof goal.priority !== 'undefined' && (
-                        <span className="ms-2">P{goal.priority}</span>
+                      <div className="d-flex align-items-center justify-content-between">
+                        <div className="text-truncate">
+                          <strong>{goal.title}</strong>
+                          {typeof goal.priority !== 'undefined' && (<span className="ms-2">P{goal.priority}</span>)}
+                        </div>
+                        <div className="d-flex align-items-center gap-1">
+                          <button className="btn btn-light btn-sm py-0 px-1" title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal); }}>
+                            <Wand2 size={14} />
+                          </button>
+                          <button className="btn btn-light btn-sm py-0 px-1" title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); }}>
+                            <ListIcon size={14} />
+                          </button>
+                          <button className="btn btn-light btn-sm py-0 px-1" title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(goal.id); setNoteDraft(''); }}>
+                            <MessageSquareText size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      {(goals.find(g => g.id === goal.id) as any)?.recentNote && (
+                        <div className="small">📝 {(goals.find(g => g.id === goal.id) as any)?.recentNote}</div>
                       )}
+                      <div className="small">{(storiesByGoal[goal.id] || 0) === 0 ? 'No linked stories' : `${storiesByGoal[goal.id]} stories`}</div>
                     </div>
                     <button
                       className="btn btn-sm btn-light position-absolute"
@@ -922,7 +997,50 @@ const EnhancedGanttChart: React.FC = () => {
           </Button>
         </Modal.Footer>
       </Modal>
-    </Container>
+  </Container>
+    {/* Activity Modal */}
+    <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
+      <Modal.Header closeButton>
+        <Modal.Title>Goal Activity</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        {activityItems.length === 0 && <div className="text-muted">No recent activity.</div>}
+        {activityItems.map((a) => (
+          <div key={a.id} className="d-flex align-items-center gap-2 py-1 border-bottom">
+            <span>{ActivityStreamService.formatActivityIcon(a.activityType)}</span>
+            <div className="flex-grow-1">
+              <div className="small">{a.description}</div>
+              <div className="text-muted" style={{ fontSize: 12 }}>{a.userEmail || a.userId}</div>
+            </div>
+          </div>
+        ))}
+      </Modal.Body>
+    </Modal>
+
+    {/* Add Note Modal */}
+    <Modal show={!!noteGoalId} onHide={() => setNoteGoalId(null)}>
+      <Modal.Header closeButton>
+        <Modal.Title>Add Note</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <Form.Control as="textarea" rows={4} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="Write a quick note about this goal..." />
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="secondary" onClick={() => setNoteGoalId(null)}>Cancel</Button>
+        <Button variant="primary" onClick={async () => {
+          if (!noteGoalId || !currentUser) return;
+          try {
+            await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft, recentNoteAt: Date.now() });
+            await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft, currentUser.uid, currentUser.email || undefined, 'personal', '', 'human');
+            setNoteGoalId(null);
+            setNoteDraft('');
+          } catch (e) {
+            console.error('Add note failed', e);
+          }
+        }}>Save Note</Button>
+      </Modal.Footer>
+    </Modal>
+
     {/* Edit Modal outside Container to avoid clipping */}
     <EditGoalModal
       goal={editGoal}
@@ -930,6 +1048,44 @@ const EnhancedGanttChart: React.FC = () => {
       onClose={() => setEditGoal(null)}
       currentUserId={currentUser?.uid || ''}
     />
+
+    {/* Open Tasks Modal */}
+    <Modal show={!!tasksModalGoalId} onHide={() => setTasksModalGoalId(null)} size="lg">
+      <Modal.Header closeButton>
+        <Modal.Title>Open Tasks</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        {tasksForModal.length === 0 ? (
+          <div className="text-muted">No open tasks.</div>
+        ) : (
+          <div className="table-responsive">
+            <table className="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>Ref</th>
+                  <th>Title</th>
+                  <th>Status</th>
+                  <th>Priority</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tasksForModal.map(t => (
+                  <tr key={t.id}>
+                    <td className="text-muted">{t.ref || '-'}</td>
+                    <td>{t.title}</td>
+                    <td>{t.status === 2 ? 'Done' : t.status === 1 ? 'In Progress' : t.status === 3 ? 'Blocked' : 'To Do'}</td>
+                    <td>P{t.priority}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="secondary" onClick={() => setTasksModalGoalId(null)}>Close</Button>
+      </Modal.Footer>
+    </Modal>
     </>
   );
 };
