@@ -3,3 +3,8 @@ backups/
 *.bundle
 *.tar.gz
 .env
+# iOS build artifacts
+/ios-app/**/.build/
+/ios-app/**/DerivedData/
+/ios-app/**/build/
+/ios-app/**/index-build/
