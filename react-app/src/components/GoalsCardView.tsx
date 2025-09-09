@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Row, Col, Badge, Button, Dropdown, Modal, Alert } from 'react-bootstrap';
-import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus, Wand2 } from 'lucide-react';
+import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -43,7 +43,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [calendarSyncStatus, setCalendarSyncStatus] = useState<{ [goalId: string]: string }>({});
   const [isSchedulingGoal, setIsSchedulingGoal] = useState<string | null>(null);
   const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
-  const [generatingForGoalId, setGeneratingForGoalId] = useState<string | null>(null);
 
   // Theme colors mapping
   const themeColors = {
@@ -52,27 +51,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     'Wealth': '#059669',
     'Tribe': '#f59e0b',
     'Home': '#3b82f6'
-  };
-
-  const generateStoriesAndKPIs = async (goal: Goal) => {
-    if (!currentUser) return;
-    try {
-      setGeneratingForGoalId(goal.id);
-      const call = httpsCallable(functions, 'generateGoalStoriesAndKPIs');
-      await call({ goalId: goal.id, apply: true });
-      await ActivityStreamService.addNote(
-        goal.id,
-        'goal',
-        `AI: generated stories and KPIs`,
-        currentUser.uid,
-        currentUser.email || '',
-        'personal'
-      );
-    } catch (e) {
-      console.error('AI generate failed', e);
-    } finally {
-      setGeneratingForGoalId(null);
-    }
   };
 
   // Status colors
@@ -382,17 +360,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       <ChevronDown size={16} />
                     </Dropdown.Toggle>
                     <Dropdown.Menu>
-                      <Dropdown.Item 
-                        onClick={() => generateStoriesAndKPIs(goal)}
-                        disabled={generatingForGoalId === goal.id}
-                      >
-                        {generatingForGoalId === goal.id ? (
-                          <span className="spinner-border spinner-border-sm me-2" />
-                        ) : (
-                          <Wand2 size={14} className="me-2" />
-                        )}
-                        AI: Generate Stories & KPIs
-                      </Dropdown.Item>
                       <Dropdown.Item 
                         onClick={() => setShowEditModal(goal)}
                       >

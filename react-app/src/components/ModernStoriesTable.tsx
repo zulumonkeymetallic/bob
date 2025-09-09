@@ -854,27 +854,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   // Filter by goalId if provided, otherwise show all stories
   const filteredStories = (goalId && goalId !== 'all') ? stories.filter(story => story.goalId === goalId) : stories;
   
-  console.log('🔍 ModernStoriesTable FILTERING:');
-  console.log('📊 Input stories count:', stories.length);
-  console.log('🎯 Goal ID filter:', goalId);
-  console.log('🎯 Goal ID filter type:', typeof goalId);
-  console.log('📝 All story goalIds with types:', stories.map(s => ({ 
-    id: s.id, 
-    goalId: s.goalId, 
-    goalIdType: typeof s.goalId,
-    title: s.title,
-    matches: s.goalId === goalId
-  })));
-  console.log('✅ After goalId filter:', filteredStories.length);
-  console.log('📝 Filtered story details:', filteredStories.map(s => ({ id: s.id, goalId: s.goalId, title: s.title })));
-  
-  // Debug: Check if any stories have the matching goalId
+  // Debug logs removed to improve performance in production
   const hasMatchingStories = stories.some(story => story.goalId === goalId);
-  console.log('🔍 Has stories with matching goalId:', hasMatchingStories);
-  
-  // Debug: Show all unique goalIds in stories
-  const uniqueGoalIds = [...new Set(stories.map(s => s.goalId))];
-  console.log('🎯 All unique goalIds in stories:', uniqueGoalIds);
   
   const tableRows: StoryTableRow[] = filteredStories.map((story, index) => {
     const goal = goals.find(g => g.id === story.goalId);

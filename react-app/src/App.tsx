@@ -42,7 +42,6 @@ import SprintPlannerSimple from './components/SprintPlannerSimple';
 import { clickTrackingService } from './services/ClickTrackingService';
 
 // BOB v3.5.2 - New Scaffolding Components
-import GoalsVisualizationView from './components/visualization/GoalsVisualizationView';
 import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
 import CalendarIntegrationView from './components/calendar/CalendarIntegrationView';
 import SprintManagementView from './components/sprints/SprintManagementView';

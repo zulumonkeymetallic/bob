@@ -10,15 +10,19 @@ const PRECACHE_URLS = [
   '/manifest.json'
 ];
 
+// Simple gated logger to avoid console spam
+let SW_DEBUG = false; // toggle via postMessage { type: 'SW_DEBUG', enabled: true }
+const swLog = (...args) => { if (SW_DEBUG) console.log('[SW]', ...args); };
+
 // Install event - precache essential files
 self.addEventListener('install', (event) => {
-  console.log('[SW] Install event');
+  swLog('Install event');
   
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(PRECACHE_URLS))
       .then(() => {
-        console.log('[SW] Precache complete');
+        swLog('Precache complete');
         // Don't auto-activate, wait for user consent
         return self.skipWaiting();
       })
@@ -27,7 +31,7 @@ self.addEventListener('install', (event) => {
 
 // Activate event - claim clients and clean up old caches
 self.addEventListener('activate', (event) => {
-  console.log('[SW] Activate event');
+  swLog('Activate event');
   
   event.waitUntil(
     Promise.all([
@@ -36,7 +40,7 @@ self.addEventListener('activate', (event) => {
         return Promise.all(
           cacheNames.map((cacheName) => {
             if (cacheName !== CACHE_NAME) {
-              console.log('[SW] Deleting old cache:', cacheName);
+              swLog('Deleting old cache:', cacheName);
               return caches.delete(cacheName);
             }
           })
@@ -50,7 +54,12 @@ self.addEventListener('activate', (event) => {
 
 // Message handler for skip waiting
 self.addEventListener('message', (event) => {
-  console.log('[SW] Message received:', event.data);
+  swLog('Message received:', event.data);
+  if (event?.data && typeof event.data === 'object' && event.data.type === 'SW_DEBUG') {
+    SW_DEBUG = !!event.data.enabled;
+    swLog('SW_DEBUG set to', SW_DEBUG);
+    return;
+  }
   
   if (event.data === 'SKIP_WAITING') {
     self.skipWaiting();
