@@ -746,15 +746,7 @@ const EnhancedGanttChart: React.FC = () => {
           </div>
         </div>
 
-        {/* Today marker */}
-        <div className="position-absolute" style={{
-          left: `${250 + getDatePosition(new Date())}px`,
-          top: 0,
-          bottom: 0,
-          width: '2px',
-          backgroundColor: '#ef4444',
-          zIndex: 2
-        }} title={`Today: ${new Date().toLocaleDateString()}`} />
+        {/* Today marker moved into canvas so it doesn't overlay header */}
 
         {/* Sprint Lines */}
         <div className="sprint-lines position-relative">
@@ -786,7 +778,16 @@ const EnhancedGanttChart: React.FC = () => {
         )}
 
         {/* Goals Rows */}
-        <div ref={canvasRef} className="goals-canvas">
+        <div ref={canvasRef} className="goals-canvas" style={{ position: 'relative' }}>
+          {/* Today marker within canvas */}
+          <div className="position-absolute" style={{
+            left: `${getDatePosition(new Date())}px`,
+            top: 0,
+            bottom: 0,
+            width: '2px',
+            backgroundColor: '#ef4444',
+            zIndex: 2
+          }} title={`Today: ${new Date().toLocaleDateString()}`} />
           {(groupByTheme ? Object.keys(goalsByTheme).map(k => parseInt(k,10)).sort((a,b)=>a-b) : [null]).map(groupKey => (
             <React.Fragment key={groupKey === null ? 'all' : `theme-${groupKey}`}>
               {groupByTheme && (
@@ -828,7 +829,7 @@ const EnhancedGanttChart: React.FC = () => {
                     style={{
                       left: `${startPos}px`,
                       width: `${width}px`,
-                      height: '30px',
+                      height: '40px',
                       backgroundColor: theme?.color,
                       border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid #ef4444' : 'none',
                       borderRadius: '4px',
@@ -878,7 +879,7 @@ const EnhancedGanttChart: React.FC = () => {
                       }}
                     />
                     
-                    <div className="goal-content px-2 text-white flex-grow-1" style={{ fontSize: 12 }}>
+                    <div className="goal-content px-2 text-white flex-grow-1" style={{ fontSize: 13, lineHeight: '16px' }}>
                       <div className="d-flex align-items-center justify-content-between">
                         <div style={{ whiteSpace: 'normal', overflow: 'visible' }}>
                           <strong>{goal.title}</strong>
