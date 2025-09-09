@@ -1,21 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Container, Row, Col, Button, Dropdown, Badge, Spinner } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Story, Sprint, Task, Goal } from '../types';
 import ModernKanbanBoard from './ModernKanbanBoard';
+import StoryTasksPanel from './StoryTasksPanel';
+import ModernTaskTable from './ModernTaskTable';
 import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3 } from 'lucide-react';
+import { useSprint } from '../contexts/SprintContext';
 
 interface SprintKanbanPageProps {
   showSidebar?: boolean;
   selectedSprintId?: string;
+  showInlineTasks?: boolean; // show inline tasks panel under board when selecting a story
 }
 
 const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({ 
   showSidebar = false, 
-  selectedSprintId: propSelectedSprintId 
+  selectedSprintId: propSelectedSprintId,
+  showInlineTasks = true,
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -25,15 +30,16 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
-  const [selectedSprintId, setSelectedSprintId] = useState<string | null>(propSelectedSprintId || null);
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
   const [loading, setLoading] = useState(true);
+  const [selectedStory, setSelectedStory] = useState<Story | null>(null);
 
   // Update selected sprint when prop changes
   useEffect(() => {
     if (propSelectedSprintId && propSelectedSprintId !== selectedSprintId) {
       setSelectedSprintId(propSelectedSprintId);
     }
-  }, [propSelectedSprintId, selectedSprintId]);
+  }, [propSelectedSprintId, selectedSprintId, setSelectedSprintId]);
 
   // Get current sprint or selected sprint
   const currentSprint = selectedSprintId 
@@ -139,7 +145,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
 
   // Sprint navigation
   const handleSprintChange = (sprintId: string | null) => {
-    setSelectedSprintId(sprintId);
+    setSelectedSprintId(sprintId || '');
   };
 
   const handlePreviousSprint = () => {
@@ -372,14 +378,45 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
             <Card.Body style={{ padding: '24px' }}>
               <ModernKanbanBoard
                 onItemSelect={(item, type) => {
-                  console.log('Item selected:', item, type);
-                  // showSidebar(item, type); // Feature disabled for route version
+                  if (type === 'story') {
+                    setSelectedStory(item as Story);
+                  }
                 }}
               />
             </Card.Body>
           </Card>
         </Col>
       </Row>
+
+      {/* Inline tasks for selected story (only on this page) */}
+      {showInlineTasks && selectedStory && (
+        <Row className="mt-3">
+          <Col>
+            <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <Card.Header style={{ backgroundColor: '#fff' }}>
+                <h5 className="mb-0">Tasks for: {selectedStory.title}</h5>
+              </Card.Header>
+              <Card.Body style={{ padding: 0 }}>
+                <ModernTaskTable
+                  tasks={tasks.filter(t => t.parentType === 'story' && t.parentId === selectedStory.id)}
+                  stories={stories}
+                  goals={goals}
+                  sprints={sprints}
+                  onTaskUpdate={async (taskId, updates) => {
+                    await updateDoc(doc(db, 'tasks', taskId), { ...updates, updatedAt: serverTimestamp() });
+                  }}
+                  onTaskDelete={async (taskId) => {
+                    await deleteDoc(doc(db, 'tasks', taskId));
+                  }}
+                  onTaskPriorityChange={async (taskId, newPriority) => {
+                    await updateDoc(doc(db, 'tasks', taskId), { priority: newPriority, updatedAt: serverTimestamp() });
+                  }}
+                />
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       {/* Empty State */}
       {sprintStories.length === 0 && sprintTasks.length === 0 && (

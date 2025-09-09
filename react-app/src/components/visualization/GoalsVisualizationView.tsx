@@ -1,9 +1,3 @@
-import React from 'react';
-import GoalVizPage from './GoalVizPage';
-
-// Simple wrapper component that redirects to the actual GoalVizPage
-const GoalsVisualizationView: React.FC = () => {
-  return <GoalVizPage />;
-};
-
-export default GoalsVisualizationView;
+// Placeholder component file to satisfy TS isolatedModules.
+// Real implementation is tracked in scaffolding.
+export {}

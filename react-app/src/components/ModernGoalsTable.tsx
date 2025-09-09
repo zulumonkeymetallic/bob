@@ -40,7 +40,6 @@ import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import ModernStoriesTable from './ModernStoriesTable';
-import EditGoalModal from './EditGoalModal';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -275,15 +274,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
-    if (key === 'targetDate') {
-      // Support number (ms), Date, or Firestore Timestamp-like objects
-      if (typeof value === 'number') return new Date(value).toLocaleDateString();
-      if (value instanceof Date) return value.toLocaleDateString();
-      if (value && typeof value === 'object' && 'seconds' in value && 'nanoseconds' in value) {
-        const ms = (value.seconds as number) * 1000 + Math.floor((value.nanoseconds as number) / 1e6);
-        return new Date(ms).toLocaleDateString();
-      }
-      return '';
+    if (key === 'targetDate' && typeof value === 'number') {
+      return new Date(value).toLocaleDateString();
     }
     if (key === 'storiesCount') {
       return `${value || 0} stories`;
@@ -662,10 +654,16 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     console.log('📚 ModernGoalsTable: Query created, setting up listener');
 
     const unsubscribe = onSnapshot(storiesQuery, (snapshot) => {
-      const storiesData = snapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        ...doc.data() 
-      } as Story));
+      const storiesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id, 
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+        };
+      }) as Story[];
       
       console.log(`📚 ModernGoalsTable: Query result received`);
       console.log(`📚 Stories found: ${storiesData.length}`);
@@ -1122,16 +1120,83 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
         </div>
       </div>
 
-      {/* Unified Edit Goal Modal */}
-      <EditGoalModal
-        goal={editingGoal}
-        show={showEditModal}
-        onClose={() => {
-          setShowEditModal(false);
-          setEditingGoal(null);
-        }}
-        currentUserId={currentUser?.uid || ''}
-      />
+      {/* Edit Goal Modal */}
+      <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Edit Goal</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {editingGoal && (
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Goal Title</Form.Label>
+                <Form.Control
+                  type="text"
+                  defaultValue={editingGoal.title}
+                  onChange={(e) => setEditingGoal({...editingGoal, title: e.target.value})}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  defaultValue={editingGoal.description}
+                  onChange={(e) => setEditingGoal({...editingGoal, description: e.target.value})}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Theme</Form.Label>
+                <Form.Select
+                  defaultValue={editingGoal.theme}
+                  onChange={(e) => setEditingGoal({...editingGoal, theme: parseInt(e.target.value) || 0})}
+                >
+                  {GLOBAL_THEMES.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.label}
+                    </option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Status</Form.Label>
+                <Form.Select
+                  defaultValue={editingGoal.status}
+                  onChange={(e) => setEditingGoal({...editingGoal, status: e.target.value as any})}
+                >
+                  <option value="New">New</option>
+                  <option value="Work in Progress">Work in Progress</option>
+                  <option value="Complete">Complete</option>
+                  <option value="Blocked">Blocked</option>
+                  <option value="Deferred">Deferred</option>
+                </Form.Select>
+              </Form.Group>
+            </Form>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowEditModal(false)}>
+            Cancel
+          </Button>
+          <Button 
+            variant="primary" 
+            onClick={() => {
+              if (editingGoal) {
+                onGoalUpdate(editingGoal.id, {
+                  title: editingGoal.title,
+                  description: editingGoal.description,
+                  theme: editingGoal.theme,
+                  status: editingGoal.status
+                });
+                setShowEditModal(false);
+                setEditingGoal(null);
+              }
+            }}
+          >
+            Save Changes
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </div>
   );
 };

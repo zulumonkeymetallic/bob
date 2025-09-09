@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, addDoc, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Sprint, Task, Goal } from '../types';
@@ -17,6 +17,8 @@ const CurrentSprintKanban: React.FC = () => {
     const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
     const [selectedStory, setSelectedStory] = useState<Story | null>(null);
     const [loading, setLoading] = useState(true);
+    const [activityModal, setActivityModal] = useState<{ story: Story | null; note: string }>({ story: null, note: '' });
+    const [latestActivities, setLatestActivities] = useState<{ [id: string]: any }>({});
 
     const kanbanLanes = [
         { id: 0, title: 'Backlog', stringId: 'backlog' },
@@ -88,6 +90,33 @@ const CurrentSprintKanban: React.FC = () => {
         return () => unsubscribeStories();
     }, [currentUser, activeSprint]);
 
+    // Load latest activity for visible stories
+    useEffect(() => {
+        const fetchLatest = async () => {
+            if (!currentUser || stories.length === 0) { setLatestActivities({}); return; }
+            const map: { [id: string]: any } = {};
+            for (const s of stories) {
+                try {
+                    const qAct = query(
+                        collection(db, 'activity_stream'),
+                        where('entityType', '==', 'story'),
+                        where('entityId', '==', s.id),
+                        where('ownerUid', '==', currentUser.uid),
+                        orderBy('timestamp', 'desc')
+                    );
+                    const snap = await getDocs(qAct);
+                    const items = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as any[];
+                    const latest = items.find((a: any) => (a.activityType === 'note_added' && a.noteContent) || a.activityType === 'updated' || a.activityType === 'created');
+                    if (latest) map[s.id] = latest;
+                } catch (e) {
+                    // ignore errors per story
+                }
+            }
+            setLatestActivities(map);
+        };
+        fetchLatest();
+    }, [stories, currentUser]);
+
 
     const updateStoryStatus = async (storyId: string, newStatus: string) => {
         try {
@@ -133,6 +162,7 @@ const CurrentSprintKanban: React.FC = () => {
     }
 
     return (
+        <>
         <Container fluid className="p-3">
             <div className="d-flex justify-content-between align-items-center mb-4">
                 <h1 className="h3 mb-0">Current Sprint Kanban</h1>
@@ -204,7 +234,11 @@ const CurrentSprintKanban: React.FC = () => {
                                                         <Card.Body className="p-3">
                                                             <div className="d-flex justify-content-between align-items-start mb-2">
                                                                 <h6 className="card-title mb-1">{story.title}</h6>
-                                                                <span className="badge badge-primary">{story.ref || story.id.slice(-4)}</span>
+                                                                <div className="d-flex align-items-center gap-1">
+                                                                  <button className="btn btn-sm btn-outline-secondary" onClick={(e) => { e.stopPropagation(); setActivityModal({ story, note: '' }); }}>Activity</button>
+                                                                  <button className="btn btn-sm btn-outline-secondary" onClick={(e) => { e.stopPropagation(); setSelectedStory(story); }}>Edit</button>
+                                                                  <span className="badge badge-primary ms-1">{story.ref || story.id.slice(-4)}</span>
+                                                                </div>
                                                             </div>
                                                             <div className="d-flex justify-content-between align-items-center">
                                                                 <small className="text-muted">
@@ -214,6 +248,14 @@ const CurrentSprintKanban: React.FC = () => {
                                                                     {doneTaskCount}/{taskCount} tasks
                                                                 </small>
                                                             </div>
+                                                            {latestActivities[story.id] && (
+                                                                <div className="mt-2 p-2" style={{ background: '#f0f9ff', border: '1px solid #0ea5e9', borderRadius: 6 }}>
+                                                                    <small style={{ color: '#0ea5e9', fontWeight: 600 }}>Latest Activity</small>
+                                                                    <div style={{ fontSize: '0.85rem' }}>
+                                                                        {latestActivities[story.id].activityType === 'note_added' ? `"${latestActivities[story.id].noteContent}"` : latestActivities[story.id].description || 'Updated'}
+                                                                    </div>
+                                                                </div>
+                                                            )}
                                                             {story.description && (
                                                                 <p className="card-text mt-2 mb-0" style={{ fontSize: '0.85rem' }}>
                                                                     {story.description.substring(0, 80)}
@@ -242,6 +284,37 @@ const CurrentSprintKanban: React.FC = () => {
                 </div>
             )}
         </Container>
+        {activityModal.story && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setActivityModal({ story: null, note: '' })}>
+            <div style={{ background: 'white', width: 520, maxWidth: '90%', borderRadius: 8, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ padding: 16, borderBottom: '1px solid #e5e7eb' }}>
+                <h5 style={{ margin: 0 }}>Add Note: {activityModal.story.ref || activityModal.story.title}</h5>
+              </div>
+              <div style={{ padding: 16, display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  placeholder="Write a quick note..."
+                  value={activityModal.note}
+                  onChange={(e) => setActivityModal(prev => ({ ...prev, note: e.target.value }))}
+                  style={{ flex: 1, border: '1px solid #d1d5db', borderRadius: 6, padding: '8px 10px' }}
+                />
+                <button
+                  onClick={async () => {
+                    if (!currentUser || !activityModal.story || !activityModal.note.trim()) return;
+                    await addDoc(collection(db, 'activity_stream'), {
+                      entityType: 'story', entityId: activityModal.story.id, ownerUid: currentUser.uid,
+                      activityType: 'note_added', noteContent: activityModal.note.trim(), timestamp: serverTimestamp()
+                    });
+                    setActivityModal({ story: null, note: '' });
+                  }}
+                  style={{ padding: '8px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: 'white' }}
+                >Add</button>
+                <button onClick={() => setActivityModal({ story: null, note: '' })} style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: 'white' }}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+        </>
     );
 };
 

@@ -8,8 +8,8 @@ import { Story, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { ChoiceHelper } from '../config/choices';
 import QuickActionsPanel from './QuickActionsPanel';
-import DashboardSprintKanban from './DashboardSprintKanban';
-import DashboardModernTaskTable from './DashboardModernTaskTable';
+import SprintKanbanPage from './SprintKanbanPage';
+import DashboardTasksModernWrapper from './DashboardTasksModernWrapper';
 import SprintSelector from './SprintSelector';
 
 interface DashboardStats {
@@ -247,25 +247,17 @@ const Dashboard: React.FC = () => {
             </Col>
           </Row>
 
-          {/* Sprint Kanban Board */}
+          {/* Sprint Kanban Board (Unified) */}
           <Row className="mb-4">
             <Col md={12}>
-              <DashboardSprintKanban 
-                maxStories={8} 
-                selectedSprintId={selectedSprintId}
-              />
+              <SprintKanbanPage selectedSprintId={selectedSprintId || undefined} showInlineTasks={false} />
             </Col>
           </Row>
 
-          {/* Tasks and Quick Actions */}
+          {/* Tasks and Quick Actions (Modern table) */}
           <Row className="mb-4">
             <Col md={8}>
-                        <DashboardModernTaskTable 
-            maxTasks={10} 
-            showDueToday={true} 
-            title="Upcoming Tasks"
-            showMetrics={true}
-          />
+              <DashboardTasksModernWrapper title="Upcoming Tasks" maxTasks={10} />
             </Col>
             <Col md={4}>
               <QuickActionsPanel 
@@ -281,7 +273,7 @@ const Dashboard: React.FC = () => {
           {/* Tasks Due Today */}
           <Row className="mb-4">
             <Col md={12}>
-              <DashboardModernTaskTable maxTasks={5} showDueToday={true} title="Tasks Due Today" />
+              <DashboardTasksModernWrapper title="Tasks Due Today" maxTasks={5} />
             </Col>
           </Row>
 

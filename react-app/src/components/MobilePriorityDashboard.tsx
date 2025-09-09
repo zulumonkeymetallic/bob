@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Container, Card, Form, Button, Badge, ListGroup } from 'react-bootstrap';
 import { Check2Square, Square, Star, Clock, ExclamationTriangle } from 'react-bootstrap-icons';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useDeviceInfo } from '../utils/deviceDetection';
 import { Task, Story } from '../types';
@@ -62,7 +62,7 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
       const newStatus = isStatus(currentStatus, 'done') ? 0 : 4; // 0=planned, 4=done
       await updateDoc(doc(db, 'tasks', taskId), {
         status: newStatus,
-        updatedAt: new Date()
+        updatedAt: serverTimestamp()
       });
     } catch (error) {
       console.error('Error updating task:', error);

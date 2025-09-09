@@ -42,3 +42,22 @@ export const validateRef = (ref: string, type: 'story' | 'task' | 'sprint' | 'go
     const pattern = new RegExp(`^${prefixes[type]}-[A-Z0-9]{4,8}$`);
     return pattern.test(ref);
 };
+
+/**
+ * Returns a consistent display reference used across UI and activity stream,
+ * derived from the entity id. Example: story -> ST-ABC123
+ */
+export const displayRefForEntity = (
+  type: 'story' | 'task' | 'sprint' | 'goal',
+  id: string
+): string => {
+  const prefixes: Record<string, string> = {
+    story: 'ST',
+    task: 'TK',
+    sprint: 'SP',
+    goal: 'GR'
+  };
+  const prefix = prefixes[type] || 'ID';
+  const short = (id || '').substring(0, 6).toUpperCase();
+  return `${prefix}-${short}`;
+};
