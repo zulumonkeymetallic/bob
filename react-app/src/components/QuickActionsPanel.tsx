@@ -7,6 +7,7 @@ import { addDoc, collection, serverTimestamp, query, where, onSnapshot, updateDo
 import { db } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import logger from '../utils/logger';
 import { Story, Goal, Sprint } from '../types';
 import AddGoalModal from './AddGoalModal';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
@@ -20,8 +21,9 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
   const { currentPersona } = usePersona();
   
   // Debug logging for QuickActionsPanel
-  console.log('🔍 QuickActionsPanel: currentUser:', !!currentUser);
-  console.log('🔍 QuickActionsPanel: currentPersona:', currentPersona);
+  if (logger.isEnabled('debug', 'quick')) {
+    logger.debug('quick', 'QuickActions init', { hasUser: !!currentUser, persona: currentPersona });
+  }
   
   const [showModal, setShowModal] = useState(false);
   const [showGoalModal, setShowGoalModal] = useState(false);
