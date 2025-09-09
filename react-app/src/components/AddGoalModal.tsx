@@ -22,7 +22,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     size: 'M',
     timeToMasterHours: 40,
     confidence: 0.5,
-    targetDate: '',
+    startDate: '',
+    endDate: '',
     status: 'New',
     priority: 2,
     kpis: [] as Array<{name: string; target: number; unit: string}>
@@ -126,7 +127,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
-        targetDate: formData.targetDate ? new Date(formData.targetDate) : null,
+        startDate: formData.startDate ? new Date(formData.startDate).getTime() : Date.now(),
+        endDate: formData.endDate ? new Date(formData.endDate).getTime() : (Date.now() + 30*24*60*60*1000),
         status: statusMap[formData.status as keyof typeof statusMap] || 0,
         priority: formData.priority,
         kpis: formData.kpis,
@@ -159,7 +161,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         size: 'M',
         timeToMasterHours: 40,
         confidence: 0.5,
-        targetDate: '',
+        startDate: '',
+        endDate: '',
         status: 'New',
         priority: 2,
         kpis: []
@@ -191,7 +194,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       size: 'M',
       timeToMasterHours: 40,
       confidence: 0.5,
-      targetDate: '',
+      startDate: '',
+      endDate: '',
       status: 'New',
       priority: 2,
       kpis: []
@@ -293,13 +297,24 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                 </Form.Text>
               </Form.Group>
             </div>
-            <div className="col-md-6">
+            <div className="col-md-3">
               <Form.Group className="mb-3">
-                <Form.Label>Target Date (Optional)</Form.Label>
+                <Form.Label>Start Date</Form.Label>
                 <Form.Control
                   type="date"
-                  value={formData.targetDate}
-                  onChange={(e) => setFormData({ ...formData, targetDate: e.target.value })}
+                  value={formData.startDate}
+                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                  disabled={currentPersona !== 'personal'}
+                />
+              </Form.Group>
+            </div>
+            <div className="col-md-3">
+              <Form.Group className="mb-3">
+                <Form.Label>End Date</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={formData.endDate}
+                  onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
                   disabled={currentPersona !== 'personal'}
                 />
               </Form.Group>
