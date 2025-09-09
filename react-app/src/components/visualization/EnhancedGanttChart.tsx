@@ -19,7 +19,10 @@ import {
   Edit3,
   Wand2,
   MessageSquareText,
-  List as ListIcon
+  List as ListIcon,
+  Maximize2,
+  Minimize2,
+  BookOpen
 } from 'lucide-react';
 import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
@@ -96,6 +99,7 @@ const EnhancedGanttChart: React.FC = () => {
   const [noteDraft, setNoteDraft] = useState('');
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
   const [dragOverlay, setDragOverlay] = useState<{ left: number; width: number; text: string } | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   
   // Drag and drop state
   const [dragState, setDragState] = useState<DragState>({
@@ -125,6 +129,7 @@ const EnhancedGanttChart: React.FC = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const headerMonthsRef = useRef<HTMLDivElement>(null);
   
   // Theme definitions
   const themes = [
@@ -141,6 +146,52 @@ const EnhancedGanttChart: React.FC = () => {
     const start = new Date(now.getFullYear() - 1, 0, 1); // 1 year ago
     const end = new Date(now.getFullYear() + 2, 11, 31); // 2 years ahead
     return { start, end };
+  }, []);
+
+  // Fullscreen handlers
+  const enterFullscreen = useCallback(async () => {
+    try {
+      document.body.classList.add('gantt-full-active');
+      if (containerRef.current && (containerRef.current as any).requestFullscreen) {
+        await (containerRef.current as any).requestFullscreen();
+      } else if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      }
+      setIsFullscreen(true);
+    } catch (e) {
+      console.error('Enter fullscreen failed', e);
+    }
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    try {
+      document.body.classList.remove('gantt-full-active');
+      if (document.fullscreenElement && document.exitFullscreen) {
+        await document.exitFullscreen();
+      }
+    } catch (e) {
+      console.error('Exit fullscreen failed', e);
+    } finally {
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) exitFullscreen(); else enterFullscreen();
+  }, [isFullscreen, enterFullscreen, exitFullscreen]);
+
+  useEffect(() => {
+    const onFsChange = () => {
+      const active = Boolean(document.fullscreenElement);
+      setIsFullscreen(active);
+      if (!active) {
+        document.body.classList.remove('gantt-full-active');
+      } else {
+        document.body.classList.add('gantt-full-active');
+      }
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
   // Scroll to today's date on mount and when zoom/data changes
@@ -509,6 +560,16 @@ const EnhancedGanttChart: React.FC = () => {
     return (itemPosition / totalDuration) * canvasWidth;
   };
 
+  // Small util to convert HEX to rgba for theme lane backgrounds
+  const hexToRgba = (hex: string, alpha: number) => {
+    const h = hex.replace('#', '');
+    const bigint = parseInt(h.length === 3 ? h.split('').map(x => x + x).join('') : h, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
   const checkImpactedItems = (goalId: string, newStartDate: Date, newEndDate: Date): (Story | Task)[] => {
     const impacted: (Story | Task)[] = [];
     
@@ -653,16 +714,25 @@ const EnhancedGanttChart: React.FC = () => {
                 <Button
                   variant="outline-secondary"
                   size="sm"
-                  onClick={() => setShowActivityStream(!showActivityStream)}
+                  onClick={() => setShowActivityStream(true)}
+                  aria-expanded={showActivityStream}
                 >
                   <Activity size={16} className="me-1" />
                   Activity
                 </Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => setZoomLevel('month')}>
+                <Button variant="outline-secondary" size="sm" onClick={() => setZoomLevel('month')} title="Zoom in">
                   <ZoomIn size={16} />
                 </Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => setZoomLevel('year')}>
+                <Button variant="outline-secondary" size="sm" onClick={() => setZoomLevel('year')} title="Zoom out">
                   <ZoomOut size={16} />
+                </Button>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  onClick={toggleFullscreen}
+                  title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'}
+                >
+                  {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                 </Button>
               </div>
             </Col>
@@ -723,7 +793,7 @@ const EnhancedGanttChart: React.FC = () => {
       </Card>
 
       {/* Main Timeline */}
-      <div ref={containerRef} className="timeline-container" style={{ height: 'calc(100vh - 250px)', overflow: 'auto' }} onWheel={handleWheelZoom}>
+      <div ref={containerRef} className="timeline-container" style={{ height: isFullscreen ? '100vh' : 'calc(100vh - 250px)', overflow: 'auto' }} onWheel={handleWheelZoom}>
         {/* Live region for a11y announcements */}
         <div aria-live="polite" className="visually-hidden">{liveAnnouncement}</div>
         {/* Timeline Header */}
@@ -732,12 +802,30 @@ const EnhancedGanttChart: React.FC = () => {
             <div style={{ width: '250px', minWidth: '250px' }} className="bg-light border-end p-2">
               <strong>Goals & Themes</strong>
             </div>
-            <div className="timeline-months d-flex" style={{ minWidth: '200%' }}>
+            <div ref={headerMonthsRef} className="timeline-months d-flex position-relative" style={{ minWidth: '200%' }}>
+              {/* Sprint shading under header months */}
+              <div className="position-absolute" style={{ left: 0, right: 0, top: 0, bottom: 0, pointerEvents: 'none', zIndex: 0 }}>
+                {sprints.map(sprint => (
+                  <div
+                    key={`hdr-${sprint.id}`}
+                    className="position-absolute"
+                    style={{
+                      left: `${getDatePosition(new Date(sprint.startDate))}px`,
+                      width: `${getDatePosition(new Date(sprint.endDate)) - getDatePosition(new Date(sprint.startDate))}px`,
+                      top: 0,
+                      bottom: 0,
+                      backgroundColor: 'rgba(59, 130, 246, 0.08)'
+                    }}
+                    aria-hidden="true"
+                    title={`${sprint.name}: ${new Date(sprint.startDate).toLocaleDateString()} - ${new Date(sprint.endDate).toLocaleDateString()}`}
+                  />
+                ))}
+              </div>
               {generateTimelineHeaders().map((header, index) => (
                 <div
                   key={index}
                   className="text-center border-end p-2"
-                  style={{ width: `${header.width}px`, minWidth: '80px' }}
+                  style={{ width: `${header.width}px`, minWidth: '80px', position: 'relative', zIndex: 1 }}
                 >
                   <small>{header.label}</small>
                 </div>
@@ -747,29 +835,6 @@ const EnhancedGanttChart: React.FC = () => {
         </div>
 
         {/* Today marker moved into canvas so it doesn't overlay header */}
-
-        {/* Sprint Lines */}
-        <div className="sprint-lines position-relative">
-          {sprints.map(sprint => (
-            <div
-              key={sprint.id}
-              className="sprint-line position-absolute"
-              style={{
-                left: `${250 + getDatePosition(new Date(sprint.startDate))}px`,
-                width: `${getDatePosition(new Date(sprint.endDate)) - getDatePosition(new Date(sprint.startDate))}px`,
-                top: '0',
-                height: '100%',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                borderLeft: '2px solid #3b82f6',
-                borderRight: '2px solid #3b82f6',
-                pointerEvents: 'none',
-                zIndex: 1
-              }}
-              title={`${sprint.name}: ${new Date(sprint.startDate).toLocaleDateString()} - ${new Date(sprint.endDate).toLocaleDateString()}`}
-            />
-          ))}
-        </div>
-
         {/* Ghost drag tooltip */}
         {dragOverlay && (
           <div className="drag-tooltip" style={{ left: dragOverlay.left, top: 60 }}>
@@ -779,6 +844,26 @@ const EnhancedGanttChart: React.FC = () => {
 
         {/* Goals Rows */}
         <div ref={canvasRef} className="goals-canvas" style={{ position: 'relative' }}>
+          {/* Sprint shading behind canvas rows */}
+          <div className="position-absolute" style={{ left: 0, right: 0, top: 0, bottom: 0, pointerEvents: 'none', zIndex: 1 }}>
+            {sprints.map(sprint => (
+              <div
+                key={`cnv-${sprint.id}`}
+                className="position-absolute"
+                style={{
+                  left: `${getDatePosition(new Date(sprint.startDate))}px`,
+                  width: `${getDatePosition(new Date(sprint.endDate)) - getDatePosition(new Date(sprint.startDate))}px`,
+                  top: 0,
+                  bottom: 0,
+                  backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                  borderLeft: '1px solid rgba(59,130,246,0.25)',
+                  borderRight: '1px solid rgba(59,130,246,0.25)'
+                }}
+                aria-hidden="true"
+                title={`${sprint.name}: ${new Date(sprint.startDate).toLocaleDateString()} - ${new Date(sprint.endDate).toLocaleDateString()}`}
+              />
+            ))}
+          </div>
           {/* Today marker within canvas */}
           <div className="position-absolute" style={{
             left: `${getDatePosition(new Date())}px`,
@@ -803,7 +888,7 @@ const EnhancedGanttChart: React.FC = () => {
             const width = Math.max(endPos - startPos, 20);
 
             return (
-              <div key={goal.id} className="goal-row d-flex align-items-center border-bottom">
+              <div key={goal.id} className="goal-row d-flex align-items-center border-bottom" style={{ background: groupByTheme && theme ? hexToRgba(theme.color, 0.05) : 'transparent' }}>
                 <div 
                   className="goal-label p-2"
                   style={{ width: '250px', minWidth: '250px' }}
@@ -891,6 +976,9 @@ const EnhancedGanttChart: React.FC = () => {
                           </button>
                           <button className="btn btn-light btn-sm py-0 px-1" title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); }}>
                             <ListIcon size={14} />
+                          </button>
+                          <button className="btn btn-light btn-sm py-0 px-1" title="View stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}>
+                            <BookOpen size={14} />
                           </button>
                           <button className="btn btn-light btn-sm py-0 px-1" title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(goal.id); setNoteDraft(''); }}>
                             <MessageSquareText size={14} />
