@@ -29,8 +29,8 @@ jobs:
       - name: Unit tests (CRA)
         run: npm test --prefix react-app -- --watchAll=false
 
-      - name: Build app
-        run: npm run build --prefix react-app
+      - name: Build app (uses emulator endpoints for tests)
+        run: REACT_APP_USE_FIREBASE_EMULATOR=true npm run build --prefix react-app
 
       - name: Check version alignment
         run: node scripts/check-version-alignment.js
@@ -40,8 +40,6 @@ jobs:
           CI: true
           PW_USE_BUILD: '1'
           APP_BASE_URL: http://localhost:4173
-          TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
-          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
         run: npx playwright test
 
       - name: Upload Playwright report
@@ -57,4 +55,3 @@ jobs:
         with:
           name: junit-results
           path: test-results/junit.xml
-

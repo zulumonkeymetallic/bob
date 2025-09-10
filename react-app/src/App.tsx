@@ -47,6 +47,7 @@ import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
 import CalendarIntegrationView from './components/calendar/CalendarIntegrationView';
 import SprintManagementView from './components/sprints/SprintManagementView';
 import SprintsPage from './components/sprints/SprintsPage';
+import SprintTablePage from './components/sprints/SprintTablePage';
 import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
@@ -189,6 +190,7 @@ function AppContent() {
             <Route path="/sprints/management" element={<SprintsPage />} />
             <Route path="/sprints/kanban" element={<SprintsPage />} />
             <Route path="/sprints/stories" element={<SprintsPage />} />
+            <Route path="/sprints/table" element={<SprintTablePage />} />
             
             <Route path="/tasks-management" element={<TasksManagement />} />
             <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
