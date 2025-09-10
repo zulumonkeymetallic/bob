@@ -5,55 +5,57 @@ import { useAuth } from '../contexts/AuthContext';
 import type { ThemeSettings } from '../types/v3.0.8-types';
 import { Goal, Story, Task } from '../types';
 import { getThemeName } from '../utils/statusHelpers';
+import { getCssVarValue } from '../utils/themeVars';
 
-// Default theme colors following the v3.0.8 spec
-const DEFAULT_THEMES: ThemeSettings['themes'] = {
+// Default theme colors pulled from CSS variables (ThemeColors.css)
+const getDefaultThemesFromCss = (): ThemeSettings['themes'] => ({
   Health: {
     name: 'Health',
-    primary: '#22c55e',
-    secondary: '#16a34a',
-    light: '#86efac',
-    lighter: '#dcfce7',
-    dark: '#15803d',
-    darker: '#14532d'
+    primary: getCssVarValue('--theme-health-primary', '#22c55e'),
+    secondary: getCssVarValue('--theme-health-dark', '#16a34a'),
+    light: getCssVarValue('--theme-health-light', '#86efac'),
+    lighter: getCssVarValue('--theme-health-lighter', '#dcfce7'),
+    dark: getCssVarValue('--theme-health-dark', '#15803d'),
+    darker: getCssVarValue('--theme-health-darker', '#14532d')
   },
   Growth: {
     name: 'Growth',
-    primary: '#3b82f6',
-    secondary: '#2563eb',
-    light: '#93c5fd',
-    lighter: '#dbeafe',
-    dark: '#1d4ed8',
-    darker: '#1e3a8a'
+    primary: getCssVarValue('--theme-growth-primary', '#3b82f6'),
+    secondary: getCssVarValue('--theme-growth-dark', '#2563eb'),
+    light: getCssVarValue('--theme-growth-light', '#93c5fd'),
+    lighter: getCssVarValue('--theme-growth-lighter', '#dbeafe'),
+    dark: getCssVarValue('--theme-growth-dark', '#1d4ed8'),
+    darker: getCssVarValue('--theme-growth-darker', '#1e3a8a')
   },
   Wealth: {
     name: 'Wealth',
-    primary: '#eab308',
-    secondary: '#ca8a04',
-    light: '#fde047',
-    lighter: '#fefce8',
-    dark: '#a16207',
-    darker: '#713f12'
+    primary: getCssVarValue('--theme-wealth-primary', '#eab308'),
+    secondary: getCssVarValue('--theme-wealth-dark', '#ca8a04'),
+    light: getCssVarValue('--theme-wealth-light', '#fde047'),
+    lighter: getCssVarValue('--theme-wealth-lighter', '#fefce8'),
+    dark: getCssVarValue('--theme-wealth-dark', '#a16207'),
+    darker: getCssVarValue('--theme-wealth-darker', '#713f12')
   },
   Tribe: {
     name: 'Tribe',
-    primary: '#8b5cf6',
-    secondary: '#7c3aed',
-    light: '#c4b5fd',
-    lighter: '#f3f4f6',
-    dark: '#6d28d9',
-    darker: '#4c1d95'
+    primary: getCssVarValue('--theme-tribe-primary', '#8b5cf6'),
+    secondary: getCssVarValue('--theme-tribe-dark', '#7c3aed'),
+    light: getCssVarValue('--theme-tribe-light', '#c4b5fd'),
+    lighter: getCssVarValue('--theme-tribe-lighter', '#f3f4f6'),
+    dark: getCssVarValue('--theme-tribe-dark', '#6d28d9'),
+    darker: getCssVarValue('--theme-tribe-darker', '#4c1d95')
   },
   Home: {
     name: 'Home',
-    primary: '#f97316',
-    secondary: '#ea580c',
-    light: '#fed7aa',
-    lighter: '#fff7ed',
-    dark: '#c2410c',
-    darker: '#9a3412'
+    primary: getCssVarValue('--theme-home-primary', '#f97316'),
+    secondary: getCssVarValue('--theme-home-dark', '#ea580c'),
+    light: getCssVarValue('--theme-home-light', '#fed7aa'),
+    lighter: getCssVarValue('--theme-home-lighter', '#fff7ed'),
+    dark: getCssVarValue('--theme-home-dark', '#c2410c'),
+    darker: getCssVarValue('--theme-home-darker', '#9a3412')
   }
-};
+});
+const DEFAULT_THEMES: ThemeSettings['themes'] = getDefaultThemesFromCss();
 
 interface UseThemeColorProps {
   entity?: { 

@@ -25,6 +25,7 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
+import { themeVars, rgbaCard } from '../utils/themeVars';
 
 interface PersonalItem {
   id: string;
@@ -181,12 +182,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 style={{
                   width: '100%',
                   padding: '6px 8px',
-                  border: '1px solid #3b82f6',
+                  border: `1px solid ${themeVars.brand}`,
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: 'white',
+                  backgroundColor: themeVars.panel,
                   outline: 'none',
-                  boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+                  boxShadow: `0 0 0 2px ${rgbaCard(0.2)}`,
                 }}
                 autoFocus
               >
@@ -211,12 +212,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               style={{
                 width: '100%',
                 padding: '6px 8px',
-                border: '1px solid #3b82f6',
+                border: `1px solid ${themeVars.brand}`,
                 borderRadius: '4px',
                 fontSize: '14px',
-                backgroundColor: 'white',
+                backgroundColor: themeVars.panel,
                 outline: 'none',
-                boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+                boxShadow: `0 0 0 2px ${rgbaCard(0.2)}`,
               }}
               autoFocus
             />
@@ -231,13 +232,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
         style={{ 
           width: column.width,
           padding: '12px 8px',
-          borderRight: '1px solid #f3f4f6',
+          borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = '#f9fafb';
+            e.currentTarget.style.backgroundColor = themeVars.card as string;
           }
         }}
         onMouseLeave={(e) => {
@@ -250,7 +251,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <div style={{
           minHeight: '20px',
           fontSize: '14px',
-          color: '#374151',
+          color: themeVars.text,
           wordBreak: 'break-word',
           whiteSpace: 'normal',
           lineHeight: '1.4',
@@ -266,32 +267,32 @@ const SortableRow: React.FC<SortableRowProps> = ({
       ref={setNodeRef}
       style={{
         ...style,
-        backgroundColor: 'white',
-        borderBottom: '1px solid #f3f4f6',
+        backgroundColor: themeVars.panel,
+        borderBottom: `1px solid ${themeVars.border}`,
         transition: 'background-color 0.15s ease',
       }}
       {...attributes}
       onMouseEnter={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = '#f9fafb';
+          e.currentTarget.style.backgroundColor = themeVars.card as string;
         }
       }}
       onMouseLeave={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = 'white';
+          e.currentTarget.style.backgroundColor = themeVars.panel as string;
         }
       }}
     >
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
-        borderRight: '1px solid #f3f4f6',
+        borderRight: `1px solid ${themeVars.border}`,
         width: '48px',
       }}>
         <button
           {...listeners}
           style={{
-            color: '#9ca3af',
+            color: themeVars.muted,
             padding: '4px',
             borderRadius: '4px',
             border: 'none',
@@ -300,10 +301,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
             transition: 'color 0.15s ease',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = '#6b7280';
+            e.currentTarget.style.color = themeVars.text as string;
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = '#9ca3af';
+            e.currentTarget.style.color = themeVars.muted as string;
           }}
           title="Drag to reorder"
         >
@@ -424,9 +425,9 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
   return (
     <div style={{ 
       position: 'relative', 
-      backgroundColor: 'white', 
+      backgroundColor: themeVars.panel, 
       borderRadius: '8px', 
-      border: '1px solid #e5e7eb', 
+      border: `1px solid ${themeVars.border}`, 
       boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
       overflow: 'hidden' 
     }}>
@@ -436,14 +437,14 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '16px',
-        borderBottom: '1px solid #e5e7eb',
-        backgroundColor: '#f9fafb',
+        borderBottom: `1px solid ${themeVars.border}`,
+        backgroundColor: themeVars.card,
       }}>
         <div>
           <h3 style={{ 
             fontSize: '18px', 
             fontWeight: '600', 
-            color: '#111827', 
+            color: themeVars.text, 
             margin: 0, 
             marginBottom: '4px' 
           }}>
@@ -451,7 +452,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
           </h3>
           <p style={{ 
             fontSize: '14px', 
-            color: '#6b7280', 
+            color: themeVars.muted, 
             margin: 0 
           }}>
             {items.length} items • {visibleColumnsCount} columns visible
@@ -469,18 +470,18 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
             fontWeight: '500',
             transition: 'all 0.15s ease',
             cursor: 'pointer',
-            border: showConfig ? '1px solid #bfdbfe' : '1px solid #d1d5db',
-            backgroundColor: showConfig ? '#dbeafe' : 'white',
-            color: showConfig ? '#1e40af' : '#374151',
+            border: showConfig ? `1px solid ${themeVars.brand}` : `1px solid ${themeVars.border}`,
+            backgroundColor: showConfig ? rgbaCard(0.2) : (themeVars.panel as string),
+            color: themeVars.text,
           }}
           onMouseEnter={(e) => {
             if (!showConfig) {
-              e.currentTarget.style.backgroundColor = '#f9fafb';
+              e.currentTarget.style.backgroundColor = themeVars.card as string;
             }
           }}
           onMouseLeave={(e) => {
             if (!showConfig) {
-              e.currentTarget.style.backgroundColor = 'white';
+              e.currentTarget.style.backgroundColor = themeVars.panel as string;
             }
           }}
         >
@@ -507,8 +508,8 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
               borderCollapse: 'collapse',
             }}>
               <thead style={{ 
-                backgroundColor: '#f9fafb', 
-                borderBottom: '1px solid #e5e7eb' 
+                backgroundColor: themeVars.card, 
+                borderBottom: `1px solid ${themeVars.border}` 
               }}>
                 <tr>
                   <th style={{
@@ -516,10 +517,10 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
-                    borderRight: '1px solid #f3f4f6',
+                    borderRight: `1px solid ${themeVars.border}`,
                     width: '48px',
                   }}>
                     Order
@@ -532,10 +533,10 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                         textAlign: 'left',
                         fontSize: '12px',
                         fontWeight: '500',
-                        color: '#6b7280',
+                        color: themeVars.muted,
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em',
-                        borderRight: '1px solid #f3f4f6',
+                        borderRight: `1px solid ${themeVars.border}`,
                         width: column.width,
                       }}
                     >
@@ -547,7 +548,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     textAlign: 'center',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     width: '96px',
@@ -584,8 +585,8 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
           right: 0,
           height: '100%',
           width: '320px',
-          backgroundColor: 'white',
-          borderLeft: '1px solid #e5e7eb',
+          backgroundColor: themeVars.panel,
+          borderLeft: `1px solid ${themeVars.border}`,
           transition: 'transform 0.3s ease',
           boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
           transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
@@ -609,7 +610,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: themeVars.text,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -617,7 +618,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.backgroundColor = themeVars.card as string;
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -645,7 +646,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                         cursor: 'pointer',
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = '#f9fafb';
+                        e.currentTarget.style.backgroundColor = themeVars.card as string;
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.backgroundColor = 'transparent';
@@ -658,8 +659,8 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                             height: '20px',
                             borderRadius: '4px',
                             border: '2px solid',
-                            borderColor: column.visible ? '#2563eb' : '#d1d5db',
-                            backgroundColor: column.visible ? '#2563eb' : 'transparent',
+                            borderColor: column.visible ? (themeVars.brand as string) : (themeVars.border as string),
+                            backgroundColor: column.visible ? (themeVars.brand as string) : 'transparent',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -671,13 +672,13 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                               </svg>
                             )}
                           </div>
-                          <span style={{ fontSize: '14px', color: '#111827' }}>{column.label}</span>
+                          <span style={{ fontSize: '14px', color: themeVars.text }}>{column.label}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {column.visible ? (
-                            <Eye size={14} style={{ color: '#9ca3af' }} />
+                            <Eye size={14} style={{ color: themeVars.muted }} />
                           ) : (
-                            <EyeOff size={14} style={{ color: '#9ca3af' }} />
+                            <EyeOff size={14} style={{ color: themeVars.muted }} />
                           )}
                         </div>
                       </div>
@@ -699,7 +700,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: themeVars.text,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -707,7 +708,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.backgroundColor = themeVars.card as string;
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -726,20 +727,20 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
                   }}>
                     <div style={{
                       padding: '12px',
-                      backgroundColor: '#f9fafb',
+                      backgroundColor: themeVars.card,
                       borderRadius: '8px',
                     }}>
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: themeVars.text, 
                         margin: '0 0 8px 0' 
                       }}>
                         Personal Organization
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: themeVars.muted, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>

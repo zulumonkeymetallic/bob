@@ -31,6 +31,7 @@ import { Story, Goal, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import { DnDMutationHandler } from '../utils/dndMutations';
+import { themeVars, rgbaCard, domainThemePrimaryVar } from '../utils/themeVars';
 
 interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
@@ -49,7 +50,7 @@ const DroppableArea: React.FC<{
       ref={setNodeRef}
       style={{
         minHeight: '100px',
-        backgroundColor: isOver ? '#f3f4f6' : 'transparent',
+        backgroundColor: isOver ? rgbaCard(0.06) : 'transparent',
         borderRadius: '6px',
         padding: '8px',
         transition: 'background-color 0.2s ease',
@@ -111,14 +112,14 @@ const SortableStoryCard: React.FC<{
                 <span style={{ fontSize: '12px', fontWeight: '600', color: themeColor }}>
                   {story.ref || `STRY-${story.id.slice(-3).toUpperCase()}`}
                 </span>
-                <h6 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#111827' }}>
+                <h6 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: themeVars.text }}>
                   {story.title}
                 </h6>
               </div>
               {goal && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '8px' }}>
                   <Target size={12} color={themeColor} />
-                  <span style={{ fontSize: '12px', color: '#6b7280' }}>
+                  <span style={{ fontSize: '12px', color: themeVars.muted }}>
                     {goal.title}
                   </span>
                 </div>
@@ -128,7 +129,7 @@ const SortableStoryCard: React.FC<{
               <Button
                 variant="link"
                 size="sm"
-                style={{ padding: '2px', color: '#6b7280' }}
+                style={{ padding: '2px', color: themeVars.muted }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onEdit(story);
@@ -139,7 +140,7 @@ const SortableStoryCard: React.FC<{
               <Button
                 variant="link"
                 size="sm"
-                style={{ padding: '2px', color: '#ef4444' }}
+                style={{ padding: '2px', color: 'var(--red)' }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDelete(story);
@@ -165,7 +166,7 @@ const SortableStoryCard: React.FC<{
                 <Badge 
                   style={{ 
                     backgroundColor: themeColor, 
-                    color: 'white',
+                    color: themeVars.onAccent,
                     fontSize: '10px'
                   }}
                 >
@@ -173,13 +174,13 @@ const SortableStoryCard: React.FC<{
                 </Badge>
               )}
             </div>
-            <span style={{ fontSize: '11px', color: '#6b7280' }}>
+            <span style={{ fontSize: '11px', color: themeVars.muted }}>
               {taskCount} tasks
             </span>
           </div>
 
           {story.description && (
-            <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: '#6b7280', lineHeight: '1.4' }}>
+            <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: themeVars.muted, lineHeight: '1.4' }}>
               {story.description.substring(0, 80)}{story.description.length > 80 ? '...' : ''}
             </p>
           )}
@@ -237,14 +238,14 @@ const SortableTaskCard: React.FC<{
                 <span style={{ fontSize: '11px', fontWeight: '600', color: themeColor }}>
                   {task.ref || `TASK-${task.id.slice(-3).toUpperCase()}`}
                 </span>
-                <h6 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: '#111827' }}>
+                <h6 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: themeVars.text }}>
                   {task.title}
                 </h6>
               </div>
               {story && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <BookOpen size={10} color={themeColor} />
-                  <span style={{ fontSize: '10px', color: '#6b7280' }}>
+                  <span style={{ fontSize: '10px', color: themeVars.muted }}>
                     {story.title}
                   </span>
                 </div>
@@ -254,7 +255,7 @@ const SortableTaskCard: React.FC<{
               <Button
                 variant="link"
                 size="sm"
-                style={{ padding: '2px', color: '#6b7280' }}
+                style={{ padding: '2px', color: themeVars.muted }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onEdit(task);
@@ -273,11 +274,11 @@ const SortableTaskCard: React.FC<{
               >
                 {task.priority}
               </Badge>
-              <Badge bg="outline-secondary" style={{ fontSize: '9px', color: '#6b7280', backgroundColor: 'transparent', border: '1px solid #d1d5db' }}>
+              <Badge bg="outline-secondary" style={{ fontSize: '9px', color: themeVars.muted, backgroundColor: 'transparent', border: `1px solid ${themeVars.border}` }}>
                 {task.effort}
               </Badge>
             </div>
-            <span style={{ fontSize: '10px', color: '#6b7280' }}>
+            <span style={{ fontSize: '10px', color: themeVars.muted }}>
               {task.estimateMin}min
             </span>
           </div>
@@ -328,18 +329,18 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
   // Swim lanes configuration
   const swimLanes = [
-    { id: 'backlog', title: 'Backlog', status: 'backlog', color: '#6b7280' },
-    { id: 'active', title: 'Active', status: 'active', color: '#2563eb' },
-    { id: 'done', title: 'Done', status: 'done', color: '#059669' },
+    { id: 'backlog', title: 'Backlog', status: 'backlog', color: themeVars.muted },
+    { id: 'active', title: 'Active', status: 'active', color: themeVars.brand },
+    { id: 'done', title: 'Done', status: 'done', color: 'var(--green)' },
   ];
 
   // Theme colors (simplified for demo)
   const themeColors: Record<string, string> = {
-    Health: '#22c55e',
-    Growth: '#3b82f6',
-    Wealth: '#eab308',
-    Tribe: '#8b5cf6',
-    Home: '#f97316',
+    Health: domainThemePrimaryVar('Health'),
+    Growth: domainThemePrimaryVar('Growth'),
+    Wealth: domainThemePrimaryVar('Wealth'),
+    Tribe: domainThemePrimaryVar('Tribe'),
+    Home: domainThemePrimaryVar('Home'),
   };
 
   // Helper functions
@@ -577,21 +578,21 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: '#f8fafc' }}>
+      <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: themeVars.bg }}>
         <div style={{ textAlign: 'center', paddingTop: '100px' }}>
           <div className="spinner-border" style={{ marginBottom: '16px' }} />
-          <p style={{ color: '#6b7280' }}>Loading kanban board...</p>
+          <p style={{ color: themeVars.muted }}>Loading kanban board...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: '#f8fafc' }}>
+    <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: themeVars.bg }}>
       {/* Header */}
       <div style={{ marginBottom: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: '#111827' }}>
+          <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text }}>
             Stories Kanban Board
           </h1>
           <div style={{ display: 'flex', gap: '12px' }}>
@@ -619,10 +620,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#6b7280' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: themeVars.muted }}>
                   {stories.length}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: themeVars.muted, fontSize: '14px', fontWeight: '500' }}>
                   Total Stories
                 </p>
               </Card.Body>
@@ -631,10 +632,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#2563eb' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: themeVars.brand }}>
                   {stories.filter(s => isStatus(s.status, 'active')).length}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: themeVars.muted, fontSize: '14px', fontWeight: '500' }}>
                   Active Stories
                 </p>
               </Card.Body>
@@ -643,10 +644,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#059669' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--green)' }}>
                   {stories.filter(s => isStatus(s.status, 'done')).length}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: themeVars.muted, fontSize: '14px', fontWeight: '500' }}>
                   Done Stories
                 </p>
               </Card.Body>
@@ -655,10 +656,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#dc2626' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--red)' }}>
                   {tasks.length}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: themeVars.muted, fontSize: '14px', fontWeight: '500' }}>
                   Total Tasks
                 </p>
               </Card.Body>
@@ -680,7 +681,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
               <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                 <Card.Header style={{ 
                   backgroundColor: lane.color, 
-                  color: 'white',
+                  color: themeVars.onAccent,
                   padding: '16px 20px',
                   border: 'none'
                 }}>
@@ -691,7 +692,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                 <Card.Body style={{ padding: '16px' }}>
                   {/* Stories Section */}
                   <div style={{ marginBottom: '24px' }}>
-                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '12px' }}>
+                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
                       Stories
                     </h6>
                     <DroppableArea id={`${lane.status}-stories`}>
@@ -702,7 +703,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                         {getStoriesForLane(lane.status).map((story) => {
                           const goal = getGoalForStory(story.id);
                           const taskCount = getTasksForStory(story.id).length;
-                          const themeColor = goal?.theme ? themeColors[goal.theme] : '#6b7280';
+                          const themeColor = goal?.theme ? themeColors[goal.theme] : themeVars.muted;
                           
                           return (
                             <SortableStoryCard
@@ -723,7 +724,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
                   {/* Tasks Section */}
                   <div>
-                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '12px' }}>
+                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
                       Tasks
                     </h6>
                     <DroppableArea id={`${lane.status}-tasks`}>
@@ -734,7 +735,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                         {getTasksForLane(lane.status).map((task) => {
                           const story = getStoryForTask(task.id);
                           const goal = story ? getGoalForStory(story.id) : undefined;
-                          const themeColor = goal?.theme ? themeColors[goal.theme] : '#6b7280';
+                          const themeColor = goal?.theme ? themeColors[goal.theme] : themeVars.muted;
                           
                           return (
                             <SortableTaskCard

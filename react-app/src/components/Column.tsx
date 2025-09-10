@@ -1,6 +1,7 @@
 import React from 'react';
 import { Droppable } from 'react-beautiful-dnd';
 import StoryCard from './StoryCard';
+import { rgbaCard } from '../utils/themeVars';
 import { Column as ColumnType, Story } from '../types';
 
 interface ColumnProps {
@@ -21,7 +22,7 @@ const Column: React.FC<ColumnProps> = ({ column, stories }) => {
               className="task-list"
               ref={provided.innerRef}
               style={{
-                backgroundColor: snapshot.isDraggingOver ? 'rgba(0,0,0,0.1)' : 'transparent',
+                backgroundColor: snapshot.isDraggingOver ? rgbaCard(0.1) : 'transparent',
               }}
               {...provided.droppableProps}
             >
