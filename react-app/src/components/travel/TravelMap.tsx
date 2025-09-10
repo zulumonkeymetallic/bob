@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Row, Col, Button, Form, Badge, ProgressBar } from 'react-bootstrap';
-import { MapContainer, TileLayer } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -148,14 +146,9 @@ const TravelMap: React.FC = () => {
         </div>
       </Card.Header>
       <Card.Body>
-        {/* Basic Leaflet map (phase 1) */}
-        <div style={{ height: 420, marginBottom: 16 }}>
-          <MapContainer {...({ center: [20, 0], zoom: 2, scrollWheelZoom: true } as any)} style={{ height: '100%', borderRadius: 8, border: '1px solid #e5e7eb' }}>
-            <TileLayer {...({
-              attribution: '\u00A9 OpenStreetMap contributors',
-              url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
-            } as any)} />
-          </MapContainer>
+        {/* Map placeholder (avoids extra deps); can be upgraded later */}
+        <div style={{ height: 420, marginBottom: 16, borderRadius: 8, border: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
+          Map view coming soon
         </div>
         <Row>
           <Col md={6}>

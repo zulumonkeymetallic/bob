@@ -27,7 +27,8 @@ import {
   Wand2,
   Pencil,
   Trash2,
-  Plus
+  Plus,
+  Activity
 } from 'lucide-react';
 import { Task, Story, Goal, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -448,6 +449,17 @@ const SortableRow: React.FC<SortableRowProps> = ({
         width: '96px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          {/* Activity stream */}
+          <button
+            onClick={() => {
+              console.log('🧭 ModernTaskTable: Activity button clicked', { taskId: task.id });
+              showSidebar(task, 'task');
+            }}
+            style={{ color: themeVars.muted as string, padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer' }}
+            title="Activity stream"
+          >
+            <Activity size={16} />
+          </button>
           {/* AI action */}
           <button
             onClick={() => {

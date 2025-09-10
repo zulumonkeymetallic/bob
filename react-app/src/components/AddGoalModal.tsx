@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
 import { GLOBAL_THEMES, migrateThemeValue } from '../constants/globalThemes';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 interface AddGoalModalProps {
   onClose: () => void;
@@ -30,6 +31,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
+  const { themes } = useGlobalThemes();
+  const [themeInput, setThemeInput] = useState('');
 
   // KPI Management functions
   const addKPI = () => {
@@ -53,7 +56,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
   };
 
   // Legacy theme names to new theme IDs
-  const themes = GLOBAL_THEMES;
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -200,9 +202,9 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       priority: 2,
       kpis: []
     });
-    setSubmitResult(null);
-    onClose();
-  };
+      setSubmitResult(null);
+      onClose();
+    };
 
   return (
     <Modal show={show} onHide={handleClose} centered size="lg">
@@ -245,15 +247,23 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
             <div className="col-md-6">
               <Form.Group className="mb-3">
                 <Form.Label>Theme</Form.Label>
-                <Form.Select
-                  value={formData.theme}
-                  onChange={(e) => setFormData({ ...formData, theme: parseInt(e.target.value) })}
+                <Form.Control
+                  list="goal-theme-options"
+                  value={themeInput || (themes.find(t => t.id === formData.theme)?.label) || ''}
+                  onChange={(e) => setThemeInput(e.target.value)}
+                  onBlur={() => {
+                    const val = themeInput;
+                    const match = themes.find(t => t.label === val || t.name === val || String(t.id) === val);
+                    setFormData({ ...formData, theme: match ? match.id : (parseInt(val) || formData.theme) });
+                  }}
+                  placeholder="Search themes..."
                   disabled={currentPersona !== 'personal'}
-                >
-                  {themes.map(theme => (
-                    <option key={theme.id} value={theme.id}>{theme.label}</option>
+                />
+                <datalist id="goal-theme-options">
+                  {themes.map(t => (
+                    <option key={t.id} value={t.label} />
                   ))}
-                </Form.Select>
+                </datalist>
               </Form.Group>
             </div>
             <div className="col-md-6">

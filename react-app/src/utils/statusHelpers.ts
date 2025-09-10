@@ -1,5 +1,6 @@
 // Quick runtime migration helpers for handling mixed string/number status values
 // This allows the build to work while we transition from strings to numbers
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 export const isStatus = (actualStatus: any, expectedStatus: string): boolean => {
   // Handle numeric status values
@@ -92,19 +93,13 @@ export const getThemeClass = (theme: any): string => {
   return typeof theme === 'string' ? theme.toLowerCase() : 'default';
 };
 
-// Helper to get theme display name 
+// Helper to get theme display name
+
 export const getThemeName = (theme: any): string => {
   if (typeof theme === 'number') {
-    switch (theme) {
-      case 1: return 'Health';
-      case 2: return 'Growth';
-      case 3: return 'Wealth';
-      case 4: return 'Tribe';
-      case 5: return 'Home';
-      default: return 'Unknown';
-    }
+    const match = GLOBAL_THEMES.find(t => t.id === theme);
+    return match ? match.label : 'Unknown';
   }
-  
   // Handle string themes (legacy)
   return typeof theme === 'string' ? theme : 'Unknown';
 };

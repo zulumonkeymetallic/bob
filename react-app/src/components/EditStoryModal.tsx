@@ -33,6 +33,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [goalInput, setGoalInput] = useState('');
 
   // Initialize form when story changes
   useEffect(() => {
@@ -51,8 +52,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           : story.acceptanceCriteria || ''
       });
       setError(null);
+      const currentGoal = goals.find(g => g.id === story.goalId);
+      setGoalInput(currentGoal?.title || '');
     }
-  }, [story]);
+  }, [story, goals]);
 
   const handleSave = async () => {
     if (!story || !editedStory.title.trim()) {
@@ -66,19 +69,24 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     try {
       console.log('💾 EditStoryModal: Saving story updates:', editedStory);
       
-      await updateDoc(doc(db, 'stories', story.id), {
+      const selectedGoal = goals.find(g => g.id === editedStory.goalId);
+      const updates: any = {
         title: editedStory.title.trim(),
         description: editedStory.description.trim(),
         goalId: editedStory.goalId || null,
         priority: editedStory.priority,
         status: editedStory.status,
-        theme: editedStory.theme,
         points: editedStory.points,
         acceptanceCriteria: editedStory.acceptanceCriteria.trim() 
           ? editedStory.acceptanceCriteria.split('\n').map(line => line.trim()).filter(line => line.length > 0)
           : [],
         updatedAt: serverTimestamp()
-      });
+      };
+      // Inherit theme from linked goal when available
+      if (selectedGoal && typeof (selectedGoal as any).theme !== 'undefined') {
+        updates.theme = (selectedGoal as any).theme;
+      }
+      await updateDoc(doc(db, 'stories', story.id), updates);
 
       console.log('✅ EditStoryModal: Story updated successfully');
       onStoryUpdated?.();
@@ -143,17 +151,22 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
             <Col md={6}>
               <Form.Group className="mb-3">
                 <Form.Label>Linked Goal</Form.Label>
-                <Form.Select
-                  value={editedStory.goalId}
-                  onChange={(e) => handleInputChange('goalId', e.target.value)}
-                >
-                  <option value="">Select a goal (optional)</option>
-                  {goals.map(goal => (
-                    <option key={goal.id} value={goal.id}>
-                      {goal.title}
-                    </option>
+                <Form.Control
+                  list="edit-story-goal-options"
+                  value={goalInput}
+                  onChange={(e) => setGoalInput(e.target.value)}
+                  onBlur={() => {
+                    const val = goalInput.trim();
+                    const match = goals.find(g => g.title === val || g.id === val);
+                    handleInputChange('goalId', match ? match.id : '');
+                  }}
+                  placeholder="Search goals by title..."
+                />
+                <datalist id="edit-story-goal-options">
+                  {goals.map(g => (
+                    <option key={g.id} value={g.title} />
                   ))}
-                </Form.Select>
+                </datalist>
               </Form.Group>
             </Col>
 
@@ -178,6 +191,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   value={editedStory.status}
                   onChange={(e) => handleInputChange('status', parseInt(e.target.value))}
                 >
+                  <option value={0}>Backlog</option>
                   <option value={1}>Planned</option>
                   <option value={2}>In Progress</option>
                   <option value={3}>Testing</option>
@@ -186,21 +200,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
               </Form.Group>
             </Col>
 
-            <Col md={2}>
-              <Form.Group className="mb-3">
-                <Form.Label>Theme</Form.Label>
-                <Form.Select
-                  value={editedStory.theme}
-                  onChange={(e) => handleInputChange('theme', parseInt(e.target.value))}
-                >
-                  <option value={1}>Health</option>
-                  <option value={2}>Growth</option>
-                  <option value={3}>Wealth</option>
-                  <option value={4}>Tribe</option>
-                  <option value={5}>Home</option>
-                </Form.Select>
-              </Form.Group>
-            </Col>
+            {/* Theme removed: stories inherit from linked goal */}
           </Row>
 
           <Form.Group className="mb-3">

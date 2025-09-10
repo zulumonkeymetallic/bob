@@ -15,7 +15,7 @@ interface AddStoryModalProps {
 interface Goal {
   id: string;
   title: string;
-  theme: string;
+  theme: number;
 }
 
 interface Sprint {
@@ -37,6 +37,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     priority: 'P2',
     points: 3
   });
+  const [goalInput, setGoalInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
 
@@ -47,6 +48,8 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         ...prev,
         goalId: goalId
       }));
+      const g = goals.find(gl => gl.id === goalId);
+      setGoalInput(g?.title || '');
     }
   }, [goalId]);
 
@@ -97,7 +100,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
           const goalsData = goalsSnapshot.docs.map(doc => ({
             id: doc.id,
             title: doc.data().title,
-            theme: doc.data().theme
+            theme: doc.data().theme as number
           }));
           
           console.log('✅ AddStoryModal: Goals loaded successfully', {
@@ -220,6 +223,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         timestamp: new Date().toISOString()
       });
 
+      const linkedGoal = goals.find(g => g.id === formData.goalId);
       const storyData = {
         ref: ref, // Add reference number
         title: formData.title.trim(),
@@ -228,7 +232,8 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         sprintId: formData.sprintId,
         priority: formData.priority,
         points: parseInt(formData.points.toString()),
-        status: 'backlog',
+        status: 0,
+        theme: linkedGoal?.theme ?? 1,
         persona: currentPersona,
         ownerUid: currentUser.uid, // Ensure ownerUid is included
         orderIndex: Date.now(), // Simple ordering by creation time
@@ -306,37 +311,22 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
 
           <Form.Group className="mb-3">
             <Form.Label>Link to Goal</Form.Label>
-            <Form.Select
-              value={formData.goalId}
-              onChange={(e) => {
-                console.log('🎯 AddStoryModal: Goal selection changed', {
-                  action: 'goal_select_change',
-                  element: 'goal_dropdown',
-                  previousValue: formData.goalId,
-                  newValue: e.target.value,
-                  selectedGoal: goals.find(g => g.id === e.target.value),
-                  availableGoals: goals.length,
-                  timestamp: new Date().toISOString()
-                });
-                setFormData({ ...formData, goalId: e.target.value });
+            <Form.Control
+              list="add-story-goal-options"
+              value={goalInput}
+              onChange={(e) => setGoalInput(e.target.value)}
+              onBlur={() => {
+                const val = goalInput.trim();
+                const match = goals.find(g => g.title === val || g.id === val);
+                setFormData({ ...formData, goalId: match ? match.id : '' });
               }}
-              onClick={() => {
-                console.log('🖱️ AddStoryModal: Goal dropdown clicked', {
-                  action: 'goal_dropdown_click',
-                  element: 'goal_select',
-                  currentValue: formData.goalId,
-                  availableOptions: goals.length,
-                  timestamp: new Date().toISOString()
-                });
-              }}
-            >
-              <option value="">Select a goal (optional)</option>
-              {goals.map(goal => (
-                <option key={goal.id} value={goal.id}>
-                  {goal.title} ({goal.theme})
-                </option>
+              placeholder="Search goals by title..."
+            />
+            <datalist id="add-story-goal-options">
+              {goals.map(g => (
+                <option key={g.id} value={g.title} />
               ))}
-            </Form.Select>
+            </datalist>
             <Form.Text className="text-muted">
               Stories linked to goals contribute to goal progress
             </Form.Text>
