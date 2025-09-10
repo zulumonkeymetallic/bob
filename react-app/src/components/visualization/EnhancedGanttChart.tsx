@@ -148,11 +148,11 @@ const EnhancedGanttChart: React.FC = () => {
   
   // Theme definitions
   const themes = [
-    { id: 1, name: 'Health', color: '#ef4444' },
-    { id: 2, name: 'Growth', color: '#8b5cf6' },
-    { id: 3, name: 'Wealth', color: '#059669' },
-    { id: 4, name: 'Tribe', color: '#f59e0b' },
-    { id: 5, name: 'Home', color: '#3b82f6' }
+    { id: 1, name: 'Health', color: 'var(--theme-health-primary)' },
+    { id: 2, name: 'Growth', color: 'var(--theme-growth-primary)' },
+    { id: 3, name: 'Wealth', color: 'var(--theme-wealth-primary)' },
+    { id: 4, name: 'Tribe', color: 'var(--theme-tribe-primary)' },
+    { id: 5, name: 'Home', color: 'var(--theme-home-primary)' }
   ];
 
   // Time range calculation
@@ -785,7 +785,7 @@ const EnhancedGanttChart: React.FC = () => {
     <Container fluid className="enhanced-gantt-chart p-0">
       {/* Header */}
       <Card className="border-0 shadow-sm">
-        <Card.Header className="bg-white border-bottom">
+        <Card.Header style={{ backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
           <Row className="align-items-center">
             <Col md={6}>
               <h4 className="mb-0 d-flex align-items-center">
@@ -881,7 +881,7 @@ const EnhancedGanttChart: React.FC = () => {
         {/* Live region for a11y announcements */}
         <div aria-live="polite" className="visually-hidden">{liveAnnouncement}</div>
         {/* Timeline Header */}
-        <div className="timeline-header sticky-top bg-white border-bottom" style={{ zIndex: 10 }}>
+        <div className="timeline-header sticky-top" style={{ zIndex: 10, backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
           <div className="d-flex">
             <div style={{ width: '250px', minWidth: '250px' }} className="bg-light border-end p-2">
               <strong>Goals & Themes</strong>
@@ -954,7 +954,7 @@ const EnhancedGanttChart: React.FC = () => {
             top: 0,
             bottom: 0,
             width: '2px',
-            backgroundColor: '#ef4444',
+            backgroundColor: 'var(--red)',
             zIndex: 2
           }} title={`Today: ${new Date().toLocaleDateString()}`} />
           {(groupByTheme ? Object.keys(goalsByTheme).map(k => parseInt(k,10)).sort((a,b)=>a-b) : [null]).map(groupKey => (
@@ -1000,7 +1000,7 @@ const EnhancedGanttChart: React.FC = () => {
                       width: `${width}px`,
                       height: '60px',
                       backgroundColor: theme?.color,
-                      border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid #ef4444' : 'none',
+                      border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid var(--red)' : 'none',
                       borderRadius: '4px',
                       top: '5px',
                       opacity: dragState.isDragging && dragState.itemId === goal.id ? 0.7 : 1,
@@ -1143,7 +1143,7 @@ const EnhancedGanttChart: React.FC = () => {
 
       {/* Activity Stream Sidebar */}
       {showActivityStream && (
-        <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 bg-white shadow-lg border-start" style={{ width: '400px', zIndex: 1000 }}>
+        <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 shadow-lg border-start" style={{ width: '400px', zIndex: 1000, backgroundColor: 'var(--panel)', borderLeft: '1px solid var(--line)' }}>
           <div className="p-3 border-bottom d-flex justify-content-between align-items-center">
             <h5 className="mb-0 d-flex align-items-center">
               <Activity className="me-2" size={20} />

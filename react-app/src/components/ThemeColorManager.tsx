@@ -250,7 +250,7 @@ const ThemeColorManager: React.FC = () => {
             <Tab.Content>
               {/* Themes & Colors Tab */}
               <Tab.Pane eventKey="themes">
-                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid var(--line)` }}>
                   <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
                     <h4 className="mb-0">Global Theme Management</h4>
                     <small style={{ color: colors.secondary }}>
@@ -310,7 +310,7 @@ const ThemeColorManager: React.FC = () => {
 
               {/* Database Migration Tab */}
               <Tab.Pane eventKey="database">
-                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid var(--line)` }}>
                   <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
                     <h4 className="mb-0">Database Migration</h4>
                     <small style={{ color: colors.secondary }}>
@@ -383,7 +383,7 @@ const ThemeColorManager: React.FC = () => {
 
               {/* System Preferences Tab */}
               <Tab.Pane eventKey="system">
-                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid var(--line)` }}>
                   <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
                     <h4 className="mb-0">System Preferences</h4>
                   </Card.Header>
@@ -401,7 +401,7 @@ const ThemeColorManager: React.FC = () => {
                         style={{ 
                           backgroundColor: backgrounds.surface, 
                           color: colors.onSurface,
-                          border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                          border: `1px solid var(--line)`
                         }}
                       >
                         <option value="light">Light</option>
@@ -439,7 +439,7 @@ const ThemeColorManager: React.FC = () => {
                   style={{ 
                     backgroundColor: backgrounds.surface, 
                     color: colors.onSurface,
-                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                    border: `1px solid var(--line)`
                   }}
                 />
               </Form.Group>
@@ -452,7 +452,7 @@ const ThemeColorManager: React.FC = () => {
                   onChange={(e) => setEditingTheme({...editingTheme, color: e.target.value})}
                   style={{ 
                     backgroundColor: backgrounds.surface,
-                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                    border: `1px solid var(--line)`
                   }}
                 />
               </Form.Group>
