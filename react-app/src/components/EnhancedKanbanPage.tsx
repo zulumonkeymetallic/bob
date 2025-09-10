@@ -340,8 +340,8 @@ const EnhancedKanbanPage: React.FC = () => {
           </h6>
           <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
             <span style={{
-              backgroundColor: getThemeColor(goalTheme) === 'success' ? '#d1fae5' : '#dbeafe',
-              color: getThemeColor(goalTheme) === 'success' ? '#065f46' : '#1e40af',
+              backgroundColor: rgbaCard(0.2),
+              color: themeVars.text as string,
               padding: '2px 8px',
               borderRadius: '12px',
               fontSize: '11px',
@@ -352,8 +352,8 @@ const EnhancedKanbanPage: React.FC = () => {
             {(() => {
               const p = (story as any).priority as number;
               const label = p === 1 ? 'P1' : p === 2 ? 'P2' : 'P3';
-              const bg = p === 1 ? '#fecaca' : p === 2 ? '#fed7aa' : '#d1fae5';
-              const fg = p === 1 ? '#991b1b' : p === 2 ? '#9a3412' : '#065f46';
+              const bg = p === 1 ? 'rgba(255, 0, 0, 0.15)' : p === 2 ? 'rgba(255, 165, 0, 0.15)' : rgbaCard(0.2);
+              const fg = p === 1 ? 'var(--red)' : p === 2 ? 'var(--orange)' : 'var(--green)';
               return (
                 <span style={{
                   backgroundColor: bg,
@@ -374,7 +374,7 @@ const EnhancedKanbanPage: React.FC = () => {
         <div style={{ marginBottom: '8px' }}>
           <span style={{ 
             fontSize: '12px', 
-            color: '#6b7280',
+            color: themeVars.muted as string,
             fontWeight: '500'
           }}>
             Goal: {getGoalTitle(story.goalId)}
@@ -385,7 +385,7 @@ const EnhancedKanbanPage: React.FC = () => {
         {story.description && (
           <p style={{ 
             fontSize: '13px', 
-            color: '#6b7280', 
+            color: themeVars.muted as string, 
             margin: '0 0 12px 0',
             lineHeight: '1.4'
           }}>
