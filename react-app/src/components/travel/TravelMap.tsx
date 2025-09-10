@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTim
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { Goal, Story } from '../../types';
+import { generateRef } from '../../utils/referenceGenerator';
 
 interface TravelEntry {
   id: string;
@@ -116,9 +117,15 @@ const TravelMap: React.FC = () => {
       acceptanceCriteria: []
     } as any;
 
+    // Generate short story reference and persist
+    const existing = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
+    const existingRefs = existing.docs.map(d => (d.data() as any).ref).filter(Boolean) as string[];
+    const shortRef = generateRef('story', existingRefs);
+
     const storyRef = await addDoc(collection(db, 'stories'), {
       ...newStory,
-      ref: `STY-${Date.now()}`,
+      ref: shortRef,
+      referenceNumber: shortRef,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });

@@ -154,7 +154,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                   transform: selectedStoryId === story.id ? 'translateY(-2px)' : 'translateY(0)',
                   boxShadow: selectedStoryId === story.id ? '0 8px 16px rgba(0,0,0,0.15)' : '0 2px 4px rgba(0,0,0,0.1)'
                 }}
-                onClick={() => onStorySelect(story)}
+                onClick={() => { onStorySelect(story); try { showSidebar(story, 'story'); } catch {} }}
                 onMouseEnter={(e) => {
                   if (selectedStoryId !== story.id) {
                     e.currentTarget.style.transform = 'translateY(-2px)';
