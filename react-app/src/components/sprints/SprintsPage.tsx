@@ -3,6 +3,7 @@ import { Container, Nav, Tab, Row, Col } from 'react-bootstrap';
 import { useLocation, useNavigate } from 'react-router-dom';
 import SprintManagementView from './SprintManagementView';
 import SprintKanbanPage from '../SprintKanbanPage';
+import SprintTablePage from './SprintTablePage';
 import StoriesManagement from '../StoriesManagement';
 import SprintSelector from '../SprintSelector';
 import { useSprint } from '../../contexts/SprintContext';
@@ -66,8 +67,8 @@ const SprintsPage: React.FC = () => {
 
             <Tab.Content>
               <Tab.Pane eventKey="management">
-                {/* Use the unified Sprint Kanban component for Management tab as well */}
-                <SprintKanbanPage selectedSprintId={selectedSprintId} />
+                {/* Restore Management to show the modern Sprint table view */}
+                <SprintTablePage />
               </Tab.Pane>
               
               <Tab.Pane eventKey="kanban">
