@@ -420,8 +420,8 @@ const TasksManagement: React.FC = () => {
         <Col>
           <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
             <Card.Header style={{ 
-              backgroundColor: '#fff', 
-              borderBottom: '1px solid #e5e7eb', 
+              backgroundColor: 'var(--card)', 
+              borderBottom: '1px solid var(--line)', 
               padding: '20px 24px' 
             }}>
               <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
@@ -451,9 +451,9 @@ const TasksManagement: React.FC = () => {
           <Col>
             <Card style={{ border: 'none', textAlign: 'center', padding: '60px 20px' }}>
               <Card.Body>
-                <BookOpen size={48} style={{ color: '#9ca3af', marginBottom: '16px' }} />
-                <h5 style={{ color: '#374151', marginBottom: '8px' }}>No tasks found</h5>
-                <p style={{ color: '#6b7280', marginBottom: '24px' }}>
+                <BookOpen size={48} style={{ color: 'var(--muted)', marginBottom: '16px' }} />
+                <h5 style={{ color: 'var(--text)', marginBottom: '8px' }}>No tasks found</h5>
+                <p style={{ color: 'var(--muted)', marginBottom: '24px' }}>
                   Create your first task or adjust your filters to see tasks.
                 </p>
                 <Button variant="primary" href="/tasks/new">

@@ -85,8 +85,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
-    backgroundColor: '#fff',
-    borderBottom: '1px solid #e5e5e5',
+    backgroundColor: 'var(--panel)',
+    borderBottom: '1px solid var(--line)',
   };
 
   const handleCellEdit = (key: string, value: string) => {
@@ -113,7 +113,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
     const cellStyle = {
       padding: '12px 8px',
-      borderRight: '1px solid #f0f0f0',
+      borderRight: '1px solid var(--line)',
       verticalAlign: 'top' as const,
       width: column.width,
       position: 'relative' as const,
@@ -257,15 +257,15 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const tableStyle = {
     width: '100%',
     borderCollapse: 'collapse' as const,
-    backgroundColor: '#fff',
+    backgroundColor: 'var(--panel)',
     boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
     borderRadius: '8px',
     overflow: 'hidden',
   };
 
   const headerStyle = {
-    backgroundColor: '#f8f9fa',
-    borderBottom: '2px solid #e5e5e5',
+    backgroundColor: 'var(--card)',
+    borderBottom: '2px solid var(--line)',
   };
 
   const headerCellStyle = {
@@ -273,8 +273,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     textAlign: 'left' as const,
     fontWeight: '600' as const,
     fontSize: '14px',
-    color: '#495057',
-    borderRight: '1px solid #e5e5e5',
+    color: 'var(--muted)',
+    borderRight: '1px solid var(--line)',
   };
 
   return (
@@ -286,8 +286,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         right: showConfig ? 0 : '-300px',
         width: '280px',
         height: '100%',
-        backgroundColor: '#fff',
-        borderLeft: '1px solid #e5e5e5',
+        backgroundColor: 'var(--panel)',
+        borderLeft: '1px solid var(--line)',
         boxShadow: '-2px 0 8px rgba(0,0,0,0.1)',
         transition: 'right 0.3s ease',
         zIndex: 10,
@@ -302,9 +302,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             alignItems: 'center',
             marginBottom: '12px',
             padding: '8px',
-            backgroundColor: column.visible ? '#f8f9fa' : '#fff',
+            backgroundColor: column.visible ? 'var(--card)' : 'var(--panel)',
             borderRadius: '4px',
-            border: '1px solid #e5e5e5',
+            border: '1px solid var(--line)',
           }}>
             <input
               type="checkbox"
@@ -325,8 +325,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
           top: '10px',
           right: '10px',
           zIndex: 20,
-          background: '#007bff',
-          color: 'white',
+          background: 'var(--brand)',
+          color: 'var(--on-accent)',
           border: 'none',
           borderRadius: '4px',
           padding: '8px 12px',

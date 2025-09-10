@@ -178,8 +178,8 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
                         className={`kanban-droppable ${snapshot.isDraggingOver ? 'drag-over' : ''}`}
                         style={{
                           minHeight: '200px',
-                          backgroundColor: snapshot.isDraggingOver ? '#f8f9fa' : 'transparent',
-                          border: '1px dashed #dee2e6',
+                          backgroundColor: snapshot.isDraggingOver ? 'rgba(var(--card-rgb), 0.15)' : 'transparent',
+                          border: '1px dashed var(--line)',
                           borderRadius: '4px',
                           padding: '8px'
                         }}
@@ -201,7 +201,7 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
                                   style={{ 
                                     fontSize: '0.85rem',
                                     cursor: 'grab',
-                                    border: '1px solid #dee2e6'
+                                    border: '1px solid var(--line)'
                                   }}
                                 >
                                   <Card.Body className="p-2">

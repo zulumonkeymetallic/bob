@@ -340,7 +340,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
           <button
             onClick={() => onTaskDelete(task.id)}
             style={{
-              color: '#dc2626',
+              color: 'var(--red)',
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
@@ -351,12 +351,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#fee2e2';
-              e.currentTarget.style.color = '#b91c1c';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.15);
+              e.currentTarget.style.color = 'var(--red)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#dc2626';
+              e.currentTarget.style.color = 'var(--red)';
             }}
             title="Delete task"
           >

@@ -600,8 +600,8 @@ const EnhancedKanbanPage: React.FC = () => {
       {/* No Goals Warning */}
       {goals.length === 0 && (
         <div style={{
-          backgroundColor: '#fef3c7',
-          border: '1px solid #f59e0b',
+          backgroundColor: 'var(--card)',
+          border: '1px solid var(--orange)',
           borderRadius: '8px',
           padding: '20px',
           textAlign: 'center',
@@ -624,7 +624,7 @@ const EnhancedKanbanPage: React.FC = () => {
             <Col md={4} key={lane.id}>
               <div style={{
                 backgroundColor: backgrounds.surface,
-                border: '1px solid #e5e7eb',
+                border: '1px solid var(--line)',
                 borderRadius: '8px',
                 height: '70vh',
                 display: 'flex',
@@ -632,9 +632,9 @@ const EnhancedKanbanPage: React.FC = () => {
               }}>
                 {/* Lane Header */}
                 <div style={{
-                  backgroundColor: '#f9fafb',
+                  backgroundColor: 'var(--card)',
                   padding: '16px',
-                  borderBottom: '1px solid #e5e7eb',
+                  borderBottom: '1px solid var(--line)',
                   borderRadius: '8px 8px 0 0'
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -648,7 +648,7 @@ const EnhancedKanbanPage: React.FC = () => {
                     </h5>
                     <span style={{
                       backgroundColor: lane.color,
-                      color: 'white',
+                      color: 'var(--on-accent)',
                       padding: '4px 8px',
                       borderRadius: '12px',
                       fontSize: '12px',
@@ -675,7 +675,7 @@ const EnhancedKanbanPage: React.FC = () => {
                     <div style={{
                       textAlign: 'center',
                       padding: '40px 20px',
-                      color: '#9ca3af',
+                      color: 'var(--muted)',
                       fontSize: '14px'
                     }}>
                       No stories in {lane.title.toLowerCase()}
