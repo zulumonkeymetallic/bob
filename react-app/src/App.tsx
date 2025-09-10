@@ -40,6 +40,7 @@ import { checkForUpdates, VERSION } from './version';
 import ComprehensiveTest from './components/ComprehensiveTest';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
 import { clickTrackingService } from './services/ClickTrackingService';
+import logger from './utils/logger';
 
 // BOB v3.5.2 - New Scaffolding Components
 import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
@@ -91,28 +92,24 @@ function AppContent() {
 
   // 🖱️ Initialize global click tracking service
   useEffect(() => {
-    console.log('🖱️ CLICK TRACKING: Initializing global interaction tracking');
+    logger.info('global', 'Initializing click tracking');
     clickTrackingService.initialize();
-    
     return () => {
-      console.log('🖱️ CLICK TRACKING: Cleaning up interaction tracking');
+      logger.info('global', 'Cleaning up click tracking');
       clickTrackingService.destroy();
     };
   }, []);
 
   // Debug location changes and force re-render
   useEffect(() => {
-    console.log('🔄 BOB v3.1.1: Location changed to:', location.pathname);
-    console.log('🔄 Location key:', location.key);
-    
-    // Force component re-render by updating state
+    logger.debug('nav', 'Location change', { path: location.pathname, key: location.key });
     setForceRender(prev => prev + 1);
   }, [location.pathname, location.key]);
 
   // Check for updates on app load and initialize version timeout service
   useEffect(() => {
     // Initialize enhanced version timeout service
-    console.log('🕐 Initializing Version Timeout Service');
+    logger.info('global', 'Initializing Version Timeout Service');
     // versionTimeoutService.forceVersionCheck(); // Temporarily disabled to fix cache loop
     
     // Legacy update check as fallback
@@ -122,7 +119,7 @@ function AppContent() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'R') {
         event.preventDefault();
-        console.log('🔄 Force refresh triggered by keyboard shortcut');
+        logger.info('global', 'Force refresh triggered by keyboard shortcut');
         
         // Clear all caches and reload
         if ('caches' in window) {
