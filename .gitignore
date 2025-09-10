@@ -18,3 +18,8 @@ backups/
 *.xz
 *.7z
 *.rar
+
+# Ignore pre-push logs
+pre-push-*.log
+react-app/pre-push-*.log
+functions/pre-push-*.log
