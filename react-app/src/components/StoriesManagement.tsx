@@ -13,6 +13,7 @@ import ImportModal from './ImportModal';
 import StoryTasksPanel from './StoryTasksPanel';
 import StoriesCardView from './StoriesCardView';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { generateRef } from '../utils/referenceGenerator';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import { themeVars } from '../utils/themeVars';
 
@@ -163,13 +164,15 @@ const StoriesManagement: React.FC = () => {
       console.log('👤 Current user:', currentUser?.email);
       console.log('🎭 Current persona:', currentPersona);
       
-      // Generate reference number
-      const refNumber = `STY-${Date.now()}`;
+      // Generate short reference like ST-3FUCOB, ensure uniqueness across current refs
+      const existingRefs = stories.map(s => s.ref).filter(Boolean) as string[];
+      const refNumber = generateRef('story', existingRefs);
       
       // Create the story document
       const newStory = {
         ...storyData,
         ref: refNumber,
+        referenceNumber: refNumber,
         ownerUid: currentUser!.uid,
         persona: 'personal' as const, // Explicitly set to 'personal' to match Story type
         createdAt: serverTimestamp(),

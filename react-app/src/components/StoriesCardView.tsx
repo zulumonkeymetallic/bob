@@ -8,6 +8,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal } from '../types';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
+import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
@@ -187,7 +188,13 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         wordBreak: 'break-word',
                         color: 'var(--text)'
                       }}>
-                        {story.ref}
+                        {(() => {
+                          const shortRef = (story as any).referenceNumber || story.ref;
+                          const display = shortRef && validateRef(shortRef, 'story')
+                            ? shortRef
+                            : displayRefForEntity('story', story.id);
+                          return display;
+                        })()}
                       </h5>
                       <p style={{ 
                         margin: '0 0 8px 0', 

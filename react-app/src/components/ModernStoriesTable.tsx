@@ -22,6 +22,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
+import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { 
   Settings, 
   GripVertical, 
@@ -860,8 +861,13 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   
   const tableRows: StoryTableRow[] = filteredStories.map((story, index) => {
     const goal = goals.find(g => g.id === story.goalId);
+    const shortRef = (story as any).referenceNumber || story.ref;
+    const displayRef = shortRef && validateRef(shortRef, 'story')
+      ? shortRef
+      : displayRefForEntity('story', story.id);
     return {
       ...story,
+      ref: displayRef,
       goalTitle: goal?.title || 'Unassigned',
       sortOrder: index,
     };
