@@ -67,8 +67,8 @@ const SprintsPage: React.FC = () => {
 
             <Tab.Content>
               <Tab.Pane eventKey="management">
-                {/* Restore Management to show the modern Sprint table view */}
-                <SprintTablePage />
+                {/* Restore full Sprint Management view */}
+                <SprintManagementView />
               </Tab.Pane>
               
               <Tab.Pane eventKey="kanban">

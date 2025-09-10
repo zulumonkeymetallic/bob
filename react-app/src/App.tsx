@@ -187,7 +187,8 @@ function AppContent() {
             
             {/* Sprint routes */}
             <Route path="/sprints" element={<SprintsPage />} />
-            <Route path="/sprints/management" element={<SprintTablePage />} />
+            {/* Restore dedicated Management page */}
+            <Route path="/sprints/management" element={<SprintManagementView />} />
             <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
             <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
