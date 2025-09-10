@@ -14,6 +14,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    # Protect with environment approvals/secrets. 'live' -> Production, other -> Test
+    environment: 
+      name: ${{ env.CHANNEL_ID == 'live' && 'Production' || 'Test' }}
+    concurrency:
+      group: deploy-${{ github.ref }}
+      cancel-in-progress: false
     env:
       CHANNEL_ID: ${{ github.event.inputs.channelId || 'live' }}
     steps:
@@ -58,4 +64,3 @@ jobs:
       - name: Post release notes
         if: ${{ success() }}
         run: echo "Deployed $(git rev-parse --short HEAD) to ${{ secrets.FIREBASE_PROJECT_ID }} (channel: ${{ env.CHANNEL_ID }})"
-
