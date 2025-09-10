@@ -47,11 +47,11 @@ const GoalVizPage: React.FC = () => {
 
   // BOB Platform Themes
   const themes = [
-    { id: 'health', name: 'Health & Fitness', color: '#ef4444' },
-    { id: 'growth', name: 'Personal Growth', color: '#8b5cf6' },
-    { id: 'wealth', name: 'Wealth & Finance', color: '#059669' },
-    { id: 'tribe', name: 'Tribe & Relationships', color: '#f59e0b' },
-    { id: 'home', name: 'Home & Environment', color: '#3b82f6' },
+    { id: 'health', name: 'Health & Fitness', color: 'var(--theme-health-primary)' },
+    { id: 'growth', name: 'Personal Growth', color: 'var(--theme-growth-primary)' },
+    { id: 'wealth', name: 'Wealth & Finance', color: 'var(--theme-wealth-primary)' },
+    { id: 'tribe', name: 'Tribe & Relationships', color: 'var(--theme-tribe-primary)' },
+    { id: 'home', name: 'Home & Environment', color: 'var(--theme-home-primary)' },
   ];
 
   useEffect(() => {

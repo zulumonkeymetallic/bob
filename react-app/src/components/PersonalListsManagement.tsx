@@ -254,7 +254,7 @@ const PersonalListsManagement: React.FC = () => {
                     setFilterCategory('all');
                     setSearchTerm('');
                   }}
-                  style={{ borderColor: '#d1d5db' }}
+                  style={{ borderColor: 'var(--line)' }}
                 >
                   Clear Filters
                 </Button>
@@ -266,8 +266,8 @@ const PersonalListsManagement: React.FC = () => {
         {/* Modern Personal Lists Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
           <Card.Header style={{ 
-            backgroundColor: '#fff', 
-            borderBottom: '1px solid #e5e7eb', 
+            backgroundColor: 'var(--card)', 
+            borderBottom: '1px solid var(--line)', 
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
@@ -285,7 +285,7 @@ const PersonalListsManagement: React.FC = () => {
                 justifyContent: 'center'
               }}>
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading personal items...</p>
+                <p style={{ margin: 0, color: 'var(--muted)' }}>Loading personal items...</p>
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }}>

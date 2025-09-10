@@ -68,7 +68,7 @@ const DashboardTasksModernWrapper: React.FC<DashboardTasksModernWrapperProps> = 
 
   return (
     <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-      <Card.Header style={{ backgroundColor: '#fff', borderBottom: '1px solid #e5e7eb' }}>
+      <Card.Header style={{ backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
         <h5 className="mb-0">{title}</h5>
       </Card.Header>
       <Card.Body style={{ padding: 0 }}>
@@ -87,4 +87,3 @@ const DashboardTasksModernWrapper: React.FC<DashboardTasksModernWrapperProps> = 
 };
 
 export default DashboardTasksModernWrapper;
-

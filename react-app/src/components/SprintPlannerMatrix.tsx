@@ -209,8 +209,8 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
         className="matrix-cell h-100"
         style={{ 
           minHeight: '120px',
-          border: '1px solid #e0e0e0',
-          backgroundColor: cellStories.length > 0 ? '#f8f9fa' : '#ffffff'
+          border: '1px solid var(--line)',
+          backgroundColor: cellStories.length > 0 ? 'var(--card)' : 'var(--panel)'
         }}
         data-testid={`planner-cell-${sprintId}-${goalId}-${subGoalId || 'root'}`}
       >

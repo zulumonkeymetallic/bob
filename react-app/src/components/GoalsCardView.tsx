@@ -13,6 +13,7 @@ import AddStoryModal from './AddStoryModal';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
+import { themeVars, domainThemePrimaryVar } from '../utils/themeVars';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { toDate, formatDate } from '../utils/firestoreAdapters';
 
@@ -44,23 +45,23 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [isSchedulingGoal, setIsSchedulingGoal] = useState<string | null>(null);
   const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
 
-  // Theme colors mapping
+  // Theme colors mapping via CSS variables (no hardcoded hex)
   const themeColors = {
-    'Health': '#ef4444',
-    'Growth': '#8b5cf6', 
-    'Wealth': '#059669',
-    'Tribe': '#f59e0b',
-    'Home': '#3b82f6'
-  };
+    Health: domainThemePrimaryVar('Health'),
+    Growth: domainThemePrimaryVar('Growth'),
+    Wealth: domainThemePrimaryVar('Wealth'),
+    Tribe: domainThemePrimaryVar('Tribe'),
+    Home: domainThemePrimaryVar('Home')
+  } as const;
 
-  // Status colors
+  // Status colors via tokens
   const statusColors = {
-    'New': '#6b7280',
-    'Work in Progress': '#059669',
-    'Complete': '#2563eb',
-    'Blocked': '#ef4444',
-    'Deferred': '#f59e0b'
-  };
+    New: 'var(--muted)',
+    'Work in Progress': 'var(--green)',
+    Complete: 'var(--brand)',
+    Blocked: 'var(--red)',
+    Deferred: 'var(--orange)'
+  } as const;
 
   
   const loadLatestActivityForGoal = async (goalId: string) => {
@@ -266,7 +267,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       <div style={{ 
         textAlign: 'center', 
         padding: '60px 20px',
-        color: '#6b7280'
+        color: themeVars.muted as string
       }}>
         <Target size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
         <h4>No Goals Found</h4>
@@ -283,15 +284,17 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             <Card 
               style={{ 
                 height: '100%',
-                border: selectedGoalId === goal.id ? '3px solid #3b82f6' : 'none',
+                border: selectedGoalId === goal.id 
+                  ? `3px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--brand)'}` 
+                  : '1px solid var(--line)',
                 boxShadow: selectedGoalId === goal.id 
-                  ? '0 8px 20px rgba(59, 130, 246, 0.3)' 
+                  ? '0 0 0 0 rgba(0,0,0,0)' 
                   : '0 4px 6px rgba(0,0,0,0.1)',
                 borderRadius: '12px',
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
                 cursor: 'pointer',
-                backgroundColor: selectedGoalId === goal.id ? '#f8faff' : '#fff'
+                backgroundColor: selectedGoalId === goal.id ? (themeVars.card as string) : (themeVars.panel as string)
               }}
               className="h-100"
               onClick={() => onGoalSelect?.(goal.id)}
@@ -312,7 +315,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               <div 
                 style={{ 
                   height: '6px', 
-                  backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || '#6b7280'
+                  backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)'
                 }} 
               />
 
@@ -332,8 +335,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <Badge 
                         style={{ 
-                          backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || '#6b7280',
-                          color: 'white',
+                          backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)',
+                          color: 'var(--on-accent)',
                           fontSize: '12px'
                         }}
                       >
@@ -341,8 +344,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       </Badge>
                       <Badge 
                         style={{ 
-                          backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || '#6b7280',
-                          color: 'white',
+                          backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || 'var(--muted)',
+                          color: 'var(--on-accent)',
                           fontSize: '12px'
                         }}
                       >
@@ -423,7 +426,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 {goal.description && (
                   <p style={{ 
                     margin: '0 0 16px 0', 
-                    color: '#6b7280', 
+                    color: themeVars.muted as string, 
                     fontSize: '14px',
                     lineHeight: '1.5',
                     display: '-webkit-box',
@@ -440,14 +443,14 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   <div style={{ 
                     marginBottom: '16px',
                     padding: '12px',
-                    backgroundColor: '#f0f9ff',
-                    border: '1px solid #0ea5e9',
+                    backgroundColor: themeVars.card as string,
+                    border: `1px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || themeVars.border}`,
                     borderRadius: '6px'
                   }}>
                     <div style={{ 
                       fontSize: '11px', 
                       fontWeight: '600', 
-                      color: '#0ea5e9', 
+                      color: (themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || themeVars.brand) as string, 
                       marginBottom: '6px',
                       textTransform: 'uppercase',
                       letterSpacing: '0.5px'
@@ -462,7 +465,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     </div>
                     <div style={{ 
                       fontSize: '12px', 
-                      color: '#374151', 
+                      color: themeVars.text as string, 
                       fontStyle: 'italic',
                       lineHeight: '1.4'
                     }}>
@@ -478,7 +481,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     </div>
                     <div style={{ 
                       fontSize: '10px', 
-                      color: '#6b7280', 
+                      color: themeVars.muted as string, 
                       marginTop: '6px'
                     }}>
                       {ActivityStreamService.formatTimestamp(latestActivities[goal.id].timestamp)}
@@ -489,25 +492,25 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
                 {/* Goal Details */}
                 <div style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
                     <Target size={14} style={{ marginRight: '8px' }} />
                     <span style={{ fontWeight: '500', marginRight: '8px' }}>Size:</span>
                     <span>{goal.size}</span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
                     <Hash size={14} style={{ marginRight: '8px' }} />
                     <span style={{ fontWeight: '500', marginRight: '8px' }}>Priority:</span>
                     <span>{goal.priority}</span>
                   </div>
                   {goal.confidence && (
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
                       <User size={14} style={{ marginRight: '8px' }} />
                       <span style={{ fontWeight: '500', marginRight: '8px' }}>Confidence:</span>
                       <span>{goal.confidence}/10</span>
                     </div>
                   )}
                   {goalTimeAllocations[goal.id] !== undefined && (
-                    <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: '#059669' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: 'var(--green)' }}>
                       <Clock size={14} style={{ marginRight: '8px' }} />
                       <span style={{ fontWeight: '500', marginRight: '8px' }}>This Week:</span>
                       <span>{Math.round(goalTimeAllocations[goal.id])} minutes allocated</span>
@@ -521,9 +524,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   justifyContent: 'space-between', 
                   alignItems: 'center',
                   paddingTop: '16px',
-                  borderTop: '1px solid #e5e7eb',
+                  borderTop: `1px solid ${themeVars.border}`,
                   fontSize: '12px',
-                  color: '#9ca3af'
+                  color: themeVars.muted as string
                 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -538,7 +541,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     {(() => {
                       const d = toDate(goal.updatedAt);
                       return d ? (
-                        <div style={{ display: 'flex', alignItems: 'center', color: '#059669', fontWeight: '500' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', color: 'var(--green)', fontWeight: '500' }}>
                           <Calendar size={12} style={{ marginRight: '4px' }} />
                           <span>
                             Updated: {formatDate(d)} at {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

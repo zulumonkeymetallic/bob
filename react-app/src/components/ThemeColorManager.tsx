@@ -169,6 +169,30 @@ const ThemeColorManager: React.FC = () => {
       };
 
       await setDoc(doc(db, 'global_themes', currentUser.uid), globalThemeSettings);
+      // Apply colors to CSS variables immediately and persist locally for startup
+      try {
+        const root = document.documentElement;
+        const keyMap: Record<string, string> = {
+          health: 'health',
+          growth: 'growth',
+          wealth: 'wealth',
+          tribe: 'tribe',
+          home: 'home'
+        };
+        const applied: Record<string, string> = {};
+        globalThemes.forEach(t => {
+          const name = (t.name || t.label || '').toLowerCase();
+          const match = Object.keys(keyMap).find(k => name.includes(k));
+          if (match && t.color) {
+            const varName = `--theme-${keyMap[match]}-primary`;
+            root.style.setProperty(varName, t.color);
+            applied[keyMap[match]] = t.color;
+          }
+        });
+        localStorage.setItem('bob-global-themes', JSON.stringify(applied));
+      } catch (e) {
+        console.warn('Theme CSS override failed', e);
+      }
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (error) {
@@ -250,7 +274,7 @@ const ThemeColorManager: React.FC = () => {
             <Tab.Content>
               {/* Themes & Colors Tab */}
               <Tab.Pane eventKey="themes">
-                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid var(--line)` }}>
                   <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
                     <h4 className="mb-0">Global Theme Management</h4>
                     <small style={{ color: colors.secondary }}>
@@ -310,7 +334,7 @@ const ThemeColorManager: React.FC = () => {
 
               {/* Database Migration Tab */}
               <Tab.Pane eventKey="database">
-                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid var(--line)` }}>
                   <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
                     <h4 className="mb-0">Database Migration</h4>
                     <small style={{ color: colors.secondary }}>
@@ -383,7 +407,7 @@ const ThemeColorManager: React.FC = () => {
 
               {/* System Preferences Tab */}
               <Tab.Pane eventKey="system">
-                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid var(--line)` }}>
                   <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
                     <h4 className="mb-0">System Preferences</h4>
                   </Card.Header>
@@ -401,7 +425,7 @@ const ThemeColorManager: React.FC = () => {
                         style={{ 
                           backgroundColor: backgrounds.surface, 
                           color: colors.onSurface,
-                          border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                          border: `1px solid var(--line)`
                         }}
                       >
                         <option value="light">Light</option>
@@ -439,7 +463,7 @@ const ThemeColorManager: React.FC = () => {
                   style={{ 
                     backgroundColor: backgrounds.surface, 
                     color: colors.onSurface,
-                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                    border: `1px solid var(--line)`
                   }}
                 />
               </Form.Group>
@@ -452,7 +476,7 @@ const ThemeColorManager: React.FC = () => {
                   onChange={(e) => setEditingTheme({...editingTheme, color: e.target.value})}
                   style={{ 
                     backgroundColor: backgrounds.surface,
-                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                    border: `1px solid var(--line)`
                   }}
                 />
               </Form.Group>

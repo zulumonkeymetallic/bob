@@ -197,7 +197,7 @@ const TaskListView: React.FC = () => {
   return (
     <div style={{ 
       padding: '24px', 
-      backgroundColor: '#f8f9fa',
+      backgroundColor: 'var(--bg)',
       minHeight: '100vh',
       width: '100%'
     }}>
@@ -213,7 +213,7 @@ const TaskListView: React.FC = () => {
             <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
               Task List View
             </h2>
-            <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: '16px' }}>
               Manage all your tasks with modern table interface
             </p>
           </div>
@@ -227,10 +227,10 @@ const TaskListView: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--text)' }}>
                   {taskCounts.total}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
                   Total Tasks
                 </p>
               </Card.Body>
@@ -239,10 +239,10 @@ const TaskListView: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#f59e0b' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--orange)' }}>
                   {taskCounts.planned}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
                   Planned
                 </p>
               </Card.Body>
@@ -251,10 +251,10 @@ const TaskListView: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--brand)' }}>
                   {taskCounts.inProgress}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
                   In Progress
                 </p>
               </Card.Body>
@@ -263,10 +263,10 @@ const TaskListView: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--green)' }}>
                   {taskCounts.done}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
                   Done
                 </p>
               </Card.Body>
@@ -287,7 +287,7 @@ const TaskListView: React.FC = () => {
                       placeholder="Search by title..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      style={{ border: '1px solid #d1d5db' }}
+                      style={{ border: '1px solid var(--line)' }}
                     />
                   </InputGroup>
                 </Form.Group>
@@ -298,7 +298,7 @@ const TaskListView: React.FC = () => {
                   <Form.Select
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: '1px solid var(--line)' }}
                   >
                     <option value="all">All Status</option>
                     <option value="planned">Planned</option>
@@ -313,7 +313,7 @@ const TaskListView: React.FC = () => {
                   <Form.Select
                     value={filterSprint}
                     onChange={(e) => setFilterSprint(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: '1px solid var(--line)' }}
                   >
                     <option value="all">All Sprints</option>
                     {sprints.map(sprint => (
@@ -328,7 +328,7 @@ const TaskListView: React.FC = () => {
                   <Form.Select
                     value={filterTheme}
                     onChange={(e) => setFilterTheme(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: '1px solid var(--line)' }}
                   >
                     <option value="all">All Themes</option>
                     <option value="Health">Health</option>
@@ -350,7 +350,7 @@ const TaskListView: React.FC = () => {
                     setFilterTheme('all');
                     setSearchTerm('');
                   }}
-                  style={{ borderColor: '#d1d5db' }}
+                  style={{ borderColor: 'var(--line)' }}
                 >
                   Clear Filters
                 </Button>
@@ -362,8 +362,8 @@ const TaskListView: React.FC = () => {
         {/* Modern Task Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
           <Card.Header style={{ 
-            backgroundColor: '#fff', 
-            borderBottom: '1px solid #e5e7eb', 
+            backgroundColor: 'var(--panel)', 
+            borderBottom: '1px solid var(--line)', 
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
@@ -381,7 +381,7 @@ const TaskListView: React.FC = () => {
                 justifyContent: 'center'
               }}>
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading tasks...</p>
+                <p style={{ margin: 0, color: 'var(--muted)' }}>Loading tasks...</p>
               </div>
             ) : filteredTasks.length === 0 ? (
               <div style={{ 
@@ -392,7 +392,7 @@ const TaskListView: React.FC = () => {
                 alignItems: 'center',
                 justifyContent: 'center'
               }}>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '16px' }}>
                   No tasks found. Create your first task to get started!
                 </p>
               </div>

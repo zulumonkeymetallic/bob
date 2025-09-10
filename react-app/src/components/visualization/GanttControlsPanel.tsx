@@ -49,7 +49,7 @@ const GanttControlsPanel: React.FC<GanttControlsPanelProps> = ({
   return (
     <div style={{ width: 260, flex: '0 0 260px' }} className="me-3">
       <Card className="border-0 shadow-sm">
-        <Card.Header className="bg-white">
+        <Card.Header style={{ backgroundColor: 'var(--card)' }}>
           <strong>Timeline Controls</strong>
         </Card.Header>
         <Card.Body className="d-flex flex-column gap-3">

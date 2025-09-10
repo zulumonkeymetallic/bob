@@ -39,7 +39,7 @@ export const UpdateAvailableToast: React.FC<UpdateAvailableToastProps> = ({
         className="border-0 shadow-lg"
         style={{ 
           backgroundColor: 'var(--bs-primary)',
-          color: 'white'
+          color: 'var(--on-accent)'
         }}
       >
         <Toast.Header 

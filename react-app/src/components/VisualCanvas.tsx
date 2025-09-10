@@ -237,21 +237,21 @@ const VisualCanvas: React.FC = () => {
       case 'goal':
         const goal = node.data as Goal;
         const themeColors = {
-          Health: '#dc3545',
-          Growth: '#6f42c1',
-          Wealth: '#28a745',
-          Tribe: '#17a2b8',
-          Home: '#ffc107'
-        };
-        return themeColors[goal.theme] || '#6c757d';
+          Health: 'var(--theme-health-primary)',
+          Growth: 'var(--theme-growth-primary)',
+          Wealth: 'var(--theme-wealth-primary)',
+          Tribe: 'var(--theme-tribe-primary)',
+          Home: 'var(--theme-home-primary)'
+        } as const;
+        return (themeColors as any)[goal.theme] || 'var(--muted)';
       case 'story':
         const story = node.data as Story;
-        return isStatus(story.status, 'done') ? '#28a745' : isStatus(story.status, 'active') ? '#007bff' : '#6c757d';
+        return isStatus(story.status, 'done') ? 'var(--green)' : isStatus(story.status, 'active') ? 'var(--brand)' : 'var(--muted)';
       case 'task':
         const task = node.data as Task;
-        return isStatus(task.status, 'done') ? '#28a745' : isStatus(task.status, 'in_progress') ? '#007bff' : '#6c757d';
+        return isStatus(task.status, 'done') ? 'var(--green)' : isStatus(task.status, 'in_progress') ? 'var(--brand)' : 'var(--muted)';
       default:
-        return '#6c757d';
+        return 'var(--muted)';
     }
   };
 
@@ -323,8 +323,7 @@ const VisualCanvas: React.FC = () => {
             height: '100%',
             position: 'relative',
             cursor: isDragging ? 'grabbing' : 'grab',
-            background: 'linear-gradient(90deg, #f8f9fa 1px, transparent 1px), linear-gradient(180deg, #f8f9fa 1px, transparent 1px)',
-            backgroundSize: '20px 20px',
+            // Use themed CSS from .canvas class in App.css
             transform: `scale(${scale}) translate(${offset.x}px, ${offset.y}px)`,
             transformOrigin: '0 0',
             transition: isDragging ? 'none' : 'transform 0.1s ease'
@@ -351,7 +350,7 @@ const VisualCanvas: React.FC = () => {
               <path
                 key={connection.id}
                 d={getConnectionPath(connection)}
-                stroke={connection.type === 'goal-story' ? '#007bff' : '#28a745'}
+                stroke={connection.type === 'goal-story' ? 'var(--brand)' : 'var(--green)'}
                 strokeWidth="2"
                 fill="none"
                 strokeDasharray={connection.type === 'story-task' ? '5,5' : 'none'}
@@ -372,11 +371,11 @@ const VisualCanvas: React.FC = () => {
                 width: node.width,
                 height: node.height,
                 backgroundColor: getNodeColor(node),
-                color: 'white',
+                color: 'var(--on-accent)',
                 borderRadius: '8px',
                 padding: '8px',
                 cursor: 'pointer',
-                boxShadow: selectedNode?.id === node.id ? '0 0 0 3px rgba(0,123,255,0.5)' : '0 2px 4px rgba(0,0,0,0.1)',
+                boxShadow: selectedNode?.id === node.id ? '0 0 0 3px var(--brand)' : '0 2px 4px rgba(0,0,0,0.1)',
                 zIndex: 2,
                 display: 'flex',
                 flexDirection: 'column',
@@ -418,9 +417,9 @@ const VisualCanvas: React.FC = () => {
                 height: '8px', 
                 borderRadius: '50%',
                 backgroundColor: (() => {
-                  if (node.type === 'goal') return isStatus((node.data as Goal).status, 'Work in Progress') ? '#00ff00' : '#ffff00';
-                  if (node.type === 'story') return isStatus((node.data as Story).status, 'done') ? '#00ff00' : '#ffff00';
-                  return isStatus((node.data as Task).status, 'done') ? '#00ff00' : '#ffff00';
+                  if (node.type === 'goal') return isStatus((node.data as Goal).status, 'Work in Progress') ? 'var(--green)' : 'var(--orange)';
+                  if (node.type === 'story') return isStatus((node.data as Story).status, 'done') ? 'var(--green)' : 'var(--orange)';
+                  return isStatus((node.data as Task).status, 'done') ? 'var(--green)' : 'var(--orange)';
                 })()
               }} />
             </div>
@@ -435,28 +434,28 @@ const VisualCanvas: React.FC = () => {
             <Card.Body className="p-2">
               <div className="d-flex justify-content-center gap-4 text-sm">
                 <div className="d-flex align-items-center">
-                  <div style={{ width: '16px', height: '16px', backgroundColor: '#6f42c1', borderRadius: '4px', marginRight: '8px' }}></div>
+                  <div style={{ width: '16px', height: '16px', backgroundColor: 'var(--purple)', borderRadius: '4px', marginRight: '8px' }}></div>
                   <span>🎯 Goals</span>
                 </div>
                 <div className="d-flex align-items-center">
-                  <div style={{ width: '16px', height: '16px', backgroundColor: '#007bff', borderRadius: '4px', marginRight: '8px' }}></div>
+                  <div style={{ width: '16px', height: '16px', backgroundColor: 'var(--brand)', borderRadius: '4px', marginRight: '8px' }}></div>
                   <span>📋 Stories</span>
                 </div>
                 <div className="d-flex align-items-center">
-                  <div style={{ width: '16px', height: '16px', backgroundColor: '#28a745', borderRadius: '4px', marginRight: '8px' }}></div>
+                  <div style={{ width: '16px', height: '16px', backgroundColor: 'var(--green)', borderRadius: '4px', marginRight: '8px' }}></div>
                   <span>✓ Tasks</span>
                 </div>
                 <div className="d-flex align-items-center">
-                  <div style={{ width: '20px', height: '2px', backgroundColor: '#007bff', marginRight: '8px' }}></div>
+                  <div style={{ width: '20px', height: '2px', backgroundColor: 'var(--brand)', marginRight: '8px' }}></div>
                   <span>Goal → Story</span>
                 </div>
                 <div className="d-flex align-items-center">
                   <div style={{ 
                     width: '20px', 
                     height: '2px', 
-                    backgroundColor: '#28a745', 
+                    backgroundColor: 'var(--green)', 
                     marginRight: '8px',
-                    backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 3px, white 3px, white 6px)'
+                    backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 3px, var(--on-accent) 3px, var(--on-accent) 6px)'
                   }}></div>
                   <span>Story → Task</span>
                 </div>

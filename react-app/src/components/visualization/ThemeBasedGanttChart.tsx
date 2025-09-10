@@ -531,7 +531,7 @@ const ThemeBasedGanttChart: React.FC = () => {
     <Container fluid className="enhanced-gantt-chart p-0">
       {/* Header */}
       <Card className="border-0 shadow-sm">
-        <Card.Header className="bg-white border-bottom">
+        <Card.Header style={{ backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
           <Row className="align-items-center">
             <Col md={6}>
               <h4 className="mb-0 d-flex align-items-center">
@@ -627,7 +627,7 @@ const ThemeBasedGanttChart: React.FC = () => {
       {/* Timeline Container */}
       <div className="timeline-container" style={{ height: 'calc(100vh - 300px)', overflow: 'auto' }}>
         {/* Timeline Header */}
-        <div className="timeline-header sticky-top bg-white border-bottom" style={{ zIndex: 5 }}>
+        <div className="timeline-header sticky-top" style={{ zIndex: 5, backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
           <div className="d-flex">
             <div className="goal-label" style={{ width: '250px', minWidth: '250px' }}>
               <strong>Theme</strong>
@@ -875,12 +875,12 @@ const ThemeBasedGanttChart: React.FC = () => {
                   width: `${width}%`,
                   top: '5px',
                   height: '20px',
-                  backgroundColor: '#3b82f6',
+                  backgroundColor: 'var(--brand)',
                   borderRadius: '4px',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: 'white',
+                  color: 'var(--on-accent)',
                   fontSize: '11px',
                   fontWeight: '500',
                   overflow: 'hidden',
@@ -903,7 +903,7 @@ const ThemeBasedGanttChart: React.FC = () => {
             top: '0',
             width: '3px', // Thicker line for better visibility
             height: '100%',
-            backgroundColor: '#ef4444',
+            backgroundColor: 'var(--red)',
             zIndex: 4,
             pointerEvents: 'none',
             boxShadow: '0 0 6px rgba(239, 68, 68, 0.4)' // Glow effect
@@ -918,8 +918,8 @@ const ThemeBasedGanttChart: React.FC = () => {
             left: `${getDatePosition(new Date())}%`,
             top: '-25px',
             transform: 'translateX(-50%)',
-            backgroundColor: '#ef4444',
-            color: 'white',
+            backgroundColor: 'var(--red)',
+            color: 'var(--on-accent)',
             padding: '2px 8px',
             borderRadius: '4px',
             fontSize: '11px',
@@ -947,8 +947,8 @@ const ThemeBasedGanttChart: React.FC = () => {
                 top: '70px', // Below sprint bars
                 height: 'calc(100% - 70px)',
                 backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                borderLeft: '1px dashed #3b82f6',
-                borderRight: '1px dashed #3b82f6',
+                borderLeft: '1px dashed var(--brand)',
+                borderRight: '1px dashed var(--brand)',
                 pointerEvents: 'none',
                 zIndex: 1
               }}

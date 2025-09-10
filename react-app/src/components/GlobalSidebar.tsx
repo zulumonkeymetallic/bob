@@ -6,6 +6,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { useTestMode } from '../contexts/TestModeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
+import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 
 interface GlobalSidebarProps {
   goals: Goal[];
@@ -32,14 +33,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [showAddNote, setShowAddNote] = useState(false);
   const [newNote, setNewNote] = useState('');
 
-  // Theme colors mapping
+  // Theme colors mapping via CSS variables (no hardcoded hex)
   const themeColors = {
-    'Health': '#ef4444',
-    'Growth': '#8b5cf6', 
-    'Wealth': '#059669',
-    'Tribe': '#f59e0b',
-    'Home': '#3b82f6'
-  };
+    Health: domainThemePrimaryVar('Health'),
+    Growth: domainThemePrimaryVar('Growth'),
+    Wealth: domainThemePrimaryVar('Wealth'),
+    Tribe: domainThemePrimaryVar('Tribe'),
+    Home: domainThemePrimaryVar('Home')
+  } as const;
 
   React.useEffect(() => {
     if (selectedItem) {
@@ -231,7 +232,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const goal = getGoalForItem();
   const story = selectedType === 'task' ? getStoryForTask() : (selectedType === 'story' ? selectedItem as Story : null);
-  const themeColor = goal?.theme ? themeColors[goal.theme] : '#6b7280';
+  const themeColor = goal?.theme ? themeColors[goal.theme] : (themeVars.muted as string);
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return 'Not set';
@@ -279,7 +280,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
           right: 0,
           width: sidebarWidth,
           height: '100vh',
-          backgroundColor: 'white',
+          backgroundColor: themeVars.panel,
           boxShadow: '-4px 0 8px rgba(0,0,0,0.1)',
           zIndex: 1000,
           transition: 'width 0.3s ease',
@@ -295,7 +296,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
             top: '50%',
             transform: 'translateY(-50%)',
             backgroundColor: themeColor,
-            color: 'white',
+            color: themeVars.onAccent as string,
             borderRadius: '50%',
             width: '30px',
             height: '30px',
@@ -320,7 +321,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 height: '30px',
                 borderRadius: '50%',
                 backgroundColor: themeColor,
-                color: 'white',
+                color: themeVars.onAccent as string,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -331,7 +332,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
             >
               {selectedType === 'goal' ? 'G' : selectedType === 'story' ? 'S' : 'T'}
             </div>
-            <div style={{ fontSize: '10px', color: '#6b7280', transform: 'rotate(-90deg)', whiteSpace: 'nowrap' }}>
+            <div style={{ fontSize: '10px', color: themeVars.muted, transform: 'rotate(-90deg)', whiteSpace: 'nowrap' }}>
               {selectedItem.title.substring(0, 15)}
             </div>
           </div>
@@ -344,9 +345,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
             <div
               style={{
                 backgroundColor: themeColor,
-                color: 'white',
+                color: themeVars.onAccent,
                 padding: '20px',
-                borderBottom: '1px solid #e5e7eb'
+                borderBottom: `1px solid ${themeVars.border}`
               }}
             >
               {/* Test Mode Indicator */}
@@ -355,8 +356,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   position: 'absolute',
                   top: '8px',
                   right: '8px',
-                  backgroundColor: '#ff6b6b',
-                  color: 'white',
+                  backgroundColor: domainThemePrimaryVar('Health'),
+                  color: themeVars.onAccent,
                   padding: '4px 8px',
                   borderRadius: '12px',
                   fontSize: '10px',
@@ -374,15 +375,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 marginBottom: '16px',
                 textAlign: 'center',
                 padding: '12px',
-                backgroundColor: 'rgba(255,255,255,0.15)',
+                backgroundColor: rgbaCard(0.15),
                 borderRadius: '8px',
-                border: '2px solid rgba(255,255,255,0.3)'
+                border: `2px solid ${themeColor}`
               }}>
                 <div style={{ 
                   fontSize: '11px', 
-                  opacity: 0.8, 
+                  opacity: 0.9, 
                   marginBottom: '4px',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  color: themeColor as string
                 }}>
                   REFERENCE
                 </div>
@@ -391,7 +393,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   fontWeight: '900',
                   fontFamily: 'monospace',
                   letterSpacing: '2px',
-                  textShadow: '0 1px 2px rgba(0,0,0,0.3)'
+                  textShadow: '0 1px 2px rgba(0,0,0,0.15)',
+                  color: themeColor as string
                 }}>
                   {generateReferenceNumber()}
                 </div>
@@ -405,7 +408,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <Button
                     variant="link"
                     size="sm"
-                    style={{ color: 'white', padding: '4px' }}
+                    style={{ color: themeVars.onAccent as string, padding: '4px' }}
                     onClick={() => setShowAddNote(true)}
                     title="Add Note"
                   >
@@ -414,7 +417,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <Button
                     variant="link"
                     size="sm"
-                    style={{ color: 'white', padding: '4px' }}
+                    style={{ color: themeVars.onAccent as string, padding: '4px' }}
                     onClick={handleEdit}
                   >
                     <Edit3 size={16} />
@@ -422,7 +425,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <Button
                     variant="link"
                     size="sm"
-                    style={{ color: 'white', padding: '4px' }}
+                    style={{ color: themeVars.onAccent as string, padding: '4px' }}
                     onClick={handleDelete}
                   >
                     <Trash2 size={16} />
@@ -430,7 +433,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <Button
                     variant="link"
                     size="sm"
-                    style={{ color: 'white', padding: '4px' }}
+                    style={{ color: themeVars.onAccent as string, padding: '4px' }}
                     onClick={hideSidebar}
                   >
                     <X size={16} />
@@ -458,7 +461,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
             <div style={{ padding: '20px', maxHeight: 'calc(100vh - 160px)', overflow: 'auto' }}>
               {/* Title */}
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
                   Title
                 </label>
                 {isEditing ? (
@@ -469,7 +472,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     style={{ fontSize: '16px', fontWeight: '600' }}
                   />
                 ) : (
-                  <h4 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#111827' }}>
+                  <h4 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: themeVars.text }}>
                     {selectedItem.title}
                   </h4>
                 )}
@@ -477,7 +480,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
               {/* Description */}
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
                   Description
                 </label>
                 {isEditing ? (
@@ -488,7 +491,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
                   />
                 ) : (
-                  <p style={{ margin: 0, color: '#6b7280', lineHeight: '1.5' }}>
+                  <p style={{ margin: 0, color: themeVars.muted, lineHeight: '1.5' }}>
                     {selectedItem.description || 'No description provided'}
                   </p>
                 )}
@@ -497,7 +500,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
               {/* Status and Priority */}
               <Row style={{ marginBottom: '20px' }}>
                 <Col xs={6}>
-                  <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                  <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
                     Status
                   </label>
                   {isEditing ? (
@@ -551,7 +554,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   )}
                 </Col>
                 <Col xs={6}>
-                  <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                  <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
                     Priority
                   </label>
                   {isEditing ? (
@@ -608,7 +611,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <Badge 
                     style={{ 
                       backgroundColor: themeColor, 
-                      color: 'white',
+                      color: themeVars.onAccent as string,
                       fontSize: '12px',
                       padding: '6px 12px'
                     }}
@@ -619,12 +622,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
               )}
 
               {/* Metadata */}
-              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '20px', marginTop: '20px' }}>
-                <h6 style={{ fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '12px' }}>
+              <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
+                <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
                   Metadata
                 </h6>
                 
-                <div style={{ fontSize: '13px', color: '#6b7280', lineHeight: '1.6' }}>
+                <div style={{ fontSize: '13px', color: themeVars.muted, lineHeight: '1.6' }}>
                   <div style={{ marginBottom: '8px' }}>
                     <strong>ID:</strong> <code style={{ fontSize: '11px' }}>{selectedItem.id}</code>
                   </div>
@@ -641,9 +644,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
               </div>
 
               {/* Activity Stream */}
-              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '20px', marginTop: '20px' }}>
+              <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <h6 style={{ fontSize: '14px', fontWeight: '600', color: '#374151', margin: 0 }}>
+                  <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeColor as string, margin: 0 }}>
                     Activity Stream
                   </h6>
                   <Button
@@ -660,14 +663,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 <div style={{ 
                   maxHeight: '300px', 
                   overflow: 'auto',
-                  backgroundColor: '#f8f9fa',
+                  backgroundColor: themeVars.card,
                   borderRadius: '6px',
                   padding: '8px'
                 }}>
                   {activities.length === 0 ? (
                     <div style={{ 
                       textAlign: 'center', 
-                      color: '#6b7280', 
+                      color: themeVars.muted, 
                       fontSize: '13px',
                       padding: '20px'
                     }}>
@@ -682,7 +685,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                             border: 'none',
                             backgroundColor: 'transparent',
                             padding: '8px 0',
-                            borderBottom: index < activities.length - 1 ? '1px solid #e5e7eb' : 'none'
+                            borderBottom: index < activities.length - 1 ? `1px solid ${themeVars.border}` : 'none',
+                            borderLeft: `3px solid ${themeColor}`
                           }}
                         >
                           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
@@ -690,24 +694,24 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                               {ActivityStreamService.formatActivityIcon(activity.activityType)}
                             </span>
                             <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: '13px', color: '#374151', lineHeight: '1.4' }}>
+                              <div style={{ fontSize: '13px', color: themeVars.text, lineHeight: '1.4' }}>
                                 {activity.description}
                               </div>
                               {activity.noteContent && (
                                 <div style={{ 
                                   fontSize: '12px', 
-                                  color: '#6b7280', 
+                                  color: themeVars.muted, 
                                   fontStyle: 'italic',
                                   marginTop: '4px',
                                   padding: '6px',
-                                  backgroundColor: '#ffffff',
+                                  backgroundColor: themeVars.card,
                                   borderRadius: '4px',
-                                  border: '1px solid #e5e7eb'
+                                  border: `1px solid ${themeVars.border}`
                                 }}>
                                   "{activity.noteContent}"
                                 </div>
                               )}
-                              <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '4px' }}>
+                              <div style={{ fontSize: '11px', color: themeVars.muted, marginTop: '4px' }}>
                                 {ActivityStreamService.formatTimestamp(activity.timestamp)}
                                 {activity.userEmail && ` • ${activity.userEmail.split('@')[0]}`}
                               </div>
@@ -722,7 +726,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
               {/* Save Button */}
               {isEditing && (
-                <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #e5e7eb' }}>
+                <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: `1px solid ${themeVars.border}` }}>
                   <div style={{ display: 'flex', gap: '12px' }}>
                     <Button variant="primary" onClick={handleSave} style={{ flex: 1 }}>
                       <Save size={16} style={{ marginRight: '6px' }} />

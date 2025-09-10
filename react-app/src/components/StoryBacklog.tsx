@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/f
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
 
 const StoryBacklog: React.FC = () => {
   const { currentUser } = useAuth();
@@ -77,15 +78,9 @@ const StoryBacklog: React.FC = () => {
     return goal ? getThemeName(goal.theme) : 'Growth';
   };
 
-  const getThemeColor = (theme: string) => {
-    const colors = {
-      'Health': 'success',
-      'Growth': 'primary', 
-      'Wealth': 'warning',
-      'Tribe': 'info',
-      'Home': 'secondary'
-    };
-    return colors[theme] || 'secondary';
+  const getThemeColorVar = (theme: string): string => {
+    if (!theme) return themeVars.muted as string;
+    return domainThemePrimaryVar(theme);
   };
 
   const updateStoryStatus = async (storyId: string, newStatus: string) => {
@@ -232,8 +227,9 @@ const StoryBacklog: React.FC = () => {
                   <tbody>
                     {filteredStories.map((story) => {
                       const goalTheme = getGoalTheme(story.goalId);
+                      const themeColor = getThemeColorVar(goalTheme);
                       return (
-                        <tr key={story.id}>
+                        <tr key={story.id} style={{ borderLeft: `4px solid ${themeColor}` }}>
                           <td>
                             <div>
                               <strong>{story.title}</strong>
@@ -243,7 +239,7 @@ const StoryBacklog: React.FC = () => {
                             </div>
                           </td>
                           <td>
-                            <Badge bg={getThemeColor(goalTheme)} className="me-1">
+                            <Badge className="me-1" style={{ backgroundColor: themeColor, color: 'var(--on-accent)' }}>
                               {goalTheme}
                             </Badge>
                             <div className="small text-muted">{getGoalTitle(story.goalId)}</div>

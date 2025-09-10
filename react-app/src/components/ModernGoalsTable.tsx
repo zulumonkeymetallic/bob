@@ -40,6 +40,7 @@ import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import ModernStoriesTable from './ModernStoriesTable';
+import { themeVars, rgbaCard } from '../utils/themeVars';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -351,31 +352,31 @@ const SortableRow: React.FC<SortableRowProps> = ({
         );
       }
 
-      return (
-        <td key={column.key} style={{ width: column.width }}>
-          <div className="relative">
-            <input
-              type={column.type === 'date' ? 'date' : 'text'}
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onBlur={() => handleCellSave(column.key)}
-              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
-              style={{
-                width: '100%',
-                padding: '6px 8px',
-                border: '1px solid #3b82f6',
-                borderRadius: '4px',
-                fontSize: '14px',
-                backgroundColor: backgrounds.surface,
-                color: colors.onSurface,
-                outline: 'none',
-                boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
-              }}
-              autoFocus
-            />
-          </div>
-        </td>
-      );
+    return (
+      <td key={column.key} style={{ width: column.width }}>
+        <div className="relative">
+          <input
+            type={column.type === 'date' ? 'date' : 'text'}
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={() => handleCellSave(column.key)}
+            onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              border: `1px solid ${themeVars.brand}`,
+              borderRadius: '4px',
+              fontSize: '14px',
+              backgroundColor: themeVars.panel,
+              color: themeVars.text,
+              outline: 'none',
+              boxShadow: `0 0 0 2px ${rgbaCard(0.2)}`,
+            }}
+            autoFocus
+          />
+        </div>
+      </td>
+    );
     }
 
     return (
@@ -780,9 +781,9 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       data-component="ModernGoalsTable"
       style={{ 
         position: 'relative', 
-        backgroundColor: backgrounds.card, 
+        backgroundColor: themeVars.panel as string, 
         borderRadius: '8px', 
-        border: '1px solid #e5e7eb', 
+        border: `1px solid ${themeVars.border}`, 
         boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
         overflow: 'hidden' 
       }}
@@ -793,14 +794,14 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '16px',
-        borderBottom: '1px solid #e5e7eb',
-        backgroundColor: '#f9fafb',
+        borderBottom: `1px solid ${themeVars.border}`,
+        backgroundColor: themeVars.card as string,
       }}>
         <div>
           <h3 style={{ 
             fontSize: '18px', 
             fontWeight: '600', 
-            color: '#111827', 
+            color: themeVars.text as string, 
             margin: 0, 
             marginBottom: '4px' 
           }}>
@@ -808,7 +809,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
           </h3>
           <p style={{ 
             fontSize: '14px', 
-            color: '#6b7280', 
+            color: themeVars.muted as string, 
             margin: 0 
           }}>
             {goals.length} goals • {visibleColumnsCount} columns visible
@@ -826,18 +827,18 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
             fontWeight: '500',
             transition: 'all 0.15s ease',
             cursor: 'pointer',
-            border: showConfig ? '1px solid #bfdbfe' : '1px solid #d1d5db',
-            backgroundColor: showConfig ? '#dbeafe' : backgrounds.surface,
-            color: showConfig ? '#1e40af' : colors.primary,
+            border: showConfig ? `1px solid ${themeVars.brand}` : `1px solid ${themeVars.border}`,
+            backgroundColor: showConfig ? rgbaCard(0.2) : (themeVars.panel as string),
+            color: themeVars.text as string,
           }}
           onMouseEnter={(e) => {
             if (!showConfig) {
-              e.currentTarget.style.backgroundColor = isDark ? '#374151' : '#f9fafb';
+              e.currentTarget.style.backgroundColor = themeVars.card as string;
             }
           }}
           onMouseLeave={(e) => {
             if (!showConfig) {
-              e.currentTarget.style.backgroundColor = backgrounds.surface;
+              e.currentTarget.style.backgroundColor = themeVars.panel as string;
             }
           }}
         >
@@ -864,8 +865,8 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
               borderCollapse: 'collapse',
             }}>
               <thead style={{ 
-                backgroundColor: '#f9fafb', 
-                borderBottom: '1px solid #e5e7eb' 
+                backgroundColor: themeVars.card as string, 
+                borderBottom: `1px solid ${themeVars.border}` 
               }}>
                 <tr>
                   <th style={{
@@ -873,10 +874,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted as string,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
-                    borderRight: '1px solid #f3f4f6',
+                    borderRight: `1px solid ${themeVars.border}`,
                     width: '48px',
                   }}>
                     Order
@@ -889,10 +890,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                         textAlign: 'left',
                         fontSize: '12px',
                         fontWeight: '500',
-                        color: '#6b7280',
+                        color: themeVars.muted as string,
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em',
-                        borderRight: '1px solid #f3f4f6',
+                        borderRight: `1px solid ${themeVars.border}`,
                         width: column.width,
                       }}
                     >
@@ -904,7 +905,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'center',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted as string,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     width: '96px',
@@ -1092,20 +1093,20 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                   }}>
                     <div style={{
                       padding: '12px',
-                      backgroundColor: '#f9fafb',
+                      backgroundColor: themeVars.card as string,
                       borderRadius: '8px',
                     }}>
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: themeVars.text as string, 
                         margin: '0 0 8px 0' 
                       }}>
                         Goals Management
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: themeVars.muted as string, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>

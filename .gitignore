@@ -24,3 +24,8 @@ serviceAccountKey.json
 AGENTIC_AI_TEST_CREDENTIALS.json
 agentic-ai-test-token.txt
 *.secret.json
+
+# Ignore pre-push logs
+pre-push-*.log
+react-app/pre-push-*.log
+functions/pre-push-*.log

@@ -176,14 +176,14 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
 
   return (
     <Card style={{ 
-      border: '2px solid #007bff', 
+      border: '2px solid var(--brand)', 
       borderRadius: '12px',
       boxShadow: '0 4px 20px rgba(0, 123, 255, 0.15)',
       marginTop: '20px'
     }}>
       <Card.Header style={{ 
-        background: 'linear-gradient(135deg, #007bff 0%, #0056b3 100%)', 
-        color: 'white',
+        background: 'linear-gradient(135deg, #4A86E8 0%, #1d4ed8 100%)', 
+        color: 'var(--on-accent)',
         borderRadius: '10px 10px 0 0'
       }}>
         <div className="d-flex justify-content-between align-items-center">
@@ -219,7 +219,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
       <Card.Body style={{ padding: '20px' }}>
         {/* Add new task form */}
         {isAddingTask && (
-          <Card className="mb-3" style={{ border: '2px dashed #28a745' }}>
+          <Card className="mb-3" style={{ border: '2px dashed var(--green)' }}>
             <Card.Body>
               <Row>
                 <Col md={6}>
@@ -305,7 +305,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
                 key={task.id} 
                 className="mb-3"
                 style={{ 
-                  border: editingTaskId === task.id ? '2px solid #007bff' : '1px solid #dee2e6',
+                  border: editingTaskId === task.id ? '2px solid var(--brand)' : '1px solid var(--line)',
                   transition: 'all 0.2s ease'
                 }}
               >

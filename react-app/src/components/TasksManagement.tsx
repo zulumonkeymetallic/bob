@@ -209,13 +209,13 @@ const TasksManagement: React.FC = () => {
   };
 
   return (
-    <Container fluid style={{ padding: '24px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
+    <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: '100vh' }}>
       {/* Header */}
       <Row className="mb-4">
         <Col>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: '#1f2937' }}>
+              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: 'var(--text)' }}>
                 Task Management
               </h2>
               <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
@@ -242,10 +242,10 @@ const TasksManagement: React.FC = () => {
         <Col md={3}>
           <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
+              <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--text)' }}>
                 {taskStats.total}
               </div>
-              <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ fontSize: '14px', color: 'var(--muted)', marginTop: '4px' }}>
                 Total Tasks
               </div>
             </Card.Body>
@@ -254,10 +254,10 @@ const TasksManagement: React.FC = () => {
         <Col md={3}>
           <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+              <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--green)' }}>
                 {taskStats.linked}
               </div>
-              <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ fontSize: '14px', color: 'var(--muted)', marginTop: '4px' }}>
                 Linked to Stories
               </div>
             </Card.Body>
@@ -266,10 +266,10 @@ const TasksManagement: React.FC = () => {
         <Col md={3}>
           <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#dc2626' }}>
+              <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--red)' }}>
                 {taskStats.unlinked}
               </div>
-              <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ fontSize: '14px', color: 'var(--muted)', marginTop: '4px' }}>
                 Unlinked Tasks
               </div>
             </Card.Body>
@@ -278,10 +278,10 @@ const TasksManagement: React.FC = () => {
         <Col md={3}>
           <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#7c3aed' }}>
+              <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--purple)' }}>
                 {taskStats.withGoals}
               </div>
-              <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+              <div style={{ fontSize: '14px', color: 'var(--muted)', marginTop: '4px' }}>
                 Connected to Goals
               </div>
             </Card.Body>
@@ -420,8 +420,8 @@ const TasksManagement: React.FC = () => {
         <Col>
           <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
             <Card.Header style={{ 
-              backgroundColor: '#fff', 
-              borderBottom: '1px solid #e5e7eb', 
+              backgroundColor: 'var(--card)', 
+              borderBottom: '1px solid var(--line)', 
               padding: '20px 24px' 
             }}>
               <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
@@ -451,9 +451,9 @@ const TasksManagement: React.FC = () => {
           <Col>
             <Card style={{ border: 'none', textAlign: 'center', padding: '60px 20px' }}>
               <Card.Body>
-                <BookOpen size={48} style={{ color: '#9ca3af', marginBottom: '16px' }} />
-                <h5 style={{ color: '#374151', marginBottom: '8px' }}>No tasks found</h5>
-                <p style={{ color: '#6b7280', marginBottom: '24px' }}>
+                <BookOpen size={48} style={{ color: 'var(--muted)', marginBottom: '16px' }} />
+                <h5 style={{ color: 'var(--text)', marginBottom: '8px' }}>No tasks found</h5>
+                <p style={{ color: 'var(--muted)', marginBottom: '24px' }}>
                   Create your first task or adjust your filters to see tasks.
                 </p>
                 <Button variant="primary" href="/tasks/new">
