@@ -30,6 +30,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { themeVars, rgbaCard } from '../utils/themeVars';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -264,7 +265,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const getThemeColor = (themeId: number): string => {
     const theme = GLOBAL_THEMES.find(t => t.id === themeId);
-    return theme ? theme.color : '#6b7280';
+    return theme ? theme.color : (themeVars.muted as string);
   };
 
   const renderCell = (column: Column) => {
@@ -283,13 +284,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 style={{
                   width: '100%',
                   padding: '6px 8px',
-                  border: '1px solid #3b82f6',
+                  border: `1px solid ${themeVars.brand}`,
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: backgrounds.surface,
-                  color: colors.onSurface,
+                  backgroundColor: themeVars.panel,
+                  color: themeVars.text,
                   outline: 'none',
-                  boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+                  boxShadow: `0 0 0 2px ${rgbaCard(0.2)}`,
                 }}
                 autoFocus
               >
@@ -314,13 +315,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
               style={{
                 width: '100%',
                 padding: '6px 8px',
-                border: '1px solid #3b82f6',
+                border: `1px solid ${themeVars.brand}`,
                 borderRadius: '4px',
                 fontSize: '14px',
-                backgroundColor: backgrounds.surface,
-                color: colors.onSurface,
+                backgroundColor: themeVars.panel,
+                color: themeVars.text,
                 outline: 'none',
-                boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+                boxShadow: `0 0 0 2px ${rgbaCard(0.2)}`,
               }}
               autoFocus
             />
@@ -335,13 +336,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
         style={{ 
           width: column.width,
           padding: '12px 8px',
-          borderRight: '1px solid #f3f4f6',
+          borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = '#f9fafb';
+            e.currentTarget.style.backgroundColor = themeVars.card as string;
           }
         }}
         onMouseLeave={(e) => {
@@ -354,7 +355,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <div style={{
           minHeight: '20px',
           fontSize: '14px',
-          color: column.key === 'ref' ? '#4f46e5' : '#374151',
+          color: column.key === 'ref' ? (themeVars.brand as string) : (themeVars.text as string),
           fontWeight: column.key === 'ref' ? '600' : 'normal',
           fontFamily: column.key === 'ref' ? 'monospace' : 'inherit',
           wordBreak: 'break-word',
@@ -643,9 +644,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   return (
     <div style={{ 
       position: 'relative', 
-      backgroundColor: 'white', 
+      backgroundColor: themeVars.panel as string, 
       borderRadius: '8px', 
-      border: '1px solid #e5e7eb', 
+      border: `1px solid ${themeVars.border}`,
       boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
       overflow: 'hidden' 
     }}>
@@ -655,14 +656,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '16px',
-        borderBottom: '1px solid #e5e7eb',
-        backgroundColor: '#f9fafb',
+        borderBottom: `1px solid ${themeVars.border}`,
+        backgroundColor: themeVars.card as string,
       }}>
         <div>
           <h3 style={{ 
             fontSize: '18px', 
             fontWeight: '600', 
-            color: '#111827', 
+            color: themeVars.text as string, 
             margin: 0, 
             marginBottom: '4px' 
           }}>
@@ -670,7 +671,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
           </h3>
           <p style={{ 
             fontSize: '14px', 
-            color: '#6b7280', 
+            color: themeVars.muted as string, 
             margin: 0 
           }}>
             {tasks.length} tasks • {visibleColumnsCount} columns visible
@@ -688,18 +689,18 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             fontWeight: '500',
             transition: 'all 0.15s ease',
             cursor: 'pointer',
-            border: showConfig ? '1px solid #bfdbfe' : '1px solid #d1d5db',
-            backgroundColor: showConfig ? '#dbeafe' : 'white',
-            color: showConfig ? '#1e40af' : '#374151',
+            border: showConfig ? `1px solid ${themeVars.brand}` : `1px solid ${themeVars.border}`,
+            backgroundColor: showConfig ? rgbaCard(0.2) : (themeVars.panel as string),
+            color: themeVars.text as string,
           }}
           onMouseEnter={(e) => {
             if (!showConfig) {
-              e.currentTarget.style.backgroundColor = '#f9fafb';
+              e.currentTarget.style.backgroundColor = themeVars.card as string;
             }
           }}
           onMouseLeave={(e) => {
             if (!showConfig) {
-              e.currentTarget.style.backgroundColor = 'white';
+              e.currentTarget.style.backgroundColor = themeVars.panel as string;
             }
           }}
         >
@@ -726,8 +727,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
               borderCollapse: 'collapse',
             }}>
               <thead style={{ 
-                backgroundColor: '#f9fafb', 
-                borderBottom: '1px solid #e5e7eb' 
+                backgroundColor: themeVars.card as string, 
+                borderBottom: `1px solid ${themeVars.border}` 
               }}>
                 <tr>
                   <th style={{
@@ -735,7 +736,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     textAlign: 'left',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted as string,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     borderRight: '1px solid #f3f4f6',
@@ -754,7 +755,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         color: '#6b7280',
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em',
-                        borderRight: '1px solid #f3f4f6',
+                        borderRight: `1px solid ${themeVars.border}`,
                         width: column.width,
                       }}
                     >
@@ -766,7 +767,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     textAlign: 'center',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted as string,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     width: '96px',
@@ -804,8 +805,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
           right: 0,
           height: '100%',
           width: '320px',
-          backgroundColor: 'white',
-          borderLeft: '1px solid #e5e7eb',
+          backgroundColor: themeVars.panel as string,
+          borderLeft: `1px solid ${themeVars.border}`,
           transition: 'transform 0.3s ease',
           boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
           transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
@@ -829,7 +830,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: themeVars.text as string,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -837,7 +838,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.backgroundColor = themeVars.card as string;
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -865,7 +866,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         cursor: 'pointer',
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = '#f9fafb';
+                        e.currentTarget.style.backgroundColor = themeVars.card as string;
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.backgroundColor = 'transparent';
@@ -878,8 +879,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                             height: '20px',
                             borderRadius: '4px',
                             border: '2px solid',
-                            borderColor: column.visible ? '#2563eb' : '#d1d5db',
-                            backgroundColor: column.visible ? '#2563eb' : 'transparent',
+                            borderColor: column.visible ? (themeVars.brand as string) : (themeVars.border as string),
+                            backgroundColor: column.visible ? (themeVars.brand as string) : 'transparent',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -891,13 +892,13 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                               </svg>
                             )}
                           </div>
-                          <span style={{ fontSize: '14px', color: '#111827' }}>{column.label}</span>
+                          <span style={{ fontSize: '14px', color: themeVars.text as string }}>{column.label}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {column.visible ? (
-                            <Eye size={14} style={{ color: '#9ca3af' }} />
+                            <Eye size={14} style={{ color: themeVars.muted as string }} />
                           ) : (
-                            <EyeOff size={14} style={{ color: '#9ca3af' }} />
+                            <EyeOff size={14} style={{ color: themeVars.muted as string }} />
                           )}
                         </div>
                       </div>
@@ -946,20 +947,20 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                   }}>
                     <div style={{
                       padding: '12px',
-                      backgroundColor: '#f9fafb',
+                      backgroundColor: themeVars.card as string,
                       borderRadius: '8px',
                     }}>
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: themeVars.text as string, 
                         margin: '0 0 8px 0' 
                       }}>
                         Text Wrapping
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: themeVars.muted as string, 
                         margin: '0 0 8px 0',
                         lineHeight: '1.4',
                       }}>
@@ -968,12 +969,12 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       <div style={{ 
                         width: '100%', 
                         height: '8px', 
-                        backgroundColor: '#dcfce7', 
+                        backgroundColor: rgbaCard(0.15), 
                         borderRadius: '4px' 
                       }}>
                         <div style={{ 
                           height: '8px', 
-                          backgroundColor: '#16a34a', 
+                          backgroundColor: 'var(--green)', 
                           borderRadius: '4px',
                           width: '100%',
                         }}></div>

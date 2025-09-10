@@ -33,6 +33,7 @@ import {
 import { Story, Goal, Sprint } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
+import { themeVars, rgbaCard } from '../utils/themeVars';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -159,8 +160,8 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
 
     if (!column.editable || column.key === 'ref') {
       return (
-        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: '1px solid #f3f4f6' }}>
-          <div style={{ fontSize: '14px', color: '#9ca3af', fontStyle: 'italic' }}>
+        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: `1px solid ${themeVars.border}` }}>
+          <div style={{ fontSize: '14px', color: themeVars.muted, fontStyle: 'italic' }}>
             {column.key === 'ref' ? 'Auto-generated' : 'Auto'}
           </div>
         </td>
@@ -170,17 +171,17 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
     if (column.key === 'goalTitle') {
       // Show goal selector instead of goalTitle
       return (
-        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: '1px solid #f3f4f6' }}>
+        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: `1px solid ${themeVars.border}` }}>
           <select
             value={newStoryData.goalId || ''}
             onChange={(e) => onFieldChange('goalId', e.target.value)}
             style={{
               width: '100%',
               padding: '6px 8px',
-              border: '2px solid #3b82f6',
+              border: `2px solid ${themeVars.brand}`,
               borderRadius: '4px',
               fontSize: '14px',
-              backgroundColor: 'white',
+              backgroundColor: themeVars.panel,
               outline: 'none',
             }}
           >
@@ -195,17 +196,17 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
 
     if (column.type === 'select' && column.options) {
       return (
-        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: '1px solid #f3f4f6' }}>
+        <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: `1px solid ${themeVars.border}` }}>
           <select
             value={value || ''}
             onChange={(e) => onFieldChange(column.key, e.target.value)}
             style={{
               width: '100%',
               padding: '6px 8px',
-              border: '2px solid #3b82f6',
+              border: `2px solid ${themeVars.brand}`,
               borderRadius: '4px',
               fontSize: '14px',
-              backgroundColor: 'white',
+              backgroundColor: themeVars.panel,
               outline: 'none',
             }}
           >
@@ -227,7 +228,7 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
     }
 
     return (
-      <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: '1px solid #f3f4f6' }}>
+      <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: `1px solid ${themeVars.border}` }}>
         <input
           type={column.type === 'number' ? 'number' : 'text'}
           value={value || ''}
@@ -236,10 +237,10 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
           style={{
             width: '100%',
             padding: '6px 8px',
-            border: '2px solid #3b82f6',
+            border: `2px solid ${themeVars.brand}`,
             borderRadius: '4px',
             fontSize: '14px',
-            backgroundColor: 'white',
+            backgroundColor: themeVars.panel,
             outline: 'none',
           }}
         />
@@ -249,17 +250,17 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
 
   return (
     <tr style={{
-      backgroundColor: '#f0f9ff',
-      borderBottom: '2px solid #3b82f6',
-      border: '2px solid #3b82f6',
+      backgroundColor: themeVars.card as string,
+      borderBottom: `2px solid ${themeVars.brand}`,
+      border: `2px solid ${themeVars.brand}`,
     }}>
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
-        borderRight: '1px solid #f3f4f6',
+        borderRight: `1px solid ${themeVars.border}`,
         width: '48px',
       }}>
-        <div style={{ color: '#3b82f6', fontSize: '12px', fontWeight: '600' }}>NEW</div>
+        <div style={{ color: themeVars.brand, fontSize: '12px', fontWeight: '600' }}>NEW</div>
       </td>
       {columns.filter(col => col.visible).map(renderNewCell)}
       <td style={{
@@ -271,8 +272,8 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
           <button
             onClick={onSave}
             style={{
-              color: 'white',
-              backgroundColor: '#059669',
+              color: themeVars.onAccent as string,
+              backgroundColor: 'var(--green)',
               padding: '4px 8px',
               borderRadius: '4px',
               border: 'none',
@@ -287,8 +288,8 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
           <button
             onClick={onCancel}
             style={{
-              color: 'white',
-              backgroundColor: '#dc2626',
+              color: themeVars.onAccent as string,
+              backgroundColor: 'var(--red)',
               padding: '4px 8px',
               borderRadius: '4px',
               border: 'none',
@@ -594,10 +595,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
             transition: 'color 0.15s ease',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = '#6b7280';
+            e.currentTarget.style.color = themeVars.muted as string;
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = '#9ca3af';
+            e.currentTarget.style.color = themeVars.muted as string;
           }}
           title="Drag to reorder"
         >
@@ -614,7 +615,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
           <button
             onClick={() => handleCellEdit('title', story.title)}
             style={{
-              color: '#2563eb',
+              color: themeVars.brand as string,
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
@@ -625,12 +626,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#dbeafe';
-              e.currentTarget.style.color = '#1d4ed8';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.2);
+              e.currentTarget.style.color = themeVars.brand as string;
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#2563eb';
+              e.currentTarget.style.color = themeVars.brand as string;
             }}
             title="Quick edit story title"
           >
@@ -640,7 +641,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             <button
               onClick={() => onEditStory(story)}
               style={{
-                color: '#059669',
+                color: 'var(--green)',
                 padding: '4px',
                 borderRadius: '4px',
                 border: 'none',
@@ -651,12 +652,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 fontWeight: '500',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = '#d1fae5';
-                e.currentTarget.style.color = '#047857';
+                e.currentTarget.style.backgroundColor = rgbaCard(0.15);
+                e.currentTarget.style.color = 'var(--green)';
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = 'transparent';
-                e.currentTarget.style.color = '#059669';
+                e.currentTarget.style.color = 'var(--green)';
               }}
               title="Edit story in modal"
             >
@@ -666,7 +667,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
           <button
             onClick={() => onStoryDelete(story.id)}
             style={{
-              color: '#dc2626',
+              color: 'var(--red)',
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
@@ -677,12 +678,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#fee2e2';
-              e.currentTarget.style.color = '#b91c1c';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.15);
+              e.currentTarget.style.color = 'var(--red)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#dc2626';
+              e.currentTarget.style.color = 'var(--red)';
             }}
             title="Delete story"
           >
@@ -1356,16 +1357,16 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         <tr>
                           <td colSpan={columns.filter(col => col.visible).length + 2} style={{ padding: 0, borderTop: 'none' }}>
                             <div style={{ 
-                              backgroundColor: '#f8fafc', 
+                              backgroundColor: themeVars.card as string, 
                               padding: '16px',
-                              borderLeft: '4px solid #2563eb',
-                              borderBottom: '1px solid #e5e7eb'
+                              borderLeft: `4px solid ${themeVars.brand}`,
+                              borderBottom: `1px solid ${themeVars.border}`
                             }}>
                               <h4 style={{ 
                                 margin: '0 0 12px 0', 
                                 fontSize: '14px', 
                                 fontWeight: '600', 
-                                color: '#374151'
+                                color: themeVars.text as string
                               }}>
                                 📋 Tasks for: {story.title}
                               </h4>
@@ -1384,15 +1385,15 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                     <td colSpan={columns.filter(col => col.visible).length + 2} style={{ 
                       padding: '16px', 
                       textAlign: 'center',
-                      borderTop: '2px dashed #d1d5db',
-                      backgroundColor: '#f9fafb'
+                      borderTop: `2px dashed ${themeVars.border}`,
+                      backgroundColor: themeVars.card as string
                     }}>
                       <button
                         onClick={handleAddNewStory}
                         style={{
-                          color: '#2563eb',
+                          color: themeVars.brand as string,
                           backgroundColor: 'transparent',
-                          border: '2px dashed #2563eb',
+                          border: `2px dashed ${themeVars.brand}`,
                           borderRadius: '8px',
                           padding: '8px 16px',
                           fontSize: '14px',
@@ -1401,12 +1402,12 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                           transition: 'all 0.15s ease',
                         }}
                         onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = '#dbeafe';
-                          e.currentTarget.style.borderColor = '#1d4ed8';
+                          e.currentTarget.style.backgroundColor = rgbaCard(0.2);
+                          e.currentTarget.style.borderColor = themeVars.brand as string;
                         }}
                         onMouseLeave={(e) => {
                           e.currentTarget.style.backgroundColor = 'transparent';
-                          e.currentTarget.style.borderColor = '#2563eb';
+                          e.currentTarget.style.borderColor = themeVars.brand as string;
                         }}
                       >
                         + Add New Story
@@ -1426,8 +1427,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           right: 0,
           height: '100%',
           width: '320px',
-          backgroundColor: 'white',
-          borderLeft: '1px solid #e5e7eb',
+          backgroundColor: themeVars.panel as string,
+          borderLeft: `1px solid ${themeVars.border}`,
           transition: 'transform 0.3s ease',
           boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
           transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
@@ -1451,7 +1452,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: themeVars.text as string,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -1459,7 +1460,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.backgroundColor = themeVars.card as string;
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -1487,7 +1488,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         cursor: 'pointer',
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = '#f9fafb';
+                        e.currentTarget.style.backgroundColor = themeVars.card as string;
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.backgroundColor = 'transparent';
@@ -1500,8 +1501,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                             height: '20px',
                             borderRadius: '4px',
                             border: '2px solid',
-                            borderColor: column.visible ? '#2563eb' : '#d1d5db',
-                            backgroundColor: column.visible ? '#2563eb' : 'transparent',
+                            borderColor: column.visible ? (themeVars.brand as string) : (themeVars.border as string),
+                            backgroundColor: column.visible ? (themeVars.brand as string) : 'transparent',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -1513,13 +1514,13 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                               </svg>
                             )}
                           </div>
-                          <span style={{ fontSize: '14px', color: '#111827' }}>{column.label}</span>
+                          <span style={{ fontSize: '14px', color: themeVars.text as string }}>{column.label}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {column.visible ? (
-                            <Eye size={14} style={{ color: '#9ca3af' }} />
+                            <Eye size={14} style={{ color: themeVars.muted as string }} />
                           ) : (
-                            <EyeOff size={14} style={{ color: '#9ca3af' }} />
+                            <EyeOff size={14} style={{ color: themeVars.muted as string }} />
                           )}
                         </div>
                       </div>
@@ -1541,7 +1542,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: themeVars.text as string,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -1549,7 +1550,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.backgroundColor = themeVars.card as string;
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -1568,20 +1569,20 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                   }}>
                     <div style={{
                       padding: '12px',
-                      backgroundColor: '#f9fafb',
+                      backgroundColor: themeVars.card as string,
                       borderRadius: '8px',
                     }}>
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: themeVars.text as string, 
                         margin: '0 0 8px 0' 
                       }}>
                         Story Management
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: themeVars.muted as string, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>

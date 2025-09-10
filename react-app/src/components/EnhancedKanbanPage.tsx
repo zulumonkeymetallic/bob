@@ -10,6 +10,7 @@ import { sanitizeFirestoreData } from '../utils/firestoreUtils';
 import { ChoiceHelper } from '../config/choices';
 import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import { Settings, Eye, EyeOff, Plus, Edit, Trash2, Move } from 'lucide-react';
+import { themeVars, rgbaCard } from '../utils/themeVars';
 import ModernTaskTable from './ModernTaskTable';
 
 const EnhancedKanbanPage: React.FC = () => {
@@ -51,9 +52,9 @@ const EnhancedKanbanPage: React.FC = () => {
   
   // Swim lanes configuration
   const swimLanes = [
-    { id: 'backlog', title: 'Backlog', status: 0, color: '#6b7280' },
-    { id: 'active', title: 'Active', status: 1, color: '#3b82f6' },
-    { id: 'done', title: 'Done', status: 2, color: '#059669' }
+    { id: 'backlog', title: 'Backlog', status: 0, color: themeVars.muted },
+    { id: 'active', title: 'Active', status: 1, color: themeVars.brand },
+    { id: 'done', title: 'Done', status: 2, color: 'var(--green)' }
   ];
 
   useEffect(() => {
@@ -302,25 +303,25 @@ const EnhancedKanbanPage: React.FC = () => {
       <div
         onClick={() => handleStoryClick(story)}
         style={{
-          backgroundColor: backgrounds.surface,
-          border: isSelected ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+          backgroundColor: themeVars.panel,
+          border: isSelected ? `2px solid ${themeVars.brand}` : `1px solid ${themeVars.border}`,
           borderRadius: '8px',
           padding: '16px',
           marginBottom: '12px',
           cursor: 'pointer',
           transition: 'all 0.15s ease',
-          boxShadow: isSelected ? '0 4px 12px rgba(59, 130, 246, 0.15)' : '0 2px 4px rgba(0,0,0,0.1)',
+          boxShadow: isSelected ? '0 4px 12px rgba(0,0,0,0.15)' : '0 2px 4px rgba(0,0,0,0.1)',
         }}
         onMouseEnter={(e) => {
           if (!isSelected) {
             e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
-            e.currentTarget.style.borderColor = '#d1d5db';
+            e.currentTarget.style.borderColor = themeVars.border as string;
           }
         }}
         onMouseLeave={(e) => {
           if (!isSelected) {
             e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
-            e.currentTarget.style.borderColor = '#e5e7eb';
+            e.currentTarget.style.borderColor = themeVars.border as string;
           }
         }}
       >
@@ -399,16 +400,16 @@ const EnhancedKanbanPage: React.FC = () => {
           alignItems: 'center',
           marginBottom: '12px',
           padding: '8px 0',
-          borderTop: '1px solid #f3f4f6',
-          borderBottom: '1px solid #f3f4f6'
+          borderTop: `1px solid ${themeVars.border}`,
+          borderBottom: `1px solid ${themeVars.border}`
         }}>
-          <span style={{ fontSize: '12px', color: '#6b7280' }}>
+          <span style={{ fontSize: '12px', color: themeVars.muted as string }}>
             📋 {taskCount} tasks • ⭐ {story.points} points
           </span>
           {isSelected && (
             <span style={{
-              backgroundColor: '#dbeafe',
-              color: '#1e40af',
+              backgroundColor: rgbaCard(0.2),
+              color: themeVars.brand as string,
               padding: '2px 8px',
               borderRadius: '12px',
               fontSize: '11px',
@@ -421,14 +422,14 @@ const EnhancedKanbanPage: React.FC = () => {
 
         {/* Actions */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+          <span style={{ fontSize: '11px', color: themeVars.muted as string }}>
             Click to view tasks
           </span>
           <div style={{ display: 'flex', gap: '4px' }}>
             <button
               onClick={(e) => openEditStory(story, e)}
               style={{
-                color: '#2563eb',
+                color: themeVars.brand as string,
                 padding: '4px 8px',
                 borderRadius: '4px',
                 border: 'none',
@@ -439,7 +440,7 @@ const EnhancedKanbanPage: React.FC = () => {
                 transition: 'all 0.15s ease',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = '#dbeafe';
+                e.currentTarget.style.backgroundColor = rgbaCard(0.2);
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = 'transparent';
@@ -451,7 +452,7 @@ const EnhancedKanbanPage: React.FC = () => {
             <button
               onClick={(e) => openDeleteModal(story, e)}
               style={{
-                color: '#dc2626',
+                color: 'var(--red)',
                 padding: '4px 8px',
                 borderRadius: '4px',
                 border: 'none',
@@ -462,7 +463,7 @@ const EnhancedKanbanPage: React.FC = () => {
                 transition: 'all 0.15s ease',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = '#fee2e2';
+                e.currentTarget.style.backgroundColor = rgbaCard(0.15);
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = 'transparent';
@@ -475,7 +476,7 @@ const EnhancedKanbanPage: React.FC = () => {
               <Dropdown.Toggle 
                 as="button"
                 style={{
-                  color: '#059669',
+                  color: 'var(--green)',
                   padding: '4px 8px',
                   borderRadius: '4px',
                   border: 'none',

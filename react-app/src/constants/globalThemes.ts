@@ -1,4 +1,6 @@
 // Global Theme System for BOB Productivity Platform
+import { getCssVarValue } from '../utils/themeVars';
+
 export interface GlobalTheme {
   id: number;
   name: string;
@@ -10,105 +12,130 @@ export interface GlobalTheme {
   description: string;
 }
 
+// Determine readable text color for a given hex background
+const contrastText = (hex: string): string => {
+  const toRGB = (h: string) => {
+    const v = h.replace('#','');
+    const r = parseInt(v.substring(0,2),16);
+    const g = parseInt(v.substring(2,4),16);
+    const b = parseInt(v.substring(4,6),16);
+    return {r,g,b};
+  };
+  const lum = (h: string) => {
+    const {r,g,b} = toRGB(h);
+    const srgb = [r,g,b].map(c => {
+      const n = c/255;
+      return n <= 0.03928 ? n/12.92 : Math.pow((n+0.055)/1.055, 2.4);
+    });
+    return 0.2126*srgb[0] + 0.7152*srgb[1] + 0.0722*srgb[2];
+  };
+  const Lbg = lum(hex);
+  const Lwhite = lum('#ffffff');
+  const Lblack = lum('#000000');
+  const cWhite = (Math.max(Lbg, Lwhite)+0.05)/(Math.min(Lbg, Lwhite)+0.05);
+  const cBlack = (Math.max(Lbg, Lblack)+0.05)/(Math.min(Lbg, Lblack)+0.05);
+  return cWhite >= cBlack ? '#ffffff' : '#000000';
+};
+
 export const GLOBAL_THEMES: GlobalTheme[] = [
   {
     id: 0,
     name: 'General',
     label: 'General',
-    color: '#6c757d',
-    darkColor: '#495057',
-    lightColor: '#adb5bd',
-    textColor: '#ffffff',
+    color: getCssVarValue('--theme-growth-primary', '#6c757d'),
+    darkColor: getCssVarValue('--theme-growth-dark', '#495057'),
+    lightColor: getCssVarValue('--theme-growth-light', '#adb5bd'),
+    textColor: contrastText(getCssVarValue('--theme-growth-primary', '#6c757d')),
     description: 'General goals and miscellaneous items'
   },
   {
     id: 1,
     name: 'Health & Fitness',
     label: 'Health & Fitness',
-    color: '#dc3545',
-    darkColor: '#c82333',
-    lightColor: '#f5c6cb',
-    textColor: '#ffffff',
+    color: getCssVarValue('--theme-health-primary', '#dc3545'),
+    darkColor: getCssVarValue('--theme-health-dark', '#c82333'),
+    lightColor: getCssVarValue('--theme-health-light', '#f5c6cb'),
+    textColor: contrastText(getCssVarValue('--theme-health-primary', '#dc3545')),
     description: 'Physical health, fitness, nutrition, and wellness goals'
   },
   {
     id: 2,
     name: 'Career & Professional',
     label: 'Career & Professional',
-    color: '#fd7e14',
-    darkColor: '#e8620f',
-    lightColor: '#fed7aa',
-    textColor: '#ffffff',
+    color: getCssVarValue('--theme-home-primary', '#fd7e14'),
+    darkColor: getCssVarValue('--theme-home-dark', '#e8620f'),
+    lightColor: getCssVarValue('--theme-home-light', '#fed7aa'),
+    textColor: contrastText(getCssVarValue('--theme-home-primary', '#fd7e14')),
     description: 'Career development, professional skills, and work-related goals'
   },
   {
     id: 3,
     name: 'Finance & Wealth',
     label: 'Finance & Wealth',
-    color: '#ffc107',
-    darkColor: '#e0a800',
-    lightColor: '#fff3cd',
-    textColor: '#212529',
+    color: getCssVarValue('--theme-wealth-primary', '#ffc107'),
+    darkColor: getCssVarValue('--theme-wealth-dark', '#e0a800'),
+    lightColor: getCssVarValue('--theme-wealth-light', '#fff3cd'),
+    textColor: contrastText(getCssVarValue('--theme-wealth-primary', '#ffc107')),
     description: 'Financial planning, investments, budgeting, and wealth building'
   },
   {
     id: 4,
     name: 'Learning & Education',
     label: 'Learning & Education',
-    color: '#198754',
-    darkColor: '#157347',
-    lightColor: '#d1e7dd',
-    textColor: '#ffffff',
+    color: getCssVarValue('--theme-tribe-primary', '#198754'),
+    darkColor: getCssVarValue('--theme-tribe-dark', '#157347'),
+    lightColor: getCssVarValue('--theme-tribe-light', '#d1e7dd'),
+    textColor: contrastText(getCssVarValue('--theme-tribe-primary', '#198754')),
     description: 'Education, skill development, courses, and learning objectives'
   },
   {
     id: 5,
     name: 'Family & Relationships',
     label: 'Family & Relationships',
-    color: '#20c997',
-    darkColor: '#1aa179',
-    lightColor: '#c3f7df',
-    textColor: '#ffffff',
+    color: getCssVarValue('--theme-tribe-primary', '#20c997'),
+    darkColor: getCssVarValue('--theme-tribe-dark', '#1aa179'),
+    lightColor: getCssVarValue('--theme-tribe-light', '#c3f7df'),
+    textColor: contrastText(getCssVarValue('--theme-tribe-primary', '#20c997')),
     description: 'Family time, relationships, social connections, and community'
   },
   {
     id: 6,
     name: 'Hobbies & Interests',
     label: 'Hobbies & Interests',
-    color: '#0dcaf0',
-    darkColor: '#0aa2c0',
-    lightColor: '#cff4fc',
-    textColor: '#212529',
+    color: getCssVarValue('--theme-growth-primary', '#0dcaf0'),
+    darkColor: getCssVarValue('--theme-growth-dark', '#0aa2c0'),
+    lightColor: getCssVarValue('--theme-growth-light', '#cff4fc'),
+    textColor: contrastText(getCssVarValue('--theme-growth-primary', '#0dcaf0')),
     description: 'Personal interests, hobbies, creative pursuits, and entertainment'
   },
   {
     id: 7,
     name: 'Travel & Adventure',
     label: 'Travel & Adventure',
-    color: '#0d6efd',
-    darkColor: '#0b5ed7',
-    lightColor: '#cfe2ff',
-    textColor: '#ffffff',
+    color: getCssVarValue('--theme-growth-primary', '#0d6efd'),
+    darkColor: getCssVarValue('--theme-growth-dark', '#0b5ed7'),
+    lightColor: getCssVarValue('--theme-growth-light', '#cfe2ff'),
+    textColor: contrastText(getCssVarValue('--theme-growth-primary', '#0d6efd')),
     description: 'Travel plans, adventures, exploration, and cultural experiences'
   },
   {
     id: 8,
     name: 'Home & Living',
     label: 'Home & Living',
-    color: '#6610f2',
-    darkColor: '#5d0ce7',
-    lightColor: '#e0cffc',
-    textColor: '#ffffff',
+    color: getCssVarValue('--theme-home-primary', '#6610f2'),
+    darkColor: getCssVarValue('--theme-home-dark', '#5d0ce7'),
+    lightColor: getCssVarValue('--theme-home-light', '#e0cffc'),
+    textColor: contrastText(getCssVarValue('--theme-home-primary', '#6610f2')),
     description: 'Home improvement, organization, maintenance, and living space goals'
   },
   {
     id: 9,
     name: 'Spiritual & Personal Growth',
     label: 'Spiritual & Personal Growth',
-    color: '#d63384',
-    darkColor: '#c42a6f',
-    lightColor: '#f7d6e6',
-    textColor: '#ffffff',
+    color: getCssVarValue('--theme-growth-primary', '#d63384'),
+    darkColor: getCssVarValue('--theme-growth-dark', '#c42a6f'),
+    lightColor: getCssVarValue('--theme-growth-light', '#f7d6e6'),
+    textColor: contrastText(getCssVarValue('--theme-growth-primary', '#d63384')),
     description: 'Personal development, spirituality, mindfulness, and self-improvement'
   }
 ];
@@ -165,9 +192,8 @@ export const getThemeTextColor = (themeId: number, backgroundIsDark: boolean = f
   const theme = getThemeById(themeId);
   
   // For light backgrounds with dark text colors (like yellow), use dark text
-  if (theme.textColor === '#212529' && !backgroundIsDark) {
-    return '#212529';
-  }
+  // Derive from theme.textColor; if not sufficient, compute simple contrast
+  if (!theme.textColor) return '#000000';
   
   // For dark backgrounds or themes with white text, use white
   return backgroundIsDark ? '#ffffff' : theme.textColor;
