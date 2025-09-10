@@ -24,9 +24,9 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { ActivityStreamService } from '../services/ActivityStreamService';
-import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, getDoc, addDoc, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
 import { 
   Settings, 
   GripVertical, 
@@ -34,7 +34,8 @@ import {
   EyeOff,
   ChevronRight,
   ChevronDown,
-  Plus
+  Plus,
+  Activity
 } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
@@ -149,6 +150,7 @@ interface SortableRowProps {
   onStoryDelete: (storyId: string) => Promise<void>;
   onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
   onStoryAdd: (goalId: string) => (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
+  globalThemes: GlobalTheme[];
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -165,7 +167,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryUpdate,
   onStoryDelete,
   onStoryPriorityChange,
-  onStoryAdd
+  onStoryAdd,
+  globalThemes
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
@@ -226,9 +229,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
         valueToSave = statusChoice ? statusChoice.value : editValue;
         console.log(`🎯 Status conversion: "${editValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
       } else if (key === 'theme') {
-        const themeChoice = ChoiceHelper.getChoices('goal', 'theme').find(choice => choice.label === editValue);
-        valueToSave = themeChoice ? themeChoice.value : editValue;
-        console.log(`🎯 Theme conversion: "${editValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
+        // Prefer user-configured global themes over static choices
+        const themeFromSettings = globalThemes.find(t => t.label === editValue || t.name === editValue);
+        if (themeFromSettings) {
+          valueToSave = themeFromSettings.id;
+        } else {
+          // Fallback: try static ChoiceHelper mapping or numeric parse
+          const themeChoice = ChoiceHelper.getChoices('goal', 'theme').find(choice => choice.label === editValue);
+          valueToSave = themeChoice ? themeChoice.value : (isNaN(Number(editValue)) ? oldValue : Number(editValue));
+        }
+        console.log(`🎯 Theme conversion (dynamic): "${editValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
       }
       
       // Only proceed if the value actually changed
@@ -287,9 +297,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'status') {
       return getStatusName(value);
     }
-    if (key === 'theme') {
-      return getThemeName(value);
-    }
+    // theme formatting will be overridden in parent where global themes are known
     return value || '';
   };
 
@@ -298,6 +306,42 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const isEditing = editingCell === column.key;
 
     if (isEditing && column.editable) {
+      // Special handling for theme: use searchable input tied to global themes
+      if (column.key === 'theme') {
+        const datalistId = `theme-options-${goal.id}`;
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <div className="relative">
+              <input
+                list={datalistId}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onBlur={() => handleCellSave(column.key)}
+                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: '1px solid #3b82f6',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  backgroundColor: backgrounds.surface,
+                  color: colors.onSurface,
+                  outline: 'none',
+                  boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)'
+                }}
+                placeholder="Search themes..."
+                autoFocus
+              />
+              <datalist id={datalistId}>
+                {globalThemes.map((t) => (
+                  <option key={t.id} value={t.label} />
+                ))}
+              </datalist>
+            </div>
+          </td>
+        );
+      }
+
       if (column.type === 'select' && column.options) {
         return (
           <td key={column.key} style={{ width: column.width }}>
@@ -402,7 +446,14 @@ const SortableRow: React.FC<SortableRowProps> = ({
         onClick={() => {
           if (column.editable) {
             // For dropdown fields, we need to use the formatted (label) value for editing
-            const editValueToUse = (column.type === 'select') ? formatValue(column.key, value) : formatValue(column.key, value);
+            const editValueToUse = (() => {
+              if (column.key === 'theme') {
+                const themeId = value as unknown as number;
+                const t = globalThemes.find(gt => gt.id === themeId);
+                return t ? t.label : '';
+              }
+              return (column.type === 'select') ? formatValue(column.key, value) : formatValue(column.key, value);
+            })();
             handleCellEdit(column.key, editValueToUse);
           }
         }}
@@ -417,7 +468,29 @@ const SortableRow: React.FC<SortableRowProps> = ({
           whiteSpace: 'normal',
           lineHeight: '1.4',
         }}>
-          {formatValue(column.key, value)}
+          {(() => {
+            if (column.key === 'theme') {
+              const themeId = value as unknown as number;
+              const theme = globalThemes.find(t => t.id === themeId);
+              if (theme) {
+                return (
+                  <span style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    borderRadius: '12px',
+                    backgroundColor: theme.color,
+                    color: getContrastTextColor(theme.color),
+                    fontSize: '12px',
+                  }}>
+                    {theme.label}
+                  </span>
+                );
+              }
+            }
+            return (
+              <span>{formatValue(column.key, value)}</span>
+            );
+          })()}
         </div>
       </td>
     );
@@ -488,6 +561,31 @@ const SortableRow: React.FC<SortableRowProps> = ({
         width: '96px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+          <button
+            onClick={() => onRowClick(goal)}
+            style={{
+              color: '#6b7280',
+              padding: '4px',
+              borderRadius: '4px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              fontSize: '12px',
+              fontWeight: '500',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#f3f4f6';
+              e.currentTarget.style.color = '#374151';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.color = '#6b7280';
+            }}
+            title="Activity stream"
+          >
+            <Activity size={14} />
+          </button>
           <button
             onClick={() => onGoalExpand(goal.id)}
             style={{
@@ -627,6 +725,36 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
+
+  // Load user-defined global themes
+  useEffect(() => {
+    const load = async () => {
+      if (!currentUser) return;
+      try {
+        const ref = doc(db, 'global_themes', currentUser.uid);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          const data = snap.data() as any;
+          if (Array.isArray(data.themes) && data.themes.length) {
+            setGlobalThemes(data.themes as GlobalTheme[]);
+          }
+        }
+      } catch (e) {
+        console.warn('ModernGoalsTable: failed to load global themes', e);
+      }
+    };
+    load();
+  }, [currentUser]);
+
+  // Sync theme column options with loaded themes
+  useEffect(() => {
+    setColumns(prev => prev.map(col => (
+      col.key === 'theme' && col.type === 'select'
+        ? { ...col, options: globalThemes.map(t => t.label) }
+        : col
+    )));
+  }, [globalThemes]);
 
   // Load stories for expanded goals
   useEffect(() => {
@@ -644,12 +772,12 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     console.log('📚 User:', currentUser.email);
     console.log('📚 Persona:', currentPersona);
 
+    // Avoid composite index requirement: filter only, then sort in memory
     const storiesQuery = query(
       collection(db, 'stories'),
       where('goalId', '==', expandedGoalId),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc')
+      where('persona', '==', currentPersona)
     );
 
     console.log('📚 ModernGoalsTable: Query created, setting up listener');
@@ -672,6 +800,13 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       if (storiesData.length > 0) {
         console.log(`📚 First story:`, storiesData[0]);
       }
+
+      // Sort newest first (desc) in memory
+      storiesData.sort((a, b) => {
+        const ad = a.createdAt instanceof Date ? a.createdAt : new Date(0);
+        const bd = b.createdAt instanceof Date ? b.createdAt : new Date(0);
+        return bd.getTime() - ad.getTime();
+      });
       
       setGoalStories(prev => ({
         ...prev,
@@ -726,8 +861,40 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   };
 
   const handleStoryAdd = (goalId: string) => async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
-    // Implementation will be passed from parent component or handled here
-    console.log('Story add:', goalId, storyData);
+    try {
+      if (!currentUser) throw new Error('No user');
+
+      // Generate unique reference number for story for this owner
+      const existing = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
+      const existingRefs = existing.docs.map(d => (d.data() as any).ref).filter(Boolean) as string[];
+      const { generateRef } = await import('../utils/referenceGenerator');
+      const ref = generateRef('story', existingRefs);
+
+      // Get goal theme to inherit if available
+      let themeToUse = (storyData as any).theme ?? 1;
+      try {
+        const gSnap = await getDoc(doc(db, 'goals', goalId));
+        const gData: any = gSnap.exists() ? gSnap.data() : null;
+        if (gData && typeof gData.theme !== 'undefined') themeToUse = gData.theme;
+      } catch {}
+
+      const payload: any = {
+        ...storyData,
+        ref,
+        goalId,
+        theme: themeToUse,
+        ownerUid: currentUser.uid,
+        persona: currentPersona,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+
+      await addDoc(collection(db, 'stories'), payload);
+      console.log('✅ ModernGoalsTable: Inline story created', { goalId, ref });
+    } catch (e) {
+      console.error('❌ ModernGoalsTable: Failed to add story inline', e);
+      throw e;
+    }
   };
 
   const handleGoalExpand = (goalId: string) => {
@@ -925,6 +1092,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       goal={goal}
                       columns={columns}
                       index={index}
+                      globalThemes={globalThemes}
                       expandedGoalId={expandedGoalId}
                       goalStories={goalStories}
                       onGoalUpdate={onGoalUpdate}
@@ -1148,16 +1316,21 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
               </Form.Group>
               <Form.Group className="mb-3">
                 <Form.Label>Theme</Form.Label>
-                <Form.Select
-                  defaultValue={editingGoal.theme}
-                  onChange={(e) => setEditingGoal({...editingGoal, theme: parseInt(e.target.value) || 0})}
-                >
-                  {GLOBAL_THEMES.map((theme) => (
-                    <option key={theme.id} value={theme.id}>
-                      {theme.label}
-                    </option>
+                <Form.Control
+                  list="modal-theme-options"
+                  defaultValue={(globalThemes.find(t => t.id === (editingGoal.theme as any))?.label) || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const match = globalThemes.find(t => t.label === val || t.name === val);
+                    setEditingGoal({ ...editingGoal, theme: match ? match.id : (parseInt(val) || 0) });
+                  }}
+                  placeholder="Search themes..."
+                />
+                <datalist id="modal-theme-options">
+                  {globalThemes.map(t => (
+                    <option key={t.id} value={t.label} />
                   ))}
-                </Form.Select>
+                </datalist>
               </Form.Group>
               <Form.Group className="mb-3">
                 <Form.Label>Status</Form.Label>

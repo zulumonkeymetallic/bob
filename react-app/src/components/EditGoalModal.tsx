@@ -5,6 +5,7 @@ import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Goal } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { toDate } from '../utils/firestoreAdapters';
 
 interface EditGoalModalProps {
@@ -30,8 +31,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
-
-  const themes = GLOBAL_THEMES;
+  const { themes } = useGlobalThemes();
+  const [themeInput, setThemeInput] = useState('');
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -75,8 +76,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         priority: goal.priority || 2,
         kpis: goal.kpis || []
       });
+      const current = migrateThemeValue(goal.theme);
+      const themeObj = themes.find(t => t.id === current);
+      setThemeInput(themeObj?.label || '');
     }
-  }, [goal, show]);
+  }, [goal, show, themes]);
 
   // KPI Management functions
   const addKPI = () => {
@@ -209,14 +213,22 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
             <div className="col-md-6">
               <Form.Group className="mb-3">
                 <Form.Label>Theme</Form.Label>
-                <Form.Select
-                  value={formData.theme}
-                  onChange={(e) => setFormData({ ...formData, theme: parseInt(e.target.value) })}
-                >
-                  {themes.map(theme => (
-                    <option key={theme.id} value={theme.id}>{theme.label}</option>
+                <Form.Control
+                  list="edit-goal-theme-options"
+                  value={themeInput}
+                  onChange={(e) => setThemeInput(e.target.value)}
+                  onBlur={() => {
+                    const val = themeInput;
+                    const match = themes.find(t => t.label === val || t.name === val || String(t.id) === val);
+                    setFormData({ ...formData, theme: match ? match.id : (parseInt(val) || formData.theme) });
+                  }}
+                  placeholder="Search themes..."
+                />
+                <datalist id="edit-goal-theme-options">
+                  {themes.map(t => (
+                    <option key={t.id} value={t.label} />
                   ))}
-                </Form.Select>
+                </datalist>
               </Form.Group>
             </div>
             <div className="col-md-6">

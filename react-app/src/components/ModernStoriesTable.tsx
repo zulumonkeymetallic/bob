@@ -31,9 +31,11 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import { Story, Goal, Sprint } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
+import { useSidebar } from '../contexts/SidebarContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 
 interface StoryTableRow extends Story {
@@ -334,6 +336,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onToggleExpand
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { showSidebar } = useSidebar();
   const {
     attributes,
     listeners,
@@ -378,6 +381,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
       // Only proceed if the value actually changed
       if (oldValue !== editValue) {
         const updates: Partial<Story> = { [actualKey]: editValue };
+        // If goal changed, inherit theme from selected goal
+        if (actualKey === 'goalId') {
+          const newGoal = goals.find(g => g.id === editValue);
+          if (newGoal && (newGoal as any).theme !== undefined) {
+            (updates as any).theme = (newGoal as any).theme;
+          }
+        }
         await onStoryUpdate(story.id, updates);
         
         // Track the field change for activity stream
@@ -614,6 +624,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
           <button
+            onClick={() => showSidebar(story as any, 'story')}
+            style={{
+              color: themeVars.muted as string,
+              padding: '4px',
+              borderRadius: '4px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              fontSize: '11px',
+              fontWeight: '500',
+            }}
+            title="Activity stream"
+          >
+            <Activity size={12} />
+          </button>
+          <button
             onClick={() => handleCellEdit('title', story.title)}
             style={{
               color: themeVars.brand as string,
@@ -815,7 +842,12 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
     try {
       console.log('🎯 ModernStoriesTable: Starting new story save...');
-      await onStoryAdd(newStoryData as Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>);
+      const linkedGoal = goals.find(g => g.id === newStoryData.goalId);
+      const payload = {
+        ...newStoryData,
+        theme: (linkedGoal && (linkedGoal as any).theme !== undefined) ? (linkedGoal as any).theme : newStoryData.theme
+      } as Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>;
+      await onStoryAdd(payload);
       console.log('✅ ModernStoriesTable: Story add completed, clearing form...');
       
       // Clear the form data but keep the add row visible briefly
