@@ -185,11 +185,11 @@ function AppContent() {
             <Route path="/sprint-matrix" element={<Navigate to="/sprints/management" replace />} />
             <Route path="/current-sprint" element={<Navigate to="/sprints/kanban" replace />} />
             
-            {/* New consolidated sprint routes */}
+            {/* Sprint routes */}
             <Route path="/sprints" element={<SprintsPage />} />
-            <Route path="/sprints/management" element={<SprintsPage />} />
-            <Route path="/sprints/kanban" element={<SprintsPage />} />
-            <Route path="/sprints/stories" element={<SprintsPage />} />
+            <Route path="/sprints/management" element={<SprintTablePage />} />
+            <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
+            <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
             
             <Route path="/tasks-management" element={<TasksManagement />} />
