@@ -22,6 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Calendar, Target, Filter, Plus, ArrowUpDown, ArrowRight } from 'lucide-react';
 import { getThemeName, getStatusName, getPriorityName } from '../utils/statusHelpers';
+import { themeVars, rgbaCard } from '../utils/themeVars';
 
 // Sortable Story Card Component
 const SortableStoryCard: React.FC<{
@@ -45,21 +46,21 @@ const SortableStoryCard: React.FC<{
 
   const getStatusColor = (status: number) => {
     switch (status) {
-      case 0: return '#6b7280'; // Backlog
-      case 1: return '#2563eb'; // Planned
-      case 2: return '#f59e0b'; // In Progress
-      case 3: return '#10b981'; // Testing
-      case 4: return '#059669'; // Done
-      default: return '#6b7280';
+      case 0: return themeVars.muted as string; // Backlog
+      case 1: return themeVars.brand as string; // Planned
+      case 2: return 'var(--orange)'; // In Progress
+      case 3: return 'var(--green)'; // Testing
+      case 4: return 'var(--green)'; // Done
+      default: return themeVars.muted as string;
     }
   };
 
   const getPriorityColor = (priority: number) => {
     switch (priority) {
-      case 1: return '#dc2626'; // P1
-      case 2: return '#f59e0b'; // P2
-      case 3: return '#059669'; // P3
-      default: return '#6b7280';
+      case 1: return 'var(--red)'; // P1
+      case 2: return 'var(--orange)'; // P2
+      case 3: return 'var(--green)'; // P3
+      default: return themeVars.muted as string;
     }
   };
 
@@ -73,11 +74,11 @@ const SortableStoryCard: React.FC<{
     >
       <Card 
         style={{ 
-          border: '1px solid #e5e7eb',
+          border: `1px solid ${themeVars.border}`,
           borderRadius: '8px',
           cursor: 'grab',
           transition: 'all 0.2s ease',
-          backgroundColor: isDragging ? '#f3f4f6' : '#fff'
+          backgroundColor: isDragging ? (rgbaCard(0.06) as string) : (themeVars.panel as string)
         }}
       >
         <Card.Body style={{ padding: '12px' }}>
@@ -87,7 +88,7 @@ const SortableStoryCard: React.FC<{
                 margin: 0, 
                 fontSize: '14px', 
                 fontWeight: '600', 
-                color: '#1f2937',
+                color: themeVars.text as string,
                 lineHeight: '1.3'
               }}>
                 {story.title}
@@ -96,7 +97,7 @@ const SortableStoryCard: React.FC<{
                 <p style={{ 
                   margin: '4px 0 0 0', 
                   fontSize: '12px', 
-                  color: '#6b7280',
+                  color: themeVars.muted as string,
                   lineHeight: '1.3'
                 }}>
                   {story.description.length > 80 
@@ -130,7 +131,7 @@ const SortableStoryCard: React.FC<{
           
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '11px', color: '#6b7280', fontWeight: '500' }}>
+              <span style={{ fontSize: '11px', color: themeVars.muted as string, fontWeight: '500' }}>
                 {story.ref}
               </span>
               {story.points && (
@@ -142,8 +143,8 @@ const SortableStoryCard: React.FC<{
             
             {goal && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Target size={12} style={{ color: '#6b7280' }} />
-                <span style={{ fontSize: '10px', color: '#6b7280' }}>
+                <Target size={12} style={{ color: themeVars.muted as string }} />
+                <span style={{ fontSize: '10px', color: themeVars.muted as string }}>
                   {goal.title.length > 20 ? `${goal.title.substring(0, 20)}...` : goal.title}
                 </span>
               </div>
@@ -185,8 +186,8 @@ const SprintColumn: React.FC<{
       style={{ 
         minHeight: '400px',
         padding: '16px',
-        backgroundColor: '#f9fafb',
-        border: '2px dashed #d1d5db',
+        backgroundColor: themeVars.card as string,
+        border: `2px dashed ${themeVars.border}`,
         borderRadius: '8px',
         transition: 'all 0.2s ease'
       }}
@@ -194,7 +195,7 @@ const SprintColumn: React.FC<{
       {/* Column Header */}
       <div style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-          <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+          <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: themeVars.text as string }}>
             {isBacklog ? 'Backlog' : sprint?.name || 'Unknown Sprint'}
           </h5>
           <Badge 
@@ -209,16 +210,16 @@ const SprintColumn: React.FC<{
         </div>
         
         {sprint && !isBacklog && (
-          <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px' }}>
+          <div style={{ fontSize: '12px', color: themeVars.muted as string, marginBottom: '8px' }}>
             {new Date(sprint.startDate).toLocaleDateString()} - {new Date(sprint.endDate).toLocaleDateString()}
           </div>
         )}
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '12px', color: '#6b7280' }}>
+          <span style={{ fontSize: '12px', color: themeVars.muted as string }}>
             {stories.length} stories
           </span>
-          <span style={{ fontSize: '12px', color: '#6b7280' }}>
+          <span style={{ fontSize: '12px', color: themeVars.muted as string }}>
             {totalPoints} points
           </span>
         </div>
@@ -246,7 +247,7 @@ const SprintColumn: React.FC<{
         <div style={{ 
           textAlign: 'center', 
           padding: '40px 20px',
-          color: '#9ca3af'
+          color: themeVars.muted as string
         }}>
           <Calendar size={24} style={{ marginBottom: '8px' }} />
           <div style={{ fontSize: '14px' }}>
@@ -400,20 +401,20 @@ const SprintPlanningMatrix: React.FC = () => {
       <Container fluid className="p-4">
         <div style={{ textAlign: 'center', padding: '60px 20px' }}>
           <div className="spinner-border text-primary" />
-          <p style={{ marginTop: '16px', color: '#6b7280' }}>Loading sprint planning data...</p>
+          <p style={{ marginTop: '16px', color: themeVars.muted as string }}>Loading sprint planning data...</p>
         </div>
       </Container>
     );
   }
 
   return (
-    <Container fluid style={{ padding: '24px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
+    <Container fluid style={{ padding: '24px', backgroundColor: themeVars.bg as string, minHeight: '100vh' }}>
       {/* Header */}
       <Row className="mb-4">
         <Col>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: '#1f2937' }}>
+              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text as string }}>
                 Sprint Planning Matrix
               </h2>
               <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>

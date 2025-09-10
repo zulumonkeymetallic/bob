@@ -37,19 +37,19 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
 
   // Theme colors mapping (matching Goals)
   const themeColors = {
-    'Health': '#ef4444',
-    'Growth': '#8b5cf6', 
-    'Wealth': '#059669',
-    'Tribe': '#f59e0b',
-    'Home': '#3b82f6'
-  };
+    Health: 'var(--theme-health-primary)',
+    Growth: 'var(--theme-growth-primary)',
+    Wealth: 'var(--theme-wealth-primary)',
+    Tribe: 'var(--theme-tribe-primary)',
+    Home: 'var(--theme-home-primary)'
+  } as const;
 
   // Status colors for stories
   const statusColors = {
-    'Backlog': '#6b7280',
-    'Active': '#059669',
-    'Done': '#2563eb'
-  };
+    Backlog: 'var(--muted)',
+    Active: 'var(--green)',
+    Done: 'var(--brand)'
+  } as const;
 
   const getStoryStatusName = (status: number): string => {
     switch (status) {
@@ -68,9 +68,9 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
     const parentGoal = getGoalForStory(story.goalId);
     if (parentGoal) {
       const themeName = getThemeName(parentGoal.theme);
-      return themeColors[themeName as keyof typeof themeColors] || '#6b7280';
+    return themeColors[themeName as keyof typeof themeColors] || 'var(--muted)';
     }
-    return '#6b7280';
+  return 'var(--muted)';
   };
 
   const loadLatestActivityForStory = async (storyId: string) => {
@@ -140,7 +140,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                 style={{ 
                   minHeight: '380px',
                   cursor: 'pointer',
-                  border: selectedStoryId === story.id ? `2px solid ${themeColor}` : '1px solid #e5e7eb',
+                  border: selectedStoryId === story.id ? `2px solid ${themeColor}` : '1px solid var(--line)',
                   transition: 'all 0.2s ease-in-out',
                   transform: selectedStoryId === story.id ? 'translateY(-2px)' : 'translateY(0)',
                   boxShadow: selectedStoryId === story.id ? '0 8px 16px rgba(0,0,0,0.15)' : '0 2px 4px rgba(0,0,0,0.1)'
@@ -177,7 +177,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         fontWeight: '600',
                         lineHeight: '1.4',
                         wordBreak: 'break-word',
-                        color: '#1f2937'
+                        color: 'var(--text)'
                       }}>
                         {story.ref}
                       </h5>
@@ -185,7 +185,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         margin: '0 0 8px 0', 
                         fontSize: '14px',
                         lineHeight: '1.4',
-                        color: '#374151',
+                        color: 'var(--text)',
                         display: '-webkit-box',
                         WebkitLineClamp: 2,
                         WebkitBoxOrient: 'vertical',
@@ -196,8 +196,8 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                         <Badge 
                           style={{ 
-                            backgroundColor: statusColors[getStoryStatusName(story.status) as keyof typeof statusColors] || '#6b7280',
-                            color: 'white',
+                            backgroundColor: statusColors[getStoryStatusName(story.status) as keyof typeof statusColors] || 'var(--muted)',
+                            color: 'var(--on-accent)',
                             fontSize: '12px'
                           }}
                         >
@@ -205,8 +205,8 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         </Badge>
                         <Badge 
                           style={{ 
-                            backgroundColor: story.priority === 1 ? '#ef4444' : story.priority === 2 ? '#f59e0b' : '#6b7280',
-                            color: 'white',
+                            backgroundColor: story.priority === 1 ? 'var(--red)' : story.priority === 2 ? 'var(--orange)' : 'var(--muted)',
+                            color: 'var(--on-accent)',
                             fontSize: '12px'
                           }}
                         >
@@ -269,7 +269,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                     <div style={{ 
                       marginBottom: '16px',
                       padding: '10px',
-                      backgroundColor: '#f8fafc',
+                      backgroundColor: 'var(--card)',
                       border: `1px solid ${themeColor}`,
                       borderRadius: '6px'
                     }}>
@@ -289,7 +289,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       </div>
                       <div style={{ 
                         fontSize: '13px', 
-                        color: '#374151', 
+                        color: 'var(--text)', 
                         fontWeight: '500',
                         lineHeight: '1.3'
                       }}>
@@ -297,7 +297,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       </div>
                       <div style={{ 
                         fontSize: '11px', 
-                        color: '#6b7280', 
+                        color: 'var(--muted)', 
                         marginTop: '2px'
                       }}>
                         {getThemeName(parentGoal.theme)} • {getStatusName(parentGoal.status)}
@@ -310,14 +310,14 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                     <div style={{ 
                       marginBottom: '16px',
                       padding: '12px',
-                      backgroundColor: '#f0f9ff',
-                      border: '1px solid #0ea5e9',
+                      backgroundColor: 'rgba(var(--card-rgb), 0.1)',
+                      border: '1px solid var(--brand)',
                       borderRadius: '6px'
                     }}>
                       <div style={{ 
                         fontSize: '11px', 
                         fontWeight: '600', 
-                        color: '#0ea5e9', 
+                        color: 'var(--brand)', 
                         marginBottom: '6px',
                         textTransform: 'uppercase',
                         letterSpacing: '0.5px'

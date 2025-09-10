@@ -13,6 +13,7 @@ import AddStoryModal from './AddStoryModal';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
+import { themeVars } from '../utils/themeVars';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { toDate, formatDate } from '../utils/firestoreAdapters';
 
@@ -266,7 +267,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       <div style={{ 
         textAlign: 'center', 
         padding: '60px 20px',
-        color: '#6b7280'
+        color: themeVars.muted as string
       }}>
         <Target size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
         <h4>No Goals Found</h4>
@@ -283,7 +284,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             <Card 
               style={{ 
                 height: '100%',
-                border: selectedGoalId === goal.id ? '3px solid #3b82f6' : 'none',
+                border: selectedGoalId === goal.id ? `3px solid ${themeVars.brand}` : 'none',
                 boxShadow: selectedGoalId === goal.id 
                   ? '0 8px 20px rgba(59, 130, 246, 0.3)' 
                   : '0 4px 6px rgba(0,0,0,0.1)',
@@ -291,7 +292,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
                 cursor: 'pointer',
-                backgroundColor: selectedGoalId === goal.id ? '#f8faff' : '#fff'
+                backgroundColor: selectedGoalId === goal.id ? (themeVars.card as string) : (themeVars.panel as string)
               }}
               className="h-100"
               onClick={() => onGoalSelect?.(goal.id)}
@@ -312,7 +313,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               <div 
                 style={{ 
                   height: '6px', 
-                  backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || '#6b7280'
+                  backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)'
                 }} 
               />
 
@@ -332,8 +333,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <Badge 
                         style={{ 
-                          backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || '#6b7280',
-                          color: 'white',
+                          backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)',
+                          color: 'var(--on-accent)',
                           fontSize: '12px'
                         }}
                       >
@@ -341,8 +342,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       </Badge>
                       <Badge 
                         style={{ 
-                          backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || '#6b7280',
-                          color: 'white',
+                          backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || 'var(--muted)',
+                          color: 'var(--on-accent)',
                           fontSize: '12px'
                         }}
                       >
@@ -489,7 +490,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
                 {/* Goal Details */}
                 <div style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
                     <Target size={14} style={{ marginRight: '8px' }} />
                     <span style={{ fontWeight: '500', marginRight: '8px' }}>Size:</span>
                     <span>{goal.size}</span>
@@ -500,14 +501,14 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     <span>{goal.priority}</span>
                   </div>
                   {goal.confidence && (
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
                       <User size={14} style={{ marginRight: '8px' }} />
                       <span style={{ fontWeight: '500', marginRight: '8px' }}>Confidence:</span>
                       <span>{goal.confidence}/10</span>
                     </div>
                   )}
                   {goalTimeAllocations[goal.id] !== undefined && (
-                    <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: '#059669' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: 'var(--green)' }}>
                       <Clock size={14} style={{ marginRight: '8px' }} />
                       <span style={{ fontWeight: '500', marginRight: '8px' }}>This Week:</span>
                       <span>{Math.round(goalTimeAllocations[goal.id])} minutes allocated</span>
@@ -521,9 +522,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   justifyContent: 'space-between', 
                   alignItems: 'center',
                   paddingTop: '16px',
-                  borderTop: '1px solid #e5e7eb',
+                  borderTop: `1px solid ${themeVars.border}`,
                   fontSize: '12px',
-                  color: '#9ca3af'
+                  color: themeVars.muted as string
                 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>

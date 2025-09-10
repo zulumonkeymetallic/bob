@@ -362,8 +362,8 @@ const TaskListView: React.FC = () => {
         {/* Modern Task Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
           <Card.Header style={{ 
-            backgroundColor: '#fff', 
-            borderBottom: '1px solid #e5e7eb', 
+            backgroundColor: 'var(--panel)', 
+            borderBottom: '1px solid var(--line)', 
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
@@ -381,7 +381,7 @@ const TaskListView: React.FC = () => {
                 justifyContent: 'center'
               }}>
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading tasks...</p>
+                <p style={{ margin: 0, color: 'var(--muted)' }}>Loading tasks...</p>
               </div>
             ) : filteredTasks.length === 0 ? (
               <div style={{ 
@@ -392,7 +392,7 @@ const TaskListView: React.FC = () => {
                 alignItems: 'center',
                 justifyContent: 'center'
               }}>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '16px' }}>
                   No tasks found. Create your first task to get started!
                 </p>
               </div>

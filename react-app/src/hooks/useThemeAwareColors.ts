@@ -1,5 +1,6 @@
 // Theme-aware utilities for text colors and backgrounds
 import { useTheme } from '../contexts/ThemeContext';
+import { getCssVarValue } from '../utils/themeVars';
 
 export interface ThemeAwareTextColors {
   primary: string;
@@ -26,27 +27,27 @@ export const useThemeAwareColors = () => {
   const isDark = getComputedTheme() === 'dark';
   
   const colors: ThemeAwareTextColors = {
-    primary: isDark ? '#ffffff' : '#212529',
-    secondary: isDark ? '#adb5bd' : '#6c757d', 
-    muted: isDark ? '#6c757d' : '#868e96',
+    primary: getCssVarValue('--text', isDark ? '#ffffff' : '#212529'),
+    secondary: getCssVarValue('--text', isDark ? '#adb5bd' : '#6c757d'), 
+    muted: getCssVarValue('--muted', isDark ? '#6c757d' : '#868e96'),
     inverse: isDark ? '#212529' : '#ffffff',
-    onBackground: isDark ? '#ffffff' : '#212529',
-    onSurface: isDark ? '#ffffff' : '#212529',
-    onPrimary: '#ffffff', // Always white on primary colors
-    onSecondary: isDark ? '#ffffff' : '#212529'
+    onBackground: getCssVarValue('--text', isDark ? '#ffffff' : '#212529'),
+    onSurface: getCssVarValue('--text', isDark ? '#ffffff' : '#212529'),
+    onPrimary: getCssVarValue('--on-accent', '#ffffff'),
+    onSecondary: getCssVarValue('--text', isDark ? '#ffffff' : '#212529')
   };
   
   const backgrounds = {
-    primary: isDark ? '#212529' : '#ffffff',
-    secondary: isDark ? '#343a40' : '#f8f9fa',
-    surface: isDark ? '#495057' : '#ffffff',
-    card: isDark ? '#343a40' : '#ffffff',
-    modal: isDark ? '#495057' : '#ffffff'
+    primary: getCssVarValue('--panel', isDark ? '#212529' : '#ffffff'),
+    secondary: getCssVarValue('--bg', isDark ? '#343a40' : '#f8f9fa'),
+    surface: getCssVarValue('--panel', isDark ? '#495057' : '#ffffff'),
+    card: getCssVarValue('--card', isDark ? '#343a40' : '#ffffff'),
+    modal: getCssVarValue('--panel', isDark ? '#495057' : '#ffffff')
   };
   
   const borders = {
-    primary: isDark ? '#495057' : '#dee2e6',
-    secondary: isDark ? '#6c757d' : '#e9ecef'
+    primary: getCssVarValue('--line', isDark ? '#495057' : '#dee2e6'),
+    secondary: getCssVarValue('--line', isDark ? '#6c757d' : '#e9ecef')
   };
   
   return {
@@ -76,26 +77,25 @@ export const getContrastTextColor = (backgroundColor: string, isDark: boolean = 
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   
   // Return appropriate text color
-  return luminance > 0.5 ? '#212529' : '#ffffff';
+  return luminance > 0.5 ? getCssVarValue('--text', '#212529') : getCssVarValue('--on-accent', '#ffffff');
 };
 
 // Enhanced theme color utilities for goal themes
 export const getThemeAwareGoalColor = (themeId: number, isDark: boolean): { background: string; text: string } => {
-  const themeColors = [
-    { bg: '#6c757d', bgDark: '#495057' }, // General
-    { bg: '#dc3545', bgDark: '#c82333' }, // Health & Fitness
-    { bg: '#fd7e14', bgDark: '#e8620f' }, // Career & Professional
-    { bg: '#ffc107', bgDark: '#e0a800' }, // Finance & Wealth
-    { bg: '#198754', bgDark: '#157347' }, // Learning & Education
-    { bg: '#20c997', bgDark: '#1aa179' }, // Family & Relationships
-    { bg: '#0dcaf0', bgDark: '#0aa2c0' }, // Hobbies & Interests
-    { bg: '#0d6efd', bgDark: '#0b5ed7' }, // Travel & Adventure
-    { bg: '#6610f2', bgDark: '#5d0ce7' }, // Home & Living
-    { bg: '#d63384', bgDark: '#c42a6f' }  // Spiritual & Personal Growth
-  ];
-  
-  const theme = themeColors[themeId] || themeColors[0];
-  const backgroundColor = isDark ? theme.bgDark : theme.bg;
+  const map = {
+    0: '--theme-growth-primary',
+    1: '--theme-health-primary',
+    2: '--theme-home-primary',
+    3: '--theme-wealth-primary',
+    4: '--theme-tribe-primary',
+    5: '--theme-tribe-primary',
+    6: '--theme-growth-primary',
+    7: '--theme-growth-primary',
+    8: '--theme-home-primary',
+    9: '--theme-growth-primary'
+  } as const;
+  const cssVar = map[(themeId as unknown as number)] || '--theme-growth-primary';
+  const backgroundColor = getCssVarValue(cssVar, '#6b7280');
   const textColor = getContrastTextColor(backgroundColor, isDark);
   
   return {
