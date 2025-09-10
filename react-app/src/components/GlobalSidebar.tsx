@@ -377,13 +377,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 padding: '12px',
                 backgroundColor: rgbaCard(0.15),
                 borderRadius: '8px',
-                border: `2px solid var(--glass-border-color)`
+                border: `2px solid ${themeColor}`
               }}>
                 <div style={{ 
                   fontSize: '11px', 
-                  opacity: 0.8, 
+                  opacity: 0.9, 
                   marginBottom: '4px',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  color: themeColor as string
                 }}>
                   REFERENCE
                 </div>
@@ -392,7 +393,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   fontWeight: '900',
                   fontFamily: 'monospace',
                   letterSpacing: '2px',
-                  textShadow: '0 1px 2px rgba(0,0,0,0.3)'
+                  textShadow: '0 1px 2px rgba(0,0,0,0.15)',
+                  color: themeColor as string
                 }}>
                   {generateReferenceNumber()}
                 </div>
@@ -644,7 +646,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
               {/* Activity Stream */}
               <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, margin: 0 }}>
+                  <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeColor as string, margin: 0 }}>
                     Activity Stream
                   </h6>
                   <Button
