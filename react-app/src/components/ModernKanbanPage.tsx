@@ -460,6 +460,22 @@ const ModernKanbanPage: React.FC = () => {
                   stories={stories}
                   goals={goals}
                   sprints={[]}
+                  onTaskCreate={async (newTask) => {
+                    if (!currentUser) return;
+                    await addDoc(collection(db, 'tasks'), {
+                      title: newTask.title,
+                      description: newTask.description || '',
+                      parentType: 'story',
+                      parentId: (newTask as any).storyId || selectedStory?.id || '',
+                      status: 0,
+                      priority: newTask.priority || 2,
+                      effort: 'M',
+                      dueDate: newTask.dueDate || null,
+                      ownerUid: currentUser.uid,
+                      createdAt: serverTimestamp(),
+                      updatedAt: serverTimestamp(),
+                    });
+                  }}
                   onTaskUpdate={async (taskId, updates) => {
                     await updateDoc(doc(db, 'tasks', taskId), { ...updates, updatedAt: serverTimestamp() });
                   }}

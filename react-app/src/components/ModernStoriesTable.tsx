@@ -1372,7 +1372,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                               }}>
                                 📋 Tasks for: {story.title}
                               </h4>
-                              <StoryTasksPanel story={story} onClose={() => setExpandedStoryId(null)} />
+                              {/* Use ModernTaskTable for consistency */}
+                              <div>
+                                <em style={{ color: themeVars.muted as string }}>Open the story to manage tasks in the Tasks section below.</em>
+                              </div>
                             </div>
                           </td>
                         </tr>
