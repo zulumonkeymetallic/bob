@@ -683,7 +683,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                             border: 'none',
                             backgroundColor: 'transparent',
                             padding: '8px 0',
-                            borderBottom: index < activities.length - 1 ? `1px solid ${themeVars.border}` : 'none'
+                            borderBottom: index < activities.length - 1 ? `1px solid ${themeVars.border}` : 'none',
+                            borderLeft: `3px solid ${themeColor}`
                           }}
                         >
                           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>

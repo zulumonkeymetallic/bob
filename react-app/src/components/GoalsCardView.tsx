@@ -284,9 +284,11 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             <Card 
               style={{ 
                 height: '100%',
-                border: selectedGoalId === goal.id ? `3px solid ${themeVars.brand}` : 'none',
+                border: selectedGoalId === goal.id 
+                  ? `3px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--brand)'}` 
+                  : '1px solid var(--line)',
                 boxShadow: selectedGoalId === goal.id 
-                  ? '0 8px 20px rgba(59, 130, 246, 0.3)' 
+                  ? '0 0 0 0 rgba(0,0,0,0)' 
                   : '0 4px 6px rgba(0,0,0,0.1)',
                 borderRadius: '12px',
                 overflow: 'hidden',
@@ -442,7 +444,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     marginBottom: '16px',
                     padding: '12px',
                     backgroundColor: themeVars.card as string,
-                    border: `1px solid ${themeVars.border}`,
+                    border: `1px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || themeVars.border}`,
                     borderRadius: '6px'
                   }}>
                     <div style={{ 

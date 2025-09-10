@@ -169,6 +169,30 @@ const ThemeColorManager: React.FC = () => {
       };
 
       await setDoc(doc(db, 'global_themes', currentUser.uid), globalThemeSettings);
+      // Apply colors to CSS variables immediately and persist locally for startup
+      try {
+        const root = document.documentElement;
+        const keyMap: Record<string, string> = {
+          health: 'health',
+          growth: 'growth',
+          wealth: 'wealth',
+          tribe: 'tribe',
+          home: 'home'
+        };
+        const applied: Record<string, string> = {};
+        globalThemes.forEach(t => {
+          const name = (t.name || t.label || '').toLowerCase();
+          const match = Object.keys(keyMap).find(k => name.includes(k));
+          if (match && t.color) {
+            const varName = `--theme-${keyMap[match]}-primary`;
+            root.style.setProperty(varName, t.color);
+            applied[keyMap[match]] = t.color;
+          }
+        });
+        localStorage.setItem('bob-global-themes', JSON.stringify(applied));
+      } catch (e) {
+        console.warn('Theme CSS override failed', e);
+      }
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (error) {

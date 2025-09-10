@@ -197,6 +197,16 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   // Apply CSS custom properties and root attributes
   useEffect(() => {
     const root = document.documentElement;
+    // Apply saved global theme overrides for domain colors (Health/Growth/Wealth/Tribe/Home)
+    try {
+      const saved = localStorage.getItem('bob-global-themes');
+      if (saved) {
+        const map = JSON.parse(saved) as Record<string, string>;
+        Object.entries(map).forEach(([key, value]) => {
+          root.style.setProperty(`--theme-${key}-primary`, value);
+        });
+      }
+    } catch {}
     // Expose as --theme-* for any legacy consumers (non-breaking)
     Object.entries(theme.colors).forEach(([key, value]) => {
       root.style.setProperty(`--theme-${key}`, value);
