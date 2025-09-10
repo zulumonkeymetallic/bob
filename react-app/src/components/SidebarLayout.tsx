@@ -74,9 +74,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Sprints',
       icon: 'calendar-alt',
       items: [
+        { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' }
+      ]
+    },
+    {
+      label: 'Travel',
+      icon: 'globe',
+      items: [
+        { label: 'Travel Map', path: '/travel', icon: 'map' }
       ]
     },
     {

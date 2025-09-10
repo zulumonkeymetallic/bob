@@ -58,6 +58,7 @@ import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
 import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
+import TravelMap from './components/travel/TravelMap';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import ThemeBasedGanttChart from './components/visualization/ThemeBasedGanttChart';
 
@@ -215,6 +216,7 @@ function AppContent() {
             <Route path="/routes" element={<RoutesManagementView />} />
             <Route path="/routines" element={<RoutesManagementView />} />
             <Route path="/routes/optimization" element={<RoutesManagementView />} />
+            <Route path="/travel" element={<TravelMap />} />
             
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
