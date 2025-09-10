@@ -18,6 +18,13 @@ Key Changes
   - `react-app/src/components/ModernKanbanBoard.tsx`
   - `react-app/src/components/Column.tsx`
   - `react-app/src/components/ModernPersonalListsTable.tsx`
+  - `react-app/src/components/ModernStoriesTable.tsx`
+  - `react-app/src/components/ModernTaskTable.tsx`
+  - `react-app/src/components/ModernTaskTableProper.tsx`
+  - `react-app/src/components/ModernGoalsTable.tsx`
+  - `react-app/src/components/EnhancedKanbanPage.tsx`
+  - `react-app/src/components/ModernKanbanBoard-v3.0.8.tsx`
+  - `react-app/src/components/DetailsSidebar.tsx`
 - Domain theme defaults now come from CSS:
   - `react-app/src/hooks/useThemeColor.ts` pulls Health/Growth/Wealth/Tribe/Home colors from `ThemeColors.css` via CSS variables instead of hex literals
 
@@ -31,7 +38,7 @@ What “No Hardcoded Colors” Means Here
 - App UI colors (backgrounds, text, borders, badges, headers) reference CSS variables: `--bg`, `--panel`, `--card`, `--line`, `--text`, `--muted`, `--brand`, `--on-accent`.
 - Domain theme accents (Health/Growth/Wealth/Tribe/Home) are resolved via CSS variables from `ThemeColors.css`, ensuring dark/light harmonization and a single source of truth.
 
-Top Remaining Files With Hardcoded Color Usage
+Top Remaining Files With Hardcoded Color Usage (updated)
 
 The following files still contain color literals (hex/rgba or inline color/background/border). Suggested next migration targets, in order of density:
 
@@ -70,4 +77,3 @@ Build Status
 Closes
 
 - This PR targets issue #114 with concrete refactors, a utility layer for consistent theming, and a clear path to complete the remaining file migrations.
-
