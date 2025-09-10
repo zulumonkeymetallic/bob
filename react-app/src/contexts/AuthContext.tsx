@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
+import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut, signInAnonymously } from 'firebase/auth';
 import { auth } from '../firebase';
 // import { SideDoorAuth } from '../services/SideDoorAuth';
 
@@ -99,6 +99,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       console.log('🧪 Setting test user immediately:', testUser.email);
       setCurrentUser(testUser as unknown as User);
       setIsTestUser(true);
+
+      // When using emulator for tests, also sign in to Auth emulator anonymously
+      if (process.env.REACT_APP_USE_FIREBASE_EMULATOR === 'true') {
+        try {
+          console.log('🧪 Connecting to Auth emulator with anonymous sign-in...');
+          signInAnonymously(auth)
+            .then(() => console.log('🧪 Anonymous auth sign-in complete (emulator)'))
+            .catch(err => console.warn('⚠️ Anonymous sign-in failed (emulator):', err?.message));
+        } catch (err) {
+          console.warn('⚠️ Emulator auth init error:', (err as any)?.message);
+        }
+      }
       
       // Clean URL after a delay
       setTimeout(() => {
