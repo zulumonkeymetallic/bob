@@ -26,7 +26,8 @@ async function createDemoUser() {
     uid: 'demo-user-jc1-tech',
     email: 'demo@jc1.tech',
     displayName: 'Demo User',
-    password: 'Test1234b!',
+    // Use environment variable for demo password; default to placeholder
+    password: process.env.DEMO_USER_PASSWORD || 'CHANGEME',
     emailVerified: true
   };
 

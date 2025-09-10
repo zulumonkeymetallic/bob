@@ -18,6 +18,12 @@ backups/
 *.xz
 *.7z
 *.rar
+# Secrets and credentials (do not commit)
+firebase-service-account.json
+serviceAccountKey.json
+AGENTIC_AI_TEST_CREDENTIALS.json
+agentic-ai-test-token.txt
+*.secret.json
 
 # Ignore pre-push logs
 pre-push-*.log

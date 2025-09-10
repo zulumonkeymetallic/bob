@@ -281,7 +281,7 @@ const EnhancedKanbanPage: React.FC = () => {
       title: story.title,
       description: story.description || '',
       goalId: story.goalId || '',
-      priority: story.priority,
+      priority: (story as any).priority || 2,
       points: story.points || 1
     });
     setSelectedStory(story);

@@ -7,7 +7,8 @@ const AGENTIC_TEST_USER = {
     uid: 'agentic-ai-test-user',
     email: 'agenticaitestuser@jc1.tech',
     displayName: 'Agentic AI Test User',
-    password: 'SecureAgenticAI2025!',
+    // Use env var; avoid committing real passwords
+    password: process.env.AGENTIC_TEST_USER_PASSWORD || 'CHANGEME',
     emailVerified: true,
     disabled: false
 };
@@ -149,7 +150,7 @@ class AgenticAITestUserManager {
                         '1. Navigate to https://bob20250810.web.app',
                         '2. Click "Sign in with Google" button',
                         '3. Use email: agenticaitestuser@jc1.tech',
-                        '4. Use password: SecureAgenticAI2025!',
+                        '4. Use password: <set via AGENTIC_TEST_USER_PASSWORD>',
                         '5. Complete authentication'
                     ]
                 },

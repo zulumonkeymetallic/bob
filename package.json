@@ -1,7 +1,26 @@
 {
+  "name": "bob-root",
   "version": "3.1.3",
+  "private": true,
   "dependencies": {
     "react-dnd": "^16.0.1",
     "react-dnd-html5-backend": "^16.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.2",
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "firebase-tools": "^13.19.1",
+    "serve": "^14.2.4",
+    "wait-on": "^7.2.0"
+  },
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "emulators": "firebase emulators:start --only firestore,auth --project bob20250810",
+    "react:dev": "cross-env BROWSER=none PORT=3000 REACT_APP_USE_FIREBASE_EMULATOR=true npm start --prefix react-app",
+    "dev:test": "concurrently -k -s first \"npm:emulators\" \"npm:react:dev\"",
+    "preview:build": "serve -s react-app/build -l 4173",
+    "preview:test": "concurrently -k -s first \"npm:emulators\" \"npm:preview:build\""
   }
 }

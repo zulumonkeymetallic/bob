@@ -3,6 +3,7 @@
  * Tracks all user interactions (clicks, taps) across the entire application
  * Supports both mouse and touch events for desktop and mobile/iPad
  */
+import logger from '../utils/logger';
 
 export interface ClickEvent {
   timestamp: string;
@@ -38,7 +39,7 @@ class ClickTrackingService {
   public initialize() {
     if (this.isInitialized) return;
     
-    console.log('🖱️ CLICK TRACKING: Initializing global click tracking service');
+    logger.info('click', 'Initializing global click tracking service');
     
     // Track mouse clicks (desktop)
     document.addEventListener('click', this.handleClick, true);
@@ -54,11 +55,11 @@ class ClickTrackingService {
     this.trackPageNavigation();
     
     this.isInitialized = true;
-    console.log('✅ CLICK TRACKING: Service initialized successfully');
+    logger.info('click', 'Click tracking initialized');
   }
   
   public destroy() {
-    console.log('🛑 CLICK TRACKING: Destroying click tracking service');
+    logger.info('click', 'Destroying click tracking service');
     document.removeEventListener('click', this.handleClick, true);
     document.removeEventListener('touchend', this.handleTouch, true);
     document.removeEventListener('scroll', this.handleScroll, true);
@@ -117,15 +118,17 @@ class ClickTrackingService {
     const pageInfo = this.getPageInfo();
     const componentInfo = this.getComponentInfo(target);
     
-    console.log('📜 🖥️ USER SCROLL');
-    console.log('📍 Page:', pageInfo.page);
-    console.log('🧩 Component:', componentInfo.component);
-    console.log('🎯 Element:', componentInfo.element);
-    console.log('📍 Scroll Position:', { scrollTop, scrollLeft });
-    console.log('📏 Scroll Size:', { scrollHeight, scrollWidth });
-    console.log('🔄 Direction:', direction);
-    console.log('⏰ Timestamp:', new Date().toISOString());
-    console.log(`📜 ${pageInfo.page} → ${componentInfo.component} → ${componentInfo.element} | Direction: ${direction}`);
+    logger.debug('click', 'Scroll', {
+      page: pageInfo.page,
+      component: componentInfo.component,
+      element: componentInfo.element,
+      scrollTop,
+      scrollLeft,
+      scrollHeight,
+      scrollWidth,
+      direction,
+      at: new Date().toISOString(),
+    });
   }
   
   private logInteraction(event: Event, eventType: 'click' | 'touch') {
@@ -286,9 +289,7 @@ class ClickTrackingService {
   
   private trackPageNavigation() {
     // Track initial page load
-    console.log('🌐 PAGE NAVIGATION: Initial page load');
-    console.log('📍 URL:', window.location.href);
-    console.log('📱 Device:', this.detectDevice());
+    logger.info('click', 'Initial page load', { url: window.location.href, device: this.detectDevice() });
     
     // Track history changes (React Router navigation)
     const originalPushState = window.history.pushState;
@@ -296,47 +297,34 @@ class ClickTrackingService {
     
     window.history.pushState = function(...args) {
       originalPushState.apply(window.history, args);
-      console.log('🌐 PAGE NAVIGATION: History pushState');
-      console.log('📍 New URL:', window.location.href);
+      logger.info('click', 'History pushState', { url: window.location.href });
     };
     
     window.history.replaceState = function(...args) {
       originalReplaceState.apply(window.history, args);
-      console.log('🌐 PAGE NAVIGATION: History replaceState');
-      console.log('📍 New URL:', window.location.href);
+      logger.info('click', 'History replaceState', { url: window.location.href });
     };
     
     // Track popstate (back/forward)
     window.addEventListener('popstate', () => {
-      console.log('🌐 PAGE NAVIGATION: Popstate (back/forward)');
-      console.log('📍 URL:', window.location.href);
+      logger.info('click', 'History popstate', { url: window.location.href });
     });
   }
   
   private logClickEvent(clickEvent: ClickEvent) {
-    const emoji = clickEvent.eventType === 'touch' ? '👆' : '🖱️';
-    const deviceEmoji = clickEvent.device === 'tablet' ? '📱' : clickEvent.device === 'mobile' ? '📱' : '🖥️';
-    
-    console.group(`${emoji} ${deviceEmoji} USER INTERACTION`);
-    console.log('📍 Page:', clickEvent.page);
-    console.log('🧩 Component:', clickEvent.component);
-    console.log('🎯 Element:', clickEvent.element);
-    console.log('📍 Coordinates:', clickEvent.coordinates);
-    console.log('🏷️ Target:', clickEvent.targetInfo.tagName);
-    console.log('📝 Text:', clickEvent.targetInfo.textContent);
-    console.log('🆔 ID:', clickEvent.targetInfo.id || '(none)');
-    console.log('🎨 Classes:', clickEvent.targetInfo.className || '(none)');
-    if (clickEvent.targetInfo.ariaLabel) {
-      console.log('♿ Aria Label:', clickEvent.targetInfo.ariaLabel);
-    }
-    if (clickEvent.targetInfo.role) {
-      console.log('🎭 Role:', clickEvent.targetInfo.role);
-    }
-    console.log('⏰ Timestamp:', clickEvent.timestamp);
-    console.groupEnd();
-    
-    // Also log a condensed version for easier scanning
-    console.log(`${emoji} ${clickEvent.page} → ${clickEvent.component} → ${clickEvent.element} | "${clickEvent.targetInfo.textContent}"`);
+    logger.debug('click', 'User interaction', {
+      page: clickEvent.page,
+      component: clickEvent.component,
+      element: clickEvent.element,
+      coords: clickEvent.coordinates,
+      device: clickEvent.device,
+      id: clickEvent.targetInfo.id,
+      className: clickEvent.targetInfo.className,
+      text: clickEvent.targetInfo.textContent,
+      ariaLabel: clickEvent.targetInfo.ariaLabel,
+      role: clickEvent.targetInfo.role,
+      at: clickEvent.timestamp,
+    });
   }
 }
 

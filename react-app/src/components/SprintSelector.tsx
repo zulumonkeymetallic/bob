@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Sprint } from '../types';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import logger from '../utils/logger';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
@@ -27,7 +28,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
       return;
     }
 
-    console.log('🔄 SprintSelector: Setting up sprint listener for user:', currentUser.uid);
+    logger.debug('sprint', 'Setting up sprint listener for user', { uid: currentUser.uid });
 
     const q = query(
       collection(db, 'sprints'),
@@ -37,7 +38,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
 
     const unsubscribe = onSnapshot(q, 
       (snapshot) => {
-        console.log('✅ SprintSelector: Received sprint data:', snapshot.docs.length, 'sprints');
+        logger.debug('sprint', 'Received sprint data', { count: snapshot.docs.length });
         const sprintData = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
@@ -67,15 +68,15 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           // If no sprint is selected or current selection is not found, select preferred
           if (!selectedSprintId || !sprintData.find(s => s.id === selectedSprintId)) {
             if (preferredSprint) {
-              console.log('🎯 SprintSelector: Auto-selecting sprint:', preferredSprint.name, preferredSprint.status);
+              logger.info('sprint', 'Auto-selecting sprint', { name: preferredSprint.name, status: preferredSprint.status });
               onSprintChange(preferredSprint.id);
             }
           }
         }
       },
       (error) => {
-        console.error('❌ SprintSelector: Error loading sprints:', error);
-        console.log('🔍 SprintSelector: Error details:', {
+        logger.error('sprint', 'Error loading sprints', error);
+        logger.debug('sprint', 'Error details', {
           code: error.code,
           message: error.message,
           userUid: currentUser?.uid,

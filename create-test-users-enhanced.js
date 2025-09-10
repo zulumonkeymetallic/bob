@@ -26,12 +26,13 @@ class BOBTestUserCreator {
     this.firestore = null;
     
     // Test users to create
+    const defaultPass = process.env.E2E_TEST_USER_PASSWORD || 'CHANGEME';
     this.testUsers = [
       {
         uid: 'ai-test-user-12345abcdef',
         email: 'ai-test-agent@bob.local',
         displayName: 'AI Test Agent',
-        password: 'TestPassword123!',
+        password: defaultPass,
         customClaims: {
           isTestUser: true,
           testRole: 'automation',
@@ -42,7 +43,7 @@ class BOBTestUserCreator {
         uid: 'automation-test-67890ghijk',
         email: 'automation@bob.local',
         displayName: 'Test Automation User',
-        password: 'AutomationPass456!',
+        password: defaultPass,
         customClaims: {
           isTestUser: true,
           testRole: 'automation',
@@ -53,7 +54,7 @@ class BOBTestUserCreator {
         uid: 'crud-test-98765fedcba',
         email: 'crud-test@bob.local',
         displayName: 'CRUD Test User',
-        password: 'CrudTest789!',
+        password: defaultPass,
         customClaims: {
           isTestUser: true,
           testRole: 'crud-testing',
