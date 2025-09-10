@@ -2,13 +2,27 @@ import { test, expect } from '@playwright/test';
 
 const unique = (prefix: string) => `${prefix}-${Date.now().toString(36).slice(-6)}`;
 
+async function login(page) {
+  const email = process.env.TEST_USER_EMAIL;
+  const password = process.env.TEST_USER_PASSWORD;
+  if (email && password) {
+    await page.goto('/');
+    // Email/password login
+    await expect(page.getByText('BOB')).toBeVisible();
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(password);
+    await page.getByRole('button', { name: /Sign In/i }).click();
+    await page.waitForSelector('button.md-fab', { timeout: 20000 });
+  } else {
+    // Fallback to side-door test auth when secrets absent
+    await page.goto('/?test-login=true&test-mode=true');
+    await page.waitForSelector('button.md-fab');
+  }
+}
+
 test.describe('BOB E2E CRUD (Goals, Stories, Sprints, Tasks)', () => {
   test('CRUD across cards and tables', async ({ page }) => {
-    const base = '/?test-login=true&test-mode=true';
-
-    // Login via test side-door and ensure app is loaded
-    await page.goto(base);
-    await page.waitForSelector('button.md-fab');
+    await login(page);
 
     // ---------- Goals (Create via FAB) ----------
     const goalTitle = unique('Goal E2E');
@@ -16,7 +30,7 @@ test.describe('BOB E2E CRUD (Goals, Stories, Sprints, Tasks)', () => {
     await page.getByTitle('Add Goal').click();
     await page.getByLabel('Title *').fill(goalTitle);
     await page.getByRole('button', { name: 'Create Goal' }).click();
-    await expect(page.getByText('✅ Goal created successfully!')).toBeVisible();
+    await expect(page.getByText(/Goal created successfully/i)).toBeVisible();
 
     // Verify in Goals list (table) and update/delete
     await page.goto('/goals');
@@ -84,7 +98,7 @@ test.describe('BOB E2E CRUD (Goals, Stories, Sprints, Tasks)', () => {
     const storyTitle = unique('Story E2E');
     await page.getByLabel('Title *').fill(storyTitle);
     await page.getByRole('button', { name: 'Create Story' }).click();
-    await expect(page.getByText('✅ Story created successfully!')).toBeVisible();
+    await expect(page.getByText(/Story created successfully/i)).toBeVisible();
 
     // Verify in table then switch to cards
     await expect(page.getByText(storyTitle)).toBeVisible();

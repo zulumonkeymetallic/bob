@@ -23,10 +23,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: useBuild ? 'npm run preview:test' : 'npm run dev:test',
+    command: useBuild ? 'npm run preview:build' : 'npm run dev:test',
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
   },
 });
-

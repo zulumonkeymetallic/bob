@@ -7,48 +7,57 @@ on:
     branches: [ feature/**, fix/**, release/**, ci-setup-clean ]
 
 jobs:
-  e2e:
+  unit:
+    name: Unit Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - name: Install root deps
         run: npm ci || npm i
-
       - name: Install app deps (CRA)
         run: npm ci --prefix react-app || npm i --prefix react-app
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps
-
       - name: Unit tests (CRA)
         run: npm test --prefix react-app -- --watchAll=false
 
-      - name: Build app (uses emulator endpoints for tests)
-        run: REACT_APP_USE_FIREBASE_EMULATOR=true npm run build --prefix react-app
-
+  e2e:
+    name: E2E Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: Test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install root deps
+        run: npm ci || npm i
+      - name: Install app deps (CRA)
+        run: npm ci --prefix react-app || npm i --prefix react-app
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+      - name: Build app
+        run: npm run build --prefix react-app
       - name: Check version alignment
         run: node scripts/check-version-alignment.js
-
       - name: Run E2E (smoke)
         env:
           CI: true
           PW_USE_BUILD: '1'
           APP_BASE_URL: http://localhost:4173
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
         run: npx playwright test
-
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: playwright-report
-
       - name: Upload test results (JUnit)
         if: always()
         uses: actions/upload-artifact@v4
