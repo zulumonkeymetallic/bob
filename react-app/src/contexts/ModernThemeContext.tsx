@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
+import { getCssVarValue } from '../utils/themeVars';
 
 // Theme types
 export type ThemeMode = 'light' | 'dark' | 'auto';
@@ -40,59 +41,32 @@ export interface ThemeConfig {
   isDark: boolean;
 }
 
-// Light theme colors
-const lightTheme: ThemeColors = {
-  primary: '#0066cc',
-  secondary: '#6c757d',
-  surface: '#ffffff',
-  background: '#f8fafc',
+// Build theme tokens from CSS variables (keeps source of truth in CSS)
+const buildThemeColors = (): ThemeColors => ({
+  primary: getCssVarValue('--brand', '#3b82f6'),
+  secondary: getCssVarValue('--muted', '#6b7280'),
+  surface: getCssVarValue('--panel', '#ffffff'),
+  background: getCssVarValue('--bg', '#f8fafc'),
   
-  onPrimary: '#ffffff',
-  onSecondary: '#ffffff',
-  onSurface: '#1f2937',
-  onBackground: '#374151',
+  onPrimary: getCssVarValue('--on-accent', '#ffffff'),
+  onSecondary: getCssVarValue('--text', '#1f2937'),
+  onSurface: getCssVarValue('--text', '#1f2937'),
+  onBackground: getCssVarValue('--text', '#374151'),
   
-  accent: '#3b82f6',
-  success: '#10b981',
-  warning: '#f59e0b',
-  danger: '#ef4444',
-  info: '#06b6d4',
+  accent: getCssVarValue('--brand', '#3b82f6'),
+  success: getCssVarValue('--green', '#10b981'),
+  warning: getCssVarValue('--orange', '#f59e0b'),
+  danger: getCssVarValue('--red', '#ef4444'),
+  info: getCssVarValue('--blue', '#06b6d4'),
   
-  border: '#e5e7eb',
-  divider: '#f3f4f6',
+  border: getCssVarValue('--line', '#e5e7eb'),
+  divider: getCssVarValue('--line', '#f3f4f6'),
   
-  hover: '#f3f4f6',
-  focus: '#dbeafe',
-  active: '#3b82f6',
-  disabled: '#9ca3af'
-};
-
-// Dark theme colors
-const darkTheme: ThemeColors = {
-  primary: '#3b82f6',
-  secondary: '#6b7280',
-  surface: '#1f2937',
-  background: '#111827',
-  
-  onPrimary: '#ffffff',
-  onSecondary: '#ffffff',
-  onSurface: '#f9fafb',
-  onBackground: '#e5e7eb',
-  
-  accent: '#60a5fa',
-  success: '#34d399',
-  warning: '#fbbf24',
-  danger: '#f87171',
-  info: '#22d3ee',
-  
-  border: '#374151',
-  divider: '#4b5563',
-  
-  hover: '#374151',
-  focus: '#1e40af',
-  active: '#60a5fa',
-  disabled: '#6b7280'
-};
+  hover: getCssVarValue('--card', '#f3f4f6'),
+  focus: getCssVarValue('--brand', '#dbeafe'),
+  active: getCssVarValue('--brand', '#3b82f6'),
+  disabled: getCssVarValue('--muted', '#9ca3af')
+});
 
 // Theme context
 interface ThemeContextType {
@@ -213,15 +187,17 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     });
   };
   
+  const colors = useMemo(() => buildThemeColors(), [actualTheme]);
   const theme: ThemeConfig = {
     mode: themeMode,
-    colors: actualTheme === 'dark' ? darkTheme : lightTheme,
+    colors,
     isDark: actualTheme === 'dark'
   };
   
   // Apply CSS custom properties and root attributes
   useEffect(() => {
     const root = document.documentElement;
+    // Expose as --theme-* for any legacy consumers (non-breaking)
     Object.entries(theme.colors).forEach(([key, value]) => {
       root.style.setProperty(`--theme-${key}`, value);
     });

@@ -14,6 +14,7 @@ import StoryTasksPanel from './StoryTasksPanel';
 import StoriesCardView from './StoriesCardView';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import CompactSprintMetrics from './CompactSprintMetrics';
+import { themeVars } from '../utils/themeVars';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -241,7 +242,7 @@ const StoriesManagement: React.FC = () => {
   return (
     <div style={{ 
       padding: '24px', 
-      backgroundColor: '#f8f9fa',
+      backgroundColor: themeVars.bg as string,
       minHeight: '100vh',
       width: '100%'
     }}>
@@ -257,13 +258,13 @@ const StoriesManagement: React.FC = () => {
             <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
               Stories Management
             </h2>
-            <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
+            <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '16px' }}>
               Manage user stories and their relationships to goals
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {/* View Mode Toggle */}
-            <div style={{ display: 'flex', border: '1px solid #d1d5db', borderRadius: '6px', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', border: `1px solid ${themeVars.border}`, borderRadius: '6px', overflow: 'hidden' }}>
               <Button
                 variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
                 size="sm"
@@ -320,10 +321,10 @@ const StoriesManagement: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.text as string }}>
                   {storyCounts.total}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '14px', fontWeight: '500' }}>
                   Total Stories
                 </p>
               </Card.Body>
@@ -332,10 +333,10 @@ const StoriesManagement: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#6b7280' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.muted as string }}>
                   {storyCounts.backlog}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '14px', fontWeight: '500' }}>
                   Backlog
                 </p>
               </Card.Body>
@@ -344,10 +345,10 @@ const StoriesManagement: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.brand as string }}>
                   {storyCounts.active}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '14px', fontWeight: '500' }}>
                   Active
                 </p>
               </Card.Body>
@@ -356,10 +357,10 @@ const StoriesManagement: React.FC = () => {
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--green)' }}>
                   {storyCounts.done}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '14px', fontWeight: '500' }}>
                   Done
                 </p>
               </Card.Body>
@@ -407,7 +408,7 @@ const StoriesManagement: React.FC = () => {
                   <Form.Select
                     value={filterGoal}
                     onChange={(e) => setFilterGoal(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: `1px solid ${themeVars.border}` }}
                   >
                     <option value="all">All Goals</option>
                     {goals.map(goal => (
@@ -426,7 +427,7 @@ const StoriesManagement: React.FC = () => {
                     setFilterGoal('all');
                     setSearchTerm('');
                   }}
-                  style={{ borderColor: '#d1d5db' }}
+                  style={{ borderColor: themeVars.border as string }}
                 >
                   Clear Filters
                 </Button>
@@ -438,8 +439,8 @@ const StoriesManagement: React.FC = () => {
         {/* Modern Stories Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
           <Card.Header style={{ 
-            backgroundColor: '#fff', 
-            borderBottom: '1px solid #e5e7eb', 
+            backgroundColor: themeVars.panel as string, 
+            borderBottom: `1px solid ${themeVars.border}`, 
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
@@ -457,7 +458,7 @@ const StoriesManagement: React.FC = () => {
                 justifyContent: 'center'
               }}>
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading stories...</p>
+                <p style={{ margin: 0, color: themeVars.muted as string }}>Loading stories...</p>
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }} data-component="StoriesManagement">
