@@ -232,7 +232,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         sprintId: formData.sprintId,
         priority: formData.priority,
         points: parseInt(formData.points.toString()),
-        status: 'backlog',
+        status: 0,
         theme: linkedGoal?.theme ?? 1,
         persona: currentPersona,
         ownerUid: currentUser.uid, // Ensure ownerUid is included

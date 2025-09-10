@@ -151,6 +151,7 @@ interface SortableRowProps {
   onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
   onStoryAdd: (goalId: string) => (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
   globalThemes: GlobalTheme[];
+  availableGoals: Goal[];
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -168,7 +169,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryDelete,
   onStoryPriorityChange,
   onStoryAdd,
-  globalThemes
+  globalThemes,
+  availableGoals
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
@@ -687,7 +689,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             </h4>
             <ModernStoriesTable
               stories={goalStories[goal.id] || []}
-              goals={[]}
+              goals={availableGoals}
               goalId={goal.id}
               onStoryUpdate={onStoryUpdate}
               onStoryDelete={onStoryDelete}
@@ -721,6 +723,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
   const [goalStories, setGoalStories] = useState<{ [goalId: string]: Story[] }>({});
+  const [allGoals, setAllGoals] = useState<Goal[]>([]);
   const { trackClick } = useActivityTracking();
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
@@ -818,6 +821,21 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
 
     return unsubscribe;
   }, [currentUser, expandedGoalId, currentPersona]);
+
+  // Load all goals for searchable goal lists in expanded stories tables
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[];
+      setAllGoals(list);
+    }, (err) => console.warn('ModernGoalsTable: goals load failed', err));
+    return unsub;
+  }, [currentUser, currentPersona]);
 
   const handleEditModal = (goal: Goal) => {
     trackClick({
@@ -1093,11 +1111,12 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       columns={columns}
                       index={index}
                       globalThemes={globalThemes}
+                      availableGoals={allGoals}
                       expandedGoalId={expandedGoalId}
                       goalStories={goalStories}
                       onGoalUpdate={onGoalUpdate}
                       onGoalDelete={onGoalDelete}
-                      onEditModal={handleEditModal}
+                      onEditModal={onEditModal ? onEditModal : handleEditModal}
                       onRowClick={handleRowClick}
                       onGoalExpand={handleGoalExpand}
                       onStoryUpdate={handleStoryUpdate}

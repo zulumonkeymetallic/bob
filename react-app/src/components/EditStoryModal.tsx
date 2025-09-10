@@ -191,6 +191,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   value={editedStory.status}
                   onChange={(e) => handleInputChange('status', parseInt(e.target.value))}
                 >
+                  <option value={0}>Backlog</option>
                   <option value={1}>Planned</option>
                   <option value={2}>In Progress</option>
                   <option value={3}>Testing</option>
