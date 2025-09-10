@@ -106,11 +106,12 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
         right: isVisible ? 0 : '-400px',
         width: '400px',
         height: '100vh',
-        backgroundColor: 'white',
+        backgroundColor: themeVars.panel as string,
         boxShadow: '-4px 0 8px rgba(0,0,0,0.1)',
         zIndex: 1000,
         transition: 'right 0.3s ease',
-        overflow: 'auto'
+        overflow: 'auto',
+        color: themeVars.text as string
       }}
     >
       {/* Header */}
@@ -357,7 +358,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
           <>
             <Row style={{ marginBottom: '20px' }}>
               <Col xs={6}>
-                <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text as string, marginBottom: '6px', display: 'block' }}>
                   Effort
                 </label>
                 {isEditing ? (
@@ -370,7 +371,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                     <option value="L">L - Large</option>
                   </Form.Select>
                 ) : (
-                  <Badge bg="outline-secondary" style={{ fontSize: '12px', padding: '6px 12px', border: '1px solid #d1d5db' }}>
+                  <Badge bg="outline-secondary" style={{ fontSize: '12px', padding: '6px 12px', border: `1px solid ${themeVars.border}` }}>
                     {(item as Task).effort}
                   </Badge>
                 )}
@@ -481,7 +482,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
 
         {/* Save Button */}
         {isEditing && (
-          <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #e5e7eb' }}>
+          <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: `1px solid ${themeVars.border}` }}>
             <div style={{ display: 'flex', gap: '12px' }}>
               <Button variant="primary" onClick={handleSave} style={{ flex: 1 }}>
                 <Save size={16} style={{ marginRight: '6px' }} />

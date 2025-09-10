@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal } from '../types';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
+import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
@@ -37,11 +38,11 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
 
   // Theme colors mapping (matching Goals)
   const themeColors = {
-    Health: 'var(--theme-health-primary)',
-    Growth: 'var(--theme-growth-primary)',
-    Wealth: 'var(--theme-wealth-primary)',
-    Tribe: 'var(--theme-tribe-primary)',
-    Home: 'var(--theme-home-primary)'
+    Health: domainThemePrimaryVar('Health'),
+    Growth: domainThemePrimaryVar('Growth'),
+    Wealth: domainThemePrimaryVar('Wealth'),
+    Tribe: domainThemePrimaryVar('Tribe'),
+    Home: domainThemePrimaryVar('Home')
   } as const;
 
   // Status colors for stories
@@ -311,13 +312,13 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       marginBottom: '16px',
                       padding: '12px',
                       backgroundColor: 'rgba(var(--card-rgb), 0.1)',
-                      border: '1px solid var(--brand)',
+                      border: `1px solid ${(() => { const g = getGoalForStory(story.goalId); const tn = g ? getThemeName(g.theme) : undefined; return (tn && themeColors[tn as keyof typeof themeColors]) || themeVars.border; })()}`,
                       borderRadius: '6px'
                     }}>
                       <div style={{ 
                         fontSize: '11px', 
                         fontWeight: '600', 
-                        color: 'var(--brand)', 
+                        color: (() => { const g = getGoalForStory(story.goalId); const tn = g ? getThemeName(g.theme) : undefined; return (tn && themeColors[tn as keyof typeof themeColors]) || 'var(--brand)'; })(), 
                         marginBottom: '6px',
                         textTransform: 'uppercase',
                         letterSpacing: '0.5px'
@@ -332,7 +333,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       </div>
                       <div style={{ 
                         fontSize: '12px', 
-                        color: '#374151', 
+                        color: 'var(--text)', 
                         fontStyle: 'italic',
                         lineHeight: '1.4'
                       }}>
@@ -348,7 +349,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       </div>
                       <div style={{ 
                         fontSize: '10px', 
-                        color: '#6b7280', 
+                        color: 'var(--muted)', 
                         marginTop: '6px'
                       }}>
                         {ActivityStreamService.formatTimestamp(latestActivities[story.id].timestamp)}
@@ -385,9 +386,9 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                     justifyContent: 'space-between', 
                     alignItems: 'center',
                     paddingTop: '16px',
-                    borderTop: '1px solid #e5e7eb',
+                    borderTop: '1px solid var(--line)',
                     fontSize: '12px',
-                    color: '#9ca3af'
+                    color: 'var(--muted)'
                   }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                       <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -395,7 +396,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         Created: {story.createdAt && (story.createdAt instanceof Date ? story.createdAt.toLocaleDateString() : new Date(story.createdAt).toLocaleDateString())}
                       </div>
                       {story.updatedAt && (
-                        <div style={{ display: 'flex', alignItems: 'center', color: '#059669', fontWeight: '500' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', color: 'var(--green)', fontWeight: '500' }}>
                           <Calendar size={12} style={{ marginRight: '4px' }} />
                           Updated: {story.updatedAt instanceof Date ? story.updatedAt.toLocaleDateString() : new Date(story.updatedAt).toLocaleDateString()} at {story.updatedAt instanceof Date ? story.updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date(story.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </div>

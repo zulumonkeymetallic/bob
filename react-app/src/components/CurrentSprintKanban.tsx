@@ -6,7 +6,8 @@ import { Story, Sprint, Task, Goal } from '../types';
 import { Container, Row, Col, Card, Dropdown, Button } from 'react-bootstrap';
 import ModernTaskTable from './ModernTaskTable';
 import { ChoiceHelper } from '../config/choices';
-import { isStatus, isTheme } from '../utils/statusHelpers';
+import { isStatus, isTheme, getThemeName } from '../utils/statusHelpers';
+import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
 
 const CurrentSprintKanban: React.FC = () => {
     const { currentUser } = useAuth();
@@ -26,12 +27,9 @@ const CurrentSprintKanban: React.FC = () => {
         { id: 4, title: 'Done', stringId: 'done' } // Story DONE = 4
     ];
 
-    const themeColors = {
-        1: '#22c55e', // Health
-        2: '#3b82f6', // Growth
-        3: '#eab308', // Wealth
-        4: '#8b5cf6', // Tribe
-        5: '#f97316'  // Home
+    const themeColorForGoal = (goal?: Goal) => {
+        if (!goal) return themeVars.muted as string;
+        return domainThemePrimaryVar(getThemeName(goal.theme));
     };
 
     useEffect(() => {
@@ -220,7 +218,7 @@ const CurrentSprintKanban: React.FC = () => {
                                         <Card.Body style={{ maxHeight: '70vh', overflowY: 'auto' }}>
                                             {laneStories.map(story => {
                                                 const goal = getGoalForStory(story);
-                                                const themeColor = goal?.theme ? themeColors[goal.theme] : '#6b7280';
+                                                const themeColor = themeColorForGoal(goal);
                                                 const taskCount = getTasksForStory(story.id).length;
                                                 const doneTaskCount = getTasksForStory(story.id).filter(t => t.status === 2).length; // Task Done = 2
                                                 
@@ -249,9 +247,9 @@ const CurrentSprintKanban: React.FC = () => {
                                                                 </small>
                                                             </div>
                                                             {latestActivities[story.id] && (
-                                                                <div className="mt-2 p-2" style={{ background: '#f0f9ff', border: '1px solid #0ea5e9', borderRadius: 6 }}>
-                                                                    <small style={{ color: '#0ea5e9', fontWeight: 600 }}>Latest Activity</small>
-                                                                    <div style={{ fontSize: '0.85rem' }}>
+                                                                <div className="mt-2 p-2" style={{ background: 'rgba(var(--card-rgb), 0.1)', border: `1px solid ${themeColor}`, borderRadius: 6 }}>
+                                                                    <small style={{ color: themeColor as string, fontWeight: 600 }}>Latest Activity</small>
+                                                                    <div style={{ fontSize: '0.85rem', color: 'var(--text)' }}>
                                                                         {latestActivities[story.id].activityType === 'note_added' ? `"${latestActivities[story.id].noteContent}"` : latestActivities[story.id].description || 'Updated'}
                                                                     </div>
                                                                 </div>
@@ -286,8 +284,8 @@ const CurrentSprintKanban: React.FC = () => {
         </Container>
         {activityModal.story && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setActivityModal({ story: null, note: '' })}>
-            <div style={{ background: 'white', width: 520, maxWidth: '90%', borderRadius: 8, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }} onClick={(e) => e.stopPropagation()}>
-              <div style={{ padding: 16, borderBottom: '1px solid #e5e7eb' }}>
+            <div style={{ background: 'var(--panel)', color: 'var(--text)', width: 520, maxWidth: '90%', borderRadius: 8, boxShadow: '0 10px 30px rgba(0,0,0,0.2)', border: '1px solid var(--line)' }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ padding: 16, borderBottom: '1px solid var(--line)' }}>
                 <h5 style={{ margin: 0 }}>Add Note: {activityModal.story.ref || activityModal.story.title}</h5>
               </div>
               <div style={{ padding: 16, display: 'flex', gap: 8 }}>
@@ -296,7 +294,7 @@ const CurrentSprintKanban: React.FC = () => {
                   placeholder="Write a quick note..."
                   value={activityModal.note}
                   onChange={(e) => setActivityModal(prev => ({ ...prev, note: e.target.value }))}
-                  style={{ flex: 1, border: '1px solid #d1d5db', borderRadius: 6, padding: '8px 10px' }}
+                  style={{ flex: 1, border: '1px solid var(--line)', color: 'var(--text)', background: 'var(--card)', borderRadius: 6, padding: '8px 10px' }}
                 />
                 <button
                   onClick={async () => {
@@ -307,9 +305,9 @@ const CurrentSprintKanban: React.FC = () => {
                     });
                     setActivityModal({ story: null, note: '' });
                   }}
-                  style={{ padding: '8px 12px', borderRadius: 6, border: 'none', background: '#2563eb', color: 'white' }}
+                  style={{ padding: '8px 12px', borderRadius: 6, border: 'none', background: 'var(--brand)', color: 'var(--on-accent)' }}
                 >Add</button>
-                <button onClick={() => setActivityModal({ story: null, note: '' })} style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: 'white' }}>Close</button>
+                <button onClick={() => setActivityModal({ story: null, note: '' })} style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--text)' }}>Close</button>
               </div>
             </div>
           </div>

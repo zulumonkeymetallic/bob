@@ -865,8 +865,8 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
               borderCollapse: 'collapse',
             }}>
               <thead style={{ 
-                backgroundColor: '#f9fafb', 
-                borderBottom: '1px solid #e5e7eb' 
+                backgroundColor: themeVars.card as string, 
+                borderBottom: `1px solid ${themeVars.border}` 
               }}>
                 <tr>
                   <th style={{
@@ -874,10 +874,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted as string,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
-                    borderRight: '1px solid #f3f4f6',
+                    borderRight: `1px solid ${themeVars.border}`,
                     width: '48px',
                   }}>
                     Order
@@ -890,10 +890,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                         textAlign: 'left',
                         fontSize: '12px',
                         fontWeight: '500',
-                        color: '#6b7280',
+                        color: themeVars.muted as string,
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em',
-                        borderRight: '1px solid #f3f4f6',
+                        borderRight: `1px solid ${themeVars.border}`,
                         width: column.width,
                       }}
                     >
@@ -905,7 +905,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'center',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted as string,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     width: '96px',
