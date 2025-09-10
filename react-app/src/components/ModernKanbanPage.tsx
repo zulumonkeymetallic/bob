@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table, Dropdown } from 'react-bootstrap';
+import ModernTaskTable from './ModernTaskTable';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -453,88 +454,38 @@ const ModernKanbanPage: React.FC = () => {
                   Add Task
                 </Button>
               </Card.Header>
-              <Card.Body>
-                {getTasksForSelectedStory().length === 0 ? (
-                  <div className="text-center text-muted py-4">
-                    <p>No tasks for this story yet.</p>
-                    <Button variant="primary" onClick={() => setShowAddTask(true)}>
-                      Add First Task
-                    </Button>
-                  </div>
-                ) : (
-                  <Table responsive hover>
-                    <thead>
-                      <tr>
-                        <th>Task</th>
-                        <th>Status</th>
-                        <th>Effort</th>
-                        <th>Priority</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {getTasksForSelectedStory().map((task) => (
-                        <tr key={task.id}>
-                          <td>
-                            <div>
-                              <strong>{task.title}</strong>
-                              {task.description && (
-                                <div className="text-muted small">{task.description}</div>
-                              )}
-                            </div>
-                          </td>
-                          <td onClick={(e) => e.stopPropagation()}>
-                            <Dropdown>
-                              <Dropdown.Toggle as={Badge} bg={task.status === 2 ? 'success' : 
-                                  task.status === 1 ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
-                                {task.status === 1 ? 'In Progress' : 
-                                 task.status === 2 ? 'Done' : 
-                                 task.status === 3 ? 'Blocked' :
-                                 task.status === 0 ? 'To Do' : 'Unknown'}
-                              </Dropdown.Toggle>
-                              <Dropdown.Menu>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 0)}>
-                                  To Do
-                                </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 1)}>
-                                  In Progress
-                                </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 3)}>
-                                  Blocked
-                                </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 2)}>
-                                  Done
-                                </Dropdown.Item>
-                              </Dropdown.Menu>
-                            </Dropdown>
-                          </td>
-                          <td>
-                            <Badge bg="outline-dark">
-                              {task.effort === 'S' ? 'Small' : task.effort === 'M' ? 'Medium' : 'Large'}
-                            </Badge>
-                          </td>
-                          <td>
-                            <Badge bg={task.priority === 1 ? 'danger' : 
-                                task.priority === 2 ? 'warning' : 'secondary'}>
-                              {task.priority === 1 ? 'High' : 
-                               task.priority === 2 ? 'Medium' : 
-                               task.priority === 3 ? 'Low' : 'Unknown'}
-                            </Badge>
-                          </td>
-                          <td>
-                            <Button 
-                              size="sm" 
-                              variant="outline-danger"
-                              onClick={() => deleteTask(task.id)}
-                            >
-                              Delete
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
-                )}
+              <Card.Body style={{ padding: 0 }}>
+                <ModernTaskTable
+                  tasks={getTasksForSelectedStory()}
+                  stories={stories}
+                  goals={goals}
+                  sprints={[]}
+                  onTaskCreate={async (newTask) => {
+                    if (!currentUser) return;
+                    await addDoc(collection(db, 'tasks'), {
+                      title: newTask.title,
+                      description: newTask.description || '',
+                      parentType: 'story',
+                      parentId: (newTask as any).storyId || selectedStory?.id || '',
+                      status: 0,
+                      priority: newTask.priority || 2,
+                      effort: 'M',
+                      dueDate: newTask.dueDate || null,
+                      ownerUid: currentUser.uid,
+                      createdAt: serverTimestamp(),
+                      updatedAt: serverTimestamp(),
+                    });
+                  }}
+                  onTaskUpdate={async (taskId, updates) => {
+                    await updateDoc(doc(db, 'tasks', taskId), { ...updates, updatedAt: serverTimestamp() });
+                  }}
+                  onTaskDelete={async (taskId) => {
+                    await deleteDoc(doc(db, 'tasks', taskId));
+                  }}
+                  onTaskPriorityChange={async (taskId, newPriority) => {
+                    await updateDoc(doc(db, 'tasks', taskId), { priority: newPriority, updatedAt: serverTimestamp() });
+                  }}
+                />
               </Card.Body>
             </Card>
           </Col>

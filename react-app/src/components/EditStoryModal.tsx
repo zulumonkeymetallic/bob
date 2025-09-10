@@ -193,11 +193,11 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   value={editedStory.theme}
                   onChange={(e) => handleInputChange('theme', parseInt(e.target.value))}
                 >
-                  <option value={1}>Feature</option>
-                  <option value={2}>Bug Fix</option>
-                  <option value={3}>Improvement</option>
-                  <option value={4}>Research</option>
-                  <option value={5}>Technical</option>
+                  <option value={1}>Health</option>
+                  <option value={2}>Growth</option>
+                  <option value={3}>Wealth</option>
+                  <option value={4}>Tribe</option>
+                  <option value={5}>Home</option>
                 </Form.Select>
               </Form.Group>
             </Col>

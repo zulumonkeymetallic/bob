@@ -41,18 +41,33 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
     }
   }, [propSelectedSprintId, selectedSprintId, setSelectedSprintId]);
 
-  // Get current sprint or selected sprint
-  const currentSprint = selectedSprintId 
-    ? sprints.find(s => s.id === selectedSprintId)
-    : sprints.find(s => s.status === 1); // Active sprint
+  // Effective selection: prefer context id, otherwise prop; then fall back to ACTIVE sprint
+  const effectiveSelectedId = selectedSprintId || propSelectedSprintId || '';
 
-  // Filter stories and tasks for current sprint
-  const sprintStories = stories.filter(story => 
-    currentSprint ? story.sprintId === currentSprint.id : !story.sprintId
-  );
+  // Get current sprint from list (by id) or ACTIVE by status
+  const currentSprint = effectiveSelectedId
+    ? sprints.find(s => s.id === effectiveSelectedId)
+    : sprints.find(s => s.status === 1);
+
+  // Match stories by sprint id OR legacy sprint name for backwards compatibility
+  const selectedMatchValues = new Set<string | undefined>([
+    effectiveSelectedId || undefined,
+    currentSprint?.id,
+    (currentSprint as any)?.name,
+  ]);
+
+  // Filter stories and tasks for current selection
+  const sprintStories = stories.filter((story) => {
+    const storySprint = (story as any).sprintId as string | undefined;
+    return currentSprint || effectiveSelectedId
+      ? (storySprint ? selectedMatchValues.has(storySprint) : false)
+      : !storySprint;
+  });
   
   const sprintTasks = tasks.filter(task => 
-    currentSprint ? task.sprintId === currentSprint.id : !task.sprintId
+    currentSprint || effectiveSelectedId
+      ? (task.sprintId ? selectedMatchValues.has(task.sprintId as any) : false)
+      : !task.sprintId
   );
 
   useEffect(() => {

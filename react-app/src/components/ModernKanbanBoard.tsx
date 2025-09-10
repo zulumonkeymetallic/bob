@@ -29,7 +29,8 @@ import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
-import { generateRef } from '../utils/referenceGenerator';
+import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
+import EditStoryModal from './EditStoryModal';
 import { DnDMutationHandler } from '../utils/dndMutations';
 import { themeVars, rgbaCard, domainThemePrimaryVar } from '../utils/themeVars';
 
@@ -110,7 +111,12 @@ const SortableStoryCard: React.FC<{
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                 <span style={{ fontSize: '12px', fontWeight: '600', color: themeColor }}>
-                  {story.ref || `STRY-${story.id.slice(-3).toUpperCase()}`}
+                  {(() => {
+                    const shortRef = (story as any).referenceNumber || story.ref;
+                    return shortRef && validateRef(shortRef, 'story')
+                      ? shortRef
+                      : displayRefForEntity('story', story.id);
+                  })()}
                 </span>
                 <h6 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: themeVars.text }}>
                   {story.title}
@@ -771,57 +777,55 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         </DragOverlay>
       </DndContext>
 
-      {/* Edit Modal */}
-      <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
-        <Modal.Header closeButton>
-          <Modal.Title>Edit {selectedType === 'story' ? 'Story' : 'Task'}</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          {selectedItem && (
-            <Form>
-              <Form.Group className="mb-3">
-                <Form.Label>Title *</Form.Label>
-                <Form.Control
-                  type="text"
-                  value={editForm.title || ''}
-                  onChange={(e) => setEditForm({...editForm, title: e.target.value})}
-                  required
-                />
-              </Form.Group>
-              <Form.Group className="mb-3">
-                <Form.Label>Description</Form.Label>
-                <Form.Control
-                  as="textarea"
-                  rows={3}
-                  value={editForm.description || ''}
-                  onChange={(e) => setEditForm({...editForm, description: e.target.value})}
-                />
-              </Form.Group>
-              <Form.Group className="mb-3">
-                <Form.Label>Status</Form.Label>
-                <Form.Select
-                  value={editForm.status || ''}
-                  onChange={(e) => setEditForm({...editForm, status: e.target.value})}
-                >
-                  <option value="backlog">Backlog</option>
-                  <option value="active">Active</option>
-                  <option value="done">Done</option>
-                  {selectedType === 'task' && <option value="in-progress">In Progress</option>}
-                  {selectedType === 'task' && <option value="blocked">Blocked</option>}
-                </Form.Select>
-              </Form.Group>
-            </Form>
-          )}
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowEditModal(false)}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={handleSaveEdit}>
-            Save Changes
-          </Button>
-        </Modal.Footer>
-      </Modal>
+      {/* Edit Modals */}
+      {selectedType === 'story' && (
+        <EditStoryModal
+          show={showEditModal}
+          onHide={() => setShowEditModal(false)}
+          story={selectedItem as Story | null}
+          goals={goals}
+          onStoryUpdated={() => setShowEditModal(false)}
+        />
+      )}
+      {selectedType === 'task' && (
+        <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>Edit Task</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {selectedItem && (
+              <Form>
+                <Form.Group className="mb-3">
+                  <Form.Label>Title *</Form.Label>
+                  <Form.Control
+                    type="text"
+                    value={(editForm as any).title || ''}
+                    onChange={(e) => setEditForm({ ...(editForm as any), title: e.target.value })}
+                    required
+                  />
+                </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Description</Form.Label>
+                  <Form.Control
+                    as="textarea"
+                    rows={3}
+                    value={(editForm as any).description || ''}
+                    onChange={(e) => setEditForm({ ...(editForm as any), description: e.target.value })}
+                  />
+                </Form.Group>
+              </Form>
+            )}
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowEditModal(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={handleSaveEdit}>
+              Save Changes
+            </Button>
+          </Modal.Footer>
+        </Modal>
+      )}
 
       {/* Add Modal */}
       <Modal show={showAddModal} onHide={() => setShowAddModal(false)} size="lg">

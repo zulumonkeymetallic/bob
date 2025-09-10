@@ -11,6 +11,7 @@ import QuickActionsPanel from './QuickActionsPanel';
 import SprintKanbanPage from './SprintKanbanPage';
 import DashboardTasksModernWrapper from './DashboardTasksModernWrapper';
 import SprintSelector from './SprintSelector';
+import { useSprint } from '../contexts/SprintContext';
 
 interface DashboardStats {
   activeGoals: number;
@@ -43,7 +44,8 @@ const Dashboard: React.FC = () => {
   const [upcomingTasks, setUpcomingTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
-  const [selectedSprintId, setSelectedSprintId] = useState<string | null>(null);
+  // Use global sprint selection for consistency across app
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
   const [sprints, setSprints] = useState<Sprint[]>([]);
 
   useEffect(() => {
@@ -183,7 +185,7 @@ const Dashboard: React.FC = () => {
             <div className="d-flex align-items-center gap-3">
               <h2 className="mb-0">Dashboard</h2>
               <SprintSelector
-                selectedSprintId={selectedSprintId || ''}
+                selectedSprintId={selectedSprintId}
                 onSprintChange={(sprintId: string) => setSelectedSprintId(sprintId)}
                 className="ms-3"
               />
@@ -250,7 +252,7 @@ const Dashboard: React.FC = () => {
           {/* Sprint Kanban Board (Unified) */}
           <Row className="mb-4">
             <Col md={12}>
-              <SprintKanbanPage selectedSprintId={selectedSprintId || undefined} showInlineTasks={false} />
+              <SprintKanbanPage selectedSprintId={selectedSprintId} showInlineTasks={false} />
             </Col>
           </Row>
 

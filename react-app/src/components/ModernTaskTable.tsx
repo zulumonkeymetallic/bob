@@ -23,7 +23,11 @@ import {
   Eye, 
   EyeOff,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Wand2,
+  Pencil,
+  Trash2,
+  Plus
 } from 'lucide-react';
 import { Task, Story, Goal, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -59,6 +63,7 @@ interface ModernTaskTableProps {
   onTaskPriorityChange: (taskId: string, newPriority: number) => Promise<void>;
   defaultColumns?: string[];
   compact?: boolean;
+  onTaskCreate?: (newTask: Partial<Task>) => Promise<void>;
 }
 
 const defaultColumns: Column[] = [
@@ -148,6 +153,7 @@ interface SortableRowProps {
   stories: Story[];
   onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
   onTaskDelete: (taskId: string) => Promise<void>;
+  onEditRequest: (task: TaskTableRow) => void;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -156,7 +162,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   index, 
   stories,
   onTaskUpdate, 
-  onTaskDelete 
+  onTaskDelete, 
+  onEditRequest,
 }) => {
   const { showSidebar } = useSidebar();
   const { trackCRUD, trackFieldChange } = useActivityTracking();
@@ -441,40 +448,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
         width: '96px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          {/* AI action */}
           <button
-            onClick={async () => {
-              console.log('🔧 ModernTaskTable: EDIT button clicked', {
-                action: 'edit_button_clicked',
-                taskId: task.id,
-                taskTitle: task.title,
-                taskStatus: task.status,
-                timestamp: new Date().toISOString()
-              });
-              
-              showSidebar(task, 'task');
+            onClick={() => {
+              console.log('🪄 ModernTaskTable: AI action clicked', { taskId: task.id });
             }}
-            style={{
-              color: themeVars.brand as string,
-              padding: '4px',
-              borderRadius: '4px',
-              border: 'none',
-              backgroundColor: 'transparent',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              fontSize: '12px',
-              fontWeight: '500',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = rgbaCard(0.2);
-              e.currentTarget.style.color = themeVars.brand as string;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = themeVars.brand as string;
-            }}
+            style={{ color: themeVars.brand as string, padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer' }}
+            title="AI Assist"
+          >
+            <Wand2 size={16} />
+          </button>
+          {/* Edit action opens modal */}
+          <button
+            onClick={() => onEditRequest(task)}
+            style={{ color: themeVars.brand as string, padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer' }}
             title="Edit task"
           >
-            Edit
+            <Pencil size={16} />
           </button>
           <button
             onClick={() => {
@@ -488,28 +478,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
               });
               onTaskDelete(task.id);
             }}
-            style={{
-              color: 'var(--red)',
-              padding: '4px',
-              borderRadius: '4px',
-              border: 'none',
-              backgroundColor: 'transparent',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              fontSize: '12px',
-              fontWeight: '500',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = rgbaCard(0.2);
-              e.currentTarget.style.color = 'var(--red)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = 'var(--red)';
-            }}
+            style={{ color: 'var(--red)', padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer' }}
             title="Delete task"
           >
-            Delete
+            <Trash2 size={16} />
           </button>
         </div>
       </td>
@@ -525,6 +497,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   onTaskUpdate,
   onTaskDelete,
   onTaskPriorityChange,
+  onTaskCreate,
   defaultColumns: defaultColumnKeys,
   compact = false,
 }) => {
@@ -549,6 +522,12 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     filters: false,
     display: false,
   });
+
+  // Edit modal state
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingTask, setEditingTask] = useState<TaskTableRow | null>(null);
+  const [editForm, setEditForm] = useState<Partial<TaskTableRow>>({});
+  const [storySearch, setStorySearch] = useState('');
 
   // Update story column options when stories change
   useEffect(() => {
@@ -642,6 +621,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const visibleColumnsCount = columns.filter(col => col.visible).length;
 
   return (
+    <>
     <div style={{ 
       position: 'relative', 
       backgroundColor: themeVars.panel as string, 
@@ -790,6 +770,12 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       stories={stories}
                       onTaskUpdate={onTaskUpdate}
                       onTaskDelete={onTaskDelete}
+                      onEditRequest={(t) => {
+                        setEditingTask(t);
+                        setEditForm({ ...t });
+                        setStorySearch(t.storyTitle || '');
+                        setShowEditModal(true);
+                      }}
                     />
                   ))}
                 </SortableContext>
@@ -797,6 +783,33 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             </table>
           </DndContext>
         </div>
+
+        {/* Optional: Add Task button */}
+        {onTaskCreate && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '12px' }}>
+            <button
+              onClick={() => {
+                setEditingTask(null);
+                setEditForm({ title: '', description: '', priority: 2, status: 'planned' as any });
+                setStorySearch('');
+                setShowEditModal(true);
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 12px',
+                border: `1px dashed ${themeVars.brand}`,
+                background: 'transparent',
+                color: themeVars.brand as string,
+                borderRadius: 8,
+                cursor: 'pointer'
+              }}
+            >
+              <Plus size={16} /> Add Task
+            </button>
+          </div>
+        )}
 
         {/* Configuration Panel */}
         <div style={{
@@ -1034,6 +1047,83 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         </div>
       </div>
     </div>
+
+    {/* Edit/Create Modal (lightweight) */}
+    {showEditModal && (
+      <div className="modal d-block" tabIndex={-1} role="dialog" style={{ background: 'rgba(0,0,0,0.35)' }}>
+        <div className="modal-dialog modal-lg" role="document">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title">{editingTask ? 'Edit Task' : 'Add Task'}</h5>
+              <button type="button" className="btn-close" onClick={() => setShowEditModal(false)} />
+            </div>
+            <div className="modal-body">
+              <div className="mb-3">
+                <label className="form-label">Title</label>
+                <input className="form-control" value={editForm.title || ''} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} />
+              </div>
+              <div className="mb-3">
+                <label className="form-label">Description</label>
+                <textarea className="form-control" rows={3} value={editForm.description || ''} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+              </div>
+              <div className="row">
+                <div className="col-md-6 mb-3">
+                  <label className="form-label">Link to Story</label>
+                  <input className="form-control" placeholder="Type to search..." value={storySearch} onChange={(e) => setStorySearch(e.target.value)} />
+                  <div className="list-group" style={{ maxHeight: 180, overflow: 'auto' }}>
+                    {stories.filter(s => s.title?.toLowerCase().includes((storySearch||'').toLowerCase())).slice(0, 10).map(s => (
+                      <button key={s.id} type="button" className="list-group-item list-group-item-action"
+                        onClick={() => {
+                          setEditForm({ ...editForm, storyId: s.id, storyTitle: s.title, priority: (editingTask ? editingTask.priority : (editForm.priority as any)) || (s as any).priority || 2 });
+                          setStorySearch(s.title || '');
+                        }}
+                      >{s.title}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="col-md-3 mb-3">
+                  <label className="form-label">Priority</label>
+                  <select className="form-select" value={String(editForm.priority ?? '2')} onChange={(e) => setEditForm({ ...editForm, priority: parseInt(e.target.value) as any })}>
+                    <option value="1">High</option>
+                    <option value="2">Medium</option>
+                    <option value="3">Low</option>
+                  </select>
+                </div>
+                <div className="col-md-3 mb-3">
+                  <label className="form-label">Due Date</label>
+                  <input type="date" className="form-control" value={editForm.dueDate ? new Date(editForm.dueDate as any).toISOString().slice(0,10) : ''} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value ? new Date(e.target.value).getTime() : undefined })} />
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={async () => {
+                if (!editForm.title) return;
+                if (editingTask) {
+                  await onTaskUpdate(editingTask.id, {
+                    title: editForm.title,
+                    description: editForm.description,
+                    priority: editForm.priority as any,
+                    dueDate: editForm.dueDate as any,
+                    storyId: (editForm as any).storyId
+                  });
+                } else if (onTaskCreate) {
+                  await onTaskCreate({
+                    title: editForm.title,
+                    description: editForm.description,
+                    priority: editForm.priority as any,
+                    dueDate: editForm.dueDate as any,
+                    storyId: (editForm as any).storyId
+                  });
+                }
+                setShowEditModal(false);
+              }}>Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
 

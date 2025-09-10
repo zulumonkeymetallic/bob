@@ -5,14 +5,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Story, Goal } from '../types';
+import { Story, Goal, Task } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
 import AddStoryModal from './AddStoryModal';
 import EditStoryModal from './EditStoryModal';
 import ImportModal from './ImportModal';
-import StoryTasksPanel from './StoryTasksPanel';
+import ModernTaskTable from './ModernTaskTable';
 import StoriesCardView from './StoriesCardView';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { generateRef } from '../utils/referenceGenerator';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import { themeVars } from '../utils/themeVars';
 
@@ -25,6 +26,7 @@ const StoriesManagement: React.FC = () => {
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
   const [showEditStoryModal, setShowEditStoryModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -75,6 +77,13 @@ const StoriesManagement: React.FC = () => {
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
+
+    // Load tasks for selected story panels and consistency
+    const tasksQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
     
     // Subscribe to real-time updates
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -118,11 +127,25 @@ const StoriesManagement: React.FC = () => {
       setGoals(goalsData);
     });
 
+    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+      const tasksData = snapshot.docs.map(doc => {
+        const data = doc.data() as any;
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+        } as Task;
+      });
+      setTasks(tasksData);
+    });
+
     setLoading(false);
 
     return () => {
       unsubscribeStories();
       unsubscribeGoals();
+      unsubscribeTasks();
     };
   };
 
@@ -163,13 +186,15 @@ const StoriesManagement: React.FC = () => {
       console.log('👤 Current user:', currentUser?.email);
       console.log('🎭 Current persona:', currentPersona);
       
-      // Generate reference number
-      const refNumber = `STY-${Date.now()}`;
+      // Generate short reference like ST-3FUCOB, ensure uniqueness across current refs
+      const existingRefs = stories.map(s => s.ref).filter(Boolean) as string[];
+      const refNumber = generateRef('story', existingRefs);
       
       // Create the story document
       const newStory = {
         ...storyData,
         ref: refNumber,
+        referenceNumber: refNumber,
         ownerUid: currentUser!.uid,
         persona: 'personal' as const, // Explicitly set to 'personal' to match Story type
         createdAt: serverTimestamp(),
@@ -493,10 +518,47 @@ const StoriesManagement: React.FC = () => {
 
       {/* Story Tasks Panel */}
       {selectedStory && (
-        <StoryTasksPanel
-          story={selectedStory}
-          onClose={() => setSelectedStory(null)}
-        />
+        <div className="mt-3">
+          <Card>
+            <Card.Header className="d-flex justify-content-between align-items-center">
+              <h5 className="mb-0">Tasks for: {selectedStory.title}</h5>
+              <Badge bg="secondary">{tasks.filter(t => t.parentType === 'story' && t.parentId === selectedStory.id).length} tasks</Badge>
+            </Card.Header>
+            <Card.Body style={{ padding: 0 }}>
+              <ModernTaskTable
+                tasks={tasks.filter(t => t.parentType === 'story' && t.parentId === selectedStory.id)}
+                stories={stories}
+                goals={goals}
+                sprints={[]}
+                onTaskCreate={async (newTask) => {
+                  await addDoc(collection(db, 'tasks'), {
+                    title: newTask.title,
+                    description: newTask.description || '',
+                    parentType: 'story',
+                    parentId: (newTask as any).storyId || selectedStory.id,
+                    status: 0,
+                    priority: newTask.priority || 2,
+                    effort: 'M',
+                    dueDate: newTask.dueDate || null,
+                    ownerUid: currentUser!.uid,
+                    persona: currentPersona,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                  });
+                }}
+                onTaskUpdate={async (taskId, updates) => {
+                  await updateDoc(doc(db, 'tasks', taskId), { ...updates, updatedAt: serverTimestamp() });
+                }}
+                onTaskDelete={async (taskId) => {
+                  await deleteDoc(doc(db, 'tasks', taskId));
+                }}
+                onTaskPriorityChange={async (taskId, newPriority) => {
+                  await updateDoc(doc(db, 'tasks', taskId), { priority: newPriority, updatedAt: serverTimestamp() });
+                }}
+              />
+            </Card.Body>
+          </Card>
+        </div>
       )}
 
       {/* Add Story Modal */}

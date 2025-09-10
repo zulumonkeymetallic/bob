@@ -58,6 +58,7 @@ import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
 import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
+import TravelMap from './components/travel/TravelMap';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import ThemeBasedGanttChart from './components/visualization/ThemeBasedGanttChart';
 
@@ -185,11 +186,12 @@ function AppContent() {
             <Route path="/sprint-matrix" element={<Navigate to="/sprints/management" replace />} />
             <Route path="/current-sprint" element={<Navigate to="/sprints/kanban" replace />} />
             
-            {/* New consolidated sprint routes */}
+            {/* Sprint routes */}
             <Route path="/sprints" element={<SprintsPage />} />
-            <Route path="/sprints/management" element={<SprintsPage />} />
-            <Route path="/sprints/kanban" element={<SprintsPage />} />
-            <Route path="/sprints/stories" element={<SprintsPage />} />
+            {/* Restore dedicated Management page */}
+            <Route path="/sprints/management" element={<SprintManagementView />} />
+            <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
+            <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
             
             <Route path="/tasks-management" element={<TasksManagement />} />
@@ -214,6 +216,7 @@ function AppContent() {
             <Route path="/routes" element={<RoutesManagementView />} />
             <Route path="/routines" element={<RoutesManagementView />} />
             <Route path="/routes/optimization" element={<RoutesManagementView />} />
+            <Route path="/travel" element={<TravelMap />} />
             
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />

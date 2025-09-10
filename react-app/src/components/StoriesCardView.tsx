@@ -8,6 +8,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal } from '../types';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
+import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
@@ -76,19 +77,21 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
 
   const loadLatestActivityForStory = async (storyId: string) => {
     if (!currentUser) return;
-    
+
     try {
       // Query latest activities directly from Firestore
+      // Add ownerUid filter to satisfy Firestore rules and avoid permission-denied
       const q = query(
         collection(db, 'activity_stream'),
+        where('ownerUid', '==', currentUser.uid),
         where('entityId', '==', storyId),
         where('entityType', '==', 'story'),
         orderBy('timestamp', 'desc'),
         limit(1)
       );
-      
+
       const querySnapshot = await getDocs(q);
-      
+
       if (!querySnapshot.empty) {
         const latestActivity = querySnapshot.docs[0].data();
         setLatestActivities(prev => ({
@@ -96,7 +99,12 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
           [storyId]: latestActivity
         }));
       }
-    } catch (error) {
+    } catch (error: any) {
+      // Gracefully degrade on permission errors (rules may restrict activity_stream visibility)
+      if (error?.code === 'permission-denied') {
+        console.warn('activity_stream read blocked by rules for story', storyId);
+        return;
+      }
       console.error('Error loading latest activity for story:', storyId, error);
     }
   };
@@ -146,7 +154,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                   transform: selectedStoryId === story.id ? 'translateY(-2px)' : 'translateY(0)',
                   boxShadow: selectedStoryId === story.id ? '0 8px 16px rgba(0,0,0,0.15)' : '0 2px 4px rgba(0,0,0,0.1)'
                 }}
-                onClick={() => onStorySelect(story)}
+                onClick={() => { onStorySelect(story); try { showSidebar(story, 'story'); } catch {} }}
                 onMouseEnter={(e) => {
                   if (selectedStoryId !== story.id) {
                     e.currentTarget.style.transform = 'translateY(-2px)';
@@ -180,7 +188,13 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         wordBreak: 'break-word',
                         color: 'var(--text)'
                       }}>
-                        {story.ref}
+                        {(() => {
+                          const shortRef = (story as any).referenceNumber || story.ref;
+                          const display = shortRef && validateRef(shortRef, 'story')
+                            ? shortRef
+                            : displayRefForEntity('story', story.id);
+                          return display;
+                        })()}
                       </h5>
                       <p style={{ 
                         margin: '0 0 8px 0', 
