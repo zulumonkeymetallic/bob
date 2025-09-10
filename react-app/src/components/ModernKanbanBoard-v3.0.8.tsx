@@ -707,21 +707,21 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: '#f8fafc' }}>
+      <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: 'var(--bg)' }}>
         <div style={{ textAlign: 'center', paddingTop: '100px' }}>
           <div className="spinner-border" style={{ marginBottom: '16px' }} />
-          <p style={{ color: '#6b7280' }}>Loading kanban board...</p>
+          <p style={{ color: 'var(--muted)' }}>Loading kanban board...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: '#f8fafc' }}>
+    <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: 'var(--bg)' }}>
       {/* Header */}
       <div style={{ marginBottom: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: '#111827' }}>
+          <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: 'var(--text)' }}>
             Stories Kanban Board
           </h1>
           <div style={{ display: 'flex', gap: '12px' }}>
@@ -749,10 +749,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#6b7280' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--muted)' }}>
                   {stories.length}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
                   Total Stories
                 </p>
               </Card.Body>
@@ -761,10 +761,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#2563eb' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--brand)' }}>
                   {stories.filter(s => isStatus(s.status, 'active')).length}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
                   Active Stories
                 </p>
               </Card.Body>
@@ -773,10 +773,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#059669' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--green)' }}>
                   {stories.filter(s => isStatus(s.status, 'done')).length}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
                   Done Stories
                 </p>
               </Card.Body>
@@ -785,10 +785,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: '#dc2626' }}>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--red)' }}>
                   {tasks.length}
                 </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
                   Total Tasks
                 </p>
               </Card.Body>
@@ -821,7 +821,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                 <Card.Body style={{ padding: '16px' }}>
                   {/* Stories Section */}
                   <div style={{ marginBottom: '24px' }}>
-                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '12px' }}>
+                <h6 style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text)', marginBottom: '12px' }}>
                       Stories
                     </h6>
                     <DroppableArea id={`${lane.status}-stories`}>
@@ -832,7 +832,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                         {getStoriesForLane(lane.status).map((story) => {
                           const goal = getGoalForStory(story.id);
                           const taskCount = getTasksForStory(story.id).length;
-                          const themeColor = goal?.theme ? themeColors[goal.theme] : '#6b7280';
+                          const themeColor = goal?.theme ? themeColors[goal.theme] : (themeVars.muted as string);
                           
                           return (
                             <SortableStoryCard
@@ -853,7 +853,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
                   {/* Tasks Section */}
                   <div>
-                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '12px' }}>
+                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text)', marginBottom: '12px' }}>
                       Tasks
                     </h6>
                     <DroppableArea id={`${lane.status}-tasks`}>

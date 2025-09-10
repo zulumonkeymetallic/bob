@@ -372,7 +372,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 fontSize: '12px',
                 fontWeight: '500',
                 backgroundColor: getThemeColor(value as number),
-                color: 'white',
+                color: 'var(--on-accent)',
               }}
             >
               {formatValue(column.key, value)}
@@ -391,13 +391,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
       style={{
         ...style,
         backgroundColor: backgrounds.surface,
-        borderBottom: '1px solid #f3f4f6',
+        borderBottom: `1px solid ${themeVars.border}`,
         transition: 'background-color 0.15s ease',
       }}
       {...attributes}
       onMouseEnter={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = isDark ? '#374151' : '#f9fafb';
+          e.currentTarget.style.backgroundColor = themeVars.card as string;
         }
       }}
       onMouseLeave={(e) => {
@@ -409,13 +409,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
-        borderRight: '1px solid #f3f4f6',
+        borderRight: `1px solid ${themeVars.border}`,
         width: '48px',
       }}>
         <button
           {...listeners}
           style={{
-            color: '#9ca3af',
+            color: themeVars.muted as string,
             padding: '4px',
             borderRadius: '4px',
             border: 'none',
@@ -424,10 +424,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
             transition: 'color 0.15s ease',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = '#6b7280';
+            e.currentTarget.style.color = themeVars.text as string;
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = '#9ca3af';
+            e.currentTarget.style.color = themeVars.muted as string;
           }}
           title="Drag to reorder"
         >
@@ -454,7 +454,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               showSidebar(task, 'task');
             }}
             style={{
-              color: '#2563eb',
+              color: themeVars.brand as string,
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
@@ -465,12 +465,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#dbeafe';
-              e.currentTarget.style.color = '#1d4ed8';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.2);
+              e.currentTarget.style.color = themeVars.brand as string;
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#2563eb';
+              e.currentTarget.style.color = themeVars.brand as string;
             }}
             title="Edit task"
           >
@@ -489,7 +489,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               onTaskDelete(task.id);
             }}
             style={{
-              color: '#dc2626',
+              color: 'var(--red)',
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
@@ -500,12 +500,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#fee2e2';
-              e.currentTarget.style.color = '#b91c1c';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.2);
+              e.currentTarget.style.color = 'var(--red)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#dc2626';
+              e.currentTarget.style.color = 'var(--red)';
             }}
             title="Delete task"
           >
@@ -739,7 +739,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     color: themeVars.muted as string,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
-                    borderRight: '1px solid #f3f4f6',
+                    borderRight: `1px solid ${themeVars.border}`,
                     width: '48px',
                   }}>
                     Order
@@ -752,7 +752,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         textAlign: 'left',
                         fontSize: '12px',
                         fontWeight: '500',
-                        color: '#6b7280',
+                        color: themeVars.muted as string,
                         textTransform: 'uppercase',
                         letterSpacing: '0.05em',
                         borderRight: `1px solid ${themeVars.border}`,
@@ -920,7 +920,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: themeVars.text as string,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -928,7 +928,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.backgroundColor = themeVars.card as string;
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -983,20 +983,20 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     
                     <div style={{
                       padding: '12px',
-                      backgroundColor: '#f9fafb',
+                      backgroundColor: themeVars.card as string,
                       borderRadius: '8px',
                     }}>
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: themeVars.text as string, 
                         margin: '0 0 8px 0' 
                       }}>
                         Inline Editing
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: themeVars.muted as string, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>
@@ -1006,20 +1006,20 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
                     <div style={{
                       padding: '12px',
-                      backgroundColor: '#f9fafb',
+                      backgroundColor: themeVars.card as string,
                       borderRadius: '8px',
                     }}>
                       <h4 style={{ 
                         fontSize: '14px', 
                         fontWeight: '500', 
-                        color: '#111827', 
+                        color: themeVars.text as string, 
                         margin: '0 0 8px 0' 
                       }}>
                         Modern Actions
                       </h4>
                       <p style={{ 
                         fontSize: '12px', 
-                        color: '#6b7280', 
+                        color: themeVars.muted as string, 
                         margin: 0,
                         lineHeight: '1.4',
                       }}>
