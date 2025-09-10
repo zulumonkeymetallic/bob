@@ -76,19 +76,21 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
 
   const loadLatestActivityForStory = async (storyId: string) => {
     if (!currentUser) return;
-    
+
     try {
       // Query latest activities directly from Firestore
+      // Add ownerUid filter to satisfy Firestore rules and avoid permission-denied
       const q = query(
         collection(db, 'activity_stream'),
+        where('ownerUid', '==', currentUser.uid),
         where('entityId', '==', storyId),
         where('entityType', '==', 'story'),
         orderBy('timestamp', 'desc'),
         limit(1)
       );
-      
+
       const querySnapshot = await getDocs(q);
-      
+
       if (!querySnapshot.empty) {
         const latestActivity = querySnapshot.docs[0].data();
         setLatestActivities(prev => ({
@@ -96,7 +98,12 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
           [storyId]: latestActivity
         }));
       }
-    } catch (error) {
+    } catch (error: any) {
+      // Gracefully degrade on permission errors (rules may restrict activity_stream visibility)
+      if (error?.code === 'permission-denied') {
+        console.warn('activity_stream read blocked by rules for story', storyId);
+        return;
+      }
       console.error('Error loading latest activity for story:', storyId, error);
     }
   };
