@@ -43,7 +43,7 @@ const Admin = () => {
   const handleSave = async () => {
     if (user) {
       const profileRef = doc(db, 'profiles', user.uid);
-      await setDoc(profileRef, { traktUser, steamId, parkrunAthleteId }, { merge: true });
+      await setDoc(profileRef, { ownerUid: user.uid, traktUser, steamId, parkrunAthleteId }, { merge: true });
       logMessage('Profile saved!');
     }
   };

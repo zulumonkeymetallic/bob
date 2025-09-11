@@ -726,6 +726,7 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
   if (after) {
     afterSec = (String(after).length > 10) ? Math.floor(Number(after) / 1000) : Number(after);
   }
+  console.log('[syncStrava] uid', req.auth.uid, 'after', after, 'afterSec', afterSec);
   return await fetchStravaActivities(req.auth.uid, { afterSec });
 });
 
@@ -793,6 +794,7 @@ exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLI
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const days = Math.min(Number(req.data?.days || 30), 365);
+  console.log('[enrichStravaHR] uid', uid, 'days', days);
   const since = Date.now() - days*24*60*60*1000;
   const db = admin.firestore();
   const q = await db.collection('metrics_workouts')
@@ -987,6 +989,7 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const uid = req.auth.uid;
   let { athleteId, profileUrl, countryBaseUrl } = req.data || {};
+  console.log('[syncParkrun] uid', uid, 'athleteId', athleteId, 'profileUrl?', !!profileUrl, 'base?', countryBaseUrl);
   athleteId = (athleteId || '').toString().trim();
   profileUrl = (profileUrl || '').toString().trim();
   countryBaseUrl = (countryBaseUrl || '').toString().trim();
@@ -1212,6 +1215,7 @@ exports.computeParkrunPercentiles = httpsV2.onCall(async (req) => {
   const base = String(req.data?.baseUrl || 'https://www.parkrun.org.uk').trim().replace(/\/$/, '');
   const maxBack = Math.min(Number(req.data?.maxBack || 120), 500);
   const onlyMissing = !!req.data?.onlyMissing;
+  console.log('[computeParkrunPercentiles] uid', uid, 'eventSlug', eventSlug, 'startRun', startRun, 'maxBack', maxBack);
   if (!eventSlug || !startRun) {
     throw new httpsV2.HttpsError('invalid-argument', 'eventSlug and startRun are required');
   }

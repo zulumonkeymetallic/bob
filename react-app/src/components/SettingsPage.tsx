@@ -49,6 +49,8 @@ const SettingsPage: React.FC = () => {
   const [autoEnrichStravaHR, setAutoEnrichStravaHR] = useState(false);
   const [autoComputeFitnessMetrics, setAutoComputeFitnessMetrics] = useState(false);
   const [saveProfileMsg, setSaveProfileMsg] = useState<string>('');
+  const [saveProfileError, setSaveProfileError] = useState<string>('');
+  const [savingProfile, setSavingProfile] = useState<boolean>(false);
 
   // Check if database needs migration to new theme system
   const checkMigrationStatus = async () => {
@@ -500,27 +502,38 @@ const SettingsPage: React.FC = () => {
                           <Col md={3}>
                             <Button
                               variant="primary"
+                              disabled={savingProfile}
                               onClick={async () => {
                                 if (!currentUser) return;
-                                await setDoc(doc(db, 'profiles', currentUser.uid), {
-                                  parkrunAthleteId,
-                                  parkrunAutoSync,
-                                  stravaAutoSync,
-                                  parkrunDefaultEventSlug,
-                                  parkrunDefaultStartRun: parkrunDefaultStartRun ? Number(parkrunDefaultStartRun) : null,
-                                  parkrunAutoComputePercentiles,
-                                  autoEnrichStravaHR,
-                                  autoComputeFitnessMetrics
-                                }, { merge: true });
-                                setSaveProfileMsg('Saved');
-                                setTimeout(() => setSaveProfileMsg(''), 2000);
+                                setSavingProfile(true);
+                                setSaveProfileError('');
+                                try {
+                                  await setDoc(doc(db, 'profiles', currentUser.uid), {
+                                    ownerUid: currentUser.uid,
+                                    parkrunAthleteId,
+                                    parkrunAutoSync,
+                                    stravaAutoSync,
+                                    parkrunDefaultEventSlug,
+                                    parkrunDefaultStartRun: parkrunDefaultStartRun ? Number(parkrunDefaultStartRun) : null,
+                                    parkrunAutoComputePercentiles,
+                                    autoEnrichStravaHR,
+                                    autoComputeFitnessMetrics
+                                  }, { merge: true });
+                                  setSaveProfileMsg('Saved');
+                                  setTimeout(() => setSaveProfileMsg(''), 2500);
+                                } catch (e: any) {
+                                  setSaveProfileError(e?.message || 'Failed to save');
+                                } finally {
+                                  setSavingProfile(false);
+                                }
                               }}
                             >
-                              Save
+                              {savingProfile ? 'Saving…' : 'Save'}
                             </Button>
                           </Col>
                           <Col md={3}>
                             {saveProfileMsg && <span className="text-success">{saveProfileMsg}</span>}
+                            {saveProfileError && <span className="text-danger">{saveProfileError}</span>}
                           </Col>
                         </Row>
                       </Card.Body>
