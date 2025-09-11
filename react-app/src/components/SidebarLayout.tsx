@@ -76,9 +76,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'th-large' }
+        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' }
+      ]
+    },
+    {
+      label: 'Calendar',
+      icon: 'calendar',
+      items: [
+        { label: 'Calendar (Drag & Drop)', path: '/calendar', icon: 'calendar' },
+        { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'th-large' },
+        { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]
     },
     {

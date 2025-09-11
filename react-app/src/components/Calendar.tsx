@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Badge, Table, Modal, Form } from 'react-bootstrap';
 import { db, functions } from '../firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -17,6 +17,17 @@ const Calendar: React.FC = () => {
     title: '',
     start: '',
     duration: 60
+  });
+  const [googleEvents, setGoogleEvents] = useState<any[]>([]);
+  const [loadingGoogle, setLoadingGoogle] = useState(false);
+  const [editBlock, setEditBlock] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState({
+    start: '',
+    end: '',
+    category: '',
+    theme: '',
+    flexibility: 'soft',
+    rationale: ''
   });
 
   // Load calendar blocks from Firebase
@@ -38,6 +49,30 @@ const Calendar: React.FC = () => {
     });
 
     return () => unsubscribe();
+  }, [currentUser]);
+
+  // Load upcoming Google Calendar events (overlay)
+  useEffect(() => {
+    const load = async () => {
+      if (!currentUser) return;
+      try {
+        setLoadingGoogle(true);
+        const callable = httpsCallable(functions, 'listUpcomingEvents');
+        const res: any = await callable({ maxResults: 50 });
+        const items = (res?.data?.items || []).map((e: any) => ({
+          id: e.id,
+          summary: e.summary || 'Untitled',
+          start: new Date(e.start?.dateTime || e.start?.date),
+          end: new Date(e.end?.dateTime || e.end?.date)
+        }));
+        setGoogleEvents(items);
+      } catch (e) {
+        console.warn('Failed to load Google events (overlay):', (e as any)?.message);
+      } finally {
+        setLoadingGoogle(false);
+      }
+    };
+    load();
   }, [currentUser]);
 
   // Get week dates
@@ -72,6 +107,13 @@ const Calendar: React.FC = () => {
       const blockStart = new Date(block.start);
       return blockStart >= dayStart && blockStart <= dayEnd;
     }).sort((a, b) => a.start - b.start);
+  };
+
+  const getGoogleEventsForDay = (date: Date) => {
+    const dayStart = new Date(date); dayStart.setHours(0,0,0,0);
+    const dayEnd = new Date(date); dayEnd.setHours(23,59,59,999);
+    return googleEvents.filter(ev => ev.start >= dayStart && ev.start <= dayEnd)
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
   };
 
   // Create quick calendar event
@@ -110,6 +152,47 @@ const Calendar: React.FC = () => {
     }
   };
 
+  const openEditBlock = (block: any) => {
+    setEditBlock(block);
+    setEditForm({
+      start: new Date(block.start).toISOString().slice(0,16),
+      end: new Date(block.end).toISOString().slice(0,16),
+      category: block.category || '',
+      theme: block.theme || 'Health',
+      flexibility: block.flexibility || 'soft',
+      rationale: block.rationale || ''
+    });
+  };
+
+  const submitEditBlock = async () => {
+    if (!editBlock) return;
+    try {
+      await updateDoc(doc(db, 'calendar_blocks', editBlock.id), {
+        start: new Date(editForm.start).getTime(),
+        end: new Date(editForm.end).getTime(),
+        category: editForm.category,
+        theme: editForm.theme,
+        flexibility: editForm.flexibility,
+        rationale: editForm.rationale,
+        updatedAt: Date.now()
+      });
+      setEditBlock(null);
+    } catch (e) {
+      console.error('Failed to update block', e);
+      alert('Failed to update block');
+    }
+  };
+
+  const deleteBlock = async (blockId: string) => {
+    if (!window.confirm('Delete this calendar block?')) return;
+    try {
+      await deleteDoc(doc(db, 'calendar_blocks', blockId));
+    } catch (e) {
+      console.error('Failed to delete block', e);
+      alert('Failed to delete block');
+    }
+  };
+
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString('en-US', { 
       hour: 'numeric', 
@@ -142,6 +225,9 @@ const Calendar: React.FC = () => {
         <div>
           <Button variant="outline-primary" className="me-2" onClick={() => setShowCreateEvent(true)}>
             + Quick Event
+          </Button>
+          <Button variant="outline-secondary" className="me-2" onClick={() => window.location.reload()} disabled={loadingGoogle}>
+            {loadingGoogle ? 'Loading Google…' : 'Reload Google Events'}
           </Button>
           <Button variant="link" href="/ai-planner">
             Go to AI Planner
@@ -180,22 +266,48 @@ const Calendar: React.FC = () => {
                   </div>
                 </Card.Header>
                 <Card.Body style={{ minHeight: '300px', fontSize: '0.85rem' }}>
-                  {dayBlocks.length === 0 ? (
-                    <p className="text-muted text-center small">No events</p>
-                  ) : (
-                    dayBlocks.map(block => (
-                      <div key={block.id} className="mb-2 p-2 border rounded small">
-                        <div className="fw-bold">{formatTime(block.start)}</div>
-                        <div>{block.category}</div>
-                        <div>{getThemeBadge(block.theme)}</div>
-                        {block.rationale && (
-                          <div className="text-muted" style={{ fontSize: '0.75rem' }}>
-                            {block.rationale}
+                  {(() => {
+                    const gEvents = getGoogleEventsForDay(date);
+                    return (
+                      <>
+                        {gEvents.length > 0 && (
+                          <div className="mb-2">
+                            {gEvents.map(ev => (
+                              <div key={ev.id} className="mb-2 p-2 border rounded small" style={{ background: '#f0f9ff' }}>
+                                <div className="fw-bold text-primary">{ev.summary}</div>
+                                <div className="text-muted">{ev.start.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>
+                                <Badge bg="info">Google</Badge>
+                              </div>
+                            ))}
                           </div>
                         )}
-                      </div>
-                    ))
-                  )}
+                        {dayBlocks.length === 0 ? (
+                          <p className="text-muted text-center small">No blocks</p>
+                        ) : (
+                          dayBlocks.map(block => (
+                            <div key={block.id} className="mb-2 p-2 border rounded small">
+                              <div className="d-flex justify-content-between align-items-start">
+                                <div>
+                                  <div className="fw-bold">{formatTime(block.start)}</div>
+                                  <div>{block.category}</div>
+                                  <div>{getThemeBadge(block.theme)}</div>
+                                  {block.rationale && (
+                                    <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                                      {block.rationale}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="ms-2 d-flex gap-1">
+                                  <Button size="sm" variant="outline-primary" onClick={() => openEditBlock(block)}>Edit</Button>
+                                  <Button size="sm" variant="outline-danger" onClick={() => deleteBlock(block.id)}>Delete</Button>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </>
+                    );
+                  })()}
                 </Card.Body>
               </Card>
             </Col>
@@ -293,6 +405,54 @@ const Calendar: React.FC = () => {
           >
             Create Event
           </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Edit Block Modal */}
+      <Modal show={!!editBlock} onHide={() => setEditBlock(null)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Edit Calendar Block</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Start</Form.Label>
+              <Form.Control type="datetime-local" value={editForm.start} onChange={(e)=>setEditForm({...editForm, start: e.target.value})} />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>End</Form.Label>
+              <Form.Control type="datetime-local" value={editForm.end} onChange={(e)=>setEditForm({...editForm, end: e.target.value})} />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Category</Form.Label>
+              <Form.Control type="text" value={editForm.category} onChange={(e)=>setEditForm({...editForm, category: e.target.value})} />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Theme</Form.Label>
+              <Form.Select value={editForm.theme} onChange={(e)=>setEditForm({...editForm, theme: e.target.value})}>
+                <option>Health</option>
+                <option>Growth</option>
+                <option>Wealth</option>
+                <option>Tribe</option>
+                <option>Home</option>
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Flexibility</Form.Label>
+              <Form.Select value={editForm.flexibility} onChange={(e)=>setEditForm({...editForm, flexibility: e.target.value as any})}>
+                <option value="soft">Soft</option>
+                <option value="hard">Hard</option>
+              </Form.Select>
+            </Form.Group>
+            <Form.Group>
+              <Form.Label>Rationale</Form.Label>
+              <Form.Control as="textarea" rows={3} value={editForm.rationale} onChange={(e)=>setEditForm({...editForm, rationale: e.target.value})} />
+            </Form.Group>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={()=>setEditBlock(null)}>Cancel</Button>
+          <Button variant="primary" onClick={submitEditBlock}>Save Changes</Button>
         </Modal.Footer>
       </Modal>
     </Container>
