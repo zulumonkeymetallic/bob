@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Alert, Nav, Tab, Badge } from 'react-bootstrap';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -670,6 +671,8 @@ const AISettings: React.FC = () => {
   const { currentUser } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [saved, setSaved] = useState(false);
+  const [dedupRunning, setDedupRunning] = useState(false);
+  const [dedupResult, setDedupResult] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -697,6 +700,23 @@ const AISettings: React.FC = () => {
     }
   };
 
+  const runDuplicateDetection = async () => {
+    if (!currentUser) return;
+    try {
+      setDedupRunning(true);
+      setDedupResult(null);
+      const callable = httpsCallable(functions, 'detectDuplicateReminders');
+      const resp: any = await callable({});
+      const count = resp?.data?.groupsCreated ?? 0;
+      setDedupResult(`Potential duplicate groups created: ${count}`);
+    } catch (e: any) {
+      console.error('Duplicate detection failed', e);
+      setDedupResult('Duplicate detection failed: ' + (e?.message || 'Unknown error'));
+    } finally {
+      setDedupRunning(false);
+    }
+  };
+
   return (
     <Card className="mb-3">
       <Card.Body>
@@ -709,6 +729,19 @@ const AISettings: React.FC = () => {
         </div>
         <Form.Control as="textarea" rows={4} placeholder="Write a system prompt for story generation..." value={prompt} onChange={(e) => setPrompt(e.target.value)} />
         {saved && <div className="text-success mt-2">Saved</div>}
+        <hr />
+        <div className="d-flex justify-content-between align-items-center">
+          <div>
+            <h6 className="mb-1">Duplicate Task Detection (iOS Reminders)</h6>
+            <small className="text-muted">Scan for potential duplicates and flag for review</small>
+          </div>
+          <div>
+            <Button size="sm" variant="outline-secondary" onClick={runDuplicateDetection} disabled={dedupRunning}>
+              {dedupRunning ? 'Running…' : 'Run Detection'}
+            </Button>
+          </div>
+        </div>
+        {dedupResult && <div className="mt-2 small">{dedupResult}</div>}
       </Card.Body>
     </Card>
   );

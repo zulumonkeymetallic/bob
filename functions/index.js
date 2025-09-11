@@ -15,6 +15,8 @@ admin.initializeApp();
 
 // Secrets
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
+// Google AI Studio (Gemini) for Issue #124
+const GOOGLE_AI_STUDIO_API_KEY = defineSecret("GOOGLEAISTUDIOAPIKEY");
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret("GOOGLE_OAUTH_CLIENT_ID");
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret("GOOGLE_OAUTH_CLIENT_SECRET");
 const TRAKT_CLIENT_ID = defineSecret("TRAKT_CLIENT_ID");
@@ -182,7 +184,7 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
 });
 
 // ===== AI Planning Function
-exports.planCalendar = functionsV2.https.onCall(async (request) => {
+exports.planCalendar = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
@@ -204,8 +206,7 @@ exports.planCalendar = functionsV2.https.onCall(async (request) => {
     context.userId = uid; // Add userId to context for logging
     
     // 2. Generate AI plan
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const aiResponse = await generateAIPlan(openai, context, { focusGoalId, goalTimeRequest });
+    const aiResponse = await generateAIPlan(context, { focusGoalId, goalTimeRequest });
     
     // 3. Validate proposed blocks
     const validationResult = await validateCalendarBlocks(aiResponse.blocks, context);
@@ -235,7 +236,7 @@ exports.planCalendar = functionsV2.https.onCall(async (request) => {
 });
 
 // ===== Story Generation for Goal (AI)
-exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY] }, async (request) => {
+exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
@@ -263,7 +264,6 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [OPENAI_API
       basePrompt = settingsDoc.exists ? (settingsDoc.data().storyGenPrompt || null) : null;
     } catch {}
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const prompt = promptOverride || basePrompt || (
       `Generate between 3 and 6 user stories for the following personal goal. ` +
       `Each story must include a clear title and a 1-2 sentence description. ` +
@@ -272,18 +272,13 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [OPENAI_API
     );
 
     const userContent = `Goal Title: ${goal.title}\nGoal Description: ${goal.description || ''}\nTheme: ${goal.theme}\nPriority: ${goal.priority || ''}`;
-    const requestData = {
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: prompt },
-        { role: 'user', content: userContent }
-      ],
-      response_format: { type: 'json_object' }
-    };
-
-    const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
-    const resp = await aiWrapper(() => openai.chat.completions.create(requestData));
-    const text = resp?.choices?.[0]?.message?.content || '{}';
+    const text = await callLLMJson({
+      system: prompt,
+      user: userContent,
+      purpose: 'generateStoriesForGoal',
+      userId: uid,
+      expectJson: true
+    });
 
     let parsed;
     try {
@@ -390,7 +385,7 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
   };
 }
 
-async function generateAIPlan(openai, context, options = {}) {
+async function generateAIPlan(context, options = {}) {
   const { focusGoalId, goalTimeRequest } = options;
   
   let systemPrompt = `You are an AI planning assistant for BOB, a personal productivity system.
@@ -465,39 +460,21 @@ Generate a plan as JSON with:
   "rationale": "Overall planning rationale"
 }`;
 
-  const requestData = {
-    model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: focusGoalId ? 
-        `Please generate an optimal schedule focused on the goal "${context.goals.find(g => g.id === focusGoalId)?.title}". Create specific time blocks for goal work, skill building, and related tasks.` :
-        "Please generate an optimal schedule for these tasks and goals." }
-    ],
-    temperature: 0.3
-  };
+  const userMsg = focusGoalId ? 
+    `Please generate an optimal schedule focused on the goal "${context.goals.find(g => g.id === focusGoalId)?.title}". Create specific time blocks for goal work, skill building, and related tasks.` :
+    "Please generate an optimal schedule for these tasks and goals.";
 
-  // Wrap the AI call with comprehensive logging
-  const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
-  
-  const completion = await aiWrapper(
-    () => openai.chat.completions.create(requestData),
-    {
-      userId: context.userId,
-      functionName: 'planCalendar',
-      request: requestData,
-      purpose: focusGoalId ? `Goal-focused scheduling for: ${context.goals.find(g => g.id === focusGoalId)?.title}` : 'General calendar planning',
-      metadata: {
-        focusGoalId,
-        goalCount: context.goals?.length || 0,
-        taskCount: context.tasks?.length || 0,
-        persona: context.persona,
-        horizonDays: context.horizonDays
-      }
-    }
-  );
+  const text = await callLLMJson({
+    system: systemPrompt,
+    user: userMsg,
+    purpose: 'planCalendar',
+    userId: context.userId,
+    expectJson: true,
+    temperature: 0.3
+  });
 
   try {
-    return JSON.parse(completion.choices[0].message.content);
+    return JSON.parse(text);
   } catch (error) {
     throw new Error(`Failed to parse AI response: ${error.message}`);
   }
@@ -616,6 +593,114 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
   } catch (error) {
     return [];
   }
+}
+
+// ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
+exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  try {
+    const db = admin.firestore();
+    const snap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+    const crypto = require('crypto');
+    const tasks = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+    const reminderTasks = tasks.filter(t => t.source === 'ios_reminder');
+    const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const hash = (s) => crypto.createHash('sha1').update(String(s || '')).digest('hex');
+    const groups = new Map();
+
+    for (const t of reminderTasks) {
+      const key1 = t.reminderId ? `rid:${t.reminderId}` : null;
+      const key2 = `title:${norm(t.title)}|src:${norm(t.sourceRef || '')}`;
+      const key3 = `title:${norm(t.title)}|hash:${hash((t.description || '') + '|' + JSON.stringify(t.checklist || []))}`;
+      for (const k of [key1, key2, key3].filter(Boolean)) {
+        if (!groups.has(k)) groups.set(k, new Set());
+        groups.get(k).add(t.id);
+      }
+    }
+
+    let created = 0;
+    for (const [k, idSet] of groups.entries()) {
+      const ids = Array.from(idSet);
+      if (ids.length < 2) continue;
+      const docId = `dup_${uid}_${hash(k)}`;
+      await db.collection('potential_duplicates').doc(docId).set({
+        id: docId,
+        ownerUid: uid,
+        key: k,
+        method: k.startsWith('rid:') ? 'reminderId' : (k.includes('|src:') ? 'title+sourceRef' : 'title+hash'),
+        taskIds: ids,
+        count: ids.length,
+        status: 'open',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      created += 1;
+    }
+
+    return { groupsCreated: created };
+  } catch (e) {
+    console.error('detectDuplicateReminders error:', e);
+    throw new httpsV2.HttpsError('internal', e.message);
+  }
+});
+
+// ===== LLM Provider Helpers (Google AI Studio or OpenAI)
+async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2 }) {
+  const preferGemini = !!process.env.GOOGLEAISTUDIOAPIKEY;
+  const attempts = 3; // initial + 2 retries
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      if (preferGemini) {
+        const text = await callGemini({ system, user, expectJson, temperature });
+        // lightweight usage log
+        const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', 'gemini-1.5-flash');
+        await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
+        return text;
+      } else {
+        return await callOpenAI({ system, user, expectJson, temperature, userId, purpose });
+      }
+    } catch (e) {
+      lastErr = e;
+      await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
+    }
+  }
+  if (expectJson) return '{}';
+  throw lastErr || new Error('LLM unavailable');
+}
+
+async function callGemini({ system, user, expectJson, temperature }) {
+  const apiKey = process.env.GOOGLEAISTUDIOAPIKEY;
+  if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: `${system}\n\n${user}` }] }],
+    generationConfig: Object.assign({}, expectJson ? { responseMimeType: 'application/json' } : {}, { temperature: temperature ?? 0.2 })
+  };
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.map(p => p.text).join('');
+  if (!text) throw new Error('Empty response from Gemini');
+  return text;
+}
+
+async function callOpenAI({ system, user, expectJson, temperature, userId, purpose }) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const requestData = {
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ],
+    temperature: temperature ?? 0.2,
+    ...(expectJson ? { response_format: { type: 'json_object' } } : {})
+  };
+  const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
+  const resp = await aiWrapper(() => openai.chat.completions.create(requestData), { userId, functionName: purpose, request: requestData, purpose });
+  return resp?.choices?.[0]?.message?.content || '';
 }
 
 // ===== Strava Helpers

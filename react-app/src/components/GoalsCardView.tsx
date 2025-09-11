@@ -44,6 +44,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [calendarSyncStatus, setCalendarSyncStatus] = useState<{ [goalId: string]: string }>({});
   const [isSchedulingGoal, setIsSchedulingGoal] = useState<string | null>(null);
   const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
+  const [generatingForGoal, setGeneratingForGoal] = useState<string | null>(null);
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
   const themeColors = {
@@ -262,6 +263,23 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     setShowDeleteModal(null);
   };
 
+  const handleAutoGenerateStories = async (goal: Goal) => {
+    if (!currentUser) return;
+    try {
+      setGeneratingForGoal(goal.id);
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      const resp: any = await callable({ goalId: goal.id });
+      const created = resp?.data?.created ?? 0;
+      // Lightweight feedback via alert for now
+      alert(created > 0 ? `Generated ${created} stories for "${goal.title}"` : 'No stories generated');
+    } catch (e: any) {
+      console.error('Auto-generate stories failed', e);
+      alert('Failed to generate stories: ' + (e?.message || 'Unknown error'));
+    } finally {
+      setGeneratingForGoal(null);
+    }
+  };
+
   if (goals.length === 0) {
     return (
       <div style={{ 
@@ -374,6 +392,19 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       >
                         <Plus size={14} className="me-2" />
                         Add Story
+                      </Dropdown.Item>
+                      <Dropdown.Item 
+                        onClick={() => handleAutoGenerateStories(goal)}
+                        disabled={generatingForGoal === goal.id}
+                      >
+                        {generatingForGoal === goal.id ? (
+                          <>
+                            <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            Generating Stories...
+                          </>
+                        ) : (
+                          <>Auto-Generate Stories</>
+                        )}
                       </Dropdown.Item>
                       <Dropdown.Item 
                         onClick={() => scheduleGoalTime(goal)}
