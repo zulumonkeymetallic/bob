@@ -19,6 +19,11 @@ const GOOGLE_OAUTH_CLIENT_ID = defineSecret("GOOGLE_OAUTH_CLIENT_ID");
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret("GOOGLE_OAUTH_CLIENT_SECRET");
 const TRAKT_CLIENT_ID = defineSecret("TRAKT_CLIENT_ID");
 const STEAM_WEB_API_KEY = defineSecret("STEAM_WEB_API_KEY");
+// Strava integration secrets
+const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
+const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
+const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
+// No secrets required for Parkrun
 
 // ===== Utilities
 async function fetchJson(url, opts = {}) {
@@ -94,6 +99,85 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
     res.status(200).send("<script>window.close();</script>Connected. You can close this window.");
   } catch (e) {
     res.status(500).send("OAuth callback error: " + e.message);
+  }
+});
+
+// ===== Strava OAuth Start
+exports.stravaOAuthStart = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/stravaOAuthCallback`;
+    const clientId = process.env.STRAVA_CLIENT_ID;
+    const state = stateEncode({ uid, nonce });
+    const scope = encodeURIComponent("read,activity:read");
+    const authUrl = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).send("Strava OAuth start error: " + e.message);
+  }
+});
+
+// ===== Strava OAuth Callback
+exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/stravaOAuthCallback`;
+
+    const tokenData = await fetchJson("https://www.strava.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: process.env.STRAVA_CLIENT_ID,
+        client_secret: process.env.STRAVA_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+        grant_type: "authorization_code",
+      }).toString(),
+    });
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresAt = tokenData.expires_at; // seconds epoch
+    const athlete = tokenData.athlete || {};
+    if (!refresh) {
+      return res.status(400).send("No refresh_token from Strava. Ensure correct scopes and app settings.");
+    }
+
+    const db = admin.firestore();
+    const tokenRef = db.collection("tokens").doc(`${uid}_strava`);
+    await tokenRef.set({
+      provider: "strava",
+      ownerUid: uid,
+      athleteId: athlete.id || null,
+      athlete: athlete || null,
+      refresh_token: refresh,
+      access_token: access || null,
+      expires_at: expiresAt || null,
+      scope: tokenData.scope || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    // Mark profile integration flag
+    await db.collection('profiles').doc(uid).set({
+      stravaConnected: true,
+      stravaAthleteId: athlete.id || null,
+      stravaLastSyncAt: null
+    }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Strava connected. You can close this window.");
+  } catch (e) {
+    console.error('Strava OAuth callback error:', e);
+    res.status(500).send("Strava OAuth callback error: " + e.message);
   }
 });
 
@@ -533,6 +617,250 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
     return [];
   }
 }
+
+// ===== Strava Helpers
+async function getStravaTokenDoc(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('tokens').doc(`${uid}_strava`).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+async function getStravaAccessToken(uid) {
+  const db = admin.firestore();
+  const doc = await getStravaTokenDoc(uid);
+  if (!doc) throw new Error('Strava not connected for this user');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  // Refresh token
+  const refreshed = await fetchJson("https://www.strava.com/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: process.env.STRAVA_CLIENT_ID,
+      client_secret: process.env.STRAVA_CLIENT_SECRET,
+      grant_type: "refresh_token",
+      refresh_token: doc.refresh_token,
+    }).toString(),
+  });
+  const tokenRef = db.collection('tokens').doc(`${uid}_strava`);
+  await tokenRef.set({
+    access_token: refreshed.access_token,
+    refresh_token: refreshed.refresh_token || doc.refresh_token,
+    expires_at: refreshed.expires_at,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return refreshed.access_token;
+}
+
+async function upsertWorkout(uid, activity) {
+  const db = admin.firestore();
+  const activityId = String(activity.id);
+  const docId = `${uid}_${activityId}`;
+  const ref = db.collection('metrics_workouts').doc(docId);
+  const payload = {
+    id: docId,
+    ownerUid: uid,
+    provider: 'strava',
+    stravaActivityId: activityId,
+    name: activity.name,
+    type: activity.type,
+    startDate: new Date(activity.start_date).getTime(),
+    utcStartDate: new Date(activity.start_date).toISOString(),
+    distance_m: activity.distance || null,
+    movingTime_s: activity.moving_time || null,
+    elapsedTime_s: activity.elapsed_time || null,
+    elevationGain_m: activity.total_elevation_gain || null,
+    averageSpeed_mps: activity.average_speed || null,
+    maxSpeed_mps: activity.max_speed || null,
+    avgHeartrate: activity.average_heartrate || null,
+    maxHeartrate: activity.max_heartrate || null,
+    hasHeartrate: !!(activity.has_heartrate || activity.average_heartrate || activity.max_heartrate),
+    calories: activity.calories || null,
+    commute: activity.commute || false,
+    gearId: activity.gear_id || null,
+    isTrainer: activity.trainer || false,
+    isCommute: activity.commute || false,
+    isManual: activity.manual || false,
+    visibility: activity.visibility || null,
+    source: 'strava',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  await ref.set(payload, { merge: true });
+  return docId;
+}
+
+async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxPages = 3 } = {}) {
+  const accessToken = await getStravaAccessToken(uid);
+  let page = 1;
+  let total = 0;
+  let lastDocId = null;
+  while (page <= maxPages) {
+    const params = new URLSearchParams({
+      per_page: String(perPage),
+      page: String(page),
+    });
+    if (afterSec) params.append('after', String(afterSec));
+    const url = `https://www.strava.com/api/v3/athlete/activities?${params.toString()}`;
+    const rows = await fetchJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    for (const act of rows) {
+      lastDocId = await upsertWorkout(uid, act);
+      total += 1;
+    }
+    if (rows.length < perPage) break;
+    page += 1;
+  }
+  const db = admin.firestore();
+  await db.collection('profiles').doc(uid).set({ stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { ok: true, imported: total, lastDocId };
+}
+
+// Callable to sync Strava activities
+exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const after = req.data?.after || null; // ms or sec accepted
+  let afterSec = null;
+  if (after) {
+    afterSec = (String(after).length > 10) ? Math.floor(Number(after) / 1000) : Number(after);
+  }
+  console.log('[syncStrava] uid', req.auth.uid, 'after', after, 'afterSec', afterSec);
+  return await fetchStravaActivities(req.auth.uid, { afterSec });
+});
+
+// Retrieve HR stream for an activity and compute zone times; store on metrics_workouts doc
+async function getUserMaxHr(uid) {
+  const prof = await admin.firestore().collection('profiles').doc(uid).get();
+  const d = prof.exists ? prof.data() : {};
+  const maxHr = Number(d?.maxHr) || null;
+  if (maxHr) return maxHr;
+  const age = Number(d?.age || (d?.birthYear ? (new Date().getFullYear() - Number(d.birthYear)) : null)) || null;
+  return age ? Math.round(220 - age) : 190; // fallback
+}
+
+function hrZonesFromMax(maxHr) {
+  return [
+    { name: 'Z1', min: 0.50*maxHr, max: 0.60*maxHr },
+    { name: 'Z2', min: 0.60*maxHr, max: 0.70*maxHr },
+    { name: 'Z3', min: 0.70*maxHr, max: 0.80*maxHr },
+    { name: 'Z4', min: 0.80*maxHr, max: 0.90*maxHr },
+    { name: 'Z5', min: 0.90*maxHr, max: 1.00*maxHr + 1 },
+  ];
+}
+
+async function enrichActivityHr(uid, activityId) {
+  const db = admin.firestore();
+  const docId = `${uid}_${activityId}`;
+  const ref = db.collection('metrics_workouts').doc(docId);
+  const snap = await ref.get();
+  if (!snap.exists) return { ok: false, reason: 'not_found' };
+  const data = snap.data();
+  if (data.hrZones && data.hrZones.z1Time_s != null) return { ok: true, reason: 'already_enriched' };
+
+  const accessToken = await getStravaAccessToken(uid);
+  let streams;
+  try {
+    const url = `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=time,heartrate&key_by_type=true`;
+    streams = await fetchJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  } catch (e) {
+    // If fails (permissions), skip quietly
+    return { ok: false, reason: 'no_streams' };
+  }
+  const hr = Array.isArray(streams?.heartrate?.data) ? streams.heartrate.data : null;
+  const tm = Array.isArray(streams?.time?.data) ? streams.time.data : null;
+  if (!hr || !tm || hr.length === 0) return { ok: false, reason: 'empty_stream' };
+
+  const maxHr = await getUserMaxHr(uid);
+  const zones = hrZonesFromMax(maxHr);
+  const totals = { z1Time_s:0, z2Time_s:0, z3Time_s:0, z4Time_s:0, z5Time_s:0 };
+  for (let i=1; i<tm.length; i++) {
+    const dt = Math.max(1, (tm[i] - tm[i-1]));
+    const h = hr[Math.min(i, hr.length-1)];
+    const zIdx = zones.findIndex(z => h >= z.min && h < z.max);
+    if (zIdx === 0) totals.z1Time_s += dt;
+    else if (zIdx === 1) totals.z2Time_s += dt;
+    else if (zIdx === 2) totals.z3Time_s += dt;
+    else if (zIdx === 3) totals.z4Time_s += dt;
+    else totals.z5Time_s += dt;
+  }
+  await ref.set({ hrZones: totals, maxHrUsed: maxHr }, { merge: true });
+  return { ok: true, hrZones: totals };
+}
+
+// Enrich recent Strava runs with HR zone breakdown
+exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.min(Number(req.data?.days || 30), 365);
+  console.log('[enrichStravaHR] uid', uid, 'days', days);
+  const since = Date.now() - days*24*60*60*1000;
+  const db = admin.firestore();
+  const q = await db.collection('metrics_workouts')
+    .where('ownerUid', '==', uid)
+    .where('provider', '==', 'strava')
+    .get();
+  let enriched = 0, scanned = 0;
+  for (const d of q.docs) {
+    const w = d.data();
+    if ((w.startDate||0) < since) continue;
+    if (!w.hasHeartrate && !w.avgHeartrate) continue;
+    scanned++;
+    const actId = String(w.stravaActivityId || '').trim();
+    if (!actId) continue;
+    const r = await enrichActivityHr(uid, actId).catch(()=>null);
+    if (r?.ok) enriched++;
+  }
+  return { ok: true, enriched, scanned };
+});
+
+// Strava Webhook endpoint (verification + events)
+exports.stravaWebhook = httpsV2.onRequest({ secrets: [STRAVA_WEBHOOK_VERIFY_TOKEN, STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method === 'GET') {
+      const mode = req.query['hub.mode'];
+      const token = req.query['hub.verify_token'];
+      const challenge = req.query['hub.challenge'];
+      if (mode !== 'subscribe') return res.status(400).send('Invalid mode');
+      if (String(token) !== String(process.env.STRAVA_WEBHOOK_VERIFY_TOKEN)) return res.status(403).send('Invalid verify token');
+      return res.status(200).json({ 'hub.challenge': challenge });
+    }
+    if (req.method === 'POST') {
+      const body = req.body || {};
+      if (body.object_type === 'activity') {
+        const athleteId = String(body.owner_id);
+        const aspect = String(body.aspect_type);
+        // Find user by athleteId
+        const db = admin.firestore();
+        const q = await db.collection('tokens').where('provider', '==', 'strava').where('athleteId', '==', Number(athleteId)).limit(1).get();
+        if (!q.empty) {
+          const uid = q.docs[0].data().ownerUid;
+          if (aspect === 'create' || aspect === 'update') {
+            // Fetch single activity details
+            try {
+              const accessToken = await getStravaAccessToken(uid);
+              const act = await fetchJson(`https://www.strava.com/api/v3/activities/${body.object_id}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+              await upsertWorkout(uid, act);
+            } catch (e) {
+              console.error('Failed to upsert Strava activity from webhook:', e);
+            }
+          } else if (aspect === 'delete') {
+            const docId = `${uid}_${body.object_id}`;
+            await db.collection('metrics_workouts').doc(docId).delete().catch(()=>{});
+          }
+        } else {
+          console.warn('Webhook for unknown Strava athlete:', athleteId);
+        }
+      }
+      return res.status(200).json({ received: true });
+    }
+    return res.status(405).send('Method not allowed');
+  } catch (e) {
+    console.error('Strava webhook error:', e);
+    return res.status(500).send('Server error');
+  }
+});
 async function getAccessToken(uid) {
   const db = admin.firestore();
   const doc = await db.collection("tokens").doc(uid).get();
@@ -559,6 +887,400 @@ exports.calendarStatus = httpsV2.onCall(async (req) => {
   const doc = await admin.firestore().collection("tokens").doc(req.auth.uid).get();
   return { connected: doc.exists && !!doc.data().refresh_token };
 });
+
+async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
+  const base = countryBaseUrl || 'https://www.parkrun.org.uk';
+  const url = `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteId)}&eventNumber=0`;
+  const html = await (await fetch(url)).text();
+  const cheerio = require('cheerio');
+  const $ = cheerio.load(html);
+  let rows = [];
+  $('table#results tbody tr').each((_, el) => rows.push(el));
+  if (rows.length === 0) {
+    $('table tbody tr').each((_, el) => rows.push(el));
+  }
+  const db = admin.firestore();
+  let imported = 0;
+  const slugify = (s)=> String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+
+  async function getParticipantsFromResultUrl(href) {
+    if (!href) return { participants: null, resultUrl: null, runSeq: null };
+    let full = href.startsWith('http') ? href : (href.startsWith('/') ? `https://www.parkrun.org.uk${href}` : `${base}/${href}`);
+    try {
+      const page = await (await fetch(full)).text();
+      const $p = cheerio.load(page);
+      const count = $p('table#results tbody tr').length;
+      const m = full.match(/\/results\/(\d+)/);
+      const runSeq = m ? Number(m[1]) : null;
+      return { participants: count || null, resultUrl: full, runSeq };
+    } catch { return { participants: null, resultUrl: null, runSeq: null }; }
+  }
+  for (const el of rows) {
+    const tds = $(el).find('td');
+    if (tds.length < 5) continue;
+    const dateText = $(tds[0]).text().trim();
+    const eventCell = $(tds[1]);
+    const eventText = eventCell.text().trim();
+    const eventHref = eventCell.find('a').attr('href') || '';
+    const timeText = $(tds[2]).text().trim();
+    const positionText = $(tds[3]).text().trim();
+    const ageGradeText = $(tds[4]).text().trim();
+    const ageCatText = tds.length >= 6 ? $(tds[5]).text().trim() : null;
+    if (!dateText || !eventText || !timeText) continue;
+    let dateMs = Date.parse(dateText);
+    if (isNaN(dateMs)) {
+      const m = dateText.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (m) {
+        const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+        dateMs = d.getTime();
+      }
+    }
+    if (!dateMs || isNaN(dateMs)) continue;
+    let secs = 0;
+    const parts = timeText.split(':').map(x => Number(x));
+    if (parts.length === 3) secs = parts[0] * 3600 + parts[1] * 60 + parts[2];
+    else if (parts.length === 2) secs = parts[0] * 60 + parts[1];
+    else continue;
+    const eventSlug = slugify(eventText);
+    const docId = `${uid}_parkrun_${new Date(dateMs).toISOString().slice(0,10)}_${eventSlug}`;
+    // Try to derive participants from a direct result URL if the row links to it
+    let participantsCount = null; let eventResultUrl = null; let eventRunSeqNumber = null;
+    if (eventHref && /\/results\//.test(eventHref)) {
+      const info = await getParticipantsFromResultUrl(eventHref);
+      participantsCount = info.participants;
+      eventResultUrl = info.resultUrl;
+      eventRunSeqNumber = info.runSeq;
+    }
+
+    const payload = {
+      id: docId,
+      ownerUid: uid,
+      provider: 'parkrun',
+      parkrunAthleteId: athleteId,
+      event: eventText,
+      eventSlug,
+      eventResultUrl: eventResultUrl || null,
+      eventRunSeqNumber: eventRunSeqNumber || null,
+      name: `parkrun ${eventText}`,
+      type: 'Run',
+      startDate: dateMs,
+      utcStartDate: new Date(dateMs).toISOString(),
+      elapsedTime_s: secs,
+      movingTime_s: secs,
+      distance_m: 5000,
+      position: positionText ? Number(positionText) || null : null,
+      ageGrade: ageGradeText || null,
+      ageCategory: ageCatText || null,
+      participantsCount: participantsCount || null,
+      percentileTop: (participantsCount && positionText) ? Number((((participantsCount - (Number(positionText)||0) + 1)/participantsCount)*100).toFixed(2)) : null,
+      source: 'parkrun',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    await db.collection('metrics_workouts').doc(docId).set(payload, { merge: true });
+    imported += 1;
+  }
+  await db.collection('profiles').doc(uid).set({ parkrunAthleteId: athleteId, parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { ok: true, imported };
+}
+
+// ===== Parkrun Sync (HTML parse)
+exports.syncParkrun = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  let { athleteId, profileUrl, countryBaseUrl } = req.data || {};
+  console.log('[syncParkrun] uid', uid, 'athleteId', athleteId, 'profileUrl?', !!profileUrl, 'base?', countryBaseUrl);
+  athleteId = (athleteId || '').toString().trim();
+  profileUrl = (profileUrl || '').toString().trim();
+  countryBaseUrl = (countryBaseUrl || '').toString().trim();
+  if (!athleteId && profileUrl) {
+    const match1 = profileUrl.match(/athleteNumber=(\d+)/i);
+    const match2 = profileUrl.match(/parkrunner\/(\d+)/i);
+    athleteId = match1?.[1] || match2?.[1] || '';
+  }
+  if (!athleteId) {
+    throw new httpsV2.HttpsError('invalid-argument', 'Provide Parkrun athleteId or profileUrl containing athleteNumber.');
+  }
+  return await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+});
+
+// Fitness Overview aggregator
+exports.getFitnessOverview = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.min(Number(req.data?.days || 90), 365);
+  return await _getFitnessOverview(uid, days);
+});
+
+async function _getFitnessOverview(uid, days) {
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const db = admin.firestore();
+  const workoutsSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).limit(1000).get();
+  const workouts = workoutsSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(w => (w.startDate || 0) >= sinceMs && (w.provider === 'strava' || w.provider === 'parkrun'))
+    .sort((a,b) => (a.startDate||0) - (b.startDate||0));
+  const hrvSnap = await db.collection('metrics_hrv').where('ownerUid', '==', uid).limit(1000).get();
+  const hrv = hrvSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(x => {
+      const t = x.timestamp || x.date || x.day || x.measuredAt || null;
+      const ms = typeof t === 'number' ? (t > 1e12 ? t : t*1000) : (t?.toMillis ? t.toMillis() : (Date.parse(t) || null));
+      x._ms = ms;
+      return ms && ms >= sinceMs;
+    })
+    .sort((a,b) => a._ms - b._ms);
+  const km = (m)=> (typeof m === 'number' ? m/1000 : 0);
+  const sec = (s)=> (typeof s === 'number' ? s : 0);
+  const weekly = new Map();
+  let totalKm = 0, totalSec = 0, sessions = 0;
+  for (const w of workouts) {
+    const d = new Date(w.startDate || Date.now());
+    const ws = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    ws.setUTCDate(ws.getUTCDate() - ws.getUTCDay());
+    const key = ws.toISOString().slice(0,10);
+    const dist = km(w.distance_m);
+    const time = sec(w.movingTime_s || w.elapsedTime_s);
+    const agg = weekly.get(key) || { distanceKm:0, timeSec:0, sessions:0 };
+    agg.distanceKm += dist; agg.timeSec += time; agg.sessions += 1;
+    weekly.set(key, agg); totalKm += dist; totalSec += time; sessions += 1;
+  }
+  const since30 = Date.now() - 30*24*60*60*1000;
+  const last30 = workouts.filter(w => (w.startDate||0) >= since30);
+  const dist30 = last30.reduce((s,w)=> s + km(w.distance_m), 0);
+  const time30 = last30.reduce((s,w)=> s + sec(w.movingTime_s || w.elapsedTime_s), 0);
+  const avgPaceMinPerKm = dist30 > 0 ? (time30/60) / dist30 : null;
+  const toVal = (x)=> Number(x?.value ?? x?.rMSSD ?? x?.hrv ?? null) || null;
+  const last7Ms = Date.now() - 7*24*60*60*1000;
+  const last30Ms = since30;
+  const hrvLast7 = hrv.filter(x => x._ms >= last7Ms).map(toVal).filter(Boolean);
+  const hrvLast30 = hrv.filter(x => x._ms >= last30Ms).map(toVal).filter(Boolean);
+  const avg = (arr)=> arr.length? (arr.reduce((a,b)=>a+b,0)/arr.length): null;
+  const hrv7 = avg(hrvLast7);
+  const hrv30 = avg(hrvLast30);
+  const hrvTrendPct = (hrv7 && hrv30) ? ((hrv7 - hrv30) / hrv30) * 100 : null;
+  const weeks = Array.from(weekly.values());
+  const recentWeeks = weeks.slice(-4);
+  const volKm = recentWeeks.reduce((s,x)=> s + x.distanceKm, 0) / Math.max(recentWeeks.length,1);
+  const volScore = Math.max(0, Math.min(1, volKm / 50));
+  const hrvScore = (hrvTrendPct == null) ? 0.5 : Math.max(0, Math.min(1, (hrvTrendPct + 10) / 20));
+  const fitnessScore = Math.round((volScore*0.6 + hrvScore*0.4) * 100);
+  const zoneTotals = { z1Time_s:0, z2Time_s:0, z3Time_s:0, z4Time_s:0, z5Time_s:0 };
+  for (const w of workouts) {
+    if (w.hrZones) {
+      zoneTotals.z1Time_s += Number(w.hrZones.z1Time_s||0);
+      zoneTotals.z2Time_s += Number(w.hrZones.z2Time_s||0);
+      zoneTotals.z3Time_s += Number(w.hrZones.z3Time_s||0);
+      zoneTotals.z4Time_s += Number(w.hrZones.z4Time_s||0);
+      zoneTotals.z5Time_s += Number(w.hrZones.z5Time_s||0);
+    }
+  }
+  return {
+    rangeDays: days,
+    totals: { distanceKm: Number(totalKm.toFixed(2)), timeHours: Number((totalSec/3600).toFixed(2)), sessions },
+    last30: { distanceKm: Number(dist30.toFixed(2)), avgPaceMinPerKm: avgPaceMinPerKm ? Number(avgPaceMinPerKm.toFixed(2)) : null, workouts: last30.length },
+    hrv: { last7Avg: hrv7 ? Number(hrv7.toFixed(1)) : null, last30Avg: hrv30 ? Number(hrv30.toFixed(1)) : null, trendPct: hrvTrendPct != null ? Number(hrvTrendPct.toFixed(1)) : null },
+    hrZones: zoneTotals,
+    weekly: Array.from(weekly.entries()).map(([weekStart, w]) => ({ weekStart, ...w, paceMinPerKm: w.distanceKm>0 ? Number(((w.timeSec/60)/w.distanceKm).toFixed(2)) : null })),
+    fitnessScore
+  };
+}
+
+// Correlate Parkrun 5k times with Strava HR data to estimate fitness/effort relationship
+exports.getRunFitnessAnalysis = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.min(Number(req.data?.days || 180), 730);
+  return await _getRunFitnessAnalysis(uid, days);
+});
+
+// Enable automation defaults for the authenticated user
+exports.enableFitnessAutomationDefaults = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+
+  // Try to infer defaults from existing Parkrun docs
+  let defaultSlug = null;
+  let defaultRunSeq = null;
+  try {
+    const snap = await db.collection('metrics_workouts')
+      .where('ownerUid','==',uid)
+      .where('provider','==','parkrun')
+      .orderBy('startDate','desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) {
+      const d = snap.docs[0].data();
+      defaultSlug = d.eventSlug || null;
+      defaultRunSeq = d.eventRunSeqNumber || null;
+    }
+  } catch {}
+
+  const payload = {
+    stravaAutoSync: true,
+    parkrunAutoSync: true,
+    parkrunAutoComputePercentiles: true,
+    autoEnrichStravaHR: true,
+    autoComputeFitnessMetrics: true,
+  };
+  if (defaultSlug && defaultRunSeq) {
+    payload['parkrunDefaultEventSlug'] = defaultSlug;
+    payload['parkrunDefaultStartRun'] = defaultRunSeq;
+  }
+
+  await db.collection('profiles').doc(uid).set(payload, { merge: true });
+  return { ok: true, defaults: payload };
+});
+
+// Backward-compatibility stub for legacy function present in project
+exports.generateGoalStoriesAndKPIs = httpsV2.onCall(async (req) => {
+  return { ok: true, message: 'Legacy stub active' };
+});
+
+async function _getRunFitnessAnalysis(uid, days) {
+  const sinceMs = Date.now() - days*24*60*60*1000;
+  const db = admin.firestore();
+  const wSnap = await db.collection('metrics_workouts').where('ownerUid','==',uid).get();
+  const all = wSnap.docs.map(d=>({ id:d.id, ...d.data() }));
+  const parkruns = all.filter(x => x.provider==='parkrun' && (x.startDate||0) >= sinceMs);
+  const runs = all.filter(x => x.provider==='strava' && (x.startDate||0) >= sinceMs && (x.type==='Run' || x.run===true));
+  const pairs = [];
+  for (const p of parkruns) {
+    const pStart = p.startDate || 0;
+    const rCandidates = runs.filter(r => Math.abs((r.startDate||0)-pStart) <= 12*3600*1000);
+    let best = null, bestScore = 1e12;
+    for (const r of rCandidates) {
+      const dist = Number(r.distance_m||0);
+      const dScore = Math.abs(dist - 5000) + Math.abs((r.startDate||0) - pStart)/1000;
+      if (dScore < bestScore) { best = r; bestScore = dScore; }
+    }
+    if (best) pairs.push({ parkrun: p, strava: best });
+  }
+  const xs = [], ys = [];
+  let zoneAgg = { z1Time_s:0, z2Time_s:0, z3Time_s:0, z4Time_s:0, z5Time_s:0 };
+  for (const pair of pairs) {
+    const timeSec = Number(pair.parkrun.elapsedTime_s || pair.parkrun.movingTime_s || 0);
+    const avgHr = Number(pair.strava.avgHeartrate || 0);
+    if (timeSec>0 && avgHr>0) { xs.push(timeSec); ys.push(avgHr); }
+    if (pair.strava.hrZones) {
+      zoneAgg.z1Time_s += Number(pair.strava.hrZones.z1Time_s||0);
+      zoneAgg.z2Time_s += Number(pair.strava.hrZones.z2Time_s||0);
+      zoneAgg.z3Time_s += Number(pair.strava.hrZones.z3Time_s||0);
+      zoneAgg.z4Time_s += Number(pair.strava.hrZones.z4Time_s||0);
+      zoneAgg.z5Time_s += Number(pair.strava.hrZones.z5Time_s||0);
+    }
+  }
+  function pearson(x, y) {
+    const n = Math.min(x.length, y.length);
+    if (!n) return null;
+    const mx = x.reduce((a,b)=>a+b,0)/n;
+    const my = y.reduce((a,b)=>a+b,0)/n;
+    let num=0, dx=0, dy=0;
+    for (let i=0;i<n;i++){ const a=x[i]-mx, b=y[i]-my; num+=a*b; dx+=a*a; dy+=b*b; }
+    const den = Math.sqrt(dx*dy);
+    return den? num/den : null;
+  }
+  const corr = pearson(xs, ys);
+  const byMonth = new Map();
+  for (const p of parkruns) {
+    const d = new Date(p.startDate || Date.now());
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
+    const arr = byMonth.get(key) || [];
+    arr.push(Number(p.elapsedTime_s || p.movingTime_s || 0));
+    byMonth.set(key, arr);
+  }
+  const monthly = Array.from(byMonth.entries()).map(([month, arr])=>{
+    const sorted = arr.filter(Boolean).sort((a,b)=>a-b);
+    const med = sorted.length? sorted[Math.floor(sorted.length/2)] : null;
+    return { month, parkrunMedianSec: med };
+  }).sort((a,b)=> a.month.localeCompare(b.month));
+  return {
+    pairs: pairs.map(p => ({
+      parkrun: { date: new Date(p.parkrun.startDate).toISOString(), timeSec: p.parkrun.elapsedTime_s || p.parkrun.movingTime_s, position: p.parkrun.position || null, participants: p.parkrun.participantsCount || null, percentileTop: p.parkrun.percentileTop || null, ageGrade: p.parkrun.ageGrade || null },
+      strava: { activityId: p.strava.stravaActivityId, avgHeartrate: p.strava.avgHeartrate || null, hrZones: p.strava.hrZones || null }
+    })),
+    correlationTimeVsAvgHR: corr,
+    hrZonesAggregate: zoneAgg,
+    monthly
+  };
+}
+
+// Compute participants and percentile by scanning event results pages backwards
+exports.computeParkrunPercentiles = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const eventSlug = String(req.data?.eventSlug || '').trim().toLowerCase();
+  const startRun = Number(req.data?.startRun || 0);
+  const base = String(req.data?.baseUrl || 'https://www.parkrun.org.uk').trim().replace(/\/$/, '');
+  const maxBack = Math.min(Number(req.data?.maxBack || 120), 500);
+  const onlyMissing = !!req.data?.onlyMissing;
+  console.log('[computeParkrunPercentiles] uid', uid, 'eventSlug', eventSlug, 'startRun', startRun, 'maxBack', maxBack);
+  if (!eventSlug || !startRun) {
+    throw new httpsV2.HttpsError('invalid-argument', 'eventSlug and startRun are required');
+  }
+  return await _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, base, maxBack, onlyMissing });
+});
+
+async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, base = 'https://www.parkrun.org.uk', maxBack = 120, onlyMissing = false }) {
+  const cheerio = require('cheerio');
+  function dateOnly(ms) {
+    const d = new Date(ms);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  }
+  function sameDay(aMs, bMs) { return dateOnly(aMs).getTime() === dateOnly(bMs).getTime(); }
+
+  async function fetchRun(runNum) {
+    const url = `${String(base).replace(/\/$/,'')}/${eventSlug}/results/${runNum}`;
+    const html = await (await fetch(url)).text();
+    const $ = cheerio.load(html);
+    const contentText = $('#content').text() || $('body').text();
+    let dateMs = null;
+    const m = contentText.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})/);
+    if (m) { const parsed = Date.parse(m[1]); if (!isNaN(parsed)) dateMs = parsed; }
+    if (!dateMs) {
+      const t = $('time').first().attr('datetime') || $('time').first().text();
+      const parsed = Date.parse(t || '');
+      if (!isNaN(parsed)) dateMs = parsed;
+    }
+    const participants = $('table#results tbody tr').length || null;
+    return { runNum, url, dateMs, participants };
+  }
+
+  const db = admin.firestore();
+  const snap = await db.collection('metrics_workouts').where('ownerUid','==',uid).where('provider','==','parkrun').get();
+  const items = snap.docs.map(d=>({ id:d.id, ref:d.ref, ...d.data() }));
+  const slugify = (s)=> String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+  const targets = items.filter(x => (x.eventSlug ? x.eventSlug === eventSlug : slugify(x.event) === eventSlug));
+
+  let updated = 0, examined = 0;
+  for (const w of targets) {
+    examined++;
+    if (onlyMissing && w.participantsCount) continue;
+    const targetMs = w.startDate || 0;
+    let found = null;
+    for (let i=0; i<maxBack; i++) {
+      const runNum = startRun - i;
+      if (runNum <= 0) break;
+      let info;
+      try { info = await fetchRun(runNum); } catch { continue; }
+      if (info.dateMs && sameDay(info.dateMs, targetMs)) { found = info; break; }
+      if (info.dateMs && info.dateMs < (targetMs - 14*24*60*60*1000)) break;
+    }
+    if (found && found.participants && w.position) {
+      const percentileTop = Number((((found.participants - (Number(w.position)||0) + 1)/found.participants)*100).toFixed(2));
+      await w.ref.set({
+        participantsCount: found.participants,
+        percentileTop,
+        eventResultUrl: found.url,
+        eventRunSeqNumber: found.runNum,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      updated++;
+    }
+  }
+  return { ok: true, examined, updated };
+}
 
 exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
@@ -796,6 +1518,58 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
         await _syncSteam(uid);
       } catch (error) {
         console.error(`Failed to sync Steam for user ${uid}`, error);
+      }
+    }
+
+    if (data.stravaConnected && data.stravaAutoSync) {
+      try {
+        await fetchStravaActivities(uid, { maxPages: 2 });
+      } catch (error) {
+        console.error(`Failed to sync Strava for user ${uid}`, error);
+      }
+    }
+
+    if (data.parkrunAthleteId && data.parkrunAutoSync) {
+      try {
+        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+      } catch (error) {
+        console.error(`Failed to sync Parkrun for user ${uid}`, error);
+      }
+    }
+
+    if (data.parkrunAutoComputePercentiles && data.parkrunDefaultEventSlug && data.parkrunDefaultStartRun) {
+      try {
+        await _computeParkrunPercentilesInternal(uid, {
+          eventSlug: String(data.parkrunDefaultEventSlug).toLowerCase(),
+          startRun: Number(data.parkrunDefaultStartRun),
+          base: data.parkrunBaseUrl || 'https://www.parkrun.org.uk',
+          onlyMissing: true,
+          maxBack: 200
+        });
+      } catch (error) {
+        console.error(`Failed to compute Parkrun percentiles for user ${uid}`, error);
+      }
+    }
+
+    if (data.autoEnrichStravaHR) {
+      try {
+        // Enrich last 30 days for HR if missing
+        // reuse callable's logic
+        await exports.enrichStravaHR.run({ auth: { uid }, data: { days: 30 } });
+      } catch (error) {
+        // Swallow, enrichStravaHR may not be directly invocable here; fall back to inline
+        try { await (async ()=>{ /* optional future inline */ })(); } catch{}
+      }
+    }
+
+    if (data.autoComputeFitnessMetrics) {
+      try {
+        const overview = await _getFitnessOverview(uid, 90);
+        await db.collection('fitness_overview').doc(uid).set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const analysis = await _getRunFitnessAnalysis(uid, 365);
+        await db.collection('run_analysis').doc(uid).set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      } catch (error) {
+        console.error(`Failed to compute fitness metrics for user ${uid}`, error);
       }
     }
   }

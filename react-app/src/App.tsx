@@ -61,6 +61,7 @@ import TasksManagement from './components/TasksManagement';
 import TravelMap from './components/travel/TravelMap';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import ThemeBasedGanttChart from './components/visualization/ThemeBasedGanttChart';
+import WorkoutsDashboard from './components/WorkoutsDashboard';
 
 function App() {
   return (
@@ -221,6 +222,8 @@ function AppContent() {
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
             <Route path="/calendar" element={<Calendar />} />
+            <Route path="/running-results" element={<WorkoutsDashboard />} />
+            <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
             <Route path="/admin" element={<Admin />} />
