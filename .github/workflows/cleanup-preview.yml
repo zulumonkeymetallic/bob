@@ -1,8 +1,7 @@
-name: Cleanup Preview Channel
+name: Cleanup Preview Channel (disabled)
 
 on:
-  pull_request:
-    types: [closed]
+  workflow_dispatch:
 
 jobs:
   delete-preview:
@@ -21,4 +20,3 @@ jobs:
           args: hosting:channel:delete pr-${{ github.event.number }} --project bob20250810 --force
         env:
           GCP_SA_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-
