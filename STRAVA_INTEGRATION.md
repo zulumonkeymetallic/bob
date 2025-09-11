@@ -13,6 +13,11 @@ Configure secrets:
   firebase functions:secrets:set STRAVA_CLIENT_SECRET
   firebase functions:secrets:set STRAVA_WEBHOOK_VERIFY_TOKEN
 
+Security:
+- Never commit secrets (.env, .secrets.env) to the repo. They should be ignored and stored only in Firebase Functions Secrets or your CI vault.
+- If a secret was exposed, rotate it in the Strava developer portal (client secret) and replace STRAVA_WEBHOOK_VERIFY_TOKEN with a new random value. Then update Firebase with the new values using the commands above or `./scripts/set-secrets.sh`.
+- Frontend code must not receive client secrets; OAuth exchanges run only in Cloud Functions.
+
 Callback URLs (add to your Strava app settings):
 - OAuth Redirect URI: https://europe-west2-<PROJECT_ID>.cloudfunctions.net/stravaOAuthCallback
 - Webhook Callback URL: https://europe-west2-<PROJECT_ID>.cloudfunctions.net/stravaWebhook

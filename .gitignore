@@ -24,7 +24,10 @@ serviceAccountKey.json
 AGENTIC_AI_TEST_CREDENTIALS.json
 agentic-ai-test-token.txt
 *.secret.json
-.secrets.env
+**/.secrets.env
+**/.env
+**/.env.local
+**/.env.*.local
 
 # Ignore pre-push logs
 pre-push-*.log
