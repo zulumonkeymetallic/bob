@@ -529,27 +529,161 @@ async function validateCalendarBlocks(blocks, context) {
   return { errors, warnings, score: Math.max(0, score) };
 }
 
+// Map numeric theme to canonical label
+function themeLabelFromNumber(n) {
+  switch (Number(n)) {
+    case 1: return 'Health';
+    case 2: return 'Growth';
+    case 3: return 'Wealth';
+    case 4: return 'Tribe';
+    case 5: return 'Home';
+    default: return 'Growth';
+  }
+}
+
 async function applyCalendarBlocks(uid, persona, blocks) {
   const db = admin.firestore();
   const batch = db.batch();
-  
-  for (const block of blocks) {
+
+  // Helper: derive title, theme, goal link for a proposed block
+  async function enrichBlock(proposed) {
+    let title = proposed.title || null;
+    let theme = proposed.theme || null; // may be string already
+    let goalId = proposed.goalId || null;
+    let storyId = proposed.storyId || null;
+    let taskId = proposed.taskId || null;
+    let habitId = proposed.habitId || null;
+    let linkUrl = null;
+
+    // Preferred order: task → story → habit
+    if (taskId) {
+      try {
+        const t = await db.collection('tasks').doc(String(taskId)).get();
+        if (t.exists) {
+          const td = t.data();
+          const ref = td.ref || td.reference || '';
+          const tTitle = td.title || 'Task';
+          title = `${ref ? ref + ' · ' : ''}${tTitle}`;
+          // Derive story/goal from task parent
+          if (td.parentType === 'story' && td.parentId) storyId = td.parentId;
+          if (!goalId && (td.goalId || td.alignedToGoal)) {
+            goalId = td.goalId || null;
+          }
+          linkUrl = `/tasks?taskId=${t.id}`;
+        }
+      } catch {}
+    }
+
+    if (!title && storyId) {
+      try {
+        const s = await db.collection('stories').doc(String(storyId)).get();
+        if (s.exists) {
+          const sd = s.data();
+          const ref = sd.ref || '';
+          const sTitle = sd.title || 'Story';
+          title = `${ref ? ref + ' · ' : ''}${sTitle}`;
+          if (!goalId && sd.goalId) goalId = sd.goalId;
+          linkUrl = `/stories?storyId=${s.id}`;
+        }
+      } catch {}
+    }
+
+    if (!title && habitId) {
+      try {
+        const h = await db.collection('habits').doc(String(habitId)).get();
+        if (h.exists) {
+          const hd = h.data();
+          const hTitle = hd.name || hd.title || 'Habit';
+          title = hTitle;
+          if (!goalId && hd.linkedGoalId) goalId = hd.linkedGoalId;
+          linkUrl = `/habits?habitId=${h.id}`;
+        }
+      } catch {}
+    }
+
+    // Resolve theme from goal if needed
+    if (!theme && goalId) {
+      try {
+        const g = await db.collection('goals').doc(String(goalId)).get();
+        if (g.exists) {
+          const gd = g.data();
+          theme = themeLabelFromNumber(gd.theme);
+        }
+      } catch {}
+    }
+    // Ensure string theme label
+    if (typeof theme === 'number') theme = themeLabelFromNumber(theme);
+    if (!theme) theme = 'Growth';
+
+    return { title, theme, goalId, storyId, taskId, habitId, linkUrl };
+  }
+
+  // We will also log to activity_stream once
+  const activityRef = db.collection('activity_stream').doc();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  let createdCount = 0;
+  for (const proposed of blocks) {
+    const enriched = await enrichBlock(proposed);
     const blockRef = db.collection('calendar_blocks').doc();
+
     batch.set(blockRef, {
-      ...block,
+      ...proposed,
       id: blockRef.id,
       persona,
       ownerUid: uid,
       status: 'applied',
       createdBy: 'ai',
       version: 1,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      title: enriched.title || proposed.title || `${proposed.category || 'Block'} (${enriched.theme})`,
+      theme: enriched.theme,
+      goalId: enriched.goalId || proposed.goalId || null,
+      storyId: enriched.storyId || proposed.storyId || null,
+      taskId: enriched.taskId || proposed.taskId || null,
+      habitId: enriched.habitId || proposed.habitId || null,
+      updatedAt: now,
+      createdAt: now
     });
+
+    // Create scheduled_items doc if a linked entity exists
+    let linkType = null, refId = null, linkTitle = null, linkUrl = enriched.linkUrl || null;
+    if (enriched.taskId) { linkType = 'task'; refId = enriched.taskId; }
+    else if (enriched.storyId) { linkType = 'story'; refId = enriched.storyId; }
+    else if (enriched.habitId) { linkType = 'habit'; refId = enriched.habitId; }
+
+    if (linkType && refId) {
+      linkTitle = enriched.title || null;
+      const schedRef = db.collection('scheduled_items').doc();
+      batch.set(schedRef, {
+        id: schedRef.id,
+        ownerUid: uid,
+        blockId: blockRef.id,
+        type: linkType,
+        refId: String(refId),
+        title: linkTitle,
+        linkUrl: linkUrl,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    createdCount += 1;
   }
-  
+
+  // Activity summary entry for this AI application
+  batch.set(activityRef, {
+    id: activityRef.id,
+    entityId: 'calendar',
+    entityType: 'calendar_block',
+    activityType: 'calendar_ai_applied',
+    userId: uid,
+    description: `AI applied ${createdCount} calendar blocks`,
+    source: 'ai',
+    createdAt: now,
+    updatedAt: now
+  });
+
   await batch.commit();
-  return blocks.length; // Return count of blocks created
+  return createdCount;
 }
 
 function getDefaultPlanningPrefs() {
@@ -1380,6 +1514,24 @@ exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
   return { ok: true, event: ev };
 });
 
+// Update an existing Google Calendar event (summary/start/end minimal patch)
+exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const { eventId, summary, start, end } = req.data || {};
+  if (!eventId) throw new httpsV2.HttpsError("invalid-argument", "eventId required");
+  const access = await getAccessToken(req.auth.uid);
+  const body = {};
+  if (summary) body.summary = summary;
+  if (start) body.start = { dateTime: start };
+  if (end) body.end = { dateTime: end };
+  const ev = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: "PATCH",
+    headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  return { ok: true, event: ev };
+});
+
 exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const maxResults = Math.min(Number(req.data?.maxResults || 20), 100);
@@ -1389,6 +1541,19 @@ exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, 
     headers: { "Authorization": "Bearer " + access },
   });
   return { ok: true, items: data.items || [] };
+});
+
+// Delete a Google Calendar event
+exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const { eventId } = req.data || {};
+  if (!eventId) throw new httpsV2.HttpsError("invalid-argument", "eventId required");
+  const access = await getAccessToken(req.auth.uid);
+  await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': 'Bearer ' + access }
+  });
+  return { ok: true };
 });
 
 exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{storyId}", async (event) => {
