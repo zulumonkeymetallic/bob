@@ -172,10 +172,12 @@ export interface DevelopmentFeature {
 export interface CalendarBlock {
   id: string;
   googleEventId?: string;
+  syncToGoogle?: boolean;
   taskId?: string;
   goalId?: string;
   storyId?: string;
   habitId?: string;
+  seriesId?: string;
   subTheme?: string;
   persona: 'personal' | 'work';
   theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';

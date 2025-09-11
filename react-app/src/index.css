@@ -78,3 +78,28 @@ code {
   box-shadow: 0 8px 32px 0 var(--glass-shadow-color);
   transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
+
+/* Calendar dark mode tweaks */
+.rbc-calendar {
+  background: var(--bg);
+  color: var(--text);
+}
+.rbc-time-header, .rbc-time-content, .rbc-time-view, .rbc-day-bg, .rbc-timeslot-group, .rbc-header {
+  border-color: var(--line) !important;
+}
+.rbc-toolbar button {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.rbc-toolbar button.rbc-active {
+  background: var(--brand);
+  color: var(--on-accent);
+}
+.rbc-event {
+  border: none;
+  box-shadow: none;
+}
+.rbc-event-label, .rbc-event-content {
+  color: inherit;
+}

@@ -76,8 +76,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
+        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' }
+      ]
+    },
+    {
+      label: 'Calendar',
+      icon: 'calendar',
+      items: [
+        { label: 'Calendar (Drag & Drop)', path: '/calendar', icon: 'calendar' },
+        { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'th-large' },
+        { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]
     },
     {
@@ -108,6 +116,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Settings', path: '/theme-colors', icon: 'cog' },
         { label: 'Test Suite', path: '/test', icon: 'vial' },
         { label: 'Changelog', path: '/changelog', icon: 'file-text' }
+      ]
+    },
+    // Move Health to the bottom as requested
+    {
+      label: 'Health',
+      icon: 'heartbeat',
+      items: [
+        { label: 'Running Results', path: '/running-results', icon: 'running' }
       ]
     }
   ];

@@ -314,6 +314,43 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
         </Col>
       </Row>
 
+      {/* Helper: Assign unassigned stories to the selected sprint */}
+      {currentSprint && (
+        <Row className="mb-3">
+          <Col>
+            <div className="d-flex align-items-center justify-content-between p-2 border rounded" style={{ background: 'var(--notion-hover)' }}>
+              <div>
+                <strong>Selected sprint:</strong> {currentSprint.name || currentSprint.id}
+                <span className="ms-2 text-muted">(Showing stories with sprintId "{currentSprint.id}")</span>
+              </div>
+              <div className="d-flex gap-2">
+                <Button
+                  variant="outline-primary"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const unassigned = stories.filter(s => !('sprintId' in s) || !(s as any).sprintId);
+                      const toAssign = unassigned.slice(0, 10);
+                      if (toAssign.length === 0) {
+                        alert('No unassigned stories found.');
+                        return;
+                      }
+                      const ops = toAssign.map(s => updateDoc(doc(db, 'stories', s.id), { sprintId: currentSprint.id, updatedAt: serverTimestamp() } as any));
+                      await Promise.all(ops);
+                    } catch (e) {
+                      console.error('Failed to assign stories to sprint', e);
+                      alert('Failed to assign stories.');
+                    }
+                  }}
+                >
+                  Assign unassigned stories to this sprint
+                </Button>
+              </div>
+            </div>
+          </Col>
+        </Row>
+      )}
+
       {/* Sprint Metrics */}
       {currentSprint && (
         <Row className="mb-4">

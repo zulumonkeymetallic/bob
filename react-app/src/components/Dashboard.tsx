@@ -249,12 +249,7 @@ const Dashboard: React.FC = () => {
             </Col>
           </Row>
 
-          {/* Sprint Kanban Board (Unified) */}
-          <Row className="mb-4">
-            <Col md={12}>
-              <SprintKanbanPage selectedSprintId={selectedSprintId} showInlineTasks={false} />
-            </Col>
-          </Row>
+          {/* Sprint Kanban moved to its own page (/sprints/kanban) */}
 
           {/* Tasks and Quick Actions (Modern table) */}
           <Row className="mb-4">

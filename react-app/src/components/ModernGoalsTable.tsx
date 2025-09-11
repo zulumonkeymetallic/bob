@@ -25,7 +25,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { collection, query, where, onSnapshot, doc, getDoc, addDoc, getDocs, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
 import { 
   Settings, 
@@ -186,6 +187,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const [editValue, setEditValue] = useState<string>('');
   const { trackCRUD, trackClick, trackFieldChange } = useActivityTracking();
   const { currentUser } = useAuth();
+  const [generating, setGenerating] = useState<boolean>(false);
 
   // Note: Removed view tracking to focus activity stream on meaningful changes only
 
@@ -217,6 +219,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
       onEditModal(goal);
     } else {
       console.log('✏️ No onEditModal handler - this is an issue');
+    }
+  };
+
+  const handleGenerateStories = async () => {
+    if (!currentUser) return;
+    try {
+      setGenerating(true);
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      const resp: any = await callable({ goalId: goal.id });
+      const created = resp?.data?.created ?? 0;
+      alert(created > 0 ? `Generated ${created} stories for "${goal.title}"` : 'No stories generated');
+      trackClick({ elementId: 'goal-generate-stories', elementType: 'button', entityId: goal.id, entityType: 'goal', entityTitle: goal.title, additionalData: { created } });
+    } catch (e: any) {
+      console.error('generateStoriesForGoal failed', e);
+      alert('Failed to generate stories: ' + (e?.message || 'Unknown error'));
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -612,6 +631,32 @@ const SortableRow: React.FC<SortableRowProps> = ({
             title="View stories"
           >
             {expandedGoalId === goal.id ? '▼' : '▶'}
+          </button>
+          <button
+            onClick={handleGenerateStories}
+            style={{
+              color: '#10b981',
+              padding: '4px',
+              borderRadius: '4px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              fontSize: '12px',
+              fontWeight: '500',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#d1fae5';
+              e.currentTarget.style.color = '#047857';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.color = '#10b981';
+            }}
+            disabled={generating}
+            title="Auto-generate stories"
+          >
+            {generating ? 'Generating…' : 'Generate'}
           </button>
           <button
             onClick={() => handleEditClick()}

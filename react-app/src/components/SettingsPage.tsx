@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Alert, Nav, Tab, Badge } from 'react-bootstrap';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -38,6 +39,19 @@ const SettingsPage: React.FC = () => {
     tasks: 0,
     needsMigration: false
   });
+
+  // Fitness & Integrations
+  const [parkrunAthleteId, setParkrunAthleteId] = useState('');
+  const [parkrunAutoSync, setParkrunAutoSync] = useState(false);
+  const [stravaAutoSync, setStravaAutoSync] = useState(false);
+  const [parkrunDefaultEventSlug, setParkrunDefaultEventSlug] = useState('');
+  const [parkrunDefaultStartRun, setParkrunDefaultStartRun] = useState<string>('');
+  const [parkrunAutoComputePercentiles, setParkrunAutoComputePercentiles] = useState(false);
+  const [autoEnrichStravaHR, setAutoEnrichStravaHR] = useState(false);
+  const [autoComputeFitnessMetrics, setAutoComputeFitnessMetrics] = useState(false);
+  const [saveProfileMsg, setSaveProfileMsg] = useState<string>('');
+  const [saveProfileError, setSaveProfileError] = useState<string>('');
+  const [savingProfile, setSavingProfile] = useState<boolean>(false);
 
   // Check if database needs migration to new theme system
   const checkMigrationStatus = async () => {
@@ -84,6 +98,20 @@ const SettingsPage: React.FC = () => {
         if (docSnap.exists()) {
           const data = docSnap.data() as GlobalThemeSettings;
           setGlobalThemes(data.themes || GLOBAL_THEMES);
+        }
+        // Load fitness profile fields
+        const profileRef = doc(db, 'profiles', currentUser.uid);
+        const profileSnap = await getDoc(profileRef);
+        if (profileSnap.exists()) {
+          const p = profileSnap.data() as any;
+          setParkrunAthleteId(p.parkrunAthleteId || '');
+          setParkrunAutoSync(!!p.parkrunAutoSync);
+          setStravaAutoSync(!!p.stravaAutoSync);
+          setParkrunDefaultEventSlug(p.parkrunDefaultEventSlug || '');
+          setParkrunDefaultStartRun(p.parkrunDefaultStartRun ? String(p.parkrunDefaultStartRun) : '');
+          setParkrunAutoComputePercentiles(!!p.parkrunAutoComputePercentiles);
+          setAutoEnrichStravaHR(!!p.autoEnrichStravaHR);
+          setAutoComputeFitnessMetrics(!!p.autoComputeFitnessMetrics);
         }
         
         // Check migration status
@@ -456,6 +484,95 @@ const SettingsPage: React.FC = () => {
                     {/* AI Story Generation Prompt */}
                     <AISettings />
 
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h5 className="mb-2">Fitness & Integrations</h5>
+                        <Row className="g-3 align-items-end">
+                          <Col md={6}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Parkrun Athlete ID</Form.Label>
+                              <Form.Control
+                                type="text"
+                                placeholder="e.g., 349501"
+                                value={parkrunAthleteId}
+                                onChange={(e) => setParkrunAthleteId(e.target.value)}
+                              />
+                              <Form.Text className="text-muted">Found in your Parkrun profile URL (athleteNumber=...)</Form.Text>
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Button
+                              variant="primary"
+                              disabled={savingProfile}
+                              onClick={async () => {
+                                if (!currentUser) return;
+                                setSavingProfile(true);
+                                setSaveProfileError('');
+                                try {
+                                  await setDoc(doc(db, 'profiles', currentUser.uid), {
+                                    ownerUid: currentUser.uid,
+                                    parkrunAthleteId,
+                                    parkrunAutoSync,
+                                    stravaAutoSync,
+                                    parkrunDefaultEventSlug,
+                                    parkrunDefaultStartRun: parkrunDefaultStartRun ? Number(parkrunDefaultStartRun) : null,
+                                    parkrunAutoComputePercentiles,
+                                    autoEnrichStravaHR,
+                                    autoComputeFitnessMetrics
+                                  }, { merge: true });
+                                  setSaveProfileMsg('Saved');
+                                  setTimeout(() => setSaveProfileMsg(''), 2500);
+                                } catch (e: any) {
+                                  setSaveProfileError(e?.message || 'Failed to save');
+                                } finally {
+                                  setSavingProfile(false);
+                                }
+                              }}
+                            >
+                              {savingProfile ? 'Saving…' : 'Save'}
+                            </Button>
+                          </Col>
+                          <Col md={3}>
+                            {saveProfileMsg && <span className="text-success">{saveProfileMsg}</span>}
+                            {saveProfileError && <span className="text-danger">{saveProfileError}</span>}
+                          </Col>
+                        </Row>
+                      </Card.Body>
+                    </Card>
+
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h6 className="mb-2">Automation</h6>
+                        <Row className="g-3">
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-sync Parkrun (daily)" checked={parkrunAutoSync} onChange={(e)=>setParkrunAutoSync(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-sync Strava (daily)" checked={stravaAutoSync} onChange={(e)=>setStravaAutoSync(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-compute Parkrun percentiles" checked={parkrunAutoComputePercentiles} onChange={(e)=>setParkrunAutoComputePercentiles(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-enrich Strava HR zones" checked={autoEnrichStravaHR} onChange={(e)=>setAutoEnrichStravaHR(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-compute Fitness Overview/Analysis" checked={autoComputeFitnessMetrics} onChange={(e)=>setAutoComputeFitnessMetrics(e.target.checked)} />
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-2">
+                          <Col md={6}>
+                            <Form.Label>Default Event Slug</Form.Label>
+                            <Form.Control value={parkrunDefaultEventSlug} onChange={(e)=>setParkrunDefaultEventSlug(e.target.value)} placeholder="e.g., ormeau" />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Label>Default Start Run #</Form.Label>
+                            <Form.Control value={parkrunDefaultStartRun} onChange={(e)=>setParkrunDefaultStartRun(e.target.value)} placeholder="e.g., 552" />
+                          </Col>
+                        </Row>
+                      </Card.Body>
+                    </Card>
+
                     <Form.Group className="mb-3">
                       <Form.Label style={{ color: colors.primary }}>Theme Mode</Form.Label>
                       <Form.Select 
@@ -554,6 +671,8 @@ const AISettings: React.FC = () => {
   const { currentUser } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [saved, setSaved] = useState(false);
+  const [dedupRunning, setDedupRunning] = useState(false);
+  const [dedupResult, setDedupResult] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -581,6 +700,23 @@ const AISettings: React.FC = () => {
     }
   };
 
+  const runDuplicateDetection = async () => {
+    if (!currentUser) return;
+    try {
+      setDedupRunning(true);
+      setDedupResult(null);
+      const callable = httpsCallable(functions, 'detectDuplicateReminders');
+      const resp: any = await callable({});
+      const count = resp?.data?.groupsCreated ?? 0;
+      setDedupResult(`Potential duplicate groups created: ${count}`);
+    } catch (e: any) {
+      console.error('Duplicate detection failed', e);
+      setDedupResult('Duplicate detection failed: ' + (e?.message || 'Unknown error'));
+    } finally {
+      setDedupRunning(false);
+    }
+  };
+
   return (
     <Card className="mb-3">
       <Card.Body>
@@ -593,6 +729,19 @@ const AISettings: React.FC = () => {
         </div>
         <Form.Control as="textarea" rows={4} placeholder="Write a system prompt for story generation..." value={prompt} onChange={(e) => setPrompt(e.target.value)} />
         {saved && <div className="text-success mt-2">Saved</div>}
+        <hr />
+        <div className="d-flex justify-content-between align-items-center">
+          <div>
+            <h6 className="mb-1">Duplicate Task Detection (iOS Reminders)</h6>
+            <small className="text-muted">Scan for potential duplicates and flag for review</small>
+          </div>
+          <div>
+            <Button size="sm" variant="outline-secondary" onClick={runDuplicateDetection} disabled={dedupRunning}>
+              {dedupRunning ? 'Running…' : 'Run Detection'}
+            </Button>
+          </div>
+        </div>
+        {dedupResult && <div className="mt-2 small">{dedupResult}</div>}
       </Card.Body>
     </Card>
   );
