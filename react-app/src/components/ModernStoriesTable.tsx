@@ -31,9 +31,11 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import { Story, Goal, Sprint } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
+import { useSidebar } from '../contexts/SidebarContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 
 interface StoryTableRow extends Story {
@@ -104,7 +106,7 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['draft', 'planned', 'in-progress', 'testing', 'done']
+    options: ['Backlog', 'Planned', 'In Progress', 'Testing', 'Done']
   },
   { 
     key: 'priority', 
@@ -170,12 +172,19 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
     }
 
     if (column.key === 'goalTitle') {
-      // Show goal selector instead of goalTitle
+      // Searchable goal selector (datalist) sets goalId
+      const listId = 'new-story-goals';
       return (
         <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: `1px solid ${themeVars.border}` }}>
-          <select
-            value={newStoryData.goalId || ''}
-            onChange={(e) => onFieldChange('goalId', e.target.value)}
+          <input
+            list={listId}
+            value={(newStoryData.goalId && goals.find(g => g.id === newStoryData.goalId)?.title) || ''}
+            onChange={(e) => {
+              const typed = e.target.value;
+              const match = goals.find(g => g.title === typed || g.id === typed);
+              onFieldChange('goalId', match ? match.id : '');
+            }}
+            placeholder="Search goals..."
             style={{
               width: '100%',
               padding: '6px 8px',
@@ -185,12 +194,12 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
               backgroundColor: themeVars.panel,
               outline: 'none',
             }}
-          >
-            <option value="">Select Goal</option>
-            {goals.map(goal => (
-              <option key={goal.id} value={goal.id}>{goal.title}</option>
+          />
+          <datalist id={listId}>
+            {goals.map(g => (
+              <option key={g.id} value={g.title} />
             ))}
-          </select>
+          </datalist>
         </td>
       );
     }
@@ -334,6 +343,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onToggleExpand
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { showSidebar } = useSidebar();
   const {
     attributes,
     listeners,
@@ -363,7 +373,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
     setEditingCell(key);
     // For goalTitle, we want to edit the goalId, so set editValue to the current goalId
     if (key === 'goalTitle') {
-      setEditValue(story.goalId || '');
+      const currentTitle = goals.find(g => g.id === story.goalId)?.title || '';
+      setEditValue(currentTitle);
     } else {
       setEditValue(value || '');
     }
@@ -374,10 +385,36 @@ const SortableRow: React.FC<SortableRowProps> = ({
       // For goalTitle editing, we're actually editing goalId
       const actualKey = key === 'goalTitle' ? 'goalId' : key;
       const oldValue = (story as any)[actualKey]; // Store the original value
+      let valueToSave: any = editValue;
+
+      // If saving goalId, map typed goal title/id to canonical goalId
+      if (actualKey === 'goalId') {
+        const match = goals.find(g => g.id === editValue || g.title === editValue);
+        valueToSave = match ? match.id : editValue;
+      } else if (actualKey === 'status') {
+        // Map human label to numeric status
+        const label = String(editValue).toLowerCase();
+        const map: Record<string, number> = {
+          'backlog': 0,
+          'planned': 1,
+          'in progress': 2,
+          'in-progress': 2,
+          'testing': 3,
+          'done': 4
+        };
+        valueToSave = map[label] ?? editValue;
+      }
       
       // Only proceed if the value actually changed
-      if (oldValue !== editValue) {
-        const updates: Partial<Story> = { [actualKey]: editValue };
+      if (oldValue !== valueToSave) {
+        const updates: Partial<Story> = { [actualKey]: valueToSave } as any;
+        // If goal changed, inherit theme from selected goal
+        if (actualKey === 'goalId') {
+          const newGoal = goals.find(g => g.id === valueToSave);
+          if (newGoal && (newGoal as any).theme !== undefined) {
+            (updates as any).theme = (newGoal as any).theme;
+          }
+        }
         await onStoryUpdate(story.id, updates);
         
         // Track the field change for activity stream
@@ -386,11 +423,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
           'story',
           actualKey,
           oldValue,
-          editValue,
+          valueToSave,
           story.ref
         );
         
-        console.log(`🎯 Story field changed: ${actualKey} from "${oldValue}" to "${editValue}" for story ${story.id}`);
+        console.log(`🎯 Story field changed: ${actualKey} from "${oldValue}" to "${valueToSave}" for story ${story.id}`);
       }
       
       setEditingCell(null);
@@ -434,6 +471,47 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const isEditing = editingCell === column.key;
 
     if (isEditing && column.editable) {
+      // Searchable goal selector using datalist
+      if (column.key === 'goalTitle') {
+        const datalistId = `goals-${story.id}`;
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <div className="relative">
+              <input
+                list={datalistId}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onBlur={() => {
+                  // Map typed goal title or id to goalId
+                  const match = goals.find(g => g.id === editValue || g.title === editValue);
+                  if (match) {
+                    setEditValue(match.id);
+                  }
+                  handleCellSave(column.key);
+                }}
+                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: '1px solid #3b82f6',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  backgroundColor: 'white',
+                  outline: 'none',
+                  boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+                }}
+                placeholder="Search goals..."
+                autoFocus
+              />
+              <datalist id={datalistId}>
+                {goals.map(g => (
+                  <option key={g.id} value={g.title} />
+                ))}
+              </datalist>
+            </div>
+          </td>
+        );
+      }
       if (column.type === 'select' && column.options) {
         return (
           <td key={column.key} style={{ width: column.width }}>
@@ -479,30 +557,30 @@ const SortableRow: React.FC<SortableRowProps> = ({
         );
       }
 
-      return (
-        <td key={column.key} style={{ width: column.width }}>
-          <div className="relative">
-            <input
-              type={column.type === 'date' ? 'date' : 'text'}
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onBlur={() => handleCellSave(column.key)}
-              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
-              style={{
-                width: '100%',
-                padding: '6px 8px',
-                border: '1px solid #3b82f6',
-                borderRadius: '4px',
-                fontSize: '14px',
-                backgroundColor: 'white',
-                outline: 'none',
-                boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
-              }}
-              autoFocus
-            />
-          </div>
-        </td>
-      );
+    return (
+      <td key={column.key} style={{ width: column.width }}>
+        <div className="relative">
+          <input
+            type={column.type === 'date' ? 'date' : 'text'}
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={() => handleCellSave(column.key)}
+            onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              border: '1px solid #3b82f6',
+              borderRadius: '4px',
+              fontSize: '14px',
+              backgroundColor: 'white',
+              outline: 'none',
+              boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+            }}
+            autoFocus
+          />
+        </div>
+      </td>
+    );
     }
 
     return (
@@ -613,6 +691,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
         width: '96px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+          <button
+            onClick={() => showSidebar(story as any, 'story')}
+            style={{
+              color: themeVars.muted as string,
+              padding: '4px',
+              borderRadius: '4px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              fontSize: '11px',
+              fontWeight: '500',
+            }}
+            title="Activity stream"
+          >
+            <Activity size={12} />
+          </button>
           <button
             onClick={() => handleCellEdit('title', story.title)}
             style={{
@@ -815,7 +910,12 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
     try {
       console.log('🎯 ModernStoriesTable: Starting new story save...');
-      await onStoryAdd(newStoryData as Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>);
+      const linkedGoal = goals.find(g => g.id === newStoryData.goalId);
+      const payload = {
+        ...newStoryData,
+        theme: (linkedGoal && (linkedGoal as any).theme !== undefined) ? (linkedGoal as any).theme : newStoryData.theme
+      } as Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>;
+      await onStoryAdd(payload);
       console.log('✅ ModernStoriesTable: Story add completed, clearing form...');
       
       // Clear the form data but keep the add row visible briefly

@@ -24,6 +24,7 @@ const StoriesManagement: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterGoal, setFilterGoal] = useState<string>('all');
+  const [filterGoalInput, setFilterGoalInput] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -430,16 +431,27 @@ const StoriesManagement: React.FC = () => {
               <Col md={4}>
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Goal</Form.Label>
-                  <Form.Select
-                    value={filterGoal}
-                    onChange={(e) => setFilterGoal(e.target.value)}
+                  <Form.Control
+                    list="stories-filter-goals"
+                    value={filterGoal === 'all' ? '' : (goals.find(g => g.id === filterGoal)?.title || filterGoalInput)}
+                    onChange={(e) => {
+                      const typed = e.target.value;
+                      setFilterGoalInput(typed);
+                      if (!typed) {
+                        setFilterGoal('all');
+                        return;
+                      }
+                      const match = goals.find(g => g.title === typed || g.id === typed);
+                      setFilterGoal(match ? match.id : 'all');
+                    }}
+                    placeholder="Search goals..."
                     style={{ border: `1px solid ${themeVars.border}` }}
-                  >
-                    <option value="all">All Goals</option>
-                    {goals.map(goal => (
-                      <option key={goal.id} value={goal.id}>{goal.title}</option>
+                  />
+                  <datalist id="stories-filter-goals">
+                    {goals.map(g => (
+                      <option key={g.id} value={g.title} />
                     ))}
-                  </Form.Select>
+                  </datalist>
                 </Form.Group>
               </Col>
             </Row>
@@ -450,6 +462,7 @@ const StoriesManagement: React.FC = () => {
                   onClick={() => {
                     setFilterStatus('all');
                     setFilterGoal('all');
+                    setFilterGoalInput('');
                     setSearchTerm('');
                   }}
                   style={{ borderColor: themeVars.border as string }}
@@ -531,6 +544,8 @@ const StoriesManagement: React.FC = () => {
                 goals={goals}
                 sprints={[]}
                 onTaskCreate={async (newTask) => {
+                  // Inherit theme from linked goal
+                  const linkedGoal = goals.find(g => g.id === selectedStory.goalId);
                   await addDoc(collection(db, 'tasks'), {
                     title: newTask.title,
                     description: newTask.description || '',
@@ -540,6 +555,7 @@ const StoriesManagement: React.FC = () => {
                     priority: newTask.priority || 2,
                     effort: 'M',
                     dueDate: newTask.dueDate || null,
+                    theme: (linkedGoal as any)?.theme ?? 1,
                     ownerUid: currentUser!.uid,
                     persona: currentPersona,
                     createdAt: serverTimestamp(),

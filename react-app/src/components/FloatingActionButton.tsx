@@ -189,6 +189,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           .filter(ref => ref);
         
         const storyRef = generateRef('story', existingRefs);
+        const linkedGoal = goals.find(g => g.id === quickAddData.goalId);
+        const themeId = (linkedGoal && (linkedGoal as any).theme !== undefined) ? (linkedGoal as any).theme : 1;
         const storyData = {
           ...baseData,
           ref: storyRef,
@@ -197,6 +199,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           priority: quickAddData.priority,
           points: 3,
           status: 'backlog',
+          theme: themeId,
           orderIndex: 0,
           tags: [],
           acceptanceCriteria: []

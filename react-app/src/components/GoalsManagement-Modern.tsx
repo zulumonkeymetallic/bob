@@ -6,6 +6,7 @@ import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDo
 import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
+import EditGoalModal from './EditGoalModal';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -15,6 +16,7 @@ const GoalsManagement: React.FC = () => {
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -98,6 +100,7 @@ const GoalsManagement: React.FC = () => {
   };
 
   return (
+    <>
     <Container fluid className="py-4">
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
@@ -229,11 +232,20 @@ const GoalsManagement: React.FC = () => {
               onGoalUpdate={handleGoalUpdate}
               onGoalDelete={handleGoalDelete}
               onGoalPriorityChange={handleGoalPriorityChange}
+              onEditModal={(goal) => setEditGoal(goal)}
             />
           )}
         </Card.Body>
       </Card>
     </Container>
+    {/* Shared Edit Goal Modal for consistency across views */}
+    <EditGoalModal
+      goal={editGoal}
+      show={!!editGoal}
+      onClose={() => setEditGoal(null)}
+      currentUserId={currentUser?.uid || ''}
+    />
+    </>
   );
 };
 

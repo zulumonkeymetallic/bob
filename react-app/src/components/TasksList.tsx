@@ -7,7 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
-import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 interface TaskWithContext extends Task {
   referenceNumber?: string;
@@ -52,6 +52,22 @@ const TasksList: React.FC = () => {
   });
 
   const [editingField, setEditingField] = useState<{taskId: string, field: string, value: any} | null>(null);
+  const { themes } = useGlobalThemes();
+  const [newTaskThemeInput, setNewTaskThemeInput] = useState('');
+  const [editTaskThemeInput, setEditTaskThemeInput] = useState('');
+
+  useEffect(() => {
+    // Initialize add/edit theme input labels when data changes
+    const matchNew = themes.find(t => t.id === (newTask as any).theme);
+    setNewTaskThemeInput(matchNew?.label || '');
+  }, [themes]);
+
+  useEffect(() => {
+    if (selectedTask) {
+      const match = themes.find(t => t.id === (selectedTask as any).theme);
+      setEditTaskThemeInput(match?.label || '');
+    }
+  }, [selectedTask, themes]);
 
   // Generate reference number for task
   const generateReferenceNumber = (task: Task, index: number): string => {
@@ -704,16 +720,22 @@ const TasksList: React.FC = () => {
               <Col md={4}>
                 <Form.Group className="mb-3">
                   <Form.Label>Theme</Form.Label>
-                  <Form.Select
-                    value={newTask.theme}
-                    onChange={(e) => setNewTask({...newTask, theme: parseInt(e.target.value) || 0})}
-                  >
-                    {GLOBAL_THEMES.map((theme) => (
-                      <option key={theme.id} value={theme.id}>
-                        {theme.label}
-                      </option>
+                  <Form.Control
+                    list="task-theme-options"
+                    value={newTaskThemeInput}
+                    onChange={(e) => setNewTaskThemeInput(e.target.value)}
+                    onBlur={() => {
+                      const val = newTaskThemeInput.trim();
+                      const match = themes.find(t => t.label === val || t.name === val || String(t.id) === val);
+                      setNewTask({ ...newTask, theme: match ? match.id : (parseInt(val) || (newTask as any).theme) });
+                    }}
+                    placeholder="Search themes..."
+                  />
+                  <datalist id="task-theme-options">
+                    {themes.map(t => (
+                      <option key={t.id} value={t.label} />
                     ))}
-                  </Form.Select>
+                  </datalist>
                 </Form.Group>
               </Col>
             </Row>
@@ -836,16 +858,23 @@ const TasksList: React.FC = () => {
                 <Col md={4}>
                   <Form.Group className="mb-3">
                     <Form.Label>Theme</Form.Label>
-                    <Form.Select
-                      value={selectedTask.theme}
-                      onChange={(e) => setSelectedTask({...selectedTask, theme: parseInt(e.target.value) || 0})}
-                    >
-                      {GLOBAL_THEMES.map((theme) => (
-                        <option key={theme.id} value={theme.id}>
-                          {theme.label}
-                        </option>
+                    <Form.Control
+                      list="task-theme-options-edit"
+                      value={editTaskThemeInput}
+                      onChange={(e) => setEditTaskThemeInput(e.target.value)}
+                      onBlur={() => {
+                        if (!selectedTask) return;
+                        const val = editTaskThemeInput.trim();
+                        const match = themes.find(t => t.label === val || t.name === val || String(t.id) === val);
+                        setSelectedTask({ ...selectedTask, theme: match ? match.id : (parseInt(val) || (selectedTask as any).theme) });
+                      }}
+                      placeholder="Search themes..."
+                    />
+                    <datalist id="task-theme-options-edit">
+                      {themes.map(t => (
+                        <option key={t.id} value={t.label} />
                       ))}
-                    </Form.Select>
+                    </datalist>
                   </Form.Group>
                 </Col>
               </Row>

@@ -21,7 +21,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Settings, Plus, Edit3, Trash2, User, Calendar, Target, BookOpen, AlertCircle } from 'lucide-react';
+import { Settings, Plus, Edit3, Trash2, User, Calendar, Target, BookOpen, AlertCircle, Activity } from 'lucide-react';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -73,6 +73,7 @@ const SortableStoryCard: React.FC<{
   onDelete: (story: Story) => void;
   onItemClick: (story: Story) => void;
 }> = ({ story, goal, taskCount, themeColor, onEdit, onDelete, onItemClick }) => {
+  const { showSidebar } = useSidebar();
   const {
     attributes,
     listeners,
@@ -104,7 +105,7 @@ const SortableStoryCard: React.FC<{
           transition: 'all 0.2s ease',
           marginBottom: '12px'
         }}
-        onClick={() => onItemClick(story)}
+        // Disable opening activity on card click to preserve drag behavior
       >
         <Card.Body style={{ padding: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
@@ -132,6 +133,18 @@ const SortableStoryCard: React.FC<{
               )}
             </div>
             <div style={{ display: 'flex', gap: '4px' }}>
+              <Button
+                variant="link"
+                size="sm"
+                style={{ padding: '2px', color: themeVars.muted }}
+                title="Activity stream"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  showSidebar(story, 'story');
+                }}
+              >
+                <Activity size={12} />
+              </Button>
               <Button
                 variant="link"
                 size="sm"
@@ -204,6 +217,7 @@ const SortableTaskCard: React.FC<{
   onEdit: (task: Task) => void;
   onItemClick: (task: Task) => void;
 }> = ({ task, story, themeColor, onEdit, onItemClick }) => {
+  const { showSidebar } = useSidebar();
   const {
     attributes,
     listeners,
@@ -235,7 +249,7 @@ const SortableTaskCard: React.FC<{
           transition: 'all 0.2s ease',
           marginBottom: '8px'
         }}
-        onClick={() => onItemClick(task)}
+        // Disable opening activity on card click to preserve drag behavior
       >
         <Card.Body style={{ padding: '12px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
@@ -258,6 +272,18 @@ const SortableTaskCard: React.FC<{
               )}
             </div>
             <div style={{ display: 'flex', gap: '4px' }}>
+              <Button
+                variant="link"
+                size="sm"
+                style={{ padding: '2px', color: themeVars.muted }}
+                title="Activity stream"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  showSidebar(task, 'task');
+                }}
+              >
+                <Activity size={10} />
+              </Button>
               <Button
                 variant="link"
                 size="sm"
