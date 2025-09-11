@@ -1,0 +1,63 @@
+name: Deploy Preview to Firebase Hosting
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+  build-and-preview:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install and build React app
+        working-directory: react-app
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy PR Preview
+        id: deploy
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: bob20250810
+          channelId: pr-${{ github.event.number }}
+          entryPoint: .
+
+      - name: Send preview link via email (PR to dev)
+        if: ${{ github.event.pull_request.base.ref == 'dev' }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
+          server_port: ${{ secrets.MAIL_SERVER_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[BOB] PR #${{ github.event.number }} preview ready for validation"
+          to: ${{ secrets.PREVIEW_NOTIFY_TO }}
+          from: ${{ secrets.MAIL_FROM }}
+          secure: true
+          content_type: text/html
+          body: |
+            <p>Hi team,</p>
+            <p>A preview for PR <strong>#${{ github.event.number }}</strong> ("${{ github.event.pull_request.title }}") against <code>dev</code> is ready for validation.</p>
+            <p><strong>Preview URL:</strong> <a href="${{ steps.deploy.outputs.details_url }}">${{ steps.deploy.outputs.details_url }}</a></p>
+            <ul>
+              <li><strong>Branch:</strong> ${{ github.event.pull_request.head.ref }}</li>
+              <li><strong>Author:</strong> ${{ github.event.pull_request.user.login }}</li>
+              <li><strong>Expires:</strong> ${{ steps.deploy.outputs.expire_time_formatted }}</li>
+            </ul>
+            <p>You can merge to <code>main</code> after validation passes.</p>
