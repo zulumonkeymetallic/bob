@@ -1,7 +1,9 @@
-name: Deploy to Firebase Hosting (prod, disabled)
+name: Deploy to Firebase Hosting (prod)
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build-and-deploy:
@@ -32,3 +34,4 @@ jobs:
           projectId: bob20250810
           channelId: live
           entryPoint: .
+

@@ -1,7 +1,10 @@
-name: Deploy Preview to Firebase Hosting (disabled)
+name: Deploy Preview to Firebase Hosting
 
 on:
-  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - dev
 
 jobs:
   build-and-preview:
@@ -19,9 +22,6 @@ jobs:
         with:
           node-version: 20
 
-      - name: Generate Firebase client config
-        run: node scripts/generate-firebase-config.js
-
       - name: Install and build React app
         working-directory: react-app
         run: |
@@ -38,8 +38,8 @@ jobs:
           channelId: pr-${{ github.event.number }}
           entryPoint: .
 
-      - name: Send preview link via email (PR to dev/main)
-        if: ${{ github.event.pull_request.base.ref == 'dev' || github.event.pull_request.base.ref == 'main' }}
+      - name: Send preview link via email (PR to dev)
+        if: ${{ github.event.pull_request.base.ref == 'dev' }}
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.MAIL_SERVER_ADDRESS }}
@@ -53,11 +53,11 @@ jobs:
           content_type: text/html
           body: |
             <p>Hi team,</p>
-            <p>A preview for PR <strong>#${{ github.event.number }}</strong> ("${{ github.event.pull_request.title }}") against <code>${{ github.event.pull_request.base.ref }}</code> is ready for validation.</p>
+            <p>A preview for PR <strong>#${{ github.event.number }}</strong> ("${{ github.event.pull_request.title }}") against <code>dev</code> is ready for validation.</p>
             <p><strong>Preview URL:</strong> <a href="${{ steps.deploy.outputs.details_url }}">${{ steps.deploy.outputs.details_url }}</a></p>
             <ul>
               <li><strong>Branch:</strong> ${{ github.event.pull_request.head.ref }}</li>
               <li><strong>Author:</strong> ${{ github.event.pull_request.user.login }}</li>
               <li><strong>Expires:</strong> ${{ steps.deploy.outputs.expire_time_formatted }}</li>
             </ul>
-            <p>Please review the preview and proceed with merge when approved.</p>
+            <p>You can merge to <code>main</code> after validation passes.</p>
