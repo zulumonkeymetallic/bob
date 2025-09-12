@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Story, Goal, Task } from '../types';
+import { Story, Goal, Task, Sprint } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
 import AddStoryModal from './AddStoryModal';
 import EditStoryModal from './EditStoryModal';
@@ -33,6 +33,8 @@ const StoriesManagement: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
+  const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
+  const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
 
   // 📍 PAGE TRACKING
   useEffect(() => {
@@ -141,12 +143,25 @@ const StoriesManagement: React.FC = () => {
       setTasks(tasksData);
     });
 
+    // Load sprints to determine the active sprint (status === 1)
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+
+    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
+      const sprintsData = snapshot.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[];
+      const active = sprintsData.find(s => s.status === 1);
+      setActiveSprintId(active?.id || null);
+    });
+
     setLoading(false);
 
     return () => {
       unsubscribeStories();
       unsubscribeGoals();
       unsubscribeTasks();
+      unsubscribeSprints();
     };
   };
 
@@ -242,6 +257,7 @@ const StoriesManagement: React.FC = () => {
 
   // Apply filters to stories
   const filteredStories = stories.filter(story => {
+    if (applyActiveSprintFilter && activeSprintId && story.sprintId !== activeSprintId) return false;
     if (filterStatus !== 'all' && !isStatus(story.status, filterStatus)) return false;
     if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
     if (searchTerm && !story.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;

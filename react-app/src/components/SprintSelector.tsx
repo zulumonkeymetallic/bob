@@ -120,7 +120,9 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         className="d-flex align-items-center"
       >
         <span className="me-2">🏃‍♂️</span>
-        {selectedSprint ? (
+        {selectedSprintId === '' ? (
+          <span>All Sprints</span>
+        ) : selectedSprint ? (
           <span>
             <strong>{selectedSprint.name}</strong>
             <small className="ms-2 text-muted">
@@ -128,12 +130,19 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
             </small>
           </span>
         ) : (
-          <span>Select Sprint</span>
+          <span>All Sprints</span>
         )}
       </Dropdown.Toggle>
 
       <Dropdown.Menu align="end" style={{ minWidth: '300px' }}>
         <Dropdown.Header>Available Sprints</Dropdown.Header>
+        <Dropdown.Item
+          active={selectedSprintId === ''}
+          onClick={() => onSprintChange('')}
+        >
+          All Sprints
+        </Dropdown.Item>
+        <Dropdown.Divider />
         {sprints.length === 0 ? (
           <Dropdown.Item disabled>
             No sprints found. Create one in Sprint Dashboard.

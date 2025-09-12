@@ -28,6 +28,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../types';
+import { useSprint } from '../contexts/SprintContext';
 import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
@@ -324,6 +325,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar, setUpdateHandler } = useSidebar();
+  const { selectedSprintId } = useSprint();
   
   // Data state
   const [stories, setStories] = useState<Story[]>([]);
@@ -390,13 +392,22 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     return tasks.filter(task => task.parentId === storyId);
   };
 
+  // Sprint-aware filtering
+  const effectiveSprintId = selectedSprintId || (sprints.find(s => isStatus(s.status, 'active'))?.id ?? '');
+  const storiesInScope = effectiveSprintId
+    ? stories.filter(s => (s as any).sprintId === effectiveSprintId)
+    : stories;
+  const tasksInScope = effectiveSprintId
+    ? tasks.filter(t => (t as any).sprintId === effectiveSprintId)
+    : tasks;
+
   const getStoriesForLane = (status: string): Story[] => {
-    return stories.filter(story => isStatus(story.status, status));
+    return storiesInScope.filter(story => isStatus(story.status, status));
   };
 
   const getTasksForLane = (status: string): Task[] => {
     const taskStatus = status === 'active' ? 'in-progress' : status;
-    return tasks.filter(task => isStatus(task.status, taskStatus));
+    return tasksInScope.filter(task => isStatus(task.status, taskStatus));
   };
 
   // Data loading effect
