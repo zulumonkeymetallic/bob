@@ -9,7 +9,7 @@ import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import TasksList from './components/TasksList';
 import PlanningDashboard from './components/PlanningDashboard';
-import Calendar from './components/Calendar';
+import Calendar from './components/CalendarDnDView';
 import Changelog from './components/Changelog';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';

@@ -176,7 +176,7 @@ export class ActivityStreamService {
   // Log creation
   static async logCreation(
     entityId: string,
-    entityType: 'goal' | 'story' | 'task',
+    entityType: 'goal' | 'story' | 'task' | 'calendar_block',
     entityTitle: string,
     userId: string,
     userEmail?: string,

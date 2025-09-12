@@ -42,7 +42,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Dashboards',
       icon: 'chart-bar',
       items: [
-        { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' }
+        { label: 'Overview', path: '/dashboard', icon: 'home' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
       ]
     },
     {
@@ -66,7 +67,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'book',
       items: [
         { label: 'Stories List', path: '/stories', icon: 'list' },
-        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' }
       ]
     },
     {
@@ -83,8 +84,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
+        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' }
+      ]
+    },
+    {
+      label: 'Calendar',
+      icon: 'calendar',
+      items: [
+        { label: 'Calendar (Drag & Drop)', path: '/calendar', icon: 'calendar' },
+        { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'th-large' },
+        { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]
     },
     {
@@ -115,6 +124,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Settings', path: '/theme-colors', icon: 'cog' },
         { label: 'Test Suite', path: '/test', icon: 'vial' },
         { label: 'Changelog', path: '/changelog', icon: 'file-text' }
+      ]
+    },
+    // Move Health to the bottom as requested
+    {
+      label: 'Health',
+      icon: 'heartbeat',
+      items: [
+        { label: 'Running Results', path: '/running-results', icon: 'running' }
       ]
     }
   ];

@@ -306,8 +306,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   ? `3px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--brand)'}` 
                   : '1px solid var(--line)',
                 boxShadow: selectedGoalId === goal.id 
-                  ? '0 0 0 0 rgba(0,0,0,0)' 
-                  : '0 4px 6px rgba(0,0,0,0.1)',
+                  ? '0 0 0 0 transparent' 
+                  : '0 4px 6px var(--glass-shadow-color)',
                 borderRadius: '12px',
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
@@ -319,13 +319,13 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               onMouseEnter={(e) => {
                 if (selectedGoalId !== goal.id) {
                   e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 8px 12px rgba(0,0,0,0.15)';
+                  e.currentTarget.style.boxShadow = '0 8px 12px var(--glass-shadow-color)';
                 }
               }}
               onMouseLeave={(e) => {
                 if (selectedGoalId !== goal.id) {
                   e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+                  e.currentTarget.style.boxShadow = '0 4px 6px var(--glass-shadow-color)';
                 }
               }}
             >
