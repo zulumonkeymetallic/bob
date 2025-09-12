@@ -20,6 +20,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useSprint } from '../contexts/SprintContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -156,6 +157,8 @@ interface SortableRowProps {
   onStoryAdd: (goalId: string) => (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
   globalThemes: GlobalTheme[];
   availableGoals: Goal[];
+  storyCounts: Record<string, number>;
+  sprintStoryCounts: Record<string, number>;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -174,7 +177,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryPriorityChange,
   onStoryAdd,
   globalThemes,
-  availableGoals
+  availableGoals,
+  storyCounts,
+  sprintStoryCounts
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
@@ -190,6 +195,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const [editValue, setEditValue] = useState<string>('');
   const { trackCRUD, trackClick, trackFieldChange } = useActivityTracking();
   const { currentUser } = useAuth();
+  const { showSidebar } = useSidebar();
   const [generating, setGenerating] = useState<boolean>(false);
 
   // Note: Removed view tracking to focus activity stream on meaningful changes only
@@ -313,10 +319,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
       return new Date(value).toLocaleDateString();
     }
     if (key === 'storiesCount') {
-      return `${value || 0} stories`;
+      return `${storyCounts[goal.id] || 0} stories`;
     }
     if (key === 'sprintStoriesCount') {
-      return `${value || 0} in sprint`;
+      return `${sprintStoryCounts[goal.id] || 0} in sprint`;
     }
     if (key === 'status') {
       return getStatusName(value);
@@ -768,6 +774,9 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
+  const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
+  const [sprintStoryCounts, setSprintStoryCounts] = useState<Record<string, number>>({});
+  const { selectedSprintId } = useSprint();
 
   // Load user-defined global themes
   useEffect(() => {
@@ -875,6 +884,32 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     }, (err) => console.warn('ModernGoalsTable: goals load failed', err));
     return unsub;
   }, [currentUser, currentPersona]);
+
+  // Aggregate story counts per goal and per selected sprint
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const counts: Record<string, number> = {};
+      const sprintCounts: Record<string, number> = {};
+      snap.docs.forEach(d => {
+        const s = d.data() as any;
+        const gid = s.goalId;
+        if (!gid) return;
+        counts[gid] = (counts[gid] || 0) + 1;
+        if (selectedSprintId && s.sprintId === selectedSprintId) {
+          sprintCounts[gid] = (sprintCounts[gid] || 0) + 1;
+        }
+      });
+      setStoryCounts(counts);
+      setSprintStoryCounts(sprintCounts);
+    });
+    return unsub;
+  }, [currentUser, currentPersona, selectedSprintId]);
 
   const handleEditModal = (goal: Goal) => {
     trackClick({
@@ -1149,6 +1184,8 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       goal={goal}
                       columns={columns}
                       index={index}
+                      storyCounts={storyCounts}
+                      sprintStoryCounts={sprintStoryCounts}
                       globalThemes={globalThemes}
                       availableGoals={allGoals}
                       expandedGoalId={expandedGoalId}

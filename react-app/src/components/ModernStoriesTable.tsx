@@ -493,12 +493,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 style={{
                   width: '100%',
                   padding: '6px 8px',
-                  border: '1px solid #3b82f6',
+                  border: `2px solid ${themeVars.brand}`,
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: 'white',
+                  backgroundColor: themeVars.panel,
                   outline: 'none',
-                  boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+                  boxShadow: 'none',
                 }}
                 placeholder="Search goals..."
                 autoFocus
@@ -523,12 +523,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 style={{
                   width: '100%',
                   padding: '6px 8px',
-                  border: '1px solid #3b82f6',
+                  border: `2px solid ${themeVars.brand}`,
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: 'white',
+                  backgroundColor: themeVars.panel,
                   outline: 'none',
-                  boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+                  boxShadow: 'none',
                 }}
                 autoFocus
               >
@@ -569,12 +569,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
             style={{
               width: '100%',
               padding: '6px 8px',
-              border: '1px solid #3b82f6',
+              border: `2px solid ${themeVars.brand}`,
               borderRadius: '4px',
               fontSize: '14px',
-              backgroundColor: 'white',
+              backgroundColor: themeVars.panel,
               outline: 'none',
-              boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
+              boxShadow: 'none',
             }}
             autoFocus
           />
@@ -589,13 +589,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
         style={{ 
           width: column.width,
           padding: '12px 8px',
-          borderRight: '1px solid #f3f4f6',
+          borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = '#f9fafb';
+            e.currentTarget.style.backgroundColor = rgbaCard(0.08);
           }
         }}
         onMouseLeave={(e) => {
@@ -608,7 +608,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <div style={{
           minHeight: '20px',
           fontSize: '14px',
-          color: column.key === 'ref' ? '#dc2626' : '#374151',
+          color: column.key === 'ref' ? 'var(--red)' : (themeVars.text as string),
           fontWeight: column.key === 'ref' ? '600' : 'normal',
           fontFamily: column.key === 'ref' ? 'monospace' : 'inherit',
           wordBreak: 'break-word',
@@ -626,8 +626,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
       ref={setNodeRef}
       style={{
         ...style,
-        backgroundColor: 'white',
-        borderBottom: '1px solid #f3f4f6',
+        backgroundColor: themeVars.card as string,
+        borderBottom: `1px solid ${themeVars.border}`,
         transition: 'background-color 0.15s ease',
         cursor: onStorySelect ? 'pointer' : 'default',
       }}
@@ -647,25 +647,25 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}
       onMouseEnter={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = '#f9fafb';
+          e.currentTarget.style.backgroundColor = rgbaCard(0.08);
         }
       }}
       onMouseLeave={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = 'white';
+          e.currentTarget.style.backgroundColor = themeVars.card as string;
         }
       }}
     >
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
-        borderRight: '1px solid #f3f4f6',
+        borderRight: `1px solid ${themeVars.border}`,
         width: '48px',
       }}>
         <button
           {...listeners}
           style={{
-            color: '#9ca3af',
+            color: themeVars.muted as string,
             padding: '4px',
             borderRadius: '4px',
             border: 'none',
@@ -674,7 +674,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             transition: 'color 0.15s ease',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeVars.muted as string;
+            e.currentTarget.style.color = themeVars.text as string;
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.color = themeVars.muted as string;

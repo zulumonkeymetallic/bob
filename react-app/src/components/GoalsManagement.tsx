@@ -8,6 +8,10 @@ import { Goal, Story, Sprint } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import GoalsCardView from './GoalsCardView';
 import EditGoalModal from './EditGoalModal';
+import { useSprint } from '../contexts/SprintContext';
+import SprintSelector from './SprintSelector';
+import { isStatus, getThemeName } from '../utils/statusHelpers';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -22,6 +26,8 @@ const GoalsManagement: React.FC = () => {
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
 
   useEffect(() => {
     if (!currentUser) return;
@@ -81,7 +87,8 @@ const GoalsManagement: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
-    if (!currentUser || !activeSprintId) {
+    const sprintId = selectedSprintId || activeSprintId;
+    if (!currentUser || !sprintId) {
       setActiveSprintGoalIds(new Set());
       return;
     }
@@ -94,12 +101,12 @@ const GoalsManagement: React.FC = () => {
       const setIds = new Set<string>();
       snap.docs.forEach(d => {
         const s = d.data() as any;
-        if (s.sprintId === activeSprintId && s.goalId) setIds.add(s.goalId);
+        if (s.sprintId === sprintId && s.goalId) setIds.add(s.goalId);
       });
       setActiveSprintGoalIds(setIds);
     });
     return unsub;
-  }, [currentUser, currentPersona, activeSprintId]);
+  }, [currentUser, currentPersona, selectedSprintId, activeSprintId]);
 
   // Handler functions for ModernGoalsTable
   const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
@@ -134,13 +141,14 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    if (applyActiveSprintFilter && activeSprintId) {
+    const sprintFilterId = selectedSprintId || activeSprintId;
+    if (applyActiveSprintFilter && sprintFilterId) {
       // Only include goals with stories in active sprint and not complete (status !== 2)
       if (goal.status === 2) return false;
       if (!activeSprintGoalIds.has(goal.id)) return false;
     }
-    if (filterStatus !== 'all' && goal.status !== parseInt(filterStatus)) return false;
-    if (filterTheme !== 'all' && goal.theme !== parseInt(filterTheme)) return false;
+    if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
+    if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -261,7 +269,7 @@ const GoalsManagement: React.FC = () => {
         <Card style={{ marginBottom: '24px', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
           <Card.Body style={{ padding: '24px', color: 'var(--notion-text)' }}>
             <Row>
-              <Col md={4}>
+              <Col md={3}>
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Goals</Form.Label>
                   <InputGroup>
@@ -275,7 +283,7 @@ const GoalsManagement: React.FC = () => {
                   </InputGroup>
                 </Form.Group>
               </Col>
-              <Col md={4}>
+              <Col md={3}>
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Status</Form.Label>
                   <Form.Select
@@ -284,15 +292,15 @@ const GoalsManagement: React.FC = () => {
                     style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
                   >
                     <option value="all">All Status</option>
-                    <option value="new">New</option>
-                    <option value="active">Active</option>
-                    <option value="done">Done</option>
-                    <option value="paused">Paused</option>
-                    <option value="dropped">Dropped</option>
+                    <option value="New">New</option>
+                    <option value="Work in Progress">Work in Progress</option>
+                    <option value="Complete">Complete</option>
+                    <option value="Blocked">Blocked</option>
+                    <option value="Deferred">Deferred</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
-              <Col md={4}>
+              <Col md={3}>
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Theme</Form.Label>
                   <Form.Select
@@ -301,12 +309,21 @@ const GoalsManagement: React.FC = () => {
                     style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
                   >
                     <option value="all">All Themes</option>
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
+                    {globalThemes.map(t => (
+                      <option key={t.id} value={t.label}>{t.label}</option>
+                    ))}
                   </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={3}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Sprint</Form.Label>
+                  <div>
+                    <SprintSelector
+                      selectedSprintId={selectedSprintId || undefined}
+                      onSprintChange={(id) => setSelectedSprintId(id)}
+                    />
+                  </div>
                 </Form.Group>
               </Col>
             </Row>

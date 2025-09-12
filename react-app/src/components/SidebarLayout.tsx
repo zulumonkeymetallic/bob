@@ -42,7 +42,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Dashboards',
       icon: 'chart-bar',
       items: [
-        { label: 'Overview Dashboard', path: '/dashboard', icon: 'home' }
+        { label: 'Overview', path: '/dashboard', icon: 'home' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
       ]
     },
     {
@@ -59,7 +60,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'book',
       items: [
         { label: 'Stories List', path: '/stories', icon: 'list' },
-        { label: 'Kanban Board', path: '/kanban', icon: 'kanban' }
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' }
       ]
     },
     {
