@@ -58,7 +58,8 @@
     "build:dev": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "build:css": "tailwindcss -i src/index.css -o src/output.css --watch"
+    "build:css": "tailwindcss -i src/index.css -o src/output.css --watch",
+    "lint:theme-guard": "node ../scripts/check-no-color-literals.js"
   },
   "eslintConfig": {
     "extends": [

@@ -31,7 +31,7 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Activity } from 'lucide-react';
+import { Activity, Pencil, Trash2 } from 'lucide-react';
 import { Story, Goal, Sprint } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
@@ -690,7 +690,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         textAlign: 'center',
         width: '96px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <button
             onClick={() => showSidebar(story as any, 'story')}
             style={{
@@ -706,10 +706,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
             }}
             title="Activity stream"
           >
-            <Activity size={12} />
+            <Activity size={14} />
           </button>
           <button
-            onClick={() => handleCellEdit('title', story.title)}
+            onClick={() => onEditStory ? onEditStory(story) : handleCellEdit('title', story.title)}
             style={{
               color: themeVars.brand as string,
               padding: '4px',
@@ -718,48 +718,19 @@ const SortableRow: React.FC<SortableRowProps> = ({
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '11px',
-              fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = rgbaCard(0.2);
+              e.currentTarget.style.backgroundColor = rgbaCard(0.15);
               e.currentTarget.style.color = themeVars.brand as string;
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.color = themeVars.brand as string;
             }}
-            title="Quick edit story title"
+            title={onEditStory ? 'Edit story in modal' : 'Quick edit story title'}
           >
-            Quick
+            <Pencil size={14} />
           </button>
-          {onEditStory && (
-            <button
-              onClick={() => onEditStory(story)}
-              style={{
-                color: 'var(--green)',
-                padding: '4px',
-                borderRadius: '4px',
-                border: 'none',
-                backgroundColor: 'transparent',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-                fontSize: '11px',
-                fontWeight: '500',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = rgbaCard(0.15);
-                e.currentTarget.style.color = 'var(--green)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent';
-                e.currentTarget.style.color = 'var(--green)';
-              }}
-              title="Edit story in modal"
-            >
-              Edit
-            </button>
-          )}
           <button
             onClick={() => onStoryDelete(story.id)}
             style={{
@@ -783,7 +754,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             }}
             title="Delete story"
           >
-            Delete
+            <Trash2 size={14} />
           </button>
         </div>
       </td>

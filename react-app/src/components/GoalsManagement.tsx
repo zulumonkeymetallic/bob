@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Goal } from '../types';
+import { Goal, Story, Sprint } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import GoalsCardView from './GoalsCardView';
 import EditGoalModal from './EditGoalModal';
@@ -19,6 +19,9 @@ const GoalsManagement: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
+  const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
+  const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
 
   useEffect(() => {
     if (!currentUser) return;
@@ -65,6 +68,39 @@ const GoalsManagement: React.FC = () => {
     };
   };
 
+  // Load active sprint id, then find goals with stories in that sprint
+  useEffect(() => {
+    if (!currentUser) return;
+    const sprintsQ = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
+    const unsubS = onSnapshot(sprintsQ, (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[];
+      const active = list.find(s => s.status === 1);
+      setActiveSprintId(active?.id || null);
+    });
+    return unsubS;
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || !activeSprintId) {
+      setActiveSprintGoalIds(new Set());
+      return;
+    }
+    const storiesQ = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(storiesQ, (snap) => {
+      const setIds = new Set<string>();
+      snap.docs.forEach(d => {
+        const s = d.data() as any;
+        if (s.sprintId === activeSprintId && s.goalId) setIds.add(s.goalId);
+      });
+      setActiveSprintGoalIds(setIds);
+    });
+    return unsub;
+  }, [currentUser, currentPersona, activeSprintId]);
+
   // Handler functions for ModernGoalsTable
   const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
     try {
@@ -98,6 +134,11 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
+    if (applyActiveSprintFilter && activeSprintId) {
+      // Only include goals with stories in active sprint and not complete (status !== 2)
+      if (goal.status === 2) return false;
+      if (!activeSprintGoalIds.has(goal.id)) return false;
+    }
     if (filterStatus !== 'all' && goal.status !== parseInt(filterStatus)) return false;
     if (filterTheme !== 'all' && goal.theme !== parseInt(filterTheme)) return false;
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
@@ -309,7 +350,7 @@ const GoalsManagement: React.FC = () => {
                 justifyContent: 'center'
               }}>
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
-                <p style={{ margin: 0, color: '#6b7280' }}>Loading goals...</p>
+                <p style={{ margin: 0, color: 'var(--muted)' }}>Loading goals...</p>
               </div>
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }}>
