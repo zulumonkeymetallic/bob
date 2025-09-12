@@ -58,6 +58,13 @@ body.gantt-full-active .navbar, body.gantt-full-active .global-sidebar { display
   min-height: 110px;
 }
 
+/* Highlight for target swim lane while dragging */
+.theme-group--target {
+  outline: 2px dashed var(--bs-primary);
+  outline-offset: -2px;
+  background: rgba(var(--bs-primary-rgb), 0.03);
+}
+
 .goal-timeline {
   position: relative;
   min-height: 80px;

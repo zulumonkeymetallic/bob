@@ -38,6 +38,10 @@ import ModernStoriesTable from '../../components/ModernStoriesTable';
 import { Goal, Sprint, Story, Task } from '../../types';
 import './EnhancedGanttChart.css';
 import logger from '../../utils/logger';
+import ThemeRoadmap from './ThemeRoadmap';
+import { useRoadmapStore, useTimelineScale } from '../../stores/roadmapStore';
+import RoadmapAxis from './RoadmapAxis';
+import VirtualThemeLane from './VirtualThemeLane';
 
 interface GanttItem {
   id: string;
@@ -78,6 +82,9 @@ const EnhancedGanttChart: React.FC = () => {
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const { theme } = useTheme();
   
+  // View mode toggle (timeline vs roadmap)
+  const [viewMode, setViewMode] = useState<'timeline' | 'roadmap'>('timeline');
+
   // Core data
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
@@ -86,7 +93,7 @@ const EnhancedGanttChart: React.FC = () => {
   const [loading, setLoading] = useState(true);
   
   // UI State
-  const [zoomLevel, setZoomLevel] = useState<'month' | 'quarter' | 'half' | 'year'>('quarter');
+  const [zoomLevel, setZoomLevel] = useState<'week' | 'month' | 'quarter' | 'half' | 'year'>('quarter');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedThemes, setSelectedThemes] = useState<number[]>([]);
   const [showLinks, setShowLinks] = useState<boolean>(true);
@@ -94,6 +101,7 @@ const EnhancedGanttChart: React.FC = () => {
   const [collapsedGoals, setCollapsedGoals] = useState<Set<string>>(new Set());
   const [groupByTheme, setGroupByTheme] = useState<boolean>(true);
   const [storiesByGoal, setStoriesByGoal] = useState<Record<string, number>>({});
+  const [doneStoriesByGoal, setDoneStoriesByGoal] = useState<Record<string, number>>({});
   const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<any[]>([]);
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
@@ -104,6 +112,11 @@ const EnhancedGanttChart: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const renderCountRef = useRef(0);
   const dragLogRef = useRef({ lastMoveLogAt: 0 });
+  const isSpaceDownRef = useRef(false);
+  const panRef = useRef<{ active: boolean; startX: number; startStart: Date; startEnd: Date } | null>(null);
+  const panInertiaRef = useRef<{ vx: number; lastX: number; lastT: number; raf?: number } | null>(null);
+  const isShiftDownRef = useRef(false);
+  const pinchRef = useRef<{ active: boolean; startDist: number; startStart: Date; startEnd: Date; anchor: Date } | null>(null);
   
   // Drag and drop state
   const [dragState, setDragState] = useState<DragState>({
@@ -145,6 +158,8 @@ const EnhancedGanttChart: React.FC = () => {
   const timelineRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const headerMonthsRef = useRef<HTMLDivElement>(null);
+  const groupPositionsRef = useRef<Array<{ themeId: number; top: number; bottom: number; el: HTMLElement }>>([]);
+  const hoveredThemeRef = useRef<number | null>(null);
   
   // Theme definitions
   const themes = [
@@ -161,6 +176,21 @@ const EnhancedGanttChart: React.FC = () => {
     const start = new Date(now.getFullYear() - 1, 0, 1); // 1 year ago
     const end = new Date(now.getFullYear() + 2, 11, 31); // 2 years ahead
     return { start, end };
+  }, []);
+
+  // Sync timeline range to store for axis
+  const setRange = useRoadmapStore(s => s.setRange);
+  const setWidth = useRoadmapStore(s => s.setWidth);
+  const scale = useTimelineScale();
+  useEffect(() => { setRange(timeRange.start, timeRange.end); }, [timeRange.start, timeRange.end]);
+  useEffect(() => {
+    const updateWidth = () => {
+      const w = canvasRef.current?.scrollWidth || containerRef.current?.clientWidth || 1200;
+      setWidth(w);
+    };
+    updateWidth();
+    window.addEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateWidth);
   }, []);
 
   // Fullscreen handlers
@@ -195,6 +225,81 @@ const EnhancedGanttChart: React.FC = () => {
     if (isFullscreen) exitFullscreen(); else enterFullscreen();
   }, [isFullscreen, enterFullscreen, exitFullscreen]);
 
+  // Navigation helpers
+  const jumpToToday = useCallback(() => {
+    const today = new Date();
+    try {
+      useRoadmapStore.getState().setZoom(zoomLevel, today);
+    } catch {}
+    // Also center scroll approximately
+    const el = containerRef.current;
+    if (el) {
+      const left = 250 + scale(today) - el.clientWidth * 0.3;
+      el.scrollLeft = Math.max(0, left);
+    }
+  }, [zoomLevel]);
+
+  const jumpToSelectedSprint = useCallback(() => {
+    if (!selectedSprintId) return;
+    const sprint = sprints.find(s => s.id === selectedSprintId);
+    if (!sprint) return;
+    const start = new Date(sprint.startDate);
+    const end = new Date(sprint.endDate);
+    // Add a margin around sprint
+    const margin = 7 * 24 * 60 * 60 * 1000; // 1 week
+    useRoadmapStore.getState().setRange(new Date(start.getTime() - margin), new Date(end.getTime() + margin));
+    // Adjust zoom based on sprint length
+    const diff = end.getTime() - start.getTime();
+    const week = 7 * 24 * 60 * 60 * 1000;
+    const newZoom: typeof zoomLevel = diff <= 6 * week ? 'week' : diff <= 20 * week ? 'month' : 'quarter';
+    setZoomLevel(newZoom);
+    useRoadmapStore.getState().setZoom(newZoom, new Date((start.getTime() + end.getTime()) / 2));
+    // Scroll roughly into view
+    const el = containerRef.current;
+    if (el) {
+      const left = 250 + scale(start) - el.clientWidth * 0.2;
+      el.scrollLeft = Math.max(0, left);
+    }
+  }, [selectedSprintId, sprints, setZoomLevel, scale]);
+
+  const fitAll = useCallback(() => {
+    // Determine min start and max end across current goals
+    const dates: number[] = [];
+    goals.forEach((g) => {
+      const s = g.startDate ? Number(g.startDate) : undefined;
+      const e = g.endDate ? Number(g.endDate) : g.targetDate ? new Date(g.targetDate).getTime() : undefined;
+      if (s) dates.push(s);
+      if (e) dates.push(e);
+    });
+    if (dates.length < 2) return;
+    let min = Math.min(...dates);
+    let max = Math.max(...dates);
+    if (min === max) max = min + 30 * 24 * 60 * 60 * 1000; // ensure non-zero span
+    const margin = Math.round((max - min) * 0.08); // 8% padding either side
+    const newStart = new Date(min - margin);
+    const newEnd = new Date(max + margin);
+    useRoadmapStore.getState().setRange(newStart, newEnd);
+
+    // Pick an approximate zoom label by span
+    const span = max - min;
+    const day = 24 * 60 * 60 * 1000;
+    let z: typeof zoomLevel = 'quarter';
+    if (span <= 60 * day) z = 'week';
+    else if (span <= 180 * day) z = 'month';
+    else if (span <= 540 * day) z = 'quarter';
+    else if (span <= 720 * day) z = 'half';
+    else z = 'year';
+    setZoomLevel(z);
+    // Keep domain from setRange; no need to call setZoom here.
+
+    // Scroll to start
+    const el = containerRef.current;
+    if (el) {
+      const left = 250 + scale(newStart) - el.clientWidth * 0.05;
+      el.scrollLeft = Math.max(0, left);
+    }
+  }, [goals, setZoomLevel, scale]);
+
   useEffect(() => {
     renderCountRef.current += 1;
     if (logger.isEnabled('debug', 'gantt')) {
@@ -222,6 +327,28 @@ const EnhancedGanttChart: React.FC = () => {
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
+  // Track spacebar for panning
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        if (e.type === 'keydown') isSpaceDownRef.current = true;
+        else isSpaceDownRef.current = false;
+      }
+      if (e.key === 'Shift') {
+        if (e.type === 'keydown') isShiftDownRef.current = true;
+        else isShiftDownRef.current = false;
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => onKey(e);
+    const onKeyUp = (e: KeyboardEvent) => onKey(e);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
+
   // Scroll to today's date on mount and when zoom/data changes
   useEffect(() => {
     const el = containerRef.current;
@@ -234,12 +361,17 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Map stories per goal for quick indicators
   useEffect(() => {
-    const counts: Record<string, number> = {};
+    const total: Record<string, number> = {};
+    const done: Record<string, number> = {};
     stories.forEach((s) => {
       if (!s.goalId) return;
-      counts[s.goalId] = (counts[s.goalId] || 0) + 1;
+      total[s.goalId] = (total[s.goalId] || 0) + 1;
+      if (s.status === 4) {
+        done[s.goalId] = (done[s.goalId] || 0) + 1;
+      }
     });
-    setStoriesByGoal(counts);
+    setStoriesByGoal(total);
+    setDoneStoriesByGoal(done);
   }, [stories]);
 
   // Subscribe to activity when opening modal
@@ -457,6 +589,13 @@ const EnhancedGanttChart: React.FC = () => {
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     logger.debug('gantt', 'Drag start', { id: item.id, dragType, clientX, start: item.startDate, end: item.endDate });
     logger.perfMark('gantt-drag-start');
+    // Snapshot theme group positions for vertical drop detection
+    const groups = Array.from(document.querySelectorAll('[data-theme-group]')) as HTMLElement[];
+    groupPositionsRef.current = groups.map((el) => {
+      const rect = el.getBoundingClientRect();
+      const themeIdAttr = el.getAttribute('data-theme-group') || '0';
+      return { themeId: parseInt(themeIdAttr, 10), top: rect.top, bottom: rect.bottom, el };
+    });
     
     setDragState({
       isDragging: true,
@@ -477,7 +616,9 @@ const EnhancedGanttChart: React.FC = () => {
   const handleDragMove = useCallback((e: MouseEvent | TouchEvent) => {
     if (!dragState.isDragging || !dragState.itemId) return;
     
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const isTouch = 'touches' in e;
+    const clientX = isTouch ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
+    const clientY = isTouch ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
     const deltaX = clientX - dragState.startX;
     
     // Calculate time delta based on zoom level
@@ -496,10 +637,27 @@ const EnhancedGanttChart: React.FC = () => {
     } else if (dragState.dragType === 'resize-end') {
       newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
     }
+
+    // Determine hovered theme group for potential reassignment
+    const hovered = groupPositionsRef.current.find(g => clientY >= g.top && clientY <= g.bottom)?.themeId ?? null;
+    if (hoveredThemeRef.current !== hovered) {
+      const prev = groupPositionsRef.current.find(g => g.themeId === hoveredThemeRef.current);
+      if (prev) prev.el.classList.remove('theme-group--target');
+      hoveredThemeRef.current = hovered;
+      const next = groupPositionsRef.current.find(g => g.themeId === hovered);
+      if (next) next.el.classList.add('theme-group--target');
+    }
     
-    // Snap to whole-day boundaries
+    // Snap to whole-day boundaries; if Shift held, snap start to Monday of its week and end to following Monday
     newStartDate.setHours(0,0,0,0);
     newEndDate.setHours(0,0,0,0);
+    if (isShiftDownRef.current) {
+      const s = snapToWeek(newStartDate);
+      const e2 = snapToWeek(newEndDate);
+      // Ensure at least 7 days
+      if (e2.getTime() <= s.getTime()) e2.setDate(s.getDate() + 7);
+      newStartDate = s; newEndDate = e2;
+    }
 
     // Update the visual representation
     const goalElement = document.querySelector(`[data-goal-id="${dragState.itemId}"]`) as HTMLElement;
@@ -536,7 +694,8 @@ const EnhancedGanttChart: React.FC = () => {
   const handleDragEnd = useCallback(async (e: MouseEvent | TouchEvent) => {
     if (!dragState.isDragging || !dragState.itemId) return;
     
-    const clientX = 'touches' in e ? e.changedTouches[0].clientX : e.clientX;
+    const clientX = 'touches' in e ? (e as TouchEvent).changedTouches[0].clientX : (e as MouseEvent).clientX;
+    const clientY = 'touches' in e ? (e as TouchEvent).changedTouches[0].clientY : (e as MouseEvent).clientY;
     const deltaX = clientX - dragState.startX;
     const msPerPixel = getMillisecondsPerPixel(zoomLevel);
     const timeDelta = deltaX * msPerPixel;
@@ -553,9 +712,15 @@ const EnhancedGanttChart: React.FC = () => {
       newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
     }
 
-    // Snap to whole-day boundaries
+    // Snap to whole-day boundaries; if Shift held, snap to week blocks
     newStartDate.setHours(0,0,0,0);
     newEndDate.setHours(0,0,0,0);
+    if (isShiftDownRef.current) {
+      const s = snapToWeek(newStartDate);
+      const e2 = snapToWeek(newEndDate);
+      if (e2.getTime() <= s.getTime()) e2.setDate(s.getDate() + 7);
+      newStartDate = s; newEndDate = e2;
+    }
 
     // Clear drag overlay
     setDragOverlay(null);
@@ -573,6 +738,9 @@ const EnhancedGanttChart: React.FC = () => {
     });
     logger.perfMark('gantt-drag-end');
     logger.perfMeasure('gantt-drag', 'gantt-drag-start', 'gantt-drag-end');
+    // Determine drop theme and clear highlight
+    const dropThemeId = groupPositionsRef.current.find(g => clientY >= g.top && clientY <= g.bottom)?.themeId ?? null;
+    groupPositionsRef.current.forEach(g => g.el.classList.remove('theme-group--target'));
 
     // Check for impacted stories/tasks in current sprints
     const goal = goals.find(g => g.id === dragState.itemId);
@@ -586,6 +754,29 @@ const EnhancedGanttChart: React.FC = () => {
         setShowImpactModal(true);
       } else {
         await updateGoalDates(goal.id, newStartDate, newEndDate);
+      }
+
+      // Theme reassignment if dropped on another theme group
+      if (dropThemeId && dropThemeId !== goal.theme) {
+        try {
+          await updateDoc(doc(db, 'goals', goal.id), { theme: dropThemeId, updatedAt: Date.now() });
+          if (currentUser) {
+            await ActivityStreamService.logFieldChange(
+              goal.id,
+              'goal',
+              currentUser.uid,
+              currentUser.email || '',
+              'theme',
+              goal.theme,
+              dropThemeId,
+              'personal',
+              (goal as any).ref || '',
+              'human'
+            );
+          }
+        } catch (err) {
+          console.error('Failed to update theme on drop', err);
+        }
       }
     }
 
@@ -619,21 +810,33 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Helper functions
   const getMillisecondsPerPixel = (zoom: string): number => {
-    // Align with getDatePosition: use canvas width vs overall time
-    const totalDuration = timeRange.end.getTime() - timeRange.start.getTime();
-    const canvasWidth = canvasRef.current?.scrollWidth || 1000;
-    const msPerPxBase = totalDuration / canvasWidth;
-    // Zoom levels scale
-    const scales: Record<string, number> = { month: 0.5, quarter: 1, half: 2, year: 4 };
-    const scale = scales[zoom] ?? 1;
-    return msPerPxBase * scale;
+    // Use store domain for precise conversion
+    const start = useRoadmapStore.getState().start;
+    const end = useRoadmapStore.getState().end;
+    const duration = end.getTime() - start.getTime();
+    const width = useRoadmapStore.getState().width || canvasRef.current?.scrollWidth || 1000;
+    return duration / Math.max(1, Number(width));
   };
 
   const getDatePosition = (date: Date): number => {
-    const totalDuration = timeRange.end.getTime() - timeRange.start.getTime();
-    const itemPosition = date.getTime() - timeRange.start.getTime();
-    const canvasWidth = canvasRef.current?.scrollWidth || 1000;
-    return (itemPosition / totalDuration) * canvasWidth;
+    try {
+      return scale(date);
+    } catch {
+      const totalDuration = timeRange.end.getTime() - timeRange.start.getTime();
+      const itemPosition = date.getTime() - timeRange.start.getTime();
+      const canvasWidth = canvasRef.current?.scrollWidth || 1000;
+      return (itemPosition / totalDuration) * canvasWidth;
+    }
+  };
+
+  const snapToWeek = (d: Date): Date => {
+    // Snap to Monday of that week when Shift is held
+    const out = new Date(d);
+    const day = out.getDay(); // 0 Sun - 6 Sat
+    const mondayOffset = (day + 6) % 7; // days since Monday
+    out.setDate(out.getDate() - mondayOffset);
+    out.setHours(0,0,0,0);
+    return out;
   };
 
   // Small util to convert HEX to rgba for theme lane backgrounds
@@ -757,15 +960,156 @@ const EnhancedGanttChart: React.FC = () => {
     return headers;
   };
 
-  const zoomLevels: Array<typeof zoomLevel> = ['month', 'quarter', 'half', 'year'];
+  const zoomLevels: Array<typeof zoomLevel> = ['week', 'month', 'quarter', 'half', 'year'];
   const handleWheelZoom: React.WheelEventHandler<HTMLDivElement> = (e) => {
-    // Avoid calling preventDefault on passive wheel listeners (noise in console)
-    if (!e.ctrlKey && Math.abs(e.deltaY) < 35) return;
+    // Ctrl/trackpad pinch → continuous zoom around cursor anchor
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const store = useRoadmapStore.getState();
+      const { start, end, width } = store;
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect || width <= 0) return;
+      const localX = e.clientX - rect.left - 250; // subtract label column width
+      const clampedX = Math.max(0, Math.min(width, localX));
+      const domain = end.getTime() - start.getTime();
+      const anchor = new Date(start.getTime() + (clampedX / width) * domain);
+      const zoomIntensity = 0.0016; // tune zoom speed
+      const factor = Math.max(0.2, Math.min(5, 1 + e.deltaY * zoomIntensity));
+      const newStart = new Date(anchor.getTime() - (anchor.getTime() - start.getTime()) * factor);
+      const newEnd = new Date(anchor.getTime() + (end.getTime() - anchor.getTime()) * factor);
+      // Clamp to reasonable window (min 7 days)
+      const minSpan = 7 * 24 * 60 * 60 * 1000;
+      if (newEnd.getTime() - newStart.getTime() < minSpan) {
+        const mid = (newStart.getTime() + newEnd.getTime()) / 2;
+        store.setRange(new Date(mid - minSpan / 2), new Date(mid + minSpan / 2));
+      } else {
+        store.setRange(newStart, newEnd);
+      }
+      return;
+    }
+    // Otherwise discrete zoom steps for wheel
+    if (Math.abs(e.deltaY) < 35) return;
     const dir = e.deltaY > 0 ? 1 : -1;
     const idx = zoomLevels.indexOf(zoomLevel);
     const next = Math.min(zoomLevels.length - 1, Math.max(0, idx + dir));
-    if (next !== idx) setZoomLevel(zoomLevels[next]);
+    if (next !== idx) {
+      setZoomLevel(zoomLevels[next]);
+      useRoadmapStore.getState().setZoom(zoomLevels[next]);
+    }
   };
+
+  // Drag-to-pan timeline when holding Space or using middle mouse button
+  const onContainerMouseDown: React.MouseEventHandler<HTMLDivElement> = (e) => {
+    // Avoid conflict with goal bar drags (those start on bars, not container). Allow middle click always; left with Space held.
+    if (!(e.button === 1 || (e.button === 0 && isSpaceDownRef.current))) return;
+    e.preventDefault();
+    const startStart = useRoadmapStore.getState().start;
+    const startEnd = useRoadmapStore.getState().end;
+    panRef.current = { active: true, startX: e.clientX, startStart, startEnd };
+    if (containerRef.current) containerRef.current.style.cursor = 'grabbing';
+    panInertiaRef.current = { vx: 0, lastX: e.clientX, lastT: performance.now() };
+    const onMove = (ev: MouseEvent) => {
+      if (!panRef.current?.active) return;
+      const dx = ev.clientX - panRef.current.startX;
+      const msPerPx = getMillisecondsPerPixel(zoomLevel);
+      const delta = dx * msPerPx * -1; // drag right -> move timeline left
+      const newStart = new Date(panRef.current.startStart.getTime() + delta);
+      const newEnd = new Date(panRef.current.startEnd.getTime() + delta);
+      useRoadmapStore.getState().setRange(newStart, newEnd);
+      // update inertia velocity
+      const now = performance.now();
+      if (panInertiaRef.current) {
+        const dt = Math.max(1, now - panInertiaRef.current.lastT);
+        const ddx = ev.clientX - panInertiaRef.current.lastX;
+        panInertiaRef.current.vx = ddx / dt; // px per ms
+        panInertiaRef.current.lastX = ev.clientX;
+        panInertiaRef.current.lastT = now;
+      }
+    };
+    const onUp = () => {
+      if (containerRef.current) containerRef.current.style.cursor = '';
+      panRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      // Start inertia if velocity is significant
+      const state = panInertiaRef.current;
+      if (!state) return;
+      let vx = state.vx; // px/ms
+      if (Math.abs(vx) < 0.02) return; // threshold
+      const friction = 0.92;
+      let last = performance.now();
+      const tick = () => {
+        const now = performance.now();
+        const dt = now - last;
+        last = now;
+        const msPerPx = getMillisecondsPerPixel(zoomLevel);
+        const delta = vx * dt * msPerPx * -1; // convert to ms domain
+        const store = useRoadmapStore.getState();
+        const newStart = new Date(store.start.getTime() + delta);
+        const newEnd = new Date(store.end.getTime() + delta);
+        store.setRange(newStart, newEnd);
+        vx *= friction;
+        if (Math.abs(vx) >= 0.005) {
+          state.raf = requestAnimationFrame(tick);
+        }
+      };
+      state.raf = requestAnimationFrame(tick);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  // Pinch zoom on touch devices (two fingers)
+  const onContainerTouchStart: React.TouchEventHandler<HTMLDivElement> = (e) => {
+    if (e.touches.length === 2) {
+      const [t1, t2] = [e.touches[0], e.touches[1]];
+      const dx = t2.clientX - t1.clientX;
+      const dy = t2.clientY - t1.clientY;
+      const dist = Math.hypot(dx, dy);
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const midX = ((t1.clientX + t2.clientX) / 2) - rect.left - 250;
+      const w = useRoadmapStore.getState().width;
+      const { start, end } = useRoadmapStore.getState();
+      const domain = end.getTime() - start.getTime();
+      const anchor = new Date(start.getTime() + (Math.max(0, Math.min(w, midX)) / Math.max(1, w)) * domain);
+      pinchRef.current = { active: true, startDist: dist, startStart: start, startEnd: end, anchor };
+      e.preventDefault();
+    }
+  };
+
+  const onContainerTouchMove: React.TouchEventHandler<HTMLDivElement> = (e) => {
+    const pinch = pinchRef.current;
+    if (pinch && e.touches.length === 2) {
+      const [t1, t2] = [e.touches[0], e.touches[1]];
+      const dx = t2.clientX - t1.clientX;
+      const dy = t2.clientY - t1.clientY;
+      const dist = Math.hypot(dx, dy);
+      const factor = Math.max(0.2, Math.min(5, pinch.startDist / Math.max(1, dist)));
+      const start = pinch.startStart;
+      const end = pinch.startEnd;
+      const anchor = pinch.anchor;
+      const newStart = new Date(anchor.getTime() - (anchor.getTime() - start.getTime()) * factor);
+      const newEnd = new Date(anchor.getTime() + (end.getTime() - anchor.getTime()) * factor);
+      // Min 7 days
+      const minSpan = 7 * 24 * 60 * 60 * 1000;
+      if (newEnd.getTime() - newStart.getTime() < minSpan) {
+        const mid = (newStart.getTime() + newEnd.getTime()) / 2;
+        useRoadmapStore.getState().setRange(new Date(mid - minSpan / 2), new Date(mid + minSpan / 2));
+      } else {
+        useRoadmapStore.getState().setRange(newStart, newEnd);
+      }
+      e.preventDefault();
+    }
+  };
+
+  const onContainerTouchEnd: React.TouchEventHandler<HTMLDivElement> = (e) => {
+    if (e.touches.length < 2) pinchRef.current = null;
+  };
+
+  if (viewMode === 'roadmap') {
+    return <ThemeRoadmap onBackToTimeline={() => setViewMode('timeline')} />;
+  }
 
   if (loading) {
     return (
@@ -804,6 +1148,64 @@ const EnhancedGanttChart: React.FC = () => {
                   <Activity size={16} className="me-1" />
                   Activity
                 </Button>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  title="Fit all goals"
+                  onClick={fitAll}
+                >
+                  Fit
+                </Button>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  title="Today"
+                  onClick={jumpToToday}
+                >
+                  Today
+                </Button>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  title="Jump to selected sprint"
+                  onClick={jumpToSelectedSprint}
+                  disabled={!selectedSprintId}
+                >
+                  Sprint
+                </Button>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  title="Fit current sprint and overlapping goals"
+                  onClick={() => {
+                    const selected = selectedSprintId ? sprints.find(s => s.id === selectedSprintId) : sprints.find(s => s.status === 1);
+                    if (!selected) return;
+                    const sstart = new Date(selected.startDate).getTime();
+                    const send = new Date(selected.endDate).getTime();
+                    let min = sstart;
+                    let max = send;
+                    goals.forEach(g => {
+                      const gs = g.startDate ? Number(g.startDate) : undefined;
+                      const ge = g.endDate ? Number(g.endDate) : g.targetDate ? new Date(g.targetDate).getTime() : undefined;
+                      if (!gs || !ge) return;
+                      const overlaps = gs <= send && ge >= sstart;
+                      if (overlaps) { min = Math.min(min, gs); max = Math.max(max, ge); }
+                    });
+                    const pad = Math.round((max - min) * 0.08);
+                    useRoadmapStore.getState().setRange(new Date(min - pad), new Date(max + pad));
+                  }}
+                  disabled={sprints.length === 0}
+                >
+                  Fit Sprint
+                </Button>
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  onClick={() => setViewMode('roadmap')}
+                  title="Switch to Roadmap"
+                >
+                  Roadmap
+                </Button>
                 <Button variant="outline-secondary" size="sm" onClick={() => setZoomLevel('month')} title="Zoom in">
                   <ZoomIn size={16} />
                 </Button>
@@ -836,14 +1238,15 @@ const EnhancedGanttChart: React.FC = () => {
                   <div className="mb-3">
                     <div className="small text-muted mb-1">Zoom</div>
                     <div className="d-flex gap-2 align-items-center">
-                      <Form.Select value={zoomLevel} onChange={(e) => setZoomLevel(e.target.value as any)} size="sm" style={{ maxWidth: 160 }}>
-                        <option value="month">Fit</option>
+                      <Form.Select value={zoomLevel} onChange={(e) => { const z = e.target.value as any; setZoomLevel(z); useRoadmapStore.getState().setZoom(z); }} size="sm" style={{ maxWidth: 200 }}>
+                        <option value="week">Weeks</option>
+                        <option value="month">Months</option>
                         <option value="quarter">Quarter</option>
                         <option value="half">Half Year</option>
                         <option value="year">Year</option>
                       </Form.Select>
-                      <Button size="sm" variant="outline-secondary" onClick={() => setZoomLevel('month')} title="Zoom In"><ZoomIn size={14} /></Button>
-                      <Button size="sm" variant="outline-secondary" onClick={() => setZoomLevel('year')} title="Zoom Out"><ZoomOut size={14} /></Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => { const i = zoomLevels.indexOf(zoomLevel); const next = Math.max(0, i - 1); setZoomLevel(zoomLevels[next]); useRoadmapStore.getState().setZoom(zoomLevels[next]); }} title="Zoom In"><ZoomIn size={14} /></Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => { const i = zoomLevels.indexOf(zoomLevel); const next = Math.min(zoomLevels.length - 1, i + 1); setZoomLevel(zoomLevels[next]); useRoadmapStore.getState().setZoom(zoomLevels[next]); }} title="Zoom Out"><ZoomOut size={14} /></Button>
                     </div>
                   </div>
                   <Form.Check type="switch" id="toggle-links" label="Show links" checked={showLinks} onChange={(e) => setShowLinks(e.target.checked)} />
@@ -877,7 +1280,16 @@ const EnhancedGanttChart: React.FC = () => {
       </Card>
 
       {/* Main Timeline */}
-      <div ref={containerRef} className="timeline-container" style={{ height: isFullscreen ? '100vh' : 'calc(100vh - 250px)', overflow: 'auto' }} onWheel={handleWheelZoom}>
+      <div
+        ref={containerRef}
+        className="timeline-container"
+        style={{ height: isFullscreen ? '100vh' : 'calc(100vh - 250px)', overflow: 'auto' }}
+        onWheel={handleWheelZoom}
+        onMouseDown={onContainerMouseDown}
+        onTouchStart={onContainerTouchStart}
+        onTouchMove={onContainerTouchMove}
+        onTouchEnd={onContainerTouchEnd}
+      >
         {/* Live region for a11y announcements */}
         <div aria-live="polite" className="visually-hidden">{liveAnnouncement}</div>
         {/* Timeline Header */}
@@ -905,15 +1317,9 @@ const EnhancedGanttChart: React.FC = () => {
                   />
                 ))}
               </div>
-              {generateTimelineHeaders().map((header, index) => (
-                <div
-                  key={index}
-                  className="text-center border-end p-2"
-                  style={{ width: `${header.width}px`, minWidth: '80px', position: 'relative', zIndex: 1 }}
-                >
-                  <small>{header.label}</small>
-                </div>
-              ))}
+              <div className="w-100" style={{ position: 'relative', zIndex: 1 }}>
+                <RoadmapAxis height={36} />
+              </div>
             </div>
           </div>
         </div>
@@ -958,161 +1364,32 @@ const EnhancedGanttChart: React.FC = () => {
             zIndex: 2
           }} title={`Today: ${new Date().toLocaleDateString()}`} />
           {(groupByTheme ? Object.keys(goalsByTheme).map(k => parseInt(k,10)).sort((a,b)=>a-b) : [null]).map(groupKey => (
-            <React.Fragment key={groupKey === null ? 'all' : `theme-${groupKey}`}>
+            <div key={groupKey === null ? 'all' : `theme-${groupKey}`} data-theme-group={groupKey ?? ''} className="theme-group">
               {groupByTheme && (
-                <div className="d-flex align-items-center" style={{ height: 28 }}>
+                <div className="d-flex align-items-center" style={{ height: 32 }}>
                   <div style={{ width: 250, minWidth: 250 }} className="px-2 text-muted fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
-                  <div className="flex-grow-1" style={{ borderBottom: '1px solid #eee' }} />
+                  <div className="flex-grow-1" style={{ borderBottom: '1px solid var(--line)' }} />
                 </div>
               )}
-          {(groupByTheme ? (goalsByTheme[groupKey as number] || []) : ganttItems.filter(g => g.type==='goal')).map((goal, index) => {
-            const theme = themes.find(t => t.id === goal.theme);
-            const startPos = getDatePosition(goal.startDate);
-            const endPos = getDatePosition(goal.endDate);
-            const width = Math.max(endPos - startPos, 20);
-
-            return (
-              <div key={goal.id} className="goal-row d-flex align-items-center border-bottom" style={{ background: groupByTheme && theme ? hexToRgba(theme.color, 0.05) : 'transparent' }}>
-                <div 
-                  className="goal-label p-2"
-                  style={{ width: '250px', minWidth: '250px' }}
-                >
-                  <div className="d-flex align-items-center">
-                    <div
-                      className="theme-indicator me-2"
-                      style={{
-                        width: '12px',
-                        height: '12px',
-                        backgroundColor: theme?.color,
-                        borderRadius: '2px'
-                      }}
-                    />
-                    <span className="fw-medium">{goal.title}</span>
-                  </div>
-                </div>
-                
-                <div className="goal-timeline position-relative" style={{ minHeight: '80px', flex: 1 }}>
-                  <div
-                    data-goal-id={goal.id}
-                    className={`goal-bar position-absolute cursor-move d-flex align-items-center ${dragState.isDragging && dragState.itemId === goal.id ? 'dragging' : ''}`}
-                    style={{
-                      left: `${startPos}px`,
-                      width: `${width}px`,
-                      height: '60px',
-                      backgroundColor: theme?.color,
-                      border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid var(--red)' : 'none',
-                      borderRadius: '4px',
-                      top: '5px',
-                      opacity: dragState.isDragging && dragState.itemId === goal.id ? 0.7 : 1,
-                      zIndex: 5
-                    }}
-                    tabIndex={0}
-                    draggable={false}
-                    onMouseDown={(e) => handleDragStart(e, goal, 'move')}
-                    onTouchStart={(e) => handleDragStart(e, goal, 'move')}
-                    onDragStart={(e) => e.preventDefault()}
-                    onClick={() => handleItemClick(goal)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                        e.preventDefault();
-                        const step = (e.shiftKey ? 7 : 1) * (e.key === 'ArrowLeft' ? -1 : 1);
-                        const s = new Date(goal.startDate);
-                        const en = new Date(goal.endDate);
-                        s.setHours(0,0,0,0); en.setHours(0,0,0,0);
-                        s.setDate(s.getDate() + step);
-                        en.setDate(en.getDate() + step);
-                        updateGoalDates(goal.id, s, en);
-                      }
-                    }}
-                    title={`${goal.title}: ${goal.startDate.toLocaleDateString()} - ${goal.endDate.toLocaleDateString()}${(storiesByGoal[goal.id]||0)===0 ? ' • No linked stories' : ''}`}
-                  >
-                    {/* Resize handles */}
-                    <div
-                      className="resize-handle resize-start position-absolute"
-                      style={{
-                        left: '0',
-                        top: '0',
-                        width: '8px',
-                        height: '100%',
-                        cursor: 'ew-resize',
-                        backgroundColor: 'rgba(0,0,0,0.2)',
-                        borderRadius: '4px 0 0 4px'
-                      }}
-                      onMouseDown={(e) => {
-                        e.stopPropagation();
-                        handleDragStart(e, goal, 'resize-start');
-                      }}
-                      onTouchStart={(e) => {
-                        e.stopPropagation();
-                        handleDragStart(e, goal, 'resize-start');
-                      }}
-                    />
-                    
-                    <div className="goal-content px-2 text-white flex-grow-1" style={{ fontSize: 13, lineHeight: '16px' }}>
-                      <div className="d-flex align-items-center justify-content-between">
-                        <div style={{ whiteSpace: 'normal', overflow: 'visible' }}>
-                          <strong>{goal.title}</strong>
-                          {typeof goal.priority !== 'undefined' && (<span className="ms-2">P{goal.priority}</span>)}
-                        </div>
-                        <div className="d-flex align-items-center gap-1">
-                          <button className="btn btn-light btn-sm py-0 px-1" title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal); }}>
-                            <Wand2 size={14} />
-                          </button>
-                          <button className="btn btn-light btn-sm py-0 px-1" title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); }}>
-                            <ListIcon size={14} />
-                          </button>
-                          <button className="btn btn-light btn-sm py-0 px-1" title="View stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}>
-                            <BookOpen size={14} />
-                          </button>
-                          <button className="btn btn-light btn-sm py-0 px-1" title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(goal.id); setNoteDraft(''); }}>
-                            <MessageSquareText size={14} />
-                          </button>
-                        </div>
-                      </div>
-                      {(goals.find(g => g.id === goal.id) as any)?.recentNote && (
-                        <div className="small">📝 {(goals.find(g => g.id === goal.id) as any)?.recentNote}</div>
-                      )}
-                      <div className="small">{(storiesByGoal[goal.id] || 0) === 0 ? 'No linked stories' : `${storiesByGoal[goal.id]} stories`}</div>
-                    </div>
-                    <button
-                      className="btn btn-sm btn-light position-absolute"
-                      style={{ right: 10, top: 6, padding: '2px 6px' }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const full = goals.find(g => g.id === goal.id) || null;
-                        setEditGoal(full as any);
-                      }}
-                      title="Edit Goal"
-                    >
-                      <Edit3 size={12} />
-                    </button>
-                    
-                    <div
-                      className="resize-handle resize-end position-absolute"
-                      style={{
-                        right: '0',
-                        top: '0',
-                        width: '8px',
-                        height: '100%',
-                        cursor: 'ew-resize',
-                        backgroundColor: 'rgba(0,0,0,0.2)',
-                        borderRadius: '0 4px 4px 0'
-                      }}
-                      onMouseDown={(e) => {
-                        e.stopPropagation();
-                        handleDragStart(e, goal, 'resize-end');
-                      }}
-                      onTouchStart={(e) => {
-                        e.stopPropagation();
-                        handleDragStart(e, goal, 'resize-end');
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-          </React.Fragment>
+          <VirtualThemeLane
+            themeId={(groupKey as number) || 0}
+            themeName={themes.find(t => t.id === groupKey)?.name || ''}
+            themeColor={themes.find(t => t.id === groupKey)?.color || ''}
+            items={(groupByTheme ? (goalsByTheme[groupKey as number] || []) : ganttItems.filter(g => g.type==='goal')) as any}
+            getDatePosition={getDatePosition}
+            storiesByGoal={storiesByGoal}
+            doneStoriesByGoal={doneStoriesByGoal}
+            onDragStart={handleDragStart as any}
+            onItemClick={handleItemClick as any}
+            setSelectedGoalId={setSelectedGoalId}
+            handleGenerateStories={handleGenerateStories as any}
+            setActivityGoalId={setActivityGoalId as any}
+            setNoteGoalId={setNoteGoalId as any}
+            setNoteDraft={setNoteDraft}
+            updateGoalDates={updateGoalDates}
+            getThemeStyle={(id) => themes.find(t => t.id === id) as any}
+          />
+          </div>
           ))}
         </div>
       </div>

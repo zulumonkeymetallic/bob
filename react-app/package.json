@@ -4,6 +4,13 @@
   "description": "AI-Powered Personal Productivity Platform with Personal Backlogs, Mobile UX & Visual Canvas",
   "private": true,
   "dependencies": {
+    "@visx/axis": "^3.10.0",
+    "@visx/scale": "^3.10.0",
+    "@visx/zoom": "^3.10.0",
+    "date-fns": "^2.30.0",
+    "react-use-measure": "^2.1.1",
+    "react-window": "^1.8.10",
+    "zustand": "^4.5.4",
     "@atlaskit/pragmatic-drag-and-drop": "^1.7.4",
     "@atlaskit/pragmatic-drag-and-drop-react-drop-indicator": "^3.2.5",
     "@dnd-kit/core": "^6.3.1",
