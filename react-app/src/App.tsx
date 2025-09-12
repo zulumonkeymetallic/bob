@@ -60,7 +60,6 @@ import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
 import TravelMap from './components/travel/TravelMap';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
-import ThemeBasedGanttChart from './components/visualization/ThemeBasedGanttChart';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 
 function App() {
