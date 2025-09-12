@@ -52,7 +52,7 @@ const RoadmapAxis: React.FC<Props> = ({ height = 34 }) => {
           }}
           stroke="var(--line)"
           tickStroke="var(--line)"
-          tickLabelProps={() => ({ fill: 'var(--text)', fontSize: 12, textAnchor: 'middle', dy: '0.25em' })}
+          tickLabelProps={() => ({ fill: 'var(--bs-body-color)', fontSize: 12, textAnchor: 'middle', dy: '0.25em' })}
         />
       </svg>
     </div>

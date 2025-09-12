@@ -1310,7 +1310,7 @@ const EnhancedGanttChart: React.FC = () => {
                       width: `${getDatePosition(new Date(sprint.endDate)) - getDatePosition(new Date(sprint.startDate))}px`,
                       top: 0,
                       bottom: 0,
-                      backgroundColor: 'rgba(59, 130, 246, 0.08)'
+                      backgroundColor: 'rgba(59, 130, 246, 0.05)'
                     }}
                     aria-hidden="true"
                     title={`${sprint.name}: ${new Date(sprint.startDate).toLocaleDateString()} - ${new Date(sprint.endDate).toLocaleDateString()}`}
@@ -1345,7 +1345,7 @@ const EnhancedGanttChart: React.FC = () => {
                   width: `${getDatePosition(new Date(sprint.endDate)) - getDatePosition(new Date(sprint.startDate))}px`,
                   top: 0,
                   bottom: 0,
-                  backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                  backgroundColor: 'rgba(59, 130, 246, 0.05)',
                   borderLeft: '1px solid rgba(59,130,246,0.25)',
                   borderRight: '1px solid rgba(59,130,246,0.25)'
                 }}

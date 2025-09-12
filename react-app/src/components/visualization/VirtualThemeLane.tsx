@@ -34,7 +34,7 @@ type Props = {
 
 const VirtualThemeLane: React.FC<Props> = ({
   items,
-  rowHeight = 96,
+  rowHeight = 110,
   getDatePosition,
   storiesByGoal,
   doneStoriesByGoal,
@@ -117,10 +117,11 @@ const VirtualThemeLane: React.FC<Props> = ({
                 </div>
               </div>
               <div className="small">{total === 0 ? 'No linked stories' : `${total} stories`}</div>
-              <div className="goal-progress mt-1" title={`Progress: ${done}/${total} stories`}>
+              <div className="goal-progress mt-1 d-flex align-items-center" title={`Progress: ${done}/${total} stories`}>
                 <div className="goal-progress-bar-bg">
                   <div className="goal-progress-bar-fill" style={{ width: `${progress}%` }} />
                 </div>
+                <span className="goal-progress-percent">{progress}%</span>
               </div>
             </div>
             <div className="resize-handle resize-end position-absolute" style={{ right: 0, top: 0, width: 8, height: '100%', cursor: 'ew-resize', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '0 4px 4px 0' }}
@@ -141,4 +142,3 @@ const VirtualThemeLane: React.FC<Props> = ({
 };
 
 export default VirtualThemeLane;
-
