@@ -47,6 +47,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       ]
     },
     {
+      label: 'Health',
+      icon: 'heartbeat',
+      items: [
+        { label: 'Running Results', path: '/running-results', icon: 'running' }
+      ]
+    },
+    {
       label: 'Goals',
       icon: 'target',
       items: [
