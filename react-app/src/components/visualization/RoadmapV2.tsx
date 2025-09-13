@@ -47,13 +47,9 @@ type Props = {
   onSprintChange?: (id: string) => void;
 };
 
-const THEMES = [
-  { id: 1, name: 'Health', color: 'var(--theme-health-primary)' },
-  { id: 2, name: 'Growth', color: 'var(--theme-growth-primary)' },
-  { id: 3, name: 'Wealth', color: 'var(--theme-wealth-primary)' },
-  { id: 4, name: 'Tribe', color: 'var(--theme-tribe-primary)' },
-  { id: 5, name: 'Home', color: 'var(--theme-home-primary)' }
-];
+// Lane theme order based on legacy -> settings mapping
+const LANE_THEME_IDS = [1, 9, 3, 5, 8] as const; // Health, Growth(Spiritual), Wealth, Tribe(Family), Home
+const LANE_THEMES = LANE_THEME_IDS.map(id => ({ id, name: getThemeById(id).label, color: getThemeById(id).color }));
 
 const RoadmapV2: React.FC<Props> = ({
   goals,
@@ -159,7 +155,8 @@ const RoadmapV2: React.FC<Props> = ({
   const itemsByTheme = useMemo(() => {
     const grouped: Record<number, GanttItem[]> = {};
     filteredItems.forEach((g) => {
-      (grouped[g.theme] = grouped[g.theme] || []).push(g);
+      const k = migrateThemeValue(g.theme);
+      (grouped[k] = grouped[k] || []).push(g);
     });
     // order by start date in each theme
     Object.values(grouped).forEach(arr => arr.sort((a,b)=>a.startDate.getTime()-b.startDate.getTime()));
@@ -173,6 +170,31 @@ const RoadmapV2: React.FC<Props> = ({
 
   const today = new Date();
   const leftToday = scale(today);
+
+  // Fullscreen support (hide chrome via global CSS)
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onFs = () => {
+      const active = Boolean(document.fullscreenElement);
+      setIsFullscreen(active);
+      if (active) document.body.classList.add('gantt-full-active');
+      else document.body.classList.remove('gantt-full-active');
+      logger.info('roadmapV2', 'fullscreen-change', { active });
+    };
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await (containerRef.current as any)?.requestFullscreen?.();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (e) {
+      logger.error && logger.error('roadmapV2', 'fullscreen-failed', e as any);
+    }
+  };
 
   // Month header fragments
   const monthBlocks = useMemo(() => {
@@ -197,6 +219,7 @@ const RoadmapV2: React.FC<Props> = ({
           {onSwitchToRoadmap && (
             <Button size="sm" variant="outline-secondary" title="Switch to Roadmap" onClick={onSwitchToRoadmap}>Roadmap</Button>
           )}
+          <Button size="sm" variant="outline-secondary" title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'} onClick={toggleFullscreen}>{isFullscreen ? 'Exit Full Screen' : 'Full Screen'}</Button>
           {onSprintChange && (
             <SprintSelector selectedSprintId={selectedSprintId || ''} onSprintChange={onSprintChange} />
           )}
@@ -261,7 +284,7 @@ const RoadmapV2: React.FC<Props> = ({
           <div className="rv2-body">
             {/* Left sticky lane headers */}
             <div className="rv2-lane-left" style={{ width: 250 }}>
-              {THEMES.map((t, idx) => {
+              {LANE_THEMES.map((t, idx) => {
                 const items = itemsByTheme[t.id] || [];
                 const collapsed = laneCollapse[t.id];
                 const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
@@ -280,7 +303,7 @@ const RoadmapV2: React.FC<Props> = ({
             </div>
             {/* Right timeline area */}
             <div className="rv2-lane-right">
-              {THEMES.map((t, idx) => {
+              {LANE_THEMES.map((t, idx) => {
                 const items = itemsByTheme[t.id] || [];
                 const collapsed = laneCollapse[t.id];
                 const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
@@ -333,8 +356,8 @@ const RoadmapV2: React.FC<Props> = ({
                                 style={{ left, width: widthPx, borderColor: themeColor, borderWidth: 2, background: `linear-gradient(180deg, ${bg1}, ${bg2}), var(--card)` }}
                                 tabIndex={0}
                                 title={`${g.title}: ${subtitle}`}
-                                onMouseDown={(e) => onDragStart(e, g, 'move')}
-                                onTouchStart={(e) => onDragStart(e, g, 'move')}
+                                onMouseDown={(e) => { logger.info('roadmapV2', 'mousedown card', { id: g.id, x: (e as any).clientX }); onDragStart(e, g, 'move'); }}
+                                onTouchStart={(e) => { logger.info('roadmapV2', 'touchstart card', { id: g.id }); onDragStart(e, g, 'move'); }}
                                 onDragStart={(e) => e.preventDefault()}
                                 onClick={() => onItemClick(g)}
                                 onKeyDown={(e) => {
