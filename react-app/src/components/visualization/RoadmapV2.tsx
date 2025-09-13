@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card } from 'react-bootstrap';
 import { ChevronLeft, ChevronRight, Wand2, Pencil, Activity, Trash2, BookOpen } from 'lucide-react';
 import useMeasure from 'react-use-measure';
@@ -8,6 +8,8 @@ import RoadmapAxis from './RoadmapAxis';
 import './RoadmapV2.css';
 import { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
 import { FixedSizeList as List, ListChildComponentProps } from 'react-window';
+import SprintSelector from '../SprintSelector';
+import logger from '../../utils/logger';
 
 type GanttItem = {
   id: string;
@@ -41,6 +43,8 @@ type Props = {
   onTouchMove: React.TouchEventHandler<HTMLDivElement>;
   onTouchEnd: React.TouchEventHandler<HTMLDivElement>;
   onSwitchToRoadmap?: () => void;
+  selectedSprintId?: string;
+  onSprintChange?: (id: string) => void;
 };
 
 const THEMES = [
@@ -72,17 +76,44 @@ const RoadmapV2: React.FC<Props> = ({
   onTouchStart,
   onTouchMove,
   onTouchEnd,
-  onSwitchToRoadmap
+  onSwitchToRoadmap,
+  selectedSprintId,
+  onSprintChange
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [measureRef, bounds] = useMeasure();
   const scale = useTimelineScale();
   const { start, end, width, zoom, setRange, setZoom, setWidth, laneCollapse, toggleLane } = useRoadmapStore();
+  const [filterActiveSprint, setFilterActiveSprint] = useState(false);
+  const [filterHasStories, setFilterHasStories] = useState(false);
 
   // Keep store width synced to container
   useEffect(() => {
-    if (bounds.width) setWidth(bounds.width);
+    if (bounds.width) {
+      const w = Math.max(300, bounds.width - 250);
+      setWidth(w);
+      logger.debug('roadmapV2', 'measure', { container: bounds.width, timeline: w });
+    }
   }, [bounds.width, setWidth]);
+
+  // Auto-fit range once when goals list is available
+  useEffect(() => {
+    if (!goals || goals.length === 0) return;
+    const dates: number[] = [];
+    goals.forEach(g => {
+      if (g.startDate) dates.push(Number(g.startDate));
+      const e = g.endDate || (g.targetDate ? new Date(g.targetDate).getTime() : undefined);
+      if (e) dates.push(Number(e));
+    });
+    if (dates.length < 2) return;
+    const min = Math.min(...dates);
+    const max = Math.max(...dates);
+    const pad = Math.round((max - min) * 0.08);
+    const ns = new Date(min - pad);
+    const ne = new Date(max + pad);
+    setRange(ns, ne);
+    logger.info('roadmapV2', 'autoFit', { start: ns.toISOString(), end: ne.toISOString() });
+  }, [goals, setRange]);
 
   const ganttItems = useMemo<GanttItem[]>(() => {
     return goals.map((goal) => ({
@@ -95,6 +126,24 @@ const RoadmapV2: React.FC<Props> = ({
       priority: (goal as any).priority,
     }));
   }, [goals]);
+
+  const filteredItems = useMemo(() => {
+    if ((!filterActiveSprint && !filterHasStories) || stories.length === 0) return ganttItems;
+    const byGoal = new Map<string, Story[]>();
+    stories.forEach(s => {
+      const arr = byGoal.get(s.goalId) || [];
+      arr.push(s);
+      byGoal.set(s.goalId, arr);
+    });
+    return ganttItems.filter(g => {
+      const st = byGoal.get(g.id) || [];
+      if (filterHasStories && st.length === 0) return false;
+      if (filterActiveSprint && selectedSprintId) {
+        return st.some(s => s.sprintId === selectedSprintId);
+      }
+      return true;
+    });
+  }, [ganttItems, stories, filterActiveSprint, filterHasStories, selectedSprintId]);
 
   const goalById = useMemo(() => Object.fromEntries(goals.map(g => [g.id, g])), [goals]);
 
@@ -109,13 +158,13 @@ const RoadmapV2: React.FC<Props> = ({
 
   const itemsByTheme = useMemo(() => {
     const grouped: Record<number, GanttItem[]> = {};
-    ganttItems.forEach((g) => {
+    filteredItems.forEach((g) => {
       (grouped[g.theme] = grouped[g.theme] || []).push(g);
     });
     // order by start date in each theme
     Object.values(grouped).forEach(arr => arr.sort((a,b)=>a.startDate.getTime()-b.startDate.getTime()));
     return grouped;
-  }, [ganttItems]);
+  }, [filteredItems]);
 
   const jumpBy = (days: number) => {
     const delta = days * 24 * 60 * 60 * 1000;
@@ -148,12 +197,30 @@ const RoadmapV2: React.FC<Props> = ({
           {onSwitchToRoadmap && (
             <Button size="sm" variant="outline-secondary" title="Switch to Roadmap" onClick={onSwitchToRoadmap}>Roadmap</Button>
           )}
+          {onSprintChange && (
+            <SprintSelector selectedSprintId={selectedSprintId || ''} onSprintChange={onSprintChange} />
+          )}
+          <Button size="sm" variant="outline-secondary" title="Fit all goals" onClick={() => {
+            const all = filteredItems;
+            if (all.length === 0) return;
+            const times: number[] = [];
+            all.forEach(g => { times.push(g.startDate.getTime(), g.endDate.getTime()); });
+            const min = Math.min(...times), max = Math.max(...times);
+            const pad = Math.round((max - min) * 0.08);
+            setRange(new Date(min - pad), new Date(max + pad));
+          }}>Fit</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('week')}>Weeks</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('month')}>Months</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('quarter')}>Quarters</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setRange(new Date(today.getFullYear(), today.getMonth(), today.getDate()-42), new Date(today.getFullYear(), today.getMonth(), today.getDate()+42))}>Today</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => jumpBy(-14)}><ChevronLeft size={14} /></Button>
           <Button size="sm" variant="outline-secondary" onClick={() => jumpBy(14)}><ChevronRight size={14} /></Button>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
+            <input type="checkbox" checked={filterHasStories} onChange={(e) => setFilterHasStories(e.target.checked)} /> Has stories
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
+            <input type="checkbox" checked={filterActiveSprint} onChange={(e) => setFilterActiveSprint(e.target.checked)} disabled={!selectedSprintId} /> In selected sprint
+          </label>
         </div>
       </div>
 
@@ -197,7 +264,7 @@ const RoadmapV2: React.FC<Props> = ({
               {THEMES.map((t, idx) => {
                 const items = itemsByTheme[t.id] || [];
                 const collapsed = laneCollapse[t.id];
-                const laneVisibleRows = collapsed ? 0 : Math.min(8, Math.max(1, items.length));
+                const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
                 const headerHeight = collapsed ? 48 : laneVisibleRows * 72 + 16;
                 const themeIdNew = migrateThemeValue(t.id);
                 const laneColor = getThemeById(themeIdNew).color;
@@ -216,7 +283,7 @@ const RoadmapV2: React.FC<Props> = ({
               {THEMES.map((t, idx) => {
                 const items = itemsByTheme[t.id] || [];
                 const collapsed = laneCollapse[t.id];
-                const laneVisibleRows = collapsed ? 0 : Math.min(8, Math.max(1, items.length));
+                const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
                 const rowHeight = collapsed ? 48 : laneVisibleRows * 72 + 16;
                 const themeIdNew = migrateThemeValue(t.id);
                 const laneColor = getThemeById(themeIdNew).color;

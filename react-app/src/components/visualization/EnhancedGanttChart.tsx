@@ -1167,6 +1167,8 @@ const EnhancedGanttChart: React.FC = () => {
           onTouchMove={onContainerTouchMove}
           onTouchEnd={onContainerTouchEnd}
           onSwitchToRoadmap={() => setViewMode('roadmap')}
+          selectedSprintId={selectedSprintId || ''}
+          onSprintChange={setSelectedSprintId}
         />
 
         {/* Selected Goal Stories Panel */}
