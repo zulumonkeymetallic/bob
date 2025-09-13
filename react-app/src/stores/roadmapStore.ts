@@ -9,9 +9,15 @@ interface RoadmapState {
   end: Date;
   zoom: ZoomLevel;
   width: number;
+  // Persisted UI prefs
+  laneCollapse: Record<number, boolean>;
   setRange: (start: Date, end: Date) => void;
   setZoom: (zoom: ZoomLevel, anchor?: Date) => void;
   setWidth: (width: number) => void;
+  toggleLane: (themeId: number) => void;
+  setLaneCollapsed: (themeId: number, collapsed: boolean) => void;
+  // Helper selector
+  getScale: () => (d: Date) => number;
 }
 
 export const useRoadmapStore = create<RoadmapState>()(
@@ -21,6 +27,7 @@ export const useRoadmapStore = create<RoadmapState>()(
       end: new Date(new Date().getFullYear() + 2, 11, 31),
       zoom: 'quarter',
       width: 1200,
+      laneCollapse: {},
       setRange: (start, end) => set({ start, end }),
       setZoom: (zoom, anchor) => set(() => {
         const now = anchor || new Date();
@@ -32,12 +39,19 @@ export const useRoadmapStore = create<RoadmapState>()(
           end: new Date(now.getTime() + half)
         } as Partial<RoadmapState>;
       }),
-      setWidth: (width) => set({ width })
+      setWidth: (width) => set({ width }),
+      toggleLane: (themeId) => set((s) => ({ laneCollapse: { ...s.laneCollapse, [themeId]: !s.laneCollapse?.[themeId] } })),
+      setLaneCollapsed: (themeId, collapsed) => set((s) => ({ laneCollapse: { ...s.laneCollapse, [themeId]: collapsed } })),
+      getScale: () => {
+        const { start, end, width } = get();
+        const s = scaleTime<number>({ domain: [start, end], range: [0, Math.max(1, width)] });
+        return (d: Date) => s(d);
+      }
     }),
     {
       name: 'roadmap-view',
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ start: state.start, end: state.end, zoom: state.zoom }),
+      partialize: (state) => ({ start: state.start, end: state.end, zoom: state.zoom, laneCollapse: state.laneCollapse }),
       // Transform Dates to ISO strings and back
       serialize: (state) => {
         const s = JSON.parse(JSON.stringify(state));

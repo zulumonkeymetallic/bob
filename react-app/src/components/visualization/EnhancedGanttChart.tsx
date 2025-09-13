@@ -28,7 +28,7 @@ import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal } from 're
 import { useAuth } from '../../contexts/AuthContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { collection, query, where, getDocs, doc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { db, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import SprintSelector from '../SprintSelector';
@@ -42,6 +42,7 @@ import ThemeRoadmap from './ThemeRoadmap';
 import { useRoadmapStore, useTimelineScale } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
+import RoadmapV2 from './RoadmapV2';
 
 interface GanttItem {
   id: string;
@@ -933,6 +934,20 @@ const EnhancedGanttChart: React.FC = () => {
     setImpactedItems([]);
   };
 
+  // Delete a goal from timeline
+  const handleDeleteGoal = useCallback(async (goalId: string) => {
+    const goal = goals.find(g => g.id === goalId);
+    const name = goal?.title || 'goal';
+    if (!window.confirm(`Delete ${name}? This cannot be undone.`)) return;
+    try {
+      await deleteDoc(doc(db, 'goals', goalId));
+      logger.info('gantt', 'Goal deleted', { goalId });
+    } catch (e) {
+      logger.error('gantt', 'Failed to delete goal', { goalId, e });
+      alert('Failed to delete goal.');
+    }
+  }, [goals]);
+
   // Generate timeline months/quarters
   const generateTimelineHeaders = () => {
     const headers = [];
@@ -1124,6 +1139,203 @@ const EnhancedGanttChart: React.FC = () => {
     );
   }
 
+  // Feature flag to switch to RoadmapV2 timeline implementation
+  const USE_ROADMAP_V2 = true;
+
+  if (USE_ROADMAP_V2) {
+    return (
+      <>
+        <RoadmapV2
+          goals={goals}
+          sprints={sprints}
+          stories={stories}
+          storiesByGoal={storiesByGoal}
+          doneStoriesByGoal={doneStoriesByGoal}
+          onDragStart={handleDragStart as any}
+          onItemClick={handleItemClick as any}
+          updateGoalDates={updateGoalDates}
+          handleGenerateStories={handleGenerateStories as any}
+          setSelectedGoalId={setSelectedGoalId}
+          setActivityGoalId={setActivityGoalId as any}
+          setNoteGoalId={setNoteGoalId as any}
+          setNoteDraft={setNoteDraft}
+          setEditGoal={setEditGoal}
+          onDeleteGoal={handleDeleteGoal}
+          onWheel={handleWheelZoom}
+          onMouseDown={onContainerMouseDown}
+          onTouchStart={onContainerTouchStart}
+          onTouchMove={onContainerTouchMove}
+          onTouchEnd={onContainerTouchEnd}
+          onSwitchToRoadmap={() => setViewMode('roadmap')}
+        />
+
+        {/* Selected Goal Stories Panel */}
+        {selectedGoalId && (
+          <Card ref={storiesPanelRef} className="border-top rounded-0" style={{ maxHeight: '40vh', overflow: 'auto' }}>
+            <Card.Header className="d-flex justify-content-between align-items-center">
+              <div>
+                <strong>Stories for goal</strong>
+                <span className="ms-2 text-muted">{goals.find(g => g.id === selectedGoalId)?.title}</span>
+              </div>
+              <Button size="sm" variant="outline-secondary" onClick={() => setSelectedGoalId(null)}>Close</Button>
+            </Card.Header>
+            <Card.Body>
+              <ModernStoriesTable
+                stories={stories}
+                goals={goals}
+                goalId={selectedGoalId}
+                onStoryUpdate={async () => {}}
+                onStoryDelete={async () => {}}
+                onStoryPriorityChange={async () => {}}
+                onStoryAdd={() => Promise.resolve()}
+              />
+            </Card.Body>
+          </Card>
+        )}
+
+        {/* Activity Stream Sidebar */}
+        {showActivityStream && (
+          <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 shadow-lg border-start" style={{ width: '400px', zIndex: 1000, backgroundColor: 'var(--panel)', borderLeft: '1px solid var(--line)' }}>
+            <div className="p-3 border-bottom d-flex justify-content-between align-items-center">
+              <h5 className="mb-0 d-flex align-items-center">
+                <Activity className="me-2" size={20} />
+                Activity Stream
+              </h5>
+              <Button variant="outline-secondary" size="sm" onClick={() => setShowActivityStream(false)}>×</Button>
+            </div>
+            
+            <div className="p-3" style={{ height: 'calc(100% - 70px)', overflow: 'auto' }}>
+              {activityStreamItems.length === 0 ? (
+                <p className="text-muted">Click on any goal to see linked items</p>
+              ) : (
+                <div className="space-y-3">
+                  {activityStreamItems.map(item => {
+                    const theme = themes.find(t => t.id === item.theme);
+                    return (
+                      <Card key={item.id} className="border">
+                        <Card.Body className="p-3">
+                          <div className="d-flex align-items-start">
+                            {theme && (
+                              <div
+                                className="me-2 mt-1"
+                                style={{
+                                  width: '12px',
+                                  height: '12px',
+                                  backgroundColor: theme.color,
+                                  borderRadius: '2px'
+                                }}
+                              />
+                            )}
+                            <div className="flex-grow-1">
+                              <h6 className="mb-1">{item.title}</h6>
+                              {item.ref && <small className="text-muted">{item.ref}</small>}
+                              <div className="mt-2">
+                                {/* Additional details can be shown here */}
+                              </div>
+                            </div>
+                          </div>
+                        </Card.Body>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Activity Modal */}
+        <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>Goal Activity</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {activityItems.length === 0 && <div className="text-muted">No recent activity.</div>}
+            {activityItems.map((a) => (
+              <div key={a.id} className="d-flex align-items-center gap-2 py-1 border-bottom">
+                <span>{ActivityStreamService.formatActivityIcon(a.activityType)}</span>
+                <div className="flex-grow-1">
+                  <div className="small">{a.description}</div>
+                  <div className="text-muted" style={{ fontSize: 12 }}>{a.userEmail || a.userId}</div>
+                </div>
+              </div>
+            ))}
+          </Modal.Body>
+        </Modal>
+
+        {/* Add Note Modal */}
+        <Modal show={!!noteGoalId} onHide={() => setNoteGoalId(null)}>
+          <Modal.Header closeButton>
+            <Modal.Title>Add Note</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <Form.Control as="textarea" rows={4} value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="Write a quick note about this goal..." />
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setNoteGoalId(null)}>Cancel</Button>
+            <Button variant="primary" onClick={async () => {
+              if (!noteGoalId || !currentUser) return;
+              try {
+                await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft, recentNoteAt: Date.now() });
+                await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft, currentUser.uid, currentUser.email || undefined, 'personal', '', 'human');
+                setNoteGoalId(null);
+                setNoteDraft('');
+              } catch (e) {
+                console.error('Add note failed', e);
+              }
+            }}>Save Note</Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Edit Modal */}
+        <EditGoalModal
+          goal={editGoal}
+          show={!!editGoal}
+          onClose={() => setEditGoal(null)}
+          currentUserId={currentUser?.uid || ''}
+        />
+
+        {/* Open Tasks Modal */}
+        <Modal show={!!tasksModalGoalId} onHide={() => setTasksModalGoalId(null)} size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>Open Tasks</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {tasksForModal.length === 0 ? (
+              <div className="text-muted">No open tasks.</div>
+            ) : (
+              <div className="table-responsive">
+                <table className="table table-sm align-middle">
+                  <thead>
+                    <tr>
+                      <th>Ref</th>
+                      <th>Title</th>
+                      <th>Status</th>
+                      <th>Priority</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tasksForModal.map(t => (
+                      <tr key={t.id}>
+                        <td className="text-muted">{t.ref || '-'}</td>
+                        <td>{t.title}</td>
+                        <td>{t.status === 2 ? 'Done' : t.status === 1 ? 'In Progress' : t.status === 3 ? 'Blocked' : 'To Do'}</td>
+                        <td>P{t.priority}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setTasksModalGoalId(null)}>Close</Button>
+          </Modal.Footer>
+        </Modal>
+      </>
+    );
+  }
+
   return (
     <>
     <Container fluid className="enhanced-gantt-chart p-0">
@@ -1298,7 +1510,7 @@ const EnhancedGanttChart: React.FC = () => {
             <div style={{ width: '250px', minWidth: '250px' }} className="bg-light border-end p-2">
               <strong>Goals & Themes</strong>
             </div>
-            <div ref={headerMonthsRef} className="timeline-months d-flex position-relative" style={{ minWidth: '200%' }}>
+            <div ref={headerMonthsRef} className="timeline-months d-flex position-relative" style={{ minWidth: '200%', height: 60 }}>
               {/* Sprint shading under header months */}
               <div className="position-absolute" style={{ left: 0, right: 0, top: 0, bottom: 0, pointerEvents: 'none', zIndex: 0 }}>
                 {sprints.map(sprint => (
@@ -1317,8 +1529,32 @@ const EnhancedGanttChart: React.FC = () => {
                   />
                 ))}
               </div>
-              <div className="w-100" style={{ position: 'relative', zIndex: 1 }}>
+              {/* Months band */}
+              <div className="position-absolute" style={{ left: 0, right: 0, top: 0, height: 24, zIndex: 1, background: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
+                {(() => {
+                  const items: any[] = [];
+                  const start = useRoadmapStore.getState().start;
+                  const end = useRoadmapStore.getState().end;
+                  const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+                  while (cur <= end) {
+                    const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+                    const left = getDatePosition(cur);
+                    const width = getDatePosition(next) - getDatePosition(cur);
+                    items.push(
+                      <div key={`m-${cur.getFullYear()}-${cur.getMonth()}`} className="position-absolute text-center" style={{ left, width, top: 0, bottom: 0, borderRight: '1px solid var(--line)', color: 'var(--bs-body-color)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {cur.toLocaleDateString('en-US', { month: 'long' })} {cur.getMonth() === 0 ? cur.getFullYear() : ''}
+                      </div>
+                    );
+                    cur.setMonth(cur.getMonth() + 1);
+                  }
+                  return items;
+                })()}
+              </div>
+              {/* Weeks/axis band */}
+              <div className="w-100" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 36, zIndex: 2, background: 'var(--card)' }}>
                 <RoadmapAxis height={36} />
+                {/* Today chip */}
+                <div className="position-absolute" style={{ left: `${getDatePosition(new Date())}px`, top: -22, transform: 'translateX(-50%)', background: 'rgba(16,185,129,0.12)', color: '#059669', border: '1px solid rgba(16,185,129,0.35)', fontSize: 11, padding: '2px 6px', borderRadius: 6 }}>Today</div>
               </div>
             </div>
           </div>

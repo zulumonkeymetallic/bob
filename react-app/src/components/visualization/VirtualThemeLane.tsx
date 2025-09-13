@@ -57,8 +57,9 @@ const VirtualThemeLane: React.FC<Props> = ({
     const total = storiesByGoal[goal.id] || 0;
     const done = doneStoriesByGoal[goal.id] || 0;
     const progress = total ? Math.round((done / total) * 100) : 0;
+    const alt = index % 2 === 1;
     return (
-      <div style={{ ...style }} className="goal-row d-flex align-items-center border-bottom">
+      <div style={{ ...style, background: alt ? 'rgba(0,0,0,0.03)' : 'transparent' }} className="goal-row d-flex align-items-center border-bottom">
         <div className="goal-label p-2" style={{ width: '250px', minWidth: '250px' }}>
           <div className="d-flex align-items-center">
             <div className="theme-indicator me-2" style={{ width: 12, height: 12, backgroundColor: theme?.color, borderRadius: 2 }} />
