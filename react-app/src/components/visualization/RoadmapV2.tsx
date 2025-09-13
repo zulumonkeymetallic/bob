@@ -37,6 +37,7 @@ type Props = {
   setNoteDraft: (v: string) => void;
   setEditGoal: (goal: Goal | null) => void;
   onDeleteGoal: (goalId: string) => void;
+  openGlobalActivity: (goal: Goal) => void;
   onWheel: React.WheelEventHandler<HTMLDivElement>;
   onMouseDown: React.MouseEventHandler<HTMLDivElement>;
   onTouchStart: React.TouchEventHandler<HTMLDivElement>;
@@ -67,6 +68,7 @@ const RoadmapV2: React.FC<Props> = ({
   setNoteDraft,
   setEditGoal,
   onDeleteGoal,
+  openGlobalActivity,
   onWheel,
   onMouseDown,
   onTouchStart,
@@ -359,7 +361,8 @@ const RoadmapV2: React.FC<Props> = ({
                                 onMouseDown={(e) => { logger.info('roadmapV2', 'mousedown card', { id: g.id, x: (e as any).clientX }); onDragStart(e, g, 'move'); }}
                                 onTouchStart={(e) => { logger.info('roadmapV2', 'touchstart card', { id: g.id }); onDragStart(e, g, 'move'); }}
                                 onDragStart={(e) => e.preventDefault()}
-                                onClick={() => onItemClick(g)}
+                                // Card click intentionally does nothing to avoid hijacking drag interactions
+                                onClick={() => logger.debug && logger.debug('roadmapV2', 'card-click-ignored', { id: g.id })}
                                 onKeyDown={(e) => {
                                   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                                     e.preventDefault();
@@ -380,7 +383,7 @@ const RoadmapV2: React.FC<Props> = ({
                                   <div className="rv2-progress-text">{progress}%</div>
                                 </div>
                                 <div className="rv2-actions">
-                                  <button className="rv2-icon-btn muted" title="Activity stream" onClick={(e) => { e.stopPropagation(); setActivityGoalId(g.id); }}><Activity size={14} /></button>
+                                  <button className="rv2-icon-btn muted" title="Activity" onClick={(e) => { e.stopPropagation(); const full = goalById[g.id]; if (full) openGlobalActivity(full); }}><Activity size={14} /></button>
                                   <button className="rv2-icon-btn brand" title="Auto-generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g); }}><Wand2 size={14} /></button>
                                   <button className="rv2-icon-btn brand" title="Edit goal" onClick={(e) => { e.stopPropagation(); setEditGoal(goalById[g.id] || null); }}><Pencil size={14} /></button>
                                   <button className="rv2-icon-btn danger" title="Delete goal" onClick={(e) => { e.stopPropagation(); onDeleteGoal(g.id); }}><Trash2 size={14} /></button>

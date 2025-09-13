@@ -14,6 +14,7 @@
   z-index: 20;
   background: var(--card);
 }
+.rv2-toolbar .dropdown-menu { z-index: 19; }
 .rv2-toolbar-left { font-weight: 600; }
 .rv2-toolbar-right > * + * { margin-left: 8px; }
 
@@ -141,6 +142,7 @@
 .rv2-card {
   position: absolute;
   height: 60px;
+  z-index: 5;
   border-radius: 10px;
   background: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.65)), var(--card);
   box-shadow: 0 6px 12px rgba(0,0,0,0.12);

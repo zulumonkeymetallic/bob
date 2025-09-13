@@ -43,6 +43,7 @@ import { useRoadmapStore, useTimelineScale } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
 import RoadmapV2 from './RoadmapV2';
+import { useSidebar } from '../../contexts/SidebarContext';
 
 interface GanttItem {
   id: string;
@@ -82,6 +83,7 @@ const EnhancedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const { theme } = useTheme();
+  const { showSidebar } = useSidebar();
   
   // View mode toggle (timeline vs roadmap)
   const [viewMode, setViewMode] = useState<'timeline' | 'roadmap'>('timeline');
@@ -1161,6 +1163,7 @@ const EnhancedGanttChart: React.FC = () => {
           setNoteDraft={setNoteDraft}
           setEditGoal={setEditGoal}
           onDeleteGoal={handleDeleteGoal}
+          openGlobalActivity={(goal) => showSidebar(goal as any, 'goal')}
           onWheel={handleWheelZoom}
           onMouseDown={onContainerMouseDown}
           onTouchStart={onContainerTouchStart}
@@ -1197,7 +1200,8 @@ const EnhancedGanttChart: React.FC = () => {
 
         {/* Activity Stream Sidebar */}
         {showActivityStream && (
-          <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 shadow-lg border-start" style={{ width: '400px', zIndex: 1000, backgroundColor: 'var(--panel)', borderLeft: '1px solid var(--line)' }}>
+          <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 shadow-lg border-start" style={{ width: '400px', zIndex: 2000, backgroundColor: 'var(--panel)', borderLeft: '1px solid var(--line)' }}>
+          {/* Increase z-index to stay above dropdowns */}
             <div className="p-3 border-bottom d-flex justify-content-between align-items-center">
               <h5 className="mb-0 d-flex align-items-center">
                 <Activity className="me-2" size={20} />
