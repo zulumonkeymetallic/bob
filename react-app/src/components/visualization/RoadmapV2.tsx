@@ -6,7 +6,7 @@ import { Goal, Sprint, Story } from '../../types';
 import { useRoadmapStore, useTimelineScale, ZoomLevel } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import './RoadmapV2.css';
-import { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
+import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
 import { FixedSizeList as List, ListChildComponentProps } from 'react-window';
 import SprintSelector from '../SprintSelector';
 import logger from '../../utils/logger';
@@ -48,9 +48,8 @@ type Props = {
   onSprintChange?: (id: string) => void;
 };
 
-// Lane theme order based on legacy -> settings mapping
-const LANE_THEME_IDS = [1, 9, 3, 5, 8] as const; // Health, Growth(Spiritual), Wealth, Tribe(Family), Home
-const LANE_THEMES = LANE_THEME_IDS.map(id => ({ id, name: getThemeById(id).label, color: getThemeById(id).color }));
+// Lanes come from Global Theme Settings (dynamic, no hard-coding)
+const LANE_THEMES = GLOBAL_THEMES.map(t => ({ id: t.id, name: t.name || t.label, color: t.color }));
 
 const RoadmapV2: React.FC<Props> = ({
   goals,
