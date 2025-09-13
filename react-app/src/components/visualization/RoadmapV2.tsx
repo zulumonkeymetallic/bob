@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card } from 'react-bootstrap';
-import { ChevronLeft, ChevronRight, Wand2, Pencil, Activity, Trash2, BookOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Wand2, Pencil, Activity, Trash2, BookOpen, ZoomIn, ZoomOut } from 'lucide-react';
 import useMeasure from 'react-use-measure';
 import { Goal, Sprint, Story } from '../../types';
 import { useRoadmapStore, useTimelineScale, ZoomLevel } from '../../stores/roadmapStore';
@@ -81,6 +81,7 @@ const RoadmapV2: React.FC<Props> = ({
   const [filterActiveSprint, setFilterActiveSprint] = useState(false);
   const [filterHasStories, setFilterHasStories] = useState(false);
   const [filterOverlapSprint, setFilterOverlapSprint] = useState(false);
+  const [goToInput, setGoToInput] = useState<string>('');
 
   // Keep store width synced to container
   useEffect(() => {
@@ -213,17 +214,28 @@ const RoadmapV2: React.FC<Props> = ({
   // Month header fragments
   const monthBlocks = useMemo(() => {
     const blocks: Array<{ key: string; left: number; width: number; label: string }> = [];
-    // Choose months vs quarters based on span
+    // Prefer explicit zoom for band selection; fallback to span
     const monthsSpan = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
-    const useQuarters = monthsSpan > 18; // switch to quarters when zoomed far out
-    if (useQuarters) {
+    const mode: ZoomLevel = zoom;
+    if (mode === 'year' || monthsSpan > 60) {
+      // Years band
+      const cur = new Date(start.getFullYear(), 0, 1);
+      while (cur <= end) {
+        const next = new Date(cur.getFullYear() + 1, 0, 1);
+        const left = scale(cur);
+        const w = scale(next) - scale(cur);
+        blocks.push({ key: `Y-${cur.getFullYear()}`, left, width: w, label: `${cur.getFullYear()}` });
+        cur.setFullYear(cur.getFullYear() + 1);
+      }
+    } else if (mode === 'quarter' || monthsSpan > 18) {
       const cur = new Date(start.getFullYear(), Math.floor(start.getMonth() / 3) * 3, 1);
       while (cur <= end) {
         const q = Math.floor(cur.getMonth() / 3) + 1;
         const next = new Date(cur.getFullYear(), cur.getMonth() + 3, 1);
         const left = scale(cur);
         const w = scale(next) - scale(cur);
-        blocks.push({ key: `Q${q}-${cur.getFullYear()}`, left, width: w, label: `Q${q} ${cur.getFullYear()}` });
+        const lbl = `Q${q} ${cur.getFullYear()}`;
+        blocks.push({ key: `Q${q}-${cur.getFullYear()}`, left, width: w, label: lbl });
         cur.setMonth(cur.getMonth() + 3);
       }
     } else {
@@ -233,12 +245,38 @@ const RoadmapV2: React.FC<Props> = ({
         const left = scale(cur);
         const w = scale(next) - scale(cur);
         const showYear = cur.getMonth() === 0 || monthsSpan > 12;
-        blocks.push({ key: `${cur.getFullYear()}-${cur.getMonth()}`, left, width: w, label: cur.toLocaleDateString('en-US', { month: monthsSpan > 12 ? 'short' : 'long' }) + (showYear ? ` ${cur.getFullYear()}` : '') });
+        // Adaptive label by pixel width
+        let label = '';
+        if (w >= 90) label = cur.toLocaleDateString('en-US', { month: 'long' });
+        else if (w >= 50) label = cur.toLocaleDateString('en-US', { month: 'short' });
+        else if (w >= 30) label = cur.toLocaleDateString('en-US', { month: 'short' });
+        else label = '';
+        if (showYear && w >= 60) label = `${label} ${cur.getFullYear()}`;
+        blocks.push({ key: `${cur.getFullYear()}-${cur.getMonth()}`, left, width: w, label });
         cur.setMonth(cur.getMonth() + 1);
       }
     }
     return blocks;
   }, [start, end, width, zoom, scale]);
+
+  // Zoom helpers
+  const zoomByFactor = (factor: number) => {
+    const mid = new Date((start.getTime() + end.getTime()) / 2);
+    const span = end.getTime() - start.getTime();
+    const newSpan = Math.max(7 * 24 * 60 * 60 * 1000, span * factor);
+    const ns = new Date(mid.getTime() - newSpan / 2);
+    const ne = new Date(mid.getTime() + newSpan / 2);
+    setRange(ns, ne);
+  };
+  const goToDate = (d: Date) => {
+    // Recentre current zoom window on date d
+    setZoom(zoom, d);
+    const el = containerRef.current;
+    if (el) {
+      const left = 250 + scale(d) - el.clientWidth * 0.3;
+      el.scrollLeft = Math.max(0, left);
+    }
+  };
 
   return (
     <div className="rv2-container">
@@ -246,10 +284,10 @@ const RoadmapV2: React.FC<Props> = ({
           <div className="rv2-toolbar">
             <div className="rv2-toolbar-left">Roadmap Timeline</div>
             <div className="rv2-toolbar-right">
-          {onSwitchToRoadmap && (
-            <Button size="sm" variant="outline-secondary" title="Switch to Roadmap" onClick={onSwitchToRoadmap}>Roadmap</Button>
-          )}
+          {/* Roadmap switch button removed per feedback */}
           <Button size="sm" variant="outline-secondary" title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'} onClick={toggleFullscreen}>{isFullscreen ? 'Exit Full Screen' : 'Full Screen'}</Button>
+          <Button size="sm" variant="outline-secondary" title="Zoom in" onClick={() => zoomByFactor(0.75)}><ZoomIn size={14} /></Button>
+          <Button size="sm" variant="outline-secondary" title="Zoom out" onClick={() => zoomByFactor(1.25)}><ZoomOut size={14} /></Button>
           <Button size="sm" variant="outline-secondary" title="Fit all goals" onClick={() => {
             const all = filteredItems;
             if (all.length === 0) return;
@@ -262,9 +300,26 @@ const RoadmapV2: React.FC<Props> = ({
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('week')}>Weeks</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('month')}>Months</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('quarter')}>Quarters</Button>
+          <Button size="sm" variant="outline-secondary" onClick={() => setZoom('year')}>Years</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setRange(new Date(today.getFullYear(), today.getMonth(), today.getDate()-42), new Date(today.getFullYear(), today.getMonth(), today.getDate()+42))}>Today</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => jumpBy(-14)}><ChevronLeft size={14} /></Button>
           <Button size="sm" variant="outline-secondary" onClick={() => jumpBy(14)}><ChevronRight size={14} /></Button>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
+            Go to:
+            <input
+              type="date"
+              value={goToInput}
+              onChange={(e) => {
+                const v = e.target.value;
+                setGoToInput(v);
+                if (v) {
+                  const d = new Date(v + 'T12:00:00');
+                  if (!isNaN(d.getTime())) goToDate(d);
+                }
+              }}
+              style={{ fontSize: 12, padding: '2px 4px' }}
+            />
+          </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
             <input type="checkbox" checked={filterHasStories} onChange={(e) => setFilterHasStories(e.target.checked)} /> Has stories
           </label>
@@ -278,7 +333,8 @@ const RoadmapV2: React.FC<Props> = ({
       </div>
 
       {/* Header + Grid + Lanes */}
-      <div ref={containerRef} className="rv2-scroll" onWheel={onWheel} onMouseDown={onMouseDown} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+      {/* Wheel zoom disabled; rely on buttons. Preserve native scrolling. */}
+      <div ref={containerRef} className="rv2-scroll" onMouseDown={onMouseDown} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
         <div ref={measureRef} className="rv2-canvas" style={{ minWidth: Math.max(1200, width) }}>
           {/* Sticky header */}
           <div className="rv2-header">
@@ -301,7 +357,7 @@ const RoadmapV2: React.FC<Props> = ({
                 <RoadmapAxis height={36} />
                 <div className="rv2-today-chip" style={{ left: leftToday }}>Today</div>
               </div>
-              {/* Today marker */}
+              {/* Today marker (header layer) */}
               <div className="rv2-today-line" style={{ left: leftToday }} />
               {/* Monthly gridlines stronger */}
               {monthBlocks.map(m => (
@@ -333,6 +389,8 @@ const RoadmapV2: React.FC<Props> = ({
             </div>
             {/* Right timeline area */}
             <div className="rv2-lane-right">
+              {/* Full-height Today marker across all lanes */}
+              <div className="rv2-today-line" style={{ left: leftToday }} />
               {LANE_THEMES.map((t, idx) => {
                 const items = itemsByTheme[t.id] || [];
                 const collapsed = laneCollapse[t.id];
@@ -371,6 +429,8 @@ const RoadmapV2: React.FC<Props> = ({
                           const left = scale(g.startDate);
                           const right = scale(g.endDate);
                           const widthPx = Math.max(140, right - left);
+                          const isCompact = widthPx < 220;
+                          const isUltra = widthPx < 160;
                           const themeColor = getThemeById(migrateThemeValue(g.theme)).color;
                           const bg1 = hexToRgba(themeColor, 0.12);
                           const bg2 = hexToRgba(themeColor, 0.04);
@@ -381,11 +441,12 @@ const RoadmapV2: React.FC<Props> = ({
                           return (
                             <div style={style} key={g.id}>
                               <div
-                                className="rv2-card"
+                                className={`rv2-card ${isCompact ? 'compact' : ''} ${isUltra ? 'ultra' : ''}`}
                                 data-goal-id={g.id}
                                 style={{ left, width: widthPx, borderColor: themeColor, borderWidth: 2, background: `linear-gradient(180deg, ${bg1}, ${bg2}), var(--card)` }}
                                 tabIndex={0}
                                 title={`${g.title}: ${subtitle}`}
+                                draggable={false}
                                 onMouseDown={(e) => { logger.info('roadmapV2', 'mousedown card', { id: g.id, x: (e as any).clientX }); onDragStart(e, g, 'move'); }}
                                 onTouchStart={(e) => { logger.info('roadmapV2', 'touchstart card', { id: g.id }); onDragStart(e, g, 'move'); }}
                                 onDragStart={(e) => e.preventDefault()}
@@ -404,12 +465,18 @@ const RoadmapV2: React.FC<Props> = ({
                                   }
                                 }}
                               >
-                                <div className="rv2-card-title">{g.title}</div>
-                                <div className="rv2-card-subtitle">{subtitle}</div>
+                                <div className="rv2-card-title" style={{ whiteSpace: isUltra ? 'nowrap' : 'normal' }}>{g.title}</div>
+                                {!isCompact && <div className="rv2-card-subtitle">{subtitle}</div>}
                                 <div className="rv2-progress">
                                   <div className="rv2-progress-bar" style={{ width: `${progress}%` }} />
                                   <div className="rv2-progress-text">{progress}%</div>
                                 </div>
+                                {total === 0 && (
+                                  <div className="rv2-empty-hint">
+                                    Recommend auto-create using wand
+                                  </div>
+                                )}
+                                {!isCompact && (
                                 <div className="rv2-actions">
                                   <button className="rv2-icon-btn muted" title="Activity" onClick={(e) => { e.stopPropagation(); const full = goalById[g.id]; if (full) openGlobalActivity(full); }}><Activity size={14} /></button>
                                   <button className="rv2-icon-btn brand" title="Auto-generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g); }}><Wand2 size={14} /></button>
@@ -417,6 +484,7 @@ const RoadmapV2: React.FC<Props> = ({
                                   <button className="rv2-icon-btn danger" title="Delete goal" onClick={(e) => { e.stopPropagation(); onDeleteGoal(g.id); }}><Trash2 size={14} /></button>
                                   <button className="rv2-icon-btn" title="Stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(g.id); }}><BookOpen size={14} /></button>
                                 </div>
+                                )}
                                 <div className="rv2-resize-handle start" onMouseDown={(e) => { e.stopPropagation(); onDragStart(e, g, 'resize-start'); }} onTouchStart={(e) => { e.stopPropagation(); onDragStart(e, g, 'resize-start'); }} />
                                 <div className="rv2-resize-handle end" onMouseDown={(e) => { e.stopPropagation(); onDragStart(e, g, 'resize-end'); }} onTouchStart={(e) => { e.stopPropagation(); onDragStart(e, g, 'resize-end'); }} />
                               </div>

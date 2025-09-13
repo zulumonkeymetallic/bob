@@ -592,6 +592,8 @@ const EnhancedGanttChart: React.FC = () => {
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     logger.debug('gantt', 'Drag start', { id: item.id, dragType, clientX, start: item.startDate, end: item.endDate });
     logger.perfMark('gantt-drag-start');
+    // Indicate global drag state for CSS (user-select, cursor)
+    try { document.body.classList.add('rv2-dragging'); (document.body as any).dataset.rv2Dragging = '1'; } catch {}
     // Snapshot theme group positions for vertical drop detection
     const groups = Array.from(document.querySelectorAll('[data-theme-group]')) as HTMLElement[];
     groupPositionsRef.current = groups.map((el) => {
@@ -797,6 +799,7 @@ const EnhancedGanttChart: React.FC = () => {
     document.removeEventListener('mouseup', handleDragEnd);
     document.removeEventListener('touchmove', handleDragMove);
     document.removeEventListener('touchend', handleDragEnd);
+    try { document.body.classList.remove('rv2-dragging'); delete (document.body as any).dataset.rv2Dragging; } catch {}
   }, [dragState, goals, zoomLevel]);
 
   // Trigger AI story generation for a goal via Cloud Function
@@ -1159,6 +1162,7 @@ const EnhancedGanttChart: React.FC = () => {
   const USE_ROADMAP_V2 = true;
 
   if (USE_ROADMAP_V2) {
+    const noopWheel: React.WheelEventHandler<HTMLDivElement> = () => {};
     return (
       <>
         <RoadmapV2
@@ -1178,7 +1182,7 @@ const EnhancedGanttChart: React.FC = () => {
           setEditGoal={setEditGoal}
           onDeleteGoal={handleDeleteGoal}
           openGlobalActivity={(goal) => showSidebar(goal as any, 'goal')}
-          onWheel={handleWheelZoom}
+          onWheel={noopWheel}
           onMouseDown={onContainerMouseDown}
           onTouchStart={onContainerTouchStart}
           onTouchMove={onContainerTouchMove}
