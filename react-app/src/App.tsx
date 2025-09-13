@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from 'react-bootstrap';
-import { Routes, Route, BrowserRouter as Router, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, BrowserRouter as Router, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import TaskListView from './components/TaskListView';
 import GoalsManagement from './components/GoalsManagement';
@@ -84,6 +84,7 @@ function AppContent() {
   const { theme, toggleTheme } = useTheme();
   const { currentUser, signInWithGoogle, signOut } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const deviceInfo = useDeviceInfo();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -109,6 +110,18 @@ function AppContent() {
     logger.debug('nav', 'Location change', { path: location.pathname, key: location.key });
     setForceRender(prev => prev + 1);
   }, [location.pathname, location.key]);
+
+  // Auto-route to mobile checklist on mobile devices when landing on dashboard/home
+  useEffect(() => {
+    if (!currentUser) return;
+    const isMobile = deviceInfo?.isMobile;
+    const path = location.pathname;
+    const onHome = path === '/' || path === '/dashboard';
+    const alreadyMobile = path.startsWith('/mobile');
+    if (isMobile && onHome && !alreadyMobile) {
+      navigate('/mobile-checklist', { replace: true });
+    }
+  }, [currentUser, deviceInfo?.isMobile, location.pathname]);
 
   // Check for updates on app load and initialize version timeout service
   useEffect(() => {

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Card, Row, Col, ProgressBar, Badge, Button, Alert } from 'react-bootstrap';
+import { Container, Card, Row, Col, ProgressBar, Badge, Button, Alert, Table } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
@@ -12,6 +12,9 @@ import SprintKanbanPage from './SprintKanbanPage';
 import DashboardTasksModernWrapper from './DashboardTasksModernWrapper';
 import SprintSelector from './SprintSelector';
 import { useSprint } from '../contexts/SprintContext';
+import ChecklistPanel from './ChecklistPanel';
+import { functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 
 interface DashboardStats {
   activeGoals: number;
@@ -47,6 +50,8 @@ const Dashboard: React.FC = () => {
   // Use global sprint selection for consistency across app
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
+  const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
 
   useEffect(() => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
@@ -149,10 +154,70 @@ const Dashboard: React.FC = () => {
     setLastUpdated(new Date());
     setLoading(false);
 
+    // After basic data, load LLM priority and today's schedule in parallel
+    try {
+      const [p1, p2] = await Promise.all([
+        loadLLMPriority(),
+        loadTodayBlocks()
+      ]);
+    } catch {}
+
     return () => {
       unsubscribeStories();
       unsubscribeTasks();
     };
+  };
+
+  const loadLLMPriority = async () => {
+    if (!currentUser) return;
+    try {
+      // Use a small snapshot of tasks as candidates
+      const tq = query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid),
+        orderBy('createdAt', 'desc'),
+        limit(30)
+      );
+      const snap = await getDocs(tq);
+      const tasks: any[] = [];
+      snap.forEach(d => {
+        const t = d.data();
+        tasks.push({ id: d.id, title: t.title, dueDate: t.dueDate || null, priority: t.priority, effort: t.effort, status: t.status });
+      });
+
+      const call = httpsCallable(functions, 'prioritizeBacklog');
+      const res: any = await call({ tasks });
+      const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+      const todayItem = items.find((x: any) => (x.bucket || '').toUpperCase() === 'TODAY');
+      const best = todayItem || items.sort((a: any, b: any) => (b.score||0) - (a.score||0))[0];
+      if (best) {
+        const ref = tasks.find(t => t.id === best.id);
+        if (ref) setPriorityBanner({ title: ref.title, score: best.score || 0, bucket: best.bucket || null });
+      }
+    } catch (e) {
+      // Fallback: top priority from current upcomingTasks state
+      if (upcomingTasks && upcomingTasks.length > 0) {
+        const top = upcomingTasks[0];
+        setPriorityBanner({ title: top.title, score: 0 });
+      }
+    }
+  };
+
+  const loadTodayBlocks = async () => {
+    if (!currentUser) return;
+    const start = new Date(); start.setHours(0,0,0,0);
+    const end = new Date(); end.setHours(23,59,59,999);
+    const q = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('start', '>=', start.getTime()),
+      where('start', '<=', end.getTime())
+    );
+    const snap = await getDocs(q);
+    const blocks: any[] = [];
+    snap.forEach(d => blocks.push({ id: d.id, ...(d.data() || {}) }));
+    blocks.sort((a,b) => a.start - b.start);
+    setTodayBlocks(blocks);
   };
 
   const getStatusColor = (status: string): string => {
@@ -207,6 +272,13 @@ const Dashboard: React.FC = () => {
             Currently viewing <Badge bg="primary">{currentPersona}</Badge> persona data.
           </Alert>
           
+          {/* Priority Banner + Key Stats */}
+          {priorityBanner && (
+            <Alert variant="primary" className="mb-3">
+              <strong>Priority for Today:</strong> {priorityBanner.title}
+              {priorityBanner.score ? <span className="ms-2 badge bg-light text-dark">Score {Math.round(priorityBanner.score)}</span> : null}
+            </Alert>
+          )}
           {/* Quick Stats Row */}
           <Row className="mb-4">
             <Col md={3}>
@@ -250,6 +322,48 @@ const Dashboard: React.FC = () => {
           </Row>
 
           {/* Sprint Kanban moved to its own page (/sprints/kanban) */}
+
+          {/* Today Checklist + Today Schedule */}
+          <Row className="mb-4">
+            <Col md={6}>
+              <Card className="h-100">
+                <Card.Body>
+                  <ChecklistPanel title="Today's Checklist" compact />
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col md={6}>
+              <Card className="h-100">
+                <Card.Header>
+                  <h5 className="mb-0">Today's Schedule</h5>
+                </Card.Header>
+                <Card.Body>
+                  {todayBlocks.length === 0 ? (
+                    <div className="text-muted">No blocks for today</div>
+                  ) : (
+                    <Table size="sm" className="mb-0">
+                      <thead>
+                        <tr>
+                          <th style={{width:'30%'}}>Time</th>
+                          <th>Category</th>
+                          <th>Theme</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {todayBlocks.map(b => (
+                          <tr key={b.id}>
+                            <td>{new Date(b.start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+                            <td>{b.category || b.title || 'Block'}</td>
+                            <td><Badge bg="secondary">{b.theme}</Badge></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
 
           {/* Tasks and Quick Actions (Modern table) */}
           <Row className="mb-4">
