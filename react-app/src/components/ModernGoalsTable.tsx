@@ -20,6 +20,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useSprint } from '../contexts/SprintContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -36,7 +37,10 @@ import {
   ChevronRight,
   ChevronDown,
   Plus,
-  Activity
+  Activity,
+  Wand2,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
@@ -153,6 +157,8 @@ interface SortableRowProps {
   onStoryAdd: (goalId: string) => (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
   globalThemes: GlobalTheme[];
   availableGoals: Goal[];
+  storyCounts: Record<string, number>;
+  sprintStoryCounts: Record<string, number>;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -171,7 +177,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryPriorityChange,
   onStoryAdd,
   globalThemes,
-  availableGoals
+  availableGoals,
+  storyCounts,
+  sprintStoryCounts
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
@@ -187,6 +195,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const [editValue, setEditValue] = useState<string>('');
   const { trackCRUD, trackClick, trackFieldChange } = useActivityTracking();
   const { currentUser } = useAuth();
+  const { showSidebar } = useSidebar();
   const [generating, setGenerating] = useState<boolean>(false);
 
   // Note: Removed view tracking to focus activity stream on meaningful changes only
@@ -310,10 +319,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
       return new Date(value).toLocaleDateString();
     }
     if (key === 'storiesCount') {
-      return `${value || 0} stories`;
+      return `${storyCounts[goal.id] || 0} stories`;
     }
     if (key === 'sprintStoriesCount') {
-      return `${value || 0} in sprint`;
+      return `${sprintStoryCounts[goal.id] || 0} in sprint`;
     }
     if (key === 'status') {
       return getStatusName(value);
@@ -342,13 +351,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 style={{
                   width: '100%',
                   padding: '6px 8px',
-                  border: '1px solid #3b82f6',
+                  border: `2px solid ${themeVars.brand}`,
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: backgrounds.surface,
-                  color: colors.onSurface,
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
                   outline: 'none',
-                  boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)'
+                  boxShadow: 'none'
                 }}
                 placeholder="Search themes..."
                 autoFocus
@@ -398,13 +407,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 style={{
                   width: '100%',
                   padding: '6px 8px',
-                  border: '1px solid #3b82f6',
+                  border: `2px solid ${themeVars.brand}`,
                   borderRadius: '4px',
                   fontSize: '14px',
-                  backgroundColor: backgrounds.surface,
-                  color: colors.onSurface,
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
                   outline: 'none',
-                  boxShadow: '0 0 0 2px rgba(59, 130, 246, 0.2)',
                 }}
                 autoFocus
               >
@@ -450,13 +458,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
         style={{ 
           width: column.width,
           padding: '12px 8px',
-          borderRight: '1px solid #f3f4f6',
+          borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = '#f9fafb';
+            e.currentTarget.style.backgroundColor = rgbaCard(0.08);
           }
         }}
         onMouseLeave={(e) => {
@@ -482,7 +490,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <div style={{
           minHeight: '20px',
           fontSize: '14px',
-          color: column.key === 'ref' ? '#059669' : '#374151',
+          color: column.key === 'ref' ? ('var(--green)' as string) : (themeVars.text as string),
           fontWeight: column.key === 'ref' ? '600' : 'normal',
           fontFamily: column.key === 'ref' ? 'monospace' : 'inherit',
           wordBreak: 'break-word',
@@ -524,7 +532,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       style={{
         ...style,
         backgroundColor: backgrounds.surface,
-        borderBottom: '1px solid #f3f4f6',
+        borderBottom: `1px solid ${themeVars.border}`,
         transition: 'background-color 0.15s ease',
         cursor: 'pointer',
       }}
@@ -538,7 +546,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}
       onMouseEnter={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = '#f9fafb';
+          e.currentTarget.style.backgroundColor = rgbaCard(0.08);
         }
       }}
       onMouseLeave={(e) => {
@@ -550,13 +558,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
       <td style={{
         padding: '12px 8px',
         textAlign: 'center',
-        borderRight: '1px solid #f3f4f6',
+        borderRight: `1px solid ${themeVars.border}`,
         width: '48px',
       }}>
         <button
           {...listeners}
           style={{
-            color: '#9ca3af',
+            color: themeVars.muted as string,
             padding: '4px',
             borderRadius: '4px',
             border: 'none',
@@ -565,10 +573,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
             transition: 'color 0.15s ease',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = '#6b7280';
+            e.currentTarget.style.color = themeVars.text as string;
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = '#9ca3af';
+            e.currentTarget.style.color = themeVars.muted as string;
           }}
           title="Drag to reorder"
         >
@@ -583,25 +591,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
           <button
-            onClick={() => onRowClick(goal)}
+            onClick={() => showSidebar(goal, 'goal')}
             style={{
-              color: '#6b7280',
+              color: themeVars.muted as string,
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '12px',
-              fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#f3f4f6';
-              e.currentTarget.style.color = '#374151';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+              e.currentTarget.style.color = themeVars.text as string;
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#6b7280';
+              e.currentTarget.style.color = themeVars.muted as string;
             }}
             title="Activity stream"
           >
@@ -610,7 +616,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
           <button
             onClick={() => onGoalExpand(goal.id)}
             style={{
-              color: '#059669',
+              color: 'var(--green)',
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
@@ -621,12 +627,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#d1fae5';
-              e.currentTarget.style.color = '#047857';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+              e.currentTarget.style.color = 'var(--green)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#059669';
+              e.currentTarget.style.color = 'var(--green)';
             }}
             title="View stories"
           >
@@ -635,78 +641,72 @@ const SortableRow: React.FC<SortableRowProps> = ({
           <button
             onClick={handleGenerateStories}
             style={{
-              color: '#10b981',
+              color: themeVars.brand as string,
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '12px',
-              fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#d1fae5';
-              e.currentTarget.style.color = '#047857';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+              e.currentTarget.style.color = themeVars.brand as string;
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#10b981';
+              e.currentTarget.style.color = themeVars.brand as string;
             }}
             disabled={generating}
-            title="Auto-generate stories"
+            title={generating ? 'Generating…' : 'Auto-generate stories'}
           >
-            {generating ? 'Generating…' : 'Generate'}
+            <Wand2 size={14} />
           </button>
           <button
             onClick={() => handleEditClick()}
             style={{
-              color: '#2563eb',
+              color: themeVars.brand as string,
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '12px',
-              fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#dbeafe';
-              e.currentTarget.style.color = '#1d4ed8';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+              e.currentTarget.style.color = themeVars.brand as string;
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#2563eb';
+              e.currentTarget.style.color = themeVars.brand as string;
             }}
             title="Edit goal"
           >
-            Edit
+            <Pencil size={14} />
           </button>
           <button
             onClick={() => onGoalDelete(goal.id)}
             style={{
-              color: '#dc2626',
+              color: 'var(--red)',
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '12px',
-              fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#fee2e2';
-              e.currentTarget.style.color = '#b91c1c';
+              e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+              e.currentTarget.style.color = 'var(--red)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#dc2626';
+              e.currentTarget.style.color = 'var(--red)';
             }}
             title="Delete goal"
           >
-            Delete
+            <Trash2 size={14} />
           </button>
         </div>
       </td>
@@ -716,16 +716,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
       <tr>
         <td colSpan={columns.filter(col => col.visible).length + 2} style={{ padding: 0, borderTop: 'none' }}>
           <div style={{ 
-            backgroundColor: '#f8fafc', 
+            backgroundColor: themeVars.card as string, 
             padding: '16px',
-            borderLeft: '4px solid #059669',
-            borderBottom: '1px solid #e5e7eb'
+            borderLeft: `4px solid var(--green)`,
+            borderBottom: `1px solid ${themeVars.border}`
           }}>
             <h4 style={{ 
               margin: '0 0 12px 0', 
               fontSize: '14px', 
               fontWeight: '600', 
-              color: '#374151',
+              color: themeVars.text as string,
               display: 'flex',
               alignItems: 'center',
               gap: '8px'
@@ -774,6 +774,9 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
+  const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
+  const [sprintStoryCounts, setSprintStoryCounts] = useState<Record<string, number>>({});
+  const { selectedSprintId } = useSprint();
 
   // Load user-defined global themes
   useEffect(() => {
@@ -881,6 +884,32 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     }, (err) => console.warn('ModernGoalsTable: goals load failed', err));
     return unsub;
   }, [currentUser, currentPersona]);
+
+  // Aggregate story counts per goal and per selected sprint
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const counts: Record<string, number> = {};
+      const sprintCounts: Record<string, number> = {};
+      snap.docs.forEach(d => {
+        const s = d.data() as any;
+        const gid = s.goalId;
+        if (!gid) return;
+        counts[gid] = (counts[gid] || 0) + 1;
+        if (selectedSprintId && s.sprintId === selectedSprintId) {
+          sprintCounts[gid] = (sprintCounts[gid] || 0) + 1;
+        }
+      });
+      setStoryCounts(counts);
+      setSprintStoryCounts(sprintCounts);
+    });
+    return unsub;
+  }, [currentUser, currentPersona, selectedSprintId]);
 
   const handleEditModal = (goal: Goal) => {
     trackClick({
@@ -1014,7 +1043,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
         backgroundColor: themeVars.panel as string, 
         borderRadius: '8px', 
         border: `1px solid ${themeVars.border}`, 
-        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+        boxShadow: '0 1px 3px 0 var(--glass-shadow-color)',
         overflow: 'hidden' 
       }}
     >
@@ -1155,6 +1184,8 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       goal={goal}
                       columns={columns}
                       index={index}
+                      storyCounts={storyCounts}
+                      sprintStoryCounts={sprintStoryCounts}
                       globalThemes={globalThemes}
                       availableGoals={allGoals}
                       expandedGoalId={expandedGoalId}
@@ -1183,10 +1214,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
           right: 0,
           height: '100%',
           width: '320px',
-          backgroundColor: 'white',
-          borderLeft: '1px solid #e5e7eb',
+          backgroundColor: themeVars.card as string,
+          borderLeft: `1px solid ${themeVars.border}`,
           transition: 'transform 0.3s ease',
-          boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
+          boxShadow: '-4px 0 16px 0 var(--glass-shadow-color)',
           transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
         }}>
           <div style={{ 
@@ -1208,7 +1239,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: themeVars.text as string,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -1216,7 +1247,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.backgroundColor = rgbaCard(0.08);
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -1244,7 +1275,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                         cursor: 'pointer',
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = '#f9fafb';
+                        e.currentTarget.style.backgroundColor = rgbaCard(0.08);
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.backgroundColor = 'transparent';
@@ -1257,26 +1288,26 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                             height: '20px',
                             borderRadius: '4px',
                             border: '2px solid',
-                            borderColor: column.visible ? '#2563eb' : '#d1d5db',
-                            backgroundColor: column.visible ? '#2563eb' : 'transparent',
+                            borderColor: column.visible ? (themeVars.brand as string) : (themeVars.border as string),
+                            backgroundColor: column.visible ? (themeVars.brand as string) : 'transparent',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
                             transition: 'all 0.15s ease',
                           }}>
                             {column.visible && (
-                              <svg width="12" height="12" viewBox="0 0 12 12" fill="white">
+                              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                                 <path d="M10 3L4.5 8.5L2 6" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
                               </svg>
                             )}
                           </div>
-                          <span style={{ fontSize: '14px', color: '#111827' }}>{column.label}</span>
+                          <span style={{ fontSize: '14px', color: themeVars.text as string }}>{column.label}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {column.visible ? (
-                            <Eye size={14} style={{ color: '#9ca3af' }} />
+                            <Eye size={14} style={{ color: themeVars.muted as string }} />
                           ) : (
-                            <EyeOff size={14} style={{ color: '#9ca3af' }} />
+                            <EyeOff size={14} style={{ color: themeVars.muted as string }} />
                           )}
                         </div>
                       </div>
@@ -1298,7 +1329,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     textAlign: 'left',
                     fontSize: '14px',
                     fontWeight: '500',
-                    color: '#111827',
+                    color: themeVars.text as string,
                     backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
@@ -1306,7 +1337,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.backgroundColor = rgbaCard(0.08);
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';

@@ -13,6 +13,11 @@ service cloud.firestore {
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Per-user global themes document (settings page)
+    match /global_themes/{uid} {
+      // Allow a user to read/write only their own theme settings doc
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
     
     // Core v3.0.8 collections with enhanced logging
     match /sprints/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

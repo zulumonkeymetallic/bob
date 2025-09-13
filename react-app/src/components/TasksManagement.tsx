@@ -27,6 +27,7 @@ const TasksManagement: React.FC = () => {
   const [filterStory, setFilterStory] = useState<string>('all');
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [filterSprint, setFilterSprint] = useState<string>('all');
+  const [initializedSprintDefault, setInitializedSprintDefault] = useState<boolean>(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -95,6 +96,14 @@ const TasksManagement: React.FC = () => {
           ...doc.data()
         })) as Sprint[];
         setSprints(sprintsData);
+        // Default filter to active sprint once loaded
+        if (!initializedSprintDefault) {
+          const active = sprintsData.find(s => s.status === 1);
+          if (active) {
+            setFilterSprint(active.id);
+            setInitializedSprintDefault(true);
+          }
+        }
       });
 
       setLoading(false);
