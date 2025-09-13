@@ -220,6 +220,8 @@
 .rv2-resize-handle { position: absolute; top: 0; bottom: 0; width: 8px; background: rgba(0,0,0,0.08); }
 .rv2-resize-handle.start { left: 0; border-radius: 10px 0 0 10px; cursor: ew-resize; }
 .rv2-resize-handle.end { right: 0; border-radius: 0 10px 10px 0; cursor: ew-resize; }
+/* Ensure touch resize is not hijacked by scrolling */
+.rv2-resize-handle { touch-action: none; }
 
 /* Global drag state helper */
 body.rv2-dragging, body[data-rv2-dragging="1"] {
