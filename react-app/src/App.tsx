@@ -52,6 +52,7 @@ import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
+import MobileChecklistView from './components/MobileChecklistView';
 import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
@@ -198,6 +199,7 @@ function AppContent() {
             <Route path="/tasks-management" element={<TasksManagement />} />
             <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
             <Route path="/mobile-view" element={<MobileView />} />
+            <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />

@@ -1,6 +1,8 @@
-name: Deploy Preview to Firebase Hosting (disabled)
+name: Deploy Preview to Firebase Hosting
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 jobs:
