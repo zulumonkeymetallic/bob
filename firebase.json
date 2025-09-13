@@ -3,6 +3,7 @@
     "source": "functions"
   },
   "hosting": {
+    "site": "bob20250810",
     "public": "react-app/build",
     "ignore": [
       "firebase.json",
