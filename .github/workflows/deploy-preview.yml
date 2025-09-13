@@ -36,7 +36,7 @@ jobs:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           projectId: bob20250810
-          channelId: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || format('branch-{0}', github.ref_name) }}
+          channelId: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || format('run-{0}', github.run_id) }}
           entryPoint: .
 
       - name: Send preview link via email (PR to dev/main)
