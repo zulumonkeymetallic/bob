@@ -26,6 +26,20 @@
         }
       },
       {
+        "source": "/reminders/push",
+        "function": {
+          "functionId": "remindersPush",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/reminders/pull",
+        "function": {
+          "functionId": "remindersPull",
+          "region": "europe-west2"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

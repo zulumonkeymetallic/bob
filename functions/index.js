@@ -26,6 +26,7 @@ const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
 const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
+const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 
 // Scheduler utils (deterministic id + day key)
 function makePlanId(userId, date) {
@@ -1724,6 +1725,156 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
     headers: { 'Authorization': 'Bearer ' + access }
   });
   return { ok: true };
+});
+
+// Sync plan assignments for a day to Google Calendar as child events under parent block events
+exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+  const dayKey = toDayKey(date);
+  const access = await getAccessToken(uid);
+  const db = admin.firestore();
+
+  // Load assignments for the day
+  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
+  const assignments = asSnap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+  if (assignments.length === 0) return { ok: true, created: 0, updated: 0, parentsCreated: 0 };
+
+  // Group by blockId
+  const byBlock = new Map();
+  for (const a of assignments) {
+    const key = a.blockId || 'none';
+    if (!byBlock.has(key)) byBlock.set(key, []);
+    byBlock.get(key).push(a);
+  }
+
+  let parentsCreated = 0, created = 0, updated = 0;
+  for (const [blockId, list] of byBlock.entries()) {
+    let parentEventId = null;
+    let blockDoc = null;
+    if (blockId && blockId !== 'none') {
+      const bSnap = await db.collection('calendar_blocks').doc(blockId).get();
+      if (bSnap.exists) {
+        blockDoc = { id: bSnap.id, ...(bSnap.data()||{}) };
+        parentEventId = blockDoc.googleEventId || null;
+      }
+      // Create parent block event if missing
+      if (!parentEventId && blockDoc) {
+        const body = {
+          summary: blockDoc.title || `${blockDoc.theme || 'Block'}: ${blockDoc.category || ''}`.trim(),
+          description: blockDoc.rationale || 'BOB block',
+          start: { dateTime: new Date(blockDoc.start).toISOString() },
+          end: { dateTime: new Date(blockDoc.end).toISOString() },
+          extendedProperties: { private: { bobBlockId: blockId } }
+        };
+        const parent = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(body)
+        });
+        parentEventId = parent.id;
+        parentsCreated++;
+        await db.collection('calendar_blocks').doc(blockId).set({ googleEventId: parentEventId, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
+    }
+
+    for (const a of list) {
+      if (!a.start || !a.end) continue; // skip deferred/unscheduled
+      const ext = a.external || {};
+      const eid = ext.googleEventId || null;
+      const evBody = {
+        summary: a.title || 'Assignment',
+        start: { dateTime: new Date(a.start).toISOString() },
+        end: { dateTime: new Date(a.end).toISOString() },
+        description: 'BOB assignment',
+        extendedProperties: { private: { bobAssignmentId: a.id, bobBlockId: blockId || '' } }
+      };
+      if (eid) {
+        try {
+          await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+          });
+          updated++;
+        } catch {
+          // If patch fails (deleted externally), recreate
+          const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+            method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+          });
+          created++;
+          await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external||{}), googleEventId: createdEv.id } }, { merge: true });
+        }
+      } else {
+        const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+        });
+        created++;
+        await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external||{}), googleEventId: createdEv.id } }, { merge: true });
+      }
+    }
+  }
+  return { ok: true, parentsCreated, created, updated };
+});
+
+// iOS Reminders bridge (public HTTPS): Shortcuts can call these endpoints
+exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).send('Method not allowed');
+    const uid = String(req.query.uid || req.body?.uid || '');
+    const secret = process.env.REMINDERS_WEBHOOK_SECRET;
+    const provided = String(req.headers['x-reminders-secret'] || req.query.secret || req.body?.secret || '');
+    if (!uid) return res.status(400).json({ error: 'uid required' });
+    if (secret && provided !== secret) return res.status(403).json({ error: 'forbidden' });
+    const db = admin.firestore();
+    // Return tasks that need pushing: no reminderId and due today or overdue
+    const now = Date.now();
+    const start = new Date(); start.setHours(0,0,0,0);
+    const tasksSnap = await db.collection('tasks').where('ownerUid','==',uid).get();
+    const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+    const toPush = tasks.filter(t => !t.reminderId && t.status !== 2 && ((t.dueDate||0) <= (start.getTime()+24*3600*1000)));
+    const payload = toPush.map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate || null }));
+    return res.json({ ok: true, tasks: payload });
+  } catch (e) {
+    console.error('remindersPush error', e);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method !== 'POST') return res.status(405).send('Method not allowed');
+    const uid = String(req.query.uid || req.body?.uid || '');
+    const secret = process.env.REMINDERS_WEBHOOK_SECRET;
+    const provided = String(req.headers['x-reminders-secret'] || req.query.secret || req.body?.secret || '');
+    if (!uid) return res.status(400).json({ error: 'uid required' });
+    if (secret && provided !== secret) return res.status(403).json({ error: 'forbidden' });
+    const updates = Array.isArray(req.body?.tasks) ? req.body.tasks : [];
+    const db = admin.firestore();
+    let updated = 0;
+    for (const u of updates) {
+      const id = String(u.id || '');
+      const reminderId = u.reminderId ? String(u.reminderId) : null;
+      const completed = !!u.completed;
+      if (!id && !reminderId) continue;
+      let ref = null;
+      if (id) ref = db.collection('tasks').doc(id);
+      else {
+        const snap = await db.collection('tasks').where('ownerUid','==',uid).where('reminderId','==',reminderId).limit(1).get();
+        if (!snap.empty) ref = snap.docs[0].ref;
+      }
+      if (ref) {
+        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+        if (reminderId) data['reminderId'] = reminderId;
+        if (completed) data['status'] = 2;
+        await ref.set(data, { merge: true });
+        updated++;
+      }
+    }
+    return res.json({ ok: true, updated });
+  } catch (e) {
+    console.error('remindersPull error', e);
+    return res.status(500).json({ error: 'server_error' });
+  }
 });
 
 exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{storyId}", async (event) => {
