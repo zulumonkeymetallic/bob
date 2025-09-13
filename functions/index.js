@@ -47,6 +47,156 @@ function makeAssignmentId({ planId, itemType, itemId }) {
   return h.toString(36);
 }
 
+// ===== Deterministic Scheduler (Issue #152 - Phase 1)
+exports.buildPlan = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const day = req?.data?.day || new Date().toISOString().slice(0,10); // YYYY-MM-DD
+  const useLLM = !!req?.data?.useLLM;
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+
+  const db = admin.firestore();
+  const dayKey = toDayKey(date);
+  const planId = makePlanId(uid, date);
+
+  // Load blocks for the day (calendar_blocks)
+  const start = new Date(date); start.setHours(0,0,0,0);
+  const end = new Date(date); end.setHours(23,59,59,999);
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', start.getTime())
+    .where('start', '<=', end.getTime())
+    .get();
+  const blocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .sort((a,b) => a.start - b.start);
+
+  // Load candidate tasks (status not done)
+  const tasksSnap = await db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .get();
+  const tasks = tasksSnap.docs
+    .map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .filter(t => t && t.status !== 2 && t.status !== 'done');
+
+  // Score deterministically
+  function scoreTask(t) {
+    let s = 0;
+    // Due date proximity
+    if (t.dueDate) {
+      const dd = Number(t.dueDate);
+      if (dd) {
+        const days = Math.ceil((dd - Date.now()) / (24*60*60*1000));
+        if (days <= 0) s += 60; else if (days === 1) s += 45; else if (days <= 7) s += 25;
+      }
+    }
+    // Priority
+    if (t.priority === 1 || t.priority === 'high' || t.priority === 'P1') s += 25;
+    else if (t.priority === 2 || t.priority === 'medium' || t.priority === 'P2') s += 15;
+    else s += 5;
+    // Effort inverse (favor small)
+    if (t.effort === 'S') s += 15; else if (t.effort === 'M') s += 8; else s += 2;
+    // Goal alignment bonus
+    if (t.hasGoal || t.goalId) s += 10;
+    return s;
+  }
+
+  let ranked = tasks.map(t => ({ ...t, _score: scoreTask(t) }))
+    .sort((a,b) => b._score - a._score);
+
+  // Optional: soft LLM re-rank within a 20% band – omitted in Phase 1 to keep deterministic behavior
+
+  // Pack into blocks greedily
+  const items = ranked.map(t => ({
+    type: 'task',
+    id: t.id,
+    title: t.title || 'Task',
+    minutes: Number(t.estimateMin) || (t.effort === 'S' ? 20 : t.effort === 'M' ? 45 : 90),
+  }));
+
+  const assignments = [];
+  const blockFree = new Map();
+  for (const b of blocks) {
+    const free = Math.max(0, Math.floor((Number(b.end) - Number(b.start)) / 60000));
+    blockFree.set(b.id, { free, cursor: Number(b.start) });
+  }
+
+  for (const it of items) {
+    // Find earliest block with enough remaining minutes
+    let placed = false;
+    for (const b of blocks) {
+      const state = blockFree.get(b.id);
+      if (!state) continue;
+      if (state.free >= it.minutes) {
+        const startMs = state.cursor;
+        const endMs = startMs + it.minutes * 60000;
+        assignments.push({
+          id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+          planId,
+          dayKey,
+          userId: uid,
+          ownerUid: uid,
+          itemType: it.type,
+          itemId: it.id,
+          title: it.title,
+          estimatedMinutes: it.minutes,
+          blockId: b.id,
+          start: startMs,
+          end: endMs,
+          status: 'planned',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        state.free -= it.minutes;
+        state.cursor = endMs;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      // Defer (overflow)
+      assignments.push({
+        id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+        planId,
+        dayKey,
+        userId: uid,
+        ownerUid: uid,
+        itemType: it.type,
+        itemId: it.id,
+        title: it.title,
+        estimatedMinutes: it.minutes,
+        status: 'deferred',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+  }
+
+  // Persist plan assignments idempotently
+  const batch = db.batch();
+  for (const a of assignments) {
+    const ref = db.collection('plans').doc(dayKey).collection('assignments').doc(a.id);
+    batch.set(ref, a, { merge: true });
+  }
+  await batch.commit();
+
+  // Audit trail
+  const activityRef = db.collection('activity_stream').doc();
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: planId,
+    entityType: 'plan',
+    activityType: 'scheduler_plan_built',
+    userId: uid,
+    description: `Built plan with ${assignments.length} assignments for ${dayKey}`,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  return { planId, dayKey, assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })) };
+});
+
 // ===== Utilities
 async function fetchJson(url, opts = {}) {
   const res = await fetch(url, opts);

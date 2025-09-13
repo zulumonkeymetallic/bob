@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore';
+import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { PlanAssignment } from '../types/scheduler';
 import { startOfDay, endOfDay } from 'date-fns';
+import { httpsCallable } from 'firebase/functions';
+import { nextDueAt } from '../utils/recurrence';
 
 export interface ChecklistPanelProps {
   title?: string;
@@ -15,7 +17,8 @@ interface ChecklistItem {
   title: string;
   start?: number;
   end?: number;
-  source: 'assignment' | 'task';
+  source: 'assignment' | 'task' | 'chore';
+  raw?: any;
 }
 
 const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checklist", compact }) => {
@@ -42,9 +45,9 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         const assignmentsRef = collection(db, `plans/${todayKey}/assignments`);
         const aq = query(assignmentsRef, where('ownerUid', '==', currentUser.uid));
         const as = await getDocs(aq);
-        as.forEach((doc) => {
-          const a = doc.data() as any as PlanAssignment;
-          list.push({ id: doc.id, title: a.title, start: a.start, end: a.end, source: 'assignment' });
+        as.forEach((d) => {
+          const a = d.data() as any as PlanAssignment;
+          list.push({ id: d.id, title: a.title, start: a.start, end: a.end, source: 'assignment', raw: a });
         });
 
         // Also include tasks due today as loose items
@@ -58,9 +61,24 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
           where('dueDate', '<=', end),
         );
         const ts = await getDocs(tq);
-        ts.forEach((doc) => {
-          const t = doc.data() as any;
-          list.push({ id: `task-${doc.id}` , title: t.title, start: t.dueDate, end: t.dueDate, source: 'task' });
+        ts.forEach((d) => {
+          const t = d.data() as any;
+          list.push({ id: `task-${d.id}` , title: t.title, start: t.dueDate, end: t.dueDate, source: 'task', raw: { id: d.id, ...t } });
+        });
+
+        // Chores due today (using RRULE)
+        const choresRef = collection(db, 'chores');
+        const cq = query(choresRef, where('ownerUid', '==', currentUser.uid));
+        const cs = await getDocs(cq);
+        cs.forEach((d) => {
+          const c = d.data() as any;
+          const dtstart = c.dtstart || c.createdAt || undefined;
+          // Compute next due based on rrule; fall back to existing nextDueAt
+          const next = nextDueAt(c.rrule, typeof dtstart === 'number' ? dtstart : undefined, start);
+          const due = next || c.nextDueAt;
+          if (due && due >= start && due <= end) {
+            list.push({ id: `chore-${d.id}`, title: c.title || 'Chore', start: due, end: due, source: 'chore', raw: { id: d.id, ...c, computedNext: due } });
+          }
         });
 
         setItems(list);
@@ -68,7 +86,19 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         setLoading(false);
       }
     };
-    load();
+    // Ensure today's plan is built once per user/day
+    const ensurePlan = async () => {
+      if (!currentUser) return;
+      const key = `planBuilt-${todayKey}-${currentUser.uid}`;
+      if (!localStorage.getItem(key)) {
+        try {
+          const call = httpsCallable(functions, 'buildPlan');
+          await call({ day: `${new Date().toISOString().slice(0,10)}` });
+        } catch {}
+        localStorage.setItem(key, '1');
+      }
+    };
+    ensurePlan().finally(load);
   }, [currentUser, todayKey]);
 
   const now = Date.now();
@@ -80,6 +110,30 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
     .sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
 
   if (!currentUser) return null;
+
+  const markDone = async (item: ChecklistItem) => {
+    try {
+      if (item.source === 'assignment') {
+        const dayKey = todayKey;
+        const ref = doc(db, `plans/${dayKey}/assignments/${item.id}`);
+        await updateDoc(ref, { status: 'done', updatedAt: Date.now() });
+      } else if (item.source === 'task') {
+        const id = item.raw?.id || item.id.replace('task-', '');
+        await updateDoc(doc(db, 'tasks', id), { status: 2, updatedAt: Date.now() });
+      } else if (item.source === 'chore') {
+        const chore = item.raw || {};
+        const id = chore.id || item.id.replace('chore-', '');
+        const now = Date.now();
+        const next = nextDueAt(chore.rrule, chore.dtstart, now + 60000);
+        await updateDoc(doc(db, 'chores', id), { lastCompletedAt: now, nextDueAt: next || null, updatedAt: now });
+      }
+      // Optimistic remove from UI
+      setItems(prev => prev.filter(i => i.id !== item.id));
+    } catch (e) {
+      console.error('Failed to mark done', e);
+      alert('Failed to mark done');
+    }
+  };
 
   return (
     <div>
@@ -95,11 +149,11 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
             {nowNext.length === 0 && <div className="text-muted small">Nothing pending</div>}
             {nowNext.map(i => (
               <div key={i.id} className="d-flex align-items-center justify-content-between border rounded p-2 mb-2">
-                <div className="d-flex flex-column">
-                  <span className="fw-semibold">{i.title}</span>
-                  <small className="text-muted">{i.source === 'assignment' ? 'Planned' : 'Task'}</small>
-                </div>
-                <button className="btn btn-sm btn-outline-success">Done</button>
+              <div className="d-flex flex-column">
+                <span className="fw-semibold">{i.title}</span>
+                <small className="text-muted">{i.source === 'assignment' ? 'Planned' : i.source === 'task' ? 'Task' : 'Chore'}</small>
+              </div>
+              <button className="btn btn-sm btn-outline-success" onClick={() => markDone(i)}>Done</button>
               </div>
             ))}
           </div>
@@ -110,9 +164,9 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
               <div key={i.id} className="d-flex align-items-center justify-content-between border rounded p-2 mb-2">
                 <div className="d-flex flex-column">
                   <span className="fw-semibold">{i.title}</span>
-                  <small className="text-muted">{i.source === 'assignment' ? 'Planned' : 'Task'}</small>
+                  <small className="text-muted">{i.source === 'assignment' ? 'Planned' : i.source === 'task' ? 'Task' : 'Chore'}</small>
                 </div>
-                <button className="btn btn-sm btn-outline-success">Done</button>
+                <button className="btn btn-sm btn-outline-success" onClick={() => markDone(i)}>Done</button>
               </div>
             ))}
           </div>
@@ -123,4 +177,3 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
 };
 
 export default ChecklistPanel;
-
