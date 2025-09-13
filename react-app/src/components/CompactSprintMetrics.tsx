@@ -32,6 +32,13 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     }
 
     // If caller provided an ID, use it directly
+    if (selectedSprintId === '') {
+      // Explicit "All Sprints" selection disables auto-detection
+      setResolvedSprintId(undefined);
+      setSprint(null);
+      setLoading(false);
+      return;
+    }
     if (selectedSprintId) {
       setResolvedSprintId(selectedSprintId);
       return;
@@ -82,24 +89,23 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     return () => unsubscribe();
   }, [resolvedSprintId, currentUser]);
 
-  // Load stories for this sprint
+  // Load stories: if a sprint is selected, filter by sprint; otherwise load all owner's stories
   useEffect(() => {
-    if (!resolvedSprintId || !currentUser) {
-      setStories([]);
-      return;
-    }
+    if (!currentUser) { setStories([]); return; }
 
-    const storiesQuery = query(
-      collection(db, 'stories'),
-      where('sprintId', '==', resolvedSprintId),
-      where('ownerUid', '==', currentUser.uid)
-    );
+    const storiesQuery = resolvedSprintId
+      ? query(
+          collection(db, 'stories'),
+          where('sprintId', '==', resolvedSprintId),
+          where('ownerUid', '==', currentUser.uid)
+        )
+      : query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUser.uid)
+        );
 
     const unsubscribe = onSnapshot(storiesQuery, (snapshot) => {
-      const storyData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Story[];
+      const storyData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Story[];
       setStories(storyData);
     });
 
@@ -130,7 +136,30 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
   }, [currentUser]);
 
   const metrics = useMemo(() => {
-    if (!sprint) return null;
+    // Aggregated metrics when no sprint is selected
+    if (!resolvedSprintId || !sprint) {
+      const totalStories = stories.length;
+      const completedStories = stories.filter(s => s.status === 4).length;
+      const totalTasks = tasks.length;
+      const completedTasks = tasks.filter(t => t.status === 2).length;
+      const totalPoints = stories.reduce((sum, s) => sum + (s.points || 0), 0);
+      const completedPoints = stories.filter(s => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+
+      return {
+        hasStarted: true,
+        hasEnded: false,
+        daysLeft: 0,
+        daysUntilStart: 0,
+        totalStories,
+        completedStories,
+        totalTasks,
+        completedTasks,
+        storyProgress: totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0,
+        storiesWithOpenTasks: 0,
+        standaloneTasksCount: tasks.filter(t => !t.parentId || t.parentType !== 'story').length,
+        sprint: null
+      } as any;
+    }
 
     const now = new Date();
     const startDate = new Date(sprint.startDate);
@@ -200,9 +229,7 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     };
   }, [sprint, stories, tasks, selectedSprintId]);
 
-  if (!selectedSprintId || loading) {
-    return null;
-  }
+  if (loading) return null;
 
   if (!metrics) {
     return (

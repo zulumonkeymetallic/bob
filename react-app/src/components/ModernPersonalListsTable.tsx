@@ -321,52 +321,44 @@ const SortableRow: React.FC<SortableRowProps> = ({
           <button
             onClick={() => {/* Handle edit modal */}}
             style={{
-              color: '#2563eb',
+              color: 'var(--brand)',
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '12px',
-              fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#dbeafe';
-              e.currentTarget.style.color = '#1d4ed8';
+              e.currentTarget.style.backgroundColor = 'rgba(var(--card-rgb), 0.15)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#2563eb';
             }}
             title="Edit item"
           >
-            Edit
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-pencil"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
           </button>
           <button
             onClick={() => onItemDelete(item.id)}
             style={{
-              color: '#dc2626',
+              color: 'var(--red)',
               padding: '4px',
               borderRadius: '4px',
               border: 'none',
               backgroundColor: 'transparent',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
-              fontSize: '12px',
-              fontWeight: '500',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = '#fee2e2';
-              e.currentTarget.style.color = '#b91c1c';
+              e.currentTarget.style.backgroundColor = 'rgba(var(--card-rgb), 0.15)';
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#dc2626';
             }}
             title="Delete item"
           >
-            Delete
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
           </button>
         </div>
       </td>

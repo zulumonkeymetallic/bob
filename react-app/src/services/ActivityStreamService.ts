@@ -211,12 +211,14 @@ export class ActivityStreamService {
     );
 
     return onSnapshot(q, (snapshot) => {
-      const activities = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as ActivityEntry[];
-      
-      callback(activities);
+      const activities = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ActivityEntry[];
+      // Safety: ensure newest first even if some timestamps resolve later
+      const sorted = activities.sort((a,b) => {
+        const ta = (a.timestamp as any)?.toMillis ? (a.timestamp as any).toMillis() : 0;
+        const tb = (b.timestamp as any)?.toMillis ? (b.timestamp as any).toMillis() : 0;
+        return tb - ta;
+      });
+      callback(sorted);
     });
   }
 
@@ -256,6 +258,30 @@ export class ActivityStreamService {
       case 'priority_changed': return '⚡';
       default: return '📋';
     }
+  }
+
+  // Convenience: log deletion event
+  static async logDeletion(
+    entityId: string,
+    entityType: ActivityEntry['entityType'],
+    entityTitle: string,
+    userId: string,
+    userEmail?: string,
+    persona?: string,
+    referenceNumber?: string,
+    source: 'human' | 'function' | 'ai' = 'human'
+  ) {
+    await this.addActivity({
+      entityId,
+      entityType,
+      activityType: 'deleted',
+      userId,
+      userEmail,
+      description: `Deleted ${entityType}: ${entityTitle}`,
+      persona,
+      referenceNumber,
+      source
+    });
   }
 
   // Utility to format timestamp

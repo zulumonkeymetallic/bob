@@ -4,6 +4,8 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { GLOBAL_THEMES, type GlobalTheme } from '../constants/globalThemes';
 
+let warnedOnce = false;
+
 export const useGlobalThemes = () => {
   const { currentUser } = useAuth();
   const [themes, setThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
@@ -28,7 +30,10 @@ export const useGlobalThemes = () => {
         setThemes(GLOBAL_THEMES);
       }
     } catch (e: any) {
-      console.warn('useGlobalThemes: failed to load themes; falling back to defaults', e);
+      if (!warnedOnce) {
+        console.warn('useGlobalThemes: failed to load themes; falling back to defaults', e);
+        warnedOnce = true;
+      }
       setError(e?.message || 'Failed to load themes');
       setThemes(GLOBAL_THEMES);
     } finally {
@@ -44,4 +49,3 @@ export const useGlobalThemes = () => {
 };
 
 export default useGlobalThemes;
-

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle } from 'lucide-react';
+import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useTestMode } from '../contexts/TestModeContext';
@@ -34,13 +35,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [newNote, setNewNote] = useState('');
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
-  const themeColors = {
-    Health: domainThemePrimaryVar('Health'),
-    Growth: domainThemePrimaryVar('Growth'),
-    Wealth: domainThemePrimaryVar('Wealth'),
-    Tribe: domainThemePrimaryVar('Tribe'),
-    Home: domainThemePrimaryVar('Home')
-  } as const;
+  const hexToRgba = (hex: string, a: number) => {
+    const v = hex.replace('#','');
+    const b = parseInt(v.length === 3 ? v.split('').map(c=>c+c).join('') : v, 16);
+    const r = (b >> 16) & 255, g = (b >> 8) & 255, bl = b & 255;
+    return `rgba(${r}, ${g}, ${bl}, ${a})`;
+  };
 
   React.useEffect(() => {
     if (selectedItem) {
@@ -232,7 +232,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const goal = getGoalForItem();
   const story = selectedType === 'task' ? getStoryForTask() : (selectedType === 'story' ? selectedItem as Story : null);
-  const themeColor = goal?.theme ? themeColors[goal.theme] : (themeVars.muted as string);
+  const themeId = goal?.theme != null ? migrateThemeValue(goal.theme as any) : null;
+  const themeHex = themeId != null ? getThemeById(themeId).color : '#6b7280';
+  const themeColor = themeHex; // use hex for colors/gradients
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return 'Not set';
@@ -344,12 +346,20 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
             {/* Header */}
             <div
               style={{
-                backgroundColor: themeColor,
-                color: themeVars.onAccent,
+                background: `linear-gradient(180deg, ${hexToRgba(themeHex, 0.18)}, ${hexToRgba(themeHex, 0.10)})`,
+                color: themeVars.text as string,
                 padding: '20px',
                 borderBottom: `1px solid ${themeVars.border}`
               }}
             >
+              {/* Close (X) */}
+              <button
+                onClick={hideSidebar}
+                title="Close"
+                style={{ position: 'absolute', right: 8, top: 8, border: 'none', background: 'transparent', color: themeVars.muted as string, cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
               {/* Test Mode Indicator */}
               {isTestMode && (
                 <div style={{
@@ -379,13 +389,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 borderRadius: '8px',
                 border: `2px solid ${themeColor}`
               }}>
-                <div style={{ 
-                  fontSize: '11px', 
-                  opacity: 0.9, 
-                  marginBottom: '4px',
-                  letterSpacing: '0.5px',
-                  color: themeColor as string
-                }}>
+                <div style={{ fontSize: '11px', opacity: 0.9, marginBottom: '4px', letterSpacing: '0.5px', color: themeHex }}>
                   REFERENCE
                 </div>
                 <div style={{ 
@@ -394,7 +398,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   fontFamily: 'monospace',
                   letterSpacing: '2px',
                   textShadow: '0 1px 2px rgba(0,0,0,0.15)',
-                  color: themeColor as string
+                  color: themeHex
                 }}>
                   {generateReferenceNumber()}
                 </div>
@@ -646,7 +650,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
               {/* Activity Stream */}
               <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeColor as string, margin: 0 }}>
+                  <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeHex, margin: 0 }}>
                     Activity Stream
                   </h6>
                   <Button
