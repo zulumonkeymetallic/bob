@@ -8,7 +8,6 @@ import RoadmapAxis from './RoadmapAxis';
 import './RoadmapV2.css';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
 import { FixedSizeList as List, ListChildComponentProps } from 'react-window';
-import SprintSelector from '../SprintSelector';
 import logger from '../../utils/logger';
 
 type GanttItem = {
@@ -45,7 +44,6 @@ type Props = {
   onTouchEnd: React.TouchEventHandler<HTMLDivElement>;
   onSwitchToRoadmap?: () => void;
   selectedSprintId?: string;
-  onSprintChange?: (id: string) => void;
 };
 
 // Lanes come from Global Theme Settings (dynamic, no hard-coding)
@@ -74,8 +72,7 @@ const RoadmapV2: React.FC<Props> = ({
   onTouchMove,
   onTouchEnd,
   onSwitchToRoadmap,
-  selectedSprintId,
-  onSprintChange
+  selectedSprintId
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [measureRef, bounds] = useMeasure();
@@ -221,9 +218,6 @@ const RoadmapV2: React.FC<Props> = ({
             <Button size="sm" variant="outline-secondary" title="Switch to Roadmap" onClick={onSwitchToRoadmap}>Roadmap</Button>
           )}
           <Button size="sm" variant="outline-secondary" title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'} onClick={toggleFullscreen}>{isFullscreen ? 'Exit Full Screen' : 'Full Screen'}</Button>
-          {onSprintChange && (
-            <SprintSelector selectedSprintId={selectedSprintId || ''} onSprintChange={onSprintChange} />
-          )}
           <Button size="sm" variant="outline-secondary" title="Fit all goals" onClick={() => {
             const all = filteredItems;
             if (all.length === 0) return;
