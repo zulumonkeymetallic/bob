@@ -891,6 +891,15 @@ const EnhancedGanttChart: React.FC = () => {
     try {
       await updateDoc(doc(db, 'goals', goalId), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: Date.now() });
       logger.info('gantt', 'Goal dates updated', { goalId });
+      // Log activity for start/end changes (two field changes for clarity)
+      if (currentUser) {
+        const g = goals.find(x => x.id === goalId);
+        if (g) {
+          const ref = (g as any).ref || g.title || '';
+          await ActivityStreamService.logFieldChange(goalId, 'goal', currentUser.uid, currentUser.email || '', 'startDate', (g as any).startDate, newStart.getTime(), 'personal', ref, 'human');
+          await ActivityStreamService.logFieldChange(goalId, 'goal', currentUser.uid, currentUser.email || '', 'endDate', (g as any).endDate, newEnd.getTime(), 'personal', ref, 'human');
+        }
+      }
     } catch (err) {
       logger.error('gantt', 'Failed to update goal dates', { goalId, err });
       throw err;
@@ -944,6 +953,11 @@ const EnhancedGanttChart: React.FC = () => {
     try {
       await deleteDoc(doc(db, 'goals', goalId));
       logger.info('gantt', 'Goal deleted', { goalId });
+      // Log deletion
+      if (currentUser) {
+        const g = goals.find(x => x.id === goalId);
+        await ActivityStreamService.logDeletion(goalId, 'goal', g?.title || '', currentUser.uid, currentUser.email || undefined, 'personal', (g as any)?.ref || '', 'human');
+      }
     } catch (e) {
       logger.error('gantt', 'Failed to delete goal', { goalId, e });
       alert('Failed to delete goal.');
@@ -1442,9 +1456,7 @@ const EnhancedGanttChart: React.FC = () => {
               <Card className="shadow-sm">
                 <Card.Body>
                   <div className="fw-semibold mb-2">Timeline Controls</div>
-                  <div className="mb-3">
-                    <SprintSelector selectedSprintId={selectedSprintId} onSprintChange={setSelectedSprintId} />
-                  </div>
+                  {/* Global sprint selector appears in the top app toolbar; remove duplicate from here */}
                   <div className="mb-3">
                     <div className="small text-muted mb-1">Zoom</div>
                     <div className="d-flex gap-2 align-items-center">

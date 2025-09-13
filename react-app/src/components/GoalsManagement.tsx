@@ -87,7 +87,7 @@ const GoalsManagement: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
-    const sprintId = selectedSprintId || activeSprintId;
+    const sprintId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
     if (!currentUser || !sprintId) {
       setActiveSprintGoalIds(new Set());
       return;
@@ -141,7 +141,8 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    const sprintFilterId = selectedSprintId || activeSprintId;
+    // If 'All Sprints' is selected (empty string), do NOT fall back to activeSprintId
+    const sprintFilterId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
     if (applyActiveSprintFilter && sprintFilterId) {
       // Only include goals with stories in active sprint and not complete (status !== 2)
       if (goal.status === 2) return false;

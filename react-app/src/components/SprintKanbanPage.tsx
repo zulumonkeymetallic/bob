@@ -41,17 +41,19 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
     }
   }, [propSelectedSprintId, selectedSprintId, setSelectedSprintId]);
 
-  // Effective selection: prefer context id, otherwise prop; then fall back to ACTIVE sprint
-  const effectiveSelectedId = selectedSprintId || propSelectedSprintId || '';
+  // Resolve filter: explicit "All" (empty string) disables filtering entirely
+  const filterSprintId: string | null = selectedSprintId === ''
+    ? null
+    : (selectedSprintId || propSelectedSprintId || null);
 
-  // Get current sprint from list (by id) or ACTIVE by status
-  const currentSprint = effectiveSelectedId
-    ? sprints.find(s => s.id === effectiveSelectedId)
-    : sprints.find(s => s.status === 1);
+  // Get current sprint only when a specific ID is chosen (do not auto-pick active for "All")
+  const currentSprint = filterSprintId
+    ? sprints.find(s => s.id === filterSprintId)
+    : null;
 
   // Match stories by sprint id OR legacy sprint name for backwards compatibility
   const selectedMatchValues = new Set<string | undefined>([
-    effectiveSelectedId || undefined,
+    filterSprintId || undefined,
     currentSprint?.id,
     (currentSprint as any)?.name,
   ]);
@@ -59,16 +61,15 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
   // Filter stories and tasks for current selection
   const sprintStories = stories.filter((story) => {
     const storySprint = (story as any).sprintId as string | undefined;
-    return currentSprint || effectiveSelectedId
-      ? (storySprint ? selectedMatchValues.has(storySprint) : false)
-      : !storySprint;
+    // No filter when "All Sprints": include all stories
+    if (!filterSprintId && !currentSprint) return true;
+    return storySprint ? selectedMatchValues.has(storySprint) : false;
   });
   
-  const sprintTasks = tasks.filter(task => 
-    currentSprint || effectiveSelectedId
-      ? (task.sprintId ? selectedMatchValues.has(task.sprintId as any) : false)
-      : !task.sprintId
-  );
+  const sprintTasks = tasks.filter(task => {
+    if (!filterSprintId && !currentSprint) return true;
+    return task.sprintId ? selectedMatchValues.has(task.sprintId as any) : false;
+  });
 
   useEffect(() => {
     if (!currentUser) return;
@@ -136,13 +137,8 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
         })) as Sprint[];
         setSprints(sprintsData);
         
-        // Auto-select active sprint if none selected
-        if (!selectedSprintId) {
-          const activeSprint = sprintsData.find(s => s.status === 1);
-          if (activeSprint) {
-            setSelectedSprintId(activeSprint.id);
-          }
-        }
+        // Do not auto-select active sprint when user chose "All" (empty string)
+        // Keep current selection as-is
       });
 
       setLoading(false);

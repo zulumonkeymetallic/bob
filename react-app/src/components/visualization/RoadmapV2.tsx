@@ -80,6 +80,7 @@ const RoadmapV2: React.FC<Props> = ({
   const { start, end, width, zoom, setRange, setZoom, setWidth, laneCollapse, toggleLane } = useRoadmapStore();
   const [filterActiveSprint, setFilterActiveSprint] = useState(false);
   const [filterHasStories, setFilterHasStories] = useState(false);
+  const [filterOverlapSprint, setFilterOverlapSprint] = useState(false);
 
   // Keep store width synced to container
   useEffect(() => {
@@ -129,15 +130,30 @@ const RoadmapV2: React.FC<Props> = ({
       arr.push(s);
       byGoal.set(s.goalId, arr);
     });
+    // Sprint date overlap helper
+    let sprintStart: Date | null = null;
+    let sprintEnd: Date | null = null;
+    if (filterOverlapSprint && selectedSprintId) {
+      const sp = sprints.find(s => s.id === selectedSprintId);
+      if (sp) { sprintStart = new Date(sp.startDate); sprintEnd = new Date(sp.endDate); }
+    }
     return ganttItems.filter(g => {
       const st = byGoal.get(g.id) || [];
       if (filterHasStories && st.length === 0) return false;
       if (filterActiveSprint && selectedSprintId) {
         return st.some(s => s.sprintId === selectedSprintId);
       }
+      if (filterOverlapSprint && sprintStart && sprintEnd) {
+        // overlap if [g.start,g.end] intersects [sprintStart,sprintEnd]
+        const gs = g.startDate.getTime();
+        const ge = g.endDate.getTime();
+        const ss = sprintStart.getTime();
+        const se = sprintEnd.getTime();
+        if (!(gs <= se && ge >= ss)) return false;
+      }
       return true;
     });
-  }, [ganttItems, stories, filterActiveSprint, filterHasStories, selectedSprintId]);
+  }, [ganttItems, stories, filterActiveSprint, filterHasStories, filterOverlapSprint, selectedSprintId, sprints]);
 
   const goalById = useMemo(() => Object.fromEntries(goals.map(g => [g.id, g])), [goals]);
 
@@ -197,23 +213,39 @@ const RoadmapV2: React.FC<Props> = ({
   // Month header fragments
   const monthBlocks = useMemo(() => {
     const blocks: Array<{ key: string; left: number; width: number; label: string }> = [];
-    const cur = new Date(start.getFullYear(), start.getMonth(), 1);
-    while (cur <= end) {
-      const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
-      const left = scale(cur);
-      const w = scale(next) - scale(cur);
-      blocks.push({ key: `${cur.getFullYear()}-${cur.getMonth()}`, left, width: w, label: cur.toLocaleDateString('en-US', { month: 'long' }) + (cur.getMonth()===0 ? ` ${cur.getFullYear()}` : '') });
-      cur.setMonth(cur.getMonth() + 1);
+    // Choose months vs quarters based on span
+    const monthsSpan = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+    const useQuarters = monthsSpan > 18; // switch to quarters when zoomed far out
+    if (useQuarters) {
+      const cur = new Date(start.getFullYear(), Math.floor(start.getMonth() / 3) * 3, 1);
+      while (cur <= end) {
+        const q = Math.floor(cur.getMonth() / 3) + 1;
+        const next = new Date(cur.getFullYear(), cur.getMonth() + 3, 1);
+        const left = scale(cur);
+        const w = scale(next) - scale(cur);
+        blocks.push({ key: `Q${q}-${cur.getFullYear()}`, left, width: w, label: `Q${q} ${cur.getFullYear()}` });
+        cur.setMonth(cur.getMonth() + 3);
+      }
+    } else {
+      const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+      while (cur <= end) {
+        const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+        const left = scale(cur);
+        const w = scale(next) - scale(cur);
+        const showYear = cur.getMonth() === 0 || monthsSpan > 12;
+        blocks.push({ key: `${cur.getFullYear()}-${cur.getMonth()}`, left, width: w, label: cur.toLocaleDateString('en-US', { month: monthsSpan > 12 ? 'short' : 'long' }) + (showYear ? ` ${cur.getFullYear()}` : '') });
+        cur.setMonth(cur.getMonth() + 1);
+      }
     }
     return blocks;
-  }, [start, end, width, zoom]);
+  }, [start, end, width, zoom, scale]);
 
   return (
     <div className="rv2-container">
       {/* Toolbar */}
-      <div className="rv2-toolbar">
-        <div className="rv2-toolbar-left">Roadmap Timeline</div>
-        <div className="rv2-toolbar-right">
+          <div className="rv2-toolbar">
+            <div className="rv2-toolbar-left">Roadmap Timeline</div>
+            <div className="rv2-toolbar-right">
           {onSwitchToRoadmap && (
             <Button size="sm" variant="outline-secondary" title="Switch to Roadmap" onClick={onSwitchToRoadmap}>Roadmap</Button>
           )}
@@ -238,6 +270,9 @@ const RoadmapV2: React.FC<Props> = ({
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
             <input type="checkbox" checked={filterActiveSprint} onChange={(e) => setFilterActiveSprint(e.target.checked)} disabled={!selectedSprintId} /> In selected sprint
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
+            <input type="checkbox" checked={filterOverlapSprint} onChange={(e) => setFilterOverlapSprint(e.target.checked)} disabled={!selectedSprintId} /> Overlaps sprint dates
           </label>
         </div>
       </div>
