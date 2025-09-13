@@ -1415,14 +1415,7 @@ const EnhancedGanttChart: React.FC = () => {
                 >
                   Fit Sprint
                 </Button>
-                <Button
-                  variant="outline-secondary"
-                  size="sm"
-                  onClick={() => setViewMode('roadmap')}
-                  title="Switch to Roadmap"
-                >
-                  Roadmap
-                </Button>
+                {/* Roadmap toggle removed; Card view available via sidebar menu */}
                 <Button variant="outline-secondary" size="sm" onClick={() => setZoomLevel('month')} title="Zoom in">
                   <ZoomIn size={16} />
                 </Button>

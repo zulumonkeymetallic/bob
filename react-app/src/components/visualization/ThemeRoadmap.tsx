@@ -11,6 +11,8 @@ import EditGoalModal from '../../components/EditGoalModal';
 import { Goal, Sprint, Story, Task } from '../../types';
 import './ThemeRoadmap.css';
 import logger from '../../utils/logger';
+import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
+import { useSidebar } from '../../contexts/SidebarContext';
 
 type RoadmapCard = Goal & { storyCount?: number; openTaskCount?: number };
 
@@ -63,14 +65,9 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
     return () => unsubs.forEach(u => u());
   }, [currentUser?.uid]);
 
-  // Themes
-  const themes = [
-    { id: 1, name: 'Health', color: 'var(--theme-health-primary)' },
-    { id: 2, name: 'Growth', color: 'var(--theme-growth-primary)' },
-    { id: 3, name: 'Wealth', color: 'var(--theme-wealth-primary)' },
-    { id: 4, name: 'Tribe', color: 'var(--theme-tribe-primary)' },
-    { id: 5, name: 'Home', color: 'var(--theme-home-primary)' }
-  ];
+  // Themes from Settings (no hard-coded list)
+  const themes = GLOBAL_THEMES.map(t => ({ id: t.id, name: t.name || t.label, color: t.color }));
+  const { showSidebar } = useSidebar();
 
   // Derived counts
   const storiesByGoal = useMemo(() => {
@@ -116,7 +113,7 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
   const goalsByTheme = useMemo(() => {
     const grouped: Record<number, RoadmapCard[]> = {};
     filteredGoals.forEach(g => {
-      const themeId = g.theme || 0;
+      const themeId = migrateThemeValue(g.theme || 0);
       grouped[themeId] = grouped[themeId] || [];
       grouped[themeId].push({
         ...g,
@@ -260,8 +257,9 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
                 <Card
                   key={goal.id}
                   className="goal-card border shadow-sm"
+                  style={{ borderColor: theme.color, borderWidth: 2, background: `linear-gradient(180deg, ${theme.color}22, ${theme.color}10)` }}
                   draggable
-                  onClick={() => { setActivityGoalId(goal.id); setShowActivityStream(true); }}
+                  onClick={() => { /* no-op to avoid hijacking drag */ }}
                   onDragStart={(e) => handleDragStart(e, goal)}
                 >
                   <Card.Body className="p-2">
@@ -311,7 +309,7 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
                       <button className="btn btn-light btn-sm py-0 px-1" title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal); }}>
                         <Wand2 size={14} />
                       </button>
-                      <button className="btn btn-light btn-sm py-0 px-1" title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); setShowActivityStream(true); }}>
+                      <button className="btn btn-light btn-sm py-0 px-1" title="View activity" onClick={(e) => { e.stopPropagation(); showSidebar(goal as any, 'goal'); }}>
                         <Activity size={14} />
                       </button>
                       <button className="btn btn-light btn-sm py-0 px-1" title="View stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}>
