@@ -6,6 +6,7 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
 const aiUsageLogger = require("./utils/aiUsageLogger");
+const { rrulestr } = require('rrule');
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -26,6 +27,301 @@ const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
 const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
+const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
+
+// Scheduler utils (deterministic id + day key)
+function makePlanId(userId, date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}${m}${d}-${userId}`;
+}
+function toDayKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+}
+function makeAssignmentId({ planId, itemType, itemId }) {
+  const raw = `${planId}:${itemType}:${itemId}`;
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+// ===== Deterministic Scheduler (Issue #152 - Phase 1)
+exports.buildPlan = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const day = req?.data?.day || new Date().toISOString().slice(0,10); // YYYY-MM-DD
+  const useLLM = !!req?.data?.useLLM;
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+
+  const db = admin.firestore();
+  const dayKey = toDayKey(date);
+  const planId = makePlanId(uid, date);
+
+  // Load blocks for the day (calendar_blocks)
+  const start = new Date(date); start.setHours(0,0,0,0);
+  const end = new Date(date); end.setHours(23,59,59,999);
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', start.getTime())
+    .where('start', '<=', end.getTime())
+    .get();
+  const blocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .sort((a,b) => a.start - b.start);
+
+  // Load candidate tasks (status not done)
+  const tasksSnap = await db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .get();
+  const tasks = tasksSnap.docs
+    .map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .filter(t => t && t.status !== 2 && t.status !== 'done');
+
+  // Load chores due for the selected day
+  const choresSnap = await db.collection('chores')
+    .where('ownerUid', '==', uid)
+    .get();
+  const sod = new Date(date); sod.setHours(0,0,0,0);
+  const eod = new Date(date); eod.setHours(23,59,59,999);
+  function nextDue(rruleText, dtstartMs, fromMs) {
+    try {
+      const hasDt = /DTSTART/i.test(String(rruleText||''));
+      const text = !hasDt && dtstartMs
+        ? `DTSTART:${new Date(dtstartMs).toISOString().replace(/[-:]/g,'').split('.')[0]}Z\n${rruleText}`
+        : rruleText;
+      const rule = rrulestr(text);
+      const next = rule.after(new Date(fromMs), true);
+      return next ? next.getTime() : null;
+    } catch { return null; }
+  }
+  const chores = choresSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }))
+    .map(c => {
+      const due = nextDue(c.rrule, c.dtstart || c.createdAt || undefined, sod.getTime()-1);
+      return { ...c, _due: due };
+    })
+    .filter(c => c._due && c._due >= sod.getTime() && c._due <= eod.getTime());
+
+  // Load habits (daily, active) and derive preferred start time
+  const habitsSnap = await db.collection('habits')
+    .where('userId','==', uid)
+    .where('isActive','==', true)
+    .get();
+  function toTimeMs(hhmm) {
+    const [hh, mm] = String(hhmm || '07:00').split(':').map(x=>Number(x));
+    const t = new Date(sod);
+    t.setHours(hh||7, mm||0, 0, 0);
+    return t.getTime();
+  }
+  const habits = habitsSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }))
+    .filter(h => (h.frequency||'daily') === 'daily' || ((h.frequency||'') === 'weekly' && Array.isArray(h.daysOfWeek) && h.daysOfWeek.includes(new Date(sod).getDay())))
+    .map(h => ({ ...h, _preferredStart: toTimeMs(h.scheduleTime || '07:00') }));
+
+  // Score deterministically
+  function scoreTask(t) {
+    let s = 0;
+    // Due date proximity
+    if (t.dueDate) {
+      const dd = Number(t.dueDate);
+      if (dd) {
+        const days = Math.ceil((dd - Date.now()) / (24*60*60*1000));
+        if (days <= 0) s += 60; else if (days === 1) s += 45; else if (days <= 7) s += 25;
+      }
+    }
+    // Priority
+    if (t.priority === 1 || t.priority === 'high' || t.priority === 'P1') s += 25;
+    else if (t.priority === 2 || t.priority === 'medium' || t.priority === 'P2') s += 15;
+    else s += 5;
+    // Effort inverse (favor small)
+    if (t.effort === 'S') s += 15; else if (t.effort === 'M') s += 8; else s += 2;
+    // Goal alignment bonus
+    if (t.hasGoal || t.goalId) s += 10;
+    return s;
+  }
+
+  let ranked = tasks.map(t => ({ ...t, _score: scoreTask(t) }))
+    .sort((a,b) => b._score - a._score);
+
+  // Optional: soft LLM re-rank within a 20% band – omitted in Phase 1 to keep deterministic behavior
+
+  // Pack into blocks greedily
+  const items = [
+    ...ranked.map(t => ({
+      type: 'task',
+      id: t.id,
+      title: t.title || 'Task',
+      minutes: Number(t.estimateMin) || (t.effort === 'S' ? 20 : t.effort === 'M' ? 45 : 90),
+    })),
+    ...chores.map(c => ({
+      type: 'chore',
+      id: c.id,
+      title: c.title || 'Chore',
+      minutes: Number(c.estimatedMinutes) || 15
+    })),
+    ...habits.map(h => ({
+      type: 'habit',
+      id: h.id,
+      title: h.name || 'Habit',
+      minutes: 15,
+      preferredStart: h._preferredStart
+    }))
+  ];
+
+  const assignments = [];
+  const blockFree = new Map();
+  for (const b of blocks) {
+    const free = Math.max(0, Math.floor((Number(b.end) - Number(b.start)) / 60000));
+    blockFree.set(b.id, { free, cursor: Number(b.start) });
+  }
+
+  for (const it of items) {
+    // Find earliest block with enough remaining minutes
+    let placed = false;
+    // Try to respect preferredStart if provided (habits)
+    if (it.preferredStart) {
+      for (const b of blocks) {
+        const state = blockFree.get(b.id);
+        if (!state) continue;
+        if (it.preferredStart >= b.start && (it.preferredStart + it.minutes*60000) <= b.end) {
+          // place at max(cursor, preferredStart)
+          const startMs = Math.max(state.cursor, it.preferredStart);
+          const endMs = startMs + it.minutes*60000;
+          if (endMs <= b.end && (endMs - startMs)/60000 <= state.free) {
+            assignments.push({
+              id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+              planId, dayKey, userId: uid, ownerUid: uid,
+              itemType: it.type, itemId: it.id, title: it.title,
+              estimatedMinutes: it.minutes, blockId: b.id, start: startMs, end: endMs,
+              status: 'planned', createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            state.free -= Math.floor((endMs-startMs)/60000);
+            state.cursor = endMs;
+            placed = true;
+            break;
+          }
+        }
+      }
+      if (!placed) {
+        // schedule without a block at preferredStart
+        const startMs = it.preferredStart;
+        const endMs = startMs + it.minutes*60000;
+        assignments.push({
+          id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+          planId, dayKey, userId: uid, ownerUid: uid,
+          itemType: it.type, itemId: it.id, title: it.title,
+          estimatedMinutes: it.minutes, start: startMs, end: endMs,
+          status: 'planned', createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        placed = true;
+      }
+    }
+    if (placed) continue;
+    for (const b of blocks) {
+      const state = blockFree.get(b.id);
+      if (!state) continue;
+      if (state.free >= it.minutes) {
+        const startMs = state.cursor;
+        const endMs = startMs + it.minutes * 60000;
+        assignments.push({
+          id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+          planId,
+          dayKey,
+          userId: uid,
+          ownerUid: uid,
+          itemType: it.type,
+          itemId: it.id,
+          title: it.title,
+          estimatedMinutes: it.minutes,
+          blockId: b.id,
+          start: startMs,
+          end: endMs,
+          status: 'planned',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        state.free -= it.minutes;
+        state.cursor = endMs;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      // Defer (overflow)
+      assignments.push({
+        id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+        planId,
+        dayKey,
+        userId: uid,
+        ownerUid: uid,
+        itemType: it.type,
+        itemId: it.id,
+        title: it.title,
+        estimatedMinutes: it.minutes,
+        status: 'deferred',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+  }
+
+  // Persist plan assignments idempotently
+  const batch = db.batch();
+  for (const a of assignments) {
+    const ref = db.collection('plans').doc(dayKey).collection('assignments').doc(a.id);
+    batch.set(ref, a, { merge: true });
+  }
+  await batch.commit();
+
+  // Audit trail
+  const activityRef = db.collection('activity_stream').doc();
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: planId,
+    entityType: 'plan',
+    activityType: 'scheduler_plan_built',
+    userId: uid,
+    description: `Built plan with ${assignments.length} assignments for ${dayKey}`,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  return { planId, dayKey, assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })) };
+});
+
+// Reconcile assignments with Google Calendar: if child events were deleted externally,
+// mark assignments as deferred and clear the external.googleEventId
+exports.reconcilePlanFromGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+  const db = admin.firestore();
+  const dayKey = toDayKey(date);
+  const access = await getAccessToken(uid);
+  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
+  const toCheck = asSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) })).filter(a => a?.external?.googleEventId);
+  let cleared = 0;
+  for (const a of toCheck) {
+    const eid = a.external.googleEventId;
+    try {
+      // GET returns 404 if deleted
+      await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
+        headers: { 'Authorization': 'Bearer ' + access }
+      });
+    } catch (e) {
+      // Treat as deleted -> clear and mark deferred
+      await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id)
+        .set({ status: 'deferred', external: { googleEventId: null }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      cleared++;
+    }
+  }
+  return { ok: true, checked: toCheck.length, cleared };
+});
 
 // ===== Utilities
 async function fetchJson(url, opts = {}) {
@@ -728,6 +1024,37 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
     return [];
   }
 }
+
+// Scheduled: reconcile Google Calendar deletions for all users every 15 minutes
+exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
+  const db = admin.firestore();
+  // Find users with Google tokens
+  const snap = await db.collection('tokens').where('provider','==','google').get().catch(()=>null);
+  if (!snap || snap.empty) return;
+  const today = new Date();
+  const work = [];
+  for (const d of snap.docs) {
+    const uid = d.id.split('_')[0] || d.id; // tokens doc is uid
+    work.push((async () => {
+      try {
+        const dayKey = toDayKey(today);
+        // Perform reconciliation similar to reconcilePlanFromGoogleCalendar
+        const access = await getAccessToken(uid);
+        const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
+        const toCheck = asSnap.docs.map(x=>({ id:x.id, ...(x.data()||{}) })).filter(a => a?.external?.googleEventId);
+        for (const a of toCheck) {
+          try {
+            await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(a.external.googleEventId)}`, { headers: { 'Authorization': 'Bearer '+access } });
+          } catch {
+            await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id)
+              .set({ status:'deferred', external:{ googleEventId: null }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          }
+        }
+      } catch {}
+    })());
+  }
+  await Promise.allSettled(work);
+});
 
 // ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
 exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
@@ -1554,6 +1881,164 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
     headers: { 'Authorization': 'Bearer ' + access }
   });
   return { ok: true };
+});
+
+// Sync plan assignments for a day to Google Calendar as child events under parent block events
+exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+  const dayKey = toDayKey(date);
+  const access = await getAccessToken(uid);
+  const db = admin.firestore();
+
+  // Load assignments for the day
+  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
+  const assignments = asSnap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+  if (assignments.length === 0) return { ok: true, created: 0, updated: 0, parentsCreated: 0 };
+
+  // Group by blockId
+  const byBlock = new Map();
+  for (const a of assignments) {
+    const key = a.blockId || 'none';
+    if (!byBlock.has(key)) byBlock.set(key, []);
+    byBlock.get(key).push(a);
+  }
+
+  let parentsCreated = 0, created = 0, updated = 0;
+  for (const [blockId, list] of byBlock.entries()) {
+    let parentEventId = null;
+    let blockDoc = null;
+    if (blockId && blockId !== 'none') {
+      const bSnap = await db.collection('calendar_blocks').doc(blockId).get();
+      if (bSnap.exists) {
+        blockDoc = { id: bSnap.id, ...(bSnap.data()||{}) };
+        parentEventId = blockDoc.googleEventId || null;
+      }
+      // Create parent block event if missing
+      if (!parentEventId && blockDoc) {
+        const body = {
+          summary: blockDoc.title || `${blockDoc.theme || 'Block'}: ${blockDoc.category || ''}`.trim(),
+          description: blockDoc.rationale || 'BOB block',
+          start: { dateTime: new Date(blockDoc.start).toISOString() },
+          end: { dateTime: new Date(blockDoc.end).toISOString() },
+          extendedProperties: { private: { bobBlockId: blockId } }
+        };
+        const parent = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(body)
+        });
+        parentEventId = parent.id;
+        parentsCreated++;
+        await db.collection('calendar_blocks').doc(blockId).set({ googleEventId: parentEventId, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
+    }
+
+    for (const a of list) {
+      if (!a.start || !a.end) continue; // skip deferred/unscheduled
+      const ext = a.external || {};
+      const eid = ext.googleEventId || null;
+      const evBody = {
+        summary: a.title || 'Assignment',
+        start: { dateTime: new Date(a.start).toISOString() },
+        end: { dateTime: new Date(a.end).toISOString() },
+        description: 'BOB assignment',
+        extendedProperties: { private: { bobAssignmentId: a.id, bobBlockId: blockId || '' } }
+      };
+      if (eid) {
+        try {
+          await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+          });
+          updated++;
+        } catch {
+          // If patch fails (deleted externally), recreate
+          const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+            method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+          });
+          created++;
+          await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external||{}), googleEventId: createdEv.id } }, { merge: true });
+        }
+      } else {
+        const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+        });
+        created++;
+        await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external||{}), googleEventId: createdEv.id } }, { merge: true });
+      }
+    }
+  }
+  return { ok: true, parentsCreated, created, updated };
+});
+
+// iOS Reminders bridge (public HTTPS): Shortcuts can call these endpoints
+exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).send('Method not allowed');
+    const uid = String(req.query.uid || req.body?.uid || '');
+    const secret = process.env.REMINDERS_WEBHOOK_SECRET;
+    const provided = String(req.headers['x-reminders-secret'] || req.query.secret || req.body?.secret || '');
+    if (!uid) return res.status(400).json({ error: 'uid required' });
+    if (secret && provided !== secret) return res.status(403).json({ error: 'forbidden' });
+    const db = admin.firestore();
+    // Return tasks that need pushing: no reminderId and due today or overdue
+    const now = Date.now();
+    const start = new Date(); start.setHours(0,0,0,0);
+    const tasksSnap = await db.collection('tasks').where('ownerUid','==',uid).get();
+    const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+    const toPush = tasks.filter(t => !t.reminderId && t.status !== 2 && ((t.dueDate||0) <= (start.getTime()+24*3600*1000)));
+    const payload = toPush.map(t => ({
+      id: t.id,
+      title: t.title,
+      dueDate: t.dueDate || null,
+      ref: `TK-${String(t.id||'').slice(0,6).toUpperCase()}`,
+      createdAt: t.createdAt || null,
+      storyId: t.storyId || null,
+      goalId: t.goalId || null
+    }));
+    return res.json({ ok: true, tasks: payload });
+  } catch (e) {
+    console.error('remindersPush error', e);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method !== 'POST') return res.status(405).send('Method not allowed');
+    const uid = String(req.query.uid || req.body?.uid || '');
+    const secret = process.env.REMINDERS_WEBHOOK_SECRET;
+    const provided = String(req.headers['x-reminders-secret'] || req.query.secret || req.body?.secret || '');
+    if (!uid) return res.status(400).json({ error: 'uid required' });
+    if (secret && provided !== secret) return res.status(403).json({ error: 'forbidden' });
+    const updates = Array.isArray(req.body?.tasks) ? req.body.tasks : [];
+    const db = admin.firestore();
+    let updated = 0;
+    for (const u of updates) {
+      const id = String(u.id || '');
+      const reminderId = u.reminderId ? String(u.reminderId) : null;
+      const completed = !!u.completed;
+      if (!id && !reminderId) continue;
+      let ref = null;
+      if (id) ref = db.collection('tasks').doc(id);
+      else {
+        const snap = await db.collection('tasks').where('ownerUid','==',uid).where('reminderId','==',reminderId).limit(1).get();
+        if (!snap.empty) ref = snap.docs[0].ref;
+      }
+      if (ref) {
+        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+        if (reminderId) data['reminderId'] = reminderId;
+        if (completed) data['status'] = 2;
+        await ref.set(data, { merge: true });
+        updated++;
+      }
+    }
+    return res.json({ ok: true, updated });
+  } catch (e) {
+    console.error('remindersPull error', e);
+    return res.status(500).json({ error: 'server_error' });
+  }
 });
 
 exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{storyId}", async (event) => {

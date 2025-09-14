@@ -3,6 +3,7 @@
     "source": "functions"
   },
   "hosting": {
+    "site": "bob20250810",
     "public": "react-app/build",
     "ignore": [
       "firebase.json",
@@ -21,6 +22,20 @@
         "source": "/api/oauth/callback",
         "function": {
           "functionId": "oauthCallback",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/reminders/push",
+        "function": {
+          "functionId": "remindersPush",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/reminders/pull",
+        "function": {
+          "functionId": "remindersPull",
           "region": "europe-west2"
         }
       },

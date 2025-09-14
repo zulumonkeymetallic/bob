@@ -74,11 +74,10 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
         // Filter to selected sprint and limit count
         const sprintStories = storiesData
           .filter(story => {
-            if (selectedSprintId) {
-              return story.sprintId === selectedSprintId;
-            } else if (activeSprint) {
-              return story.sprintId === activeSprint.id;
-            }
+            // All sprints selected => do not filter by sprint
+            if (selectedSprintId === '') return true;
+            if (selectedSprintId) return story.sprintId === selectedSprintId;
+            if (activeSprint) return story.sprintId === activeSprint.id;
             return true;
           })
           .slice(0, maxStories);

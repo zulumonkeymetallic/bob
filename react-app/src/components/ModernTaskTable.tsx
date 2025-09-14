@@ -798,7 +798,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
         {/* Optional: Add Task button */}
         {onTaskCreate && (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '16px' }}>
             <button
               onClick={() => {
                 setEditingTask(null);
@@ -809,16 +809,25 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '6px',
-                padding: '8px 12px',
-                border: `1px dashed ${themeVars.brand}`,
+                gap: '8px',
+                padding: '10px 16px',
+                border: `2px dashed ${themeVars.brand}`,
                 background: 'transparent',
                 color: themeVars.brand as string,
                 borderRadius: 8,
-                cursor: 'pointer'
+                cursor: 'pointer',
+                fontWeight: 600
               }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'rgba(0,0,0,0.03)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+              }}
+              title="Add Task"
             >
-              <Plus size={16} /> Add Task
+              <span style={{ fontSize: 18, lineHeight: 1 }}>+</span>
+              Add Task
             </button>
           </div>
         )}

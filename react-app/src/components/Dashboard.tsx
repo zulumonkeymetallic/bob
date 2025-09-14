@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Card, Row, Col, ProgressBar, Badge, Button, Alert } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Table } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { ChoiceHelper } from '../config/choices';
-import QuickActionsPanel from './QuickActionsPanel';
 import SprintKanbanPage from './SprintKanbanPage';
-import DashboardTasksModernWrapper from './DashboardTasksModernWrapper';
 import SprintSelector from './SprintSelector';
 import { useSprint } from '../contexts/SprintContext';
+import ChecklistPanel from './ChecklistPanel';
+import { functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import CompactSprintMetrics from './CompactSprintMetrics';
+import ThemeBreakdown from './ThemeBreakdown';
 
 interface DashboardStats {
   activeGoals: number;
@@ -47,6 +50,16 @@ const Dashboard: React.FC = () => {
   // Use global sprint selection for consistency across app
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
+  const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
+  const [tasksDueToday, setTasksDueToday] = useState<number>(0);
+  const dailyBrief = () => {
+    const parts: string[] = [];
+    if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
+    if (todayBlocks.length > 0) parts.push(`${todayBlocks.length} blocks scheduled`);
+    if (priorityBanner?.title) parts.push(`Focus: ${priorityBanner.title}`);
+    return parts.length ? parts.join(' · ') : 'No urgent items. Plan or review your goals.';
+  };
 
   useEffect(() => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
@@ -149,10 +162,95 @@ const Dashboard: React.FC = () => {
     setLastUpdated(new Date());
     setLoading(false);
 
+    // After basic data, load LLM priority, today's schedule and due counts in parallel
+    try {
+      await Promise.all([
+        loadLLMPriority(),
+        loadTodayBlocks(),
+        countTasksDueToday()
+      ]);
+    } catch {}
+
     return () => {
       unsubscribeStories();
       unsubscribeTasks();
     };
+  };
+
+  const loadLLMPriority = async () => {
+    if (!currentUser) return;
+    try {
+      // Use a small snapshot of tasks as candidates
+      const tq = query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid),
+        orderBy('createdAt', 'desc'),
+        limit(30)
+      );
+      const snap = await getDocs(tq);
+      const tasks: any[] = [];
+      snap.forEach(d => {
+        const t = d.data();
+        tasks.push({ id: d.id, title: t.title, dueDate: t.dueDate || null, priority: t.priority, effort: t.effort, status: t.status });
+      });
+
+      const call = httpsCallable(functions, 'prioritizeBacklog');
+      const res: any = await call({ tasks });
+      const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+      const todayItem = items.find((x: any) => (x.bucket || '').toUpperCase() === 'TODAY');
+      const best = todayItem || items.sort((a: any, b: any) => (b.score||0) - (a.score||0))[0];
+      if (best) {
+        const ref = tasks.find(t => t.id === best.id);
+        if (ref) setPriorityBanner({ title: ref.title, score: best.score || 0, bucket: best.bucket || null });
+      }
+    } catch (e) {
+      // Fallback: top priority from current upcomingTasks state
+      if (upcomingTasks && upcomingTasks.length > 0) {
+        const top = upcomingTasks[0];
+        setPriorityBanner({ title: top.title, score: 0 });
+      }
+    }
+  };
+
+  const loadTodayBlocks = async () => {
+    if (!currentUser) return;
+    const start = new Date(); start.setHours(0,0,0,0);
+    const end = new Date(); end.setHours(23,59,59,999);
+    const q = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('start', '>=', start.getTime()),
+      where('start', '<=', end.getTime())
+    );
+    const snap = await getDocs(q);
+    const blocks: any[] = [];
+    snap.forEach(d => blocks.push({ id: d.id, ...(d.data() || {}) }));
+    blocks.sort((a,b) => a.start - b.start);
+    setTodayBlocks(blocks);
+  };
+
+  const countTasksDueToday = async () => {
+    if (!currentUser) return;
+    const start = new Date(); start.setHours(0,0,0,0);
+    const end = new Date(); end.setHours(23,59,59,999);
+    // Tasks due today
+    const tq = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('dueDate', '>=', start.getTime()),
+      where('dueDate', '<=', end.getTime())
+    );
+    const ts = await getDocs(tq);
+    let count = ts.size;
+    // Chores due today via nextDueAt precompute
+    const cq = query(collection(db, 'chores'), where('ownerUid', '==', currentUser.uid));
+    const cs = await getDocs(cq);
+    cs.forEach(d => {
+      const c: any = d.data() || {};
+      const due = c.nextDueAt;
+      if (due && due >= start.getTime() && due <= end.getTime()) count += 1;
+    });
+    setTasksDueToday(count);
   };
 
   const getStatusColor = (status: string): string => {
@@ -181,16 +279,17 @@ const Dashboard: React.FC = () => {
     <Container fluid className="p-4">
       <Row>
         <Col>
-          <div className="d-flex justify-content-between align-items-center mb-4">
-            <div className="d-flex align-items-center gap-3">
+          <div className="d-flex justify-content-between align-items-center mb-3">
+            <div className="d-flex align-items-center gap-3 flex-wrap">
               <h2 className="mb-0">Dashboard</h2>
               <SprintSelector
                 selectedSprintId={selectedSprintId}
                 onSprintChange={(sprintId: string) => setSelectedSprintId(sprintId)}
                 className="ms-3"
               />
+              <CompactSprintMetrics selectedSprintId={selectedSprintId} />
             </div>
-            <div>
+            <div className="d-flex align-items-center">
               <small className="text-muted me-3">
                 Last updated: {lastUpdated.toLocaleTimeString()}
               </small>
@@ -207,43 +306,34 @@ const Dashboard: React.FC = () => {
             Currently viewing <Badge bg="primary">{currentPersona}</Badge> persona data.
           </Alert>
           
-          {/* Quick Stats Row */}
+          {/* Priority Banner */}
+          {priorityBanner && (
+            <Alert variant="primary" className="mb-3">
+              <strong>Priority for Today:</strong> {priorityBanner.title}
+              {priorityBanner.score ? <span className="ms-2 badge bg-light text-dark">Score {Math.round(priorityBanner.score)}</span> : null}
+            </Alert>
+          )}
+          {/* Daily Brief */}
+          <Card className="mb-3">
+            <Card.Body>
+              <strong>Daily Brief:</strong> <span className="ms-1">{dailyBrief()}</span>
+            </Card.Body>
+          </Card>
+          {/* Key Stats Row */}
           <Row className="mb-4">
-            <Col md={3}>
+            <Col md={6} lg={3}>
               <Card className="text-center h-100">
                 <Card.Body>
-                  <h3 className="text-primary">{stats.activeStories}</h3>
-                  <p className="mb-0">Active Stories</p>
+                  <h3 className="text-warning">{tasksDueToday}</h3>
+                  <p className="mb-0">Tasks Due Today</p>
                 </Card.Body>
               </Card>
             </Col>
-            <Col md={3}>
+            <Col md={6} lg={3}>
               <Card className="text-center h-100">
                 <Card.Body>
-                  <h3 className="text-warning">{stats.pendingTasks}</h3>
-                  <p className="mb-0">Pending Tasks</p>
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col md={3}>
-              <Card className="text-center h-100">
-                <Card.Body>
-                  <h3 className="text-success">{stats.completedToday}</h3>
-                  <p className="mb-0">Completed Today</p>
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col md={3}>
-              <Card className="text-center h-100">
-                <Card.Body>
-                  <h3 className="text-info">{stats.progressScore}%</h3>
-                  <p className="mb-0">Progress Score</p>
-                  <ProgressBar 
-                    now={stats.progressScore} 
-                    variant="info" 
-                    className="mt-2"
-                    style={{ height: '6px' }}
-                  />
+                  <h3 className="text-info">{todayBlocks.length}</h3>
+                  <p className="mb-0">Today's Blocks</p>
                 </Card.Body>
               </Card>
             </Col>
@@ -251,59 +341,50 @@ const Dashboard: React.FC = () => {
 
           {/* Sprint Kanban moved to its own page (/sprints/kanban) */}
 
-          {/* Tasks and Quick Actions (Modern table) */}
+          {/* 3-Column Overview: Checklist | Calendar | Theme Breakdown */}
           <Row className="mb-4">
-            <Col md={8}>
-              <DashboardTasksModernWrapper title="Upcoming Tasks" maxTasks={10} />
+            <Col lg={4} className="mb-3">
+              <Card className="h-100">
+                <Card.Body>
+                  <ChecklistPanel title="Today's Checklist" compact />
+                </Card.Body>
+              </Card>
             </Col>
-            <Col md={4}>
-              <QuickActionsPanel 
-                onAction={(type, data) => {
-                  console.log('✨ Quick action completed:', type, data);
-                  // Refresh dashboard data when new items are created
-                  loadDashboardData();
-                }} 
-              />
+            <Col lg={4} className="mb-3">
+              <Card className="h-100">
+                <Card.Header>
+                  <h5 className="mb-0">Today's Schedule</h5>
+                </Card.Header>
+                <Card.Body>
+                  {todayBlocks.length === 0 ? (
+                    <div className="text-muted">No blocks for today</div>
+                  ) : (
+                    <Table size="sm" className="mb-0">
+                      <thead>
+                        <tr>
+                          <th style={{width:'30%'}}>Time</th>
+                          <th>Category</th>
+                          <th>Theme</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {todayBlocks.map(b => (
+                          <tr key={b.id}>
+                            <td>{new Date(b.start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+                            <td>{b.category || b.title || 'Block'}</td>
+                            <td><Badge bg="secondary">{b.theme}</Badge></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col lg={4} className="mb-3">
+              <ThemeBreakdown />
             </Col>
           </Row>
-
-          {/* Tasks Due Today */}
-          <Row className="mb-4">
-            <Col md={12}>
-              <DashboardTasksModernWrapper title="Tasks Due Today" maxTasks={5} />
-            </Col>
-          </Row>
-
-          {/* Quick Actions */}
-          <Card>
-            <Card.Header>
-              <h5 className="mb-0">� Quick Actions</h5>
-            </Card.Header>
-            <Card.Body>
-              <Row>
-                <Col md={3} className="mb-2">
-                  <Button variant="primary" href="/kanban" className="w-100">
-                    Manage Stories
-                  </Button>
-                </Col>
-                <Col md={3} className="mb-2">
-                  <Button variant="success" href="/tasks" className="w-100">
-                    View Tasks
-                  </Button>
-                </Col>
-                <Col md={3} className="mb-2">
-                  <Button variant="info" href="/goals" className="w-100">
-                    Plan Goals
-                  </Button>
-                </Col>
-                <Col md={3} className="mb-2">
-                  <Button variant="warning" href="/ai-planner" className="w-100">
-                    AI Planning
-                  </Button>
-                </Col>
-              </Row>
-            </Card.Body>
-          </Card>
         </Col>
       </Row>
     </Container>

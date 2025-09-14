@@ -30,6 +30,20 @@ service cloud.firestore {
     match /activity_stream/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+
+    // New scheduler-related collections
+    match /themes/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /chores/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Alias for blocks in new schema (calendar_blocks already exists separately)
+    match /blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+
+    // Plans -> per-day document with assignments subcollection
+    match /plans/{dayKey} {
+      match /assignments/{assignmentId} {
+        allow create: if isOwnerForCreate();
+        allow read, update, delete: if isOwner();
+      }
+    }
     
     // Test login tokens - DENY in production
     match /test_login_tokens/{id} { allow read, write: if false; }

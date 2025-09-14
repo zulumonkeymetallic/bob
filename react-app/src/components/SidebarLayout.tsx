@@ -46,6 +46,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
       ]
     },
+    // Health
     {
       label: 'Health',
       icon: 'heartbeat',
@@ -98,6 +99,15 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       ]
     },
     {
+      label: 'Routines',
+      icon: 'check-circle',
+      items: [
+        { label: 'Daily Habits', path: '/habits', icon: 'check' },
+        { label: 'Chores (RRULE)', path: '/chores', icon: 'broom' },
+        { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
+      ]
+    },
+    {
       label: 'Travel',
       icon: 'globe',
       items: [
@@ -111,30 +121,15 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' }
       ]
     },
-    {
-      label: 'Data Management',
-      icon: 'list',
-      items: [
-        { label: 'Personal Lists', path: '/personal-lists-modern', icon: 'bookmark' }
-      ]
-    },
+    // (Removed Data Management per request)
     {
       label: 'System',
       icon: 'cog',
       items: [
-        { label: 'Settings', path: '/theme-colors', icon: 'cog' },
-        { label: 'Test Suite', path: '/test', icon: 'vial' },
-        { label: 'Changelog', path: '/changelog', icon: 'file-text' }
+        { label: 'Settings', path: '/theme-colors', icon: 'cog' }
       ]
     },
-    // Move Health to the bottom as requested
-    {
-      label: 'Health',
-      icon: 'heartbeat',
-      items: [
-        { label: 'Running Results', path: '/running-results', icon: 'running' }
-      ]
-    }
+    // Removed duplicate Health group at bottom
   ];
 
   const handleNavigation = (path: string) => {

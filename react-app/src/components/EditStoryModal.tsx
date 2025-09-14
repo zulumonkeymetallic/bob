@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
-import { collection, query, getDocs, where, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, getDocs, where, orderBy, updateDoc, doc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Story, Goal } from '../types';
+import { Story, Goal, Sprint } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 import { getPriorityName, getStatusName, getThemeName } from '../utils/statusHelpers';
 
 interface EditStoryModalProps {
@@ -28,12 +29,15 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     status: 1,
     theme: 1,
     points: 0,
-    acceptanceCriteria: ''
+    acceptanceCriteria: '',
+    sprintId: '' as string | ''
   });
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [goalInput, setGoalInput] = useState('');
+  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const { currentUser } = useAuth();
 
   // Initialize form when story changes
   useEffect(() => {
@@ -49,13 +53,29 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         points: story.points || 0,
         acceptanceCriteria: Array.isArray(story.acceptanceCriteria) 
           ? story.acceptanceCriteria.join('\n') 
-          : story.acceptanceCriteria || ''
+          : story.acceptanceCriteria || '',
+        sprintId: (story as any).sprintId || ''
       });
       setError(null);
       const currentGoal = goals.find(g => g.id === story.goalId);
       setGoalInput(currentGoal?.title || '');
     }
   }, [story, goals]);
+
+  // Load sprints for the selector
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('startDate', 'desc')
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const data = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[];
+      setSprints(data);
+    });
+    return () => unsub();
+  }, [currentUser]);
 
   const handleSave = async () => {
     if (!story || !editedStory.title.trim()) {
@@ -77,6 +97,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         priority: editedStory.priority,
         status: editedStory.status,
         points: editedStory.points,
+        sprintId: editedStory.sprintId || null,
         acceptanceCriteria: editedStory.acceptanceCriteria.trim() 
           ? editedStory.acceptanceCriteria.split('\n').map(line => line.trim()).filter(line => line.length > 0)
           : [],
@@ -148,6 +169,22 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           </Row>
 
           <Row>
+            <Col md={4}>
+              <Form.Group className="mb-3">
+                <Form.Label>Sprint</Form.Label>
+                <Form.Select
+                  value={editedStory.sprintId}
+                  onChange={(e) => handleInputChange('sprintId', e.target.value)}
+                >
+                  <option value="">Backlog (No Sprint)</option>
+                  {sprints.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} {s.status === 1 ? '(Active)' : ''}
+                    </option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+            </Col>
             <Col md={6}>
               <Form.Group className="mb-3">
                 <Form.Label>Linked Goal</Form.Label>
