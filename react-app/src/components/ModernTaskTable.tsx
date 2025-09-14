@@ -31,6 +31,7 @@ import {
   Activity
 } from 'lucide-react';
 import { Task, Story, Goal, Sprint } from '../types';
+import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
@@ -562,8 +563,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   // Convert tasks to table rows with sort order and story titles
   const tableRows: TaskTableRow[] = tasks.map((task, index) => {
     const story = stories.find(s => s.id === task.storyId);
+    const computedRef = (task as any).ref || (task as any).reference || (task as any).referenceNumber || displayRefForEntity('task', task.id);
     return {
       ...task,
+      ref: computedRef,
       sortOrder: index,
       storyTitle: story?.title || '',
     };
