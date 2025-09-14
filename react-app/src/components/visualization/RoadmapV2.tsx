@@ -58,6 +58,7 @@ const RoadmapV2: React.FC<Props> = ({
   stories,
   storiesByGoal,
   doneStoriesByGoal,
+  dragOverlay,
   onDragStart,
   onItemClick,
   updateGoalDates,
@@ -444,8 +445,8 @@ const RoadmapV2: React.FC<Props> = ({
                           const isCompact = widthPx < 220;
                           const isUltra = widthPx < 160;
                           const themeColor = getThemeById(migrateThemeValue(g.theme)).color;
-                          const bg1 = hexToRgba(themeColor, 0.12);
-                          const bg2 = hexToRgba(themeColor, 0.04);
+                          const bg1 = hexToRgba(themeColor, 0.16);
+                          const bg2 = hexToRgba(themeColor, 0.06);
                           const total = storiesByGoal[g.id] || 0;
                           const done = doneStoriesByGoal[g.id] || 0;
                           const progress = total ? Math.round((done / total) * 100) : 0;
@@ -455,7 +456,7 @@ const RoadmapV2: React.FC<Props> = ({
                               <div
                                 className={`rv2-card ${isCompact ? 'compact' : ''} ${isUltra ? 'ultra' : ''}`}
                                 data-goal-id={g.id}
-                                style={{ left, width: widthPx, borderColor: themeColor, borderWidth: 2, background: `linear-gradient(180deg, ${bg1}, ${bg2}), var(--card)` }}
+                                style={{ left, width: widthPx, borderColor: themeColor, borderWidth: 2, background: `linear-gradient(90deg, ${bg1}, ${bg2})` }}
                                 tabIndex={0}
                                 title={`${g.title}: ${subtitle}`}
                                 draggable={false}
@@ -483,11 +484,7 @@ const RoadmapV2: React.FC<Props> = ({
                                   <div className="rv2-progress-bar" style={{ width: `${progress}%` }} />
                                   <div className="rv2-progress-text">{progress}%</div>
                                 </div>
-                                {total === 0 && (
-                                  <div className="rv2-empty-hint">
-                                    Recommend auto-create using wand
-                                  </div>
-                                )}
+                                {/* Hint removed per request */}
                                 {!isCompact && (
                                 <div className="rv2-actions">
                                   <button className="rv2-icon-btn muted" title="Activity" onClick={(e) => { e.stopPropagation(); const full = goalById[g.id]; if (full) openGlobalActivity(full); }}><Activity size={14} /></button>

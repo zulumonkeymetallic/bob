@@ -38,7 +38,10 @@
   display: grid;
   grid-template-columns: 250px 1fr;
   border-bottom: 1px solid var(--line);
+  /* Make date header fully opaque so nothing shows through */
   background: var(--card);
+  background-color: var(--card);
+  isolation: isolate; /* create a new stacking context */
   box-shadow: 0 4px 10px rgba(0,0,0,0.25);
   /* Avoid blocking interactions below when users drag near the header edge */
   pointer-events: none;
@@ -52,6 +55,16 @@
   position: relative;
   height: var(--rv2-header-h);
   background: var(--card);
+  background-color: var(--card);
+}
+
+/* Ensure header paints an opaque layer regardless of theme transparency */
+.rv2-header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--card);
+  z-index: -1; /* behind month labels and axis within header */
 }
 .rv2-months { position: absolute; top: 0; left: 0; right: 0; height: 26px; }
 .rv2-month {
