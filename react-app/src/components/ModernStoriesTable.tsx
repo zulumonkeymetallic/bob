@@ -706,12 +706,20 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 backgroundColor: 'transparent',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
-                fontSize: '11px',
-                fontWeight: '500',
+                fontSize: '12px',
+                fontWeight: 500,
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'rgba(0,0,0,0.04)';
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--green)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--green)';
               }}
               title={isExpanded ? 'Hide tasks' : 'Show tasks'}
             >
-              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              {isExpanded ? '▼' : '▶'}
             </button>
           )}
           <button
