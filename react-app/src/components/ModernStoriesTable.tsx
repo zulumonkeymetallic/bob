@@ -20,7 +20,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { 
@@ -32,8 +32,9 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { Activity, Pencil, Trash2 } from 'lucide-react';
-import { Story, Goal, Sprint } from '../types';
+import { Story, Goal, Sprint, Task } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
+import ModernTaskTable from './ModernTaskTable';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { useSidebar } from '../contexts/SidebarContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
@@ -63,6 +64,7 @@ interface ModernStoriesTableProps {
   onStorySelect?: (story: Story) => void; // New prop for story selection
   onEditStory?: (story: Story) => void; // New prop for story editing
   goalId?: string; // Made optional for full stories table
+  enableInlineTasks?: boolean; // Only show green caret + inline tasks when true
 }
 
 const defaultColumns: Column[] = [
@@ -328,6 +330,7 @@ interface SortableRowProps {
   onStorySelect?: (story: Story) => void;
   onEditStory?: (story: Story) => void;
   onToggleExpand?: (storyId: string) => void;
+  isExpanded?: boolean;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -340,7 +343,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryDelete,
   onStorySelect,
   onEditStory,
-  onToggleExpand
+  onToggleExpand,
+  isExpanded
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { showSidebar } = useSidebar();
@@ -691,6 +695,25 @@ const SortableRow: React.FC<SortableRowProps> = ({
         width: '96px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          {onToggleExpand && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleExpand && onToggleExpand(story.id); }}
+              style={{
+                color: 'var(--green)',
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                fontSize: '11px',
+                fontWeight: '500',
+              }}
+              title={isExpanded ? 'Hide tasks' : 'Show tasks'}
+            >
+              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+          )}
           <button
             onClick={() => showSidebar(story as any, 'story')}
             style={{
@@ -772,6 +795,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onStorySelect,
   onEditStory,
   goalId,
+  enableInlineTasks = false,
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -784,6 +808,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     display: false,
   });
   const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
   
   // New story row state
   const [isAddingNewStory, setIsAddingNewStory] = useState(false);
@@ -799,6 +824,21 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     points: '',
     hasGoal: ''
   });
+
+  // Subscribe to tasks when inline tasks are enabled
+  useEffect(() => {
+    if (!enableInlineTasks || !currentUser) return;
+    const tasksQ = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(tasksQ, (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[];
+      setAllTasks(list);
+    });
+    return () => unsub();
+  }, [enableInlineTasks, currentUser, currentPersona]);
   const [sortConfig, setSortConfig] = useState({
     key: 'updatedAt',
     direction: 'desc' as 'asc' | 'desc'
@@ -1425,8 +1465,9 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         onStorySelect={onStorySelect}
                         onEditStory={onEditStory}
                         onToggleExpand={handleToggleExpand}
+                        isExpanded={expandedStoryId === story.id}
                       />
-                      {expandedStoryId === story.id && (
+                      {enableInlineTasks && expandedStoryId === story.id && (
                         <tr>
                           <td colSpan={columns.filter(col => col.visible).length + 2} style={{ padding: 0, borderTop: 'none' }}>
                             <div style={{ 
@@ -1441,12 +1482,41 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                                 fontWeight: '600', 
                                 color: themeVars.text as string
                               }}>
-                                📋 Tasks for: {story.title}
+                                🧩 Tasks for: {story.title}
                               </h4>
-                              {/* Use ModernTaskTable for consistency */}
-                              <div>
-                                <em style={{ color: themeVars.muted as string }}>Open the story to manage tasks in the Tasks section below.</em>
-                              </div>
+                              <ModernTaskTable
+                                tasks={allTasks.filter(t => (t as any).parentType === 'story' && (t as any).parentId === story.id)}
+                                stories={stories as any}
+                                goals={goals as any}
+                                sprints={sprints as any}
+                                onTaskCreate={async (newTask) => {
+                                  const linkedGoal = goals.find(g => g.id === (story as any).goalId);
+                                  await addDoc(collection(db, 'tasks'), {
+                                    title: newTask.title || '',
+                                    description: newTask.description || '',
+                                    parentType: 'story',
+                                    parentId: story.id,
+                                    status: (newTask as any).status ?? 'planned',
+                                    priority: (newTask as any).priority ?? 2,
+                                    effort: (newTask as any).effort ?? 'M',
+                                    dueDate: (newTask as any).dueDate || null,
+                                    theme: (linkedGoal as any)?.theme ?? 1,
+                                    ownerUid: currentUser!.uid,
+                                    persona: currentPersona,
+                                    createdAt: serverTimestamp(),
+                                    updatedAt: serverTimestamp(),
+                                  } as any);
+                                }}
+                                onTaskUpdate={async (taskId, updates) => {
+                                  await updateDoc(doc(db, 'tasks', taskId), { ...updates, updatedAt: serverTimestamp() } as any);
+                                }}
+                                onTaskDelete={async (taskId) => {
+                                  await deleteDoc(doc(db, 'tasks', taskId));
+                                }}
+                                onTaskPriorityChange={async (taskId, newPriority) => {
+                                  await updateDoc(doc(db, 'tasks', taskId), { priority: newPriority, updatedAt: serverTimestamp() } as any);
+                                }}
+                              />
                             </div>
                           </td>
                         </tr>

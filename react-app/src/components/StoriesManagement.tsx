@@ -527,6 +527,7 @@ const StoriesManagement: React.FC = () => {
                     onStorySelect={setSelectedStory}
                     onEditStory={openEditStory}
                     goalId="all"
+                    enableInlineTasks
                   />
                 ) : (
                   <StoriesCardView 

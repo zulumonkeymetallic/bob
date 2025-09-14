@@ -65,8 +65,10 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           
           const preferredSprint = activeSprint || plannedSprint || fallbackSprint;
 
-          // Respect explicit "All Sprints" selection (empty string) and do not auto-select
-          const isExplicitAll = selectedSprintId === '';
+          // Respect explicit "All Sprints" only if user saved it.
+          // Initial state may be '' before any selection is saved in localStorage.
+          const saved = (typeof window !== 'undefined') ? localStorage.getItem('bob_selected_sprint') : null;
+          const isExplicitAll = selectedSprintId === '' && saved === '';
 
           // If no sprint is selected (undefined/null) or current selection is not found, select preferred
           if (!isExplicitAll && (!selectedSprintId || !sprintData.find(s => s.id === selectedSprintId))) {
