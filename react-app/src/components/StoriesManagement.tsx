@@ -16,6 +16,7 @@ import { isStatus, isTheme } from '../utils/statusHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import { themeVars } from '../utils/themeVars';
+import ConfirmDialog from './ConfirmDialog';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -32,6 +33,7 @@ const StoriesManagement: React.FC = () => {
   const [showEditStoryModal, setShowEditStoryModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
@@ -178,10 +180,18 @@ const StoriesManagement: React.FC = () => {
   };
 
   const handleStoryDelete = async (storyId: string) => {
+    const s = stories.find(st => st.id === storyId);
+    setConfirmDelete({ id: storyId, title: s?.title || storyId });
+  };
+
+  const performStoryDelete = async () => {
+    if (!confirmDelete) return;
     try {
-      await deleteDoc(doc(db, 'stories', storyId));
+      await deleteDoc(doc(db, 'stories', confirmDelete.id));
     } catch (error) {
       console.error('Error deleting story:', error);
+    } finally {
+      setConfirmDelete(null);
     }
   };
 
@@ -622,6 +632,15 @@ const StoriesManagement: React.FC = () => {
           setShowImportModal(false);
           loadStoriesData(); // Refresh stories after import
         }}
+      />
+
+      <ConfirmDialog
+        show={!!confirmDelete}
+        title="Delete Story?"
+        message={<span>Are you sure you want to delete story <strong>{confirmDelete?.title}</strong>? This cannot be undone.</span>}
+        confirmText="Delete Story"
+        onConfirm={performStoryDelete}
+        onCancel={() => setConfirmDelete(null)}
       />
     </div>
   );

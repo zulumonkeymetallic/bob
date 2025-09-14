@@ -12,6 +12,7 @@ import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
 import { isStatus, getThemeName } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import ConfirmDialog from './ConfirmDialog';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -23,6 +24,7 @@ const GoalsManagement: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
@@ -121,10 +123,18 @@ const GoalsManagement: React.FC = () => {
   };
 
   const handleGoalDelete = async (goalId: string) => {
+    const g = goals.find(gl => gl.id === goalId);
+    setConfirmDelete({ id: goalId, title: g?.title || goalId });
+  };
+
+  const performGoalDelete = async () => {
+    if (!confirmDelete) return;
     try {
-      await deleteDoc(doc(db, 'goals', goalId));
+      await deleteDoc(doc(db, 'goals', confirmDelete.id));
     } catch (error) {
       console.error('Error deleting goal:', error);
+    } finally {
+      setConfirmDelete(null);
     }
   };
 
@@ -393,13 +403,22 @@ const GoalsManagement: React.FC = () => {
           </Card.Body>
         </Card>
 
-        {/* Shared Edit Goal Modal */}
-        <EditGoalModal
-          goal={editGoal}
-          show={!!editGoal}
-          onClose={() => setEditGoal(null)}
-          currentUserId={currentUser?.uid || ''}
-        />
+      {/* Shared Edit Goal Modal */}
+      <EditGoalModal
+        goal={editGoal}
+        show={!!editGoal}
+        onClose={() => setEditGoal(null)}
+        currentUserId={currentUser?.uid || ''}
+      />
+
+      <ConfirmDialog
+        show={!!confirmDelete}
+        title="Delete Goal?"
+        message={<span>Are you sure you want to delete goal <strong>{confirmDelete?.title}</strong>? This cannot be undone.</span>}
+        confirmText="Delete Goal"
+        onConfirm={performGoalDelete}
+        onCancel={() => setConfirmDelete(null)}
+      />
       </div>
     </div>
   );
