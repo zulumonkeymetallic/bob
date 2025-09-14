@@ -321,7 +321,7 @@ const GoalsManagement: React.FC = () => {
                   <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Sprint</Form.Label>
                   <div>
                     <SprintSelector
-                      selectedSprintId={selectedSprintId || undefined}
+                      selectedSprintId={selectedSprintId}
                       onSprintChange={(id) => setSelectedSprintId(id)}
                     />
                   </div>

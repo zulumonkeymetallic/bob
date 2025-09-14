@@ -53,6 +53,13 @@ const Dashboard: React.FC = () => {
   const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
+  const dailyBrief = () => {
+    const parts: string[] = [];
+    if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
+    if (todayBlocks.length > 0) parts.push(`${todayBlocks.length} blocks scheduled`);
+    if (priorityBanner?.title) parts.push(`Focus: ${priorityBanner.title}`);
+    return parts.length ? parts.join(' · ') : 'No urgent items. Plan or review your goals.';
+  };
 
   useEffect(() => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
@@ -280,7 +287,7 @@ const Dashboard: React.FC = () => {
                 onSprintChange={(sprintId: string) => setSelectedSprintId(sprintId)}
                 className="ms-3"
               />
-              <CompactSprintMetrics selectedSprintId={selectedSprintId || undefined} />
+              <CompactSprintMetrics selectedSprintId={selectedSprintId} />
             </div>
             <div className="d-flex align-items-center">
               <small className="text-muted me-3">
@@ -306,6 +313,12 @@ const Dashboard: React.FC = () => {
               {priorityBanner.score ? <span className="ms-2 badge bg-light text-dark">Score {Math.round(priorityBanner.score)}</span> : null}
             </Alert>
           )}
+          {/* Daily Brief */}
+          <Card className="mb-3">
+            <Card.Body>
+              <strong>Daily Brief:</strong> <span className="ms-1">{dailyBrief()}</span>
+            </Card.Body>
+          </Card>
           {/* Key Stats Row */}
           <Row className="mb-4">
             <Col md={6} lg={3}>

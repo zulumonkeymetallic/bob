@@ -10,7 +10,6 @@ import ModernKanbanPage from './components/ModernKanbanPage';
 import TasksList from './components/TasksList';
 import PlanningDashboard from './components/PlanningDashboard';
 import Calendar from './components/CalendarDnDView';
-import Changelog from './components/Changelog';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
@@ -37,7 +36,6 @@ import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
 import { checkForUpdates, VERSION } from './version';
 // import { versionTimeoutService } from './services/versionTimeoutService';
-import ComprehensiveTest from './components/ComprehensiveTest';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
 import { clickTrackingService } from './services/ClickTrackingService';
 import logger from './utils/logger';
@@ -53,6 +51,8 @@ import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
+import ChoresManagement from './components/ChoresManagement';
+import HabitsManagement from './components/HabitsManagement';
 import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
@@ -213,6 +213,8 @@ function AppContent() {
             <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
+            <Route path="/chores" element={<ChoresManagement />} />
+            <Route path="/habits" element={<HabitsManagement />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />
@@ -243,8 +245,9 @@ function AppContent() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
             <Route path="/admin" element={<Admin />} />
-            <Route path="/test" element={<ComprehensiveTest />} />
-            <Route path="/changelog" element={<Changelog />} />
+            {/* Removed by request: Test Suite and Changelog routes */}
+            <Route path="/test" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
 

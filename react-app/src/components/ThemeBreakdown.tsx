@@ -5,7 +5,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Goal } from '../types';
-import { GLOBAL_THEMES, getThemeById } from '../constants/globalThemes';
+import { GLOBAL_THEMES, getThemeById, getThemeByName } from '../constants/globalThemes';
 import { isStatus } from '../utils/statusHelpers';
 
 const ThemeBreakdown: React.FC = () => {
@@ -83,11 +83,12 @@ const ThemeBreakdown: React.FC = () => {
       <Card.Body>
         {rows.map(r => {
           const pct = r.stories > 0 ? Math.round((r.doneStories / r.stories) * 100) : 0;
+          const themeForRow = getThemeByName(r.label);
           return (
             <div key={r.key} className="mb-3">
               <div className="d-flex justify-content-between align-items-center">
                 <div>
-                  <strong>{r.label}</strong>
+                  <strong style={{ color: themeForRow.color }}>{r.label}</strong>
                   <Badge bg="light" text="dark" className="ms-2">{r.goals} goals</Badge>
                   <Badge bg="light" text="dark" className="ms-2">{r.stories} stories</Badge>
                 </div>

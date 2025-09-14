@@ -43,8 +43,13 @@ export class ActivityStreamService {
   // Add activity entry
   static async addActivity(activity: Omit<ActivityEntry, 'id' | 'timestamp'>): Promise<void> {
     try {
+      // Remove undefined values to satisfy Firestore constraints
+      const cleaned: any = {};
+      Object.entries(activity as Record<string, any>).forEach(([k, v]) => {
+        if (v !== undefined) cleaned[k] = v;
+      });
       await addDoc(collection(db, 'activity_stream'), {
-        ...activity,
+        ...cleaned,
         // Firestore rules require ownerUid for create; match to userId
         ownerUid: activity.userId,
         timestamp: serverTimestamp(),

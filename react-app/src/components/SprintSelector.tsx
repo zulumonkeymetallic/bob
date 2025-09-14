@@ -64,9 +64,12 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           const fallbackSprint = sprintData[0]; // Most recent by start date
           
           const preferredSprint = activeSprint || plannedSprint || fallbackSprint;
-          
-          // If no sprint is selected or current selection is not found, select preferred
-          if (!selectedSprintId || !sprintData.find(s => s.id === selectedSprintId)) {
+
+          // Respect explicit "All Sprints" selection (empty string) and do not auto-select
+          const isExplicitAll = selectedSprintId === '';
+
+          // If no sprint is selected (undefined/null) or current selection is not found, select preferred
+          if (!isExplicitAll && (!selectedSprintId || !sprintData.find(s => s.id === selectedSprintId))) {
             if (preferredSprint) {
               logger.info('sprint', 'Auto-selecting sprint', { name: preferredSprint.name, status: preferredSprint.status });
               onSprintChange(preferredSprint.id);

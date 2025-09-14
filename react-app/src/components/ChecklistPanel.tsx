@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, doc, updateDoc, setDoc } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { PlanAssignment } from '../types/scheduler';
@@ -17,7 +17,7 @@ interface ChecklistItem {
   title: string;
   start?: number;
   end?: number;
-  source: 'assignment' | 'task' | 'chore';
+  source: 'assignment' | 'task' | 'chore' | 'habit';
   raw?: any;
 }
 
@@ -81,6 +81,18 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
           }
         });
 
+        // Habits due today (daily & active)
+        const habitsSnap = await getDocs(query(collection(db, 'habits'), where('userId','==', currentUser.uid), where('isActive','==', true)));
+        const now = new Date();
+        const todayStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+        for (const hDoc of habitsSnap.docs) {
+          const h: any = hDoc.data();
+          if (h.frequency === 'daily') {
+            // check entry
+            list.push({ id: `habit-${hDoc.id}`, title: h.name, start: undefined, end: undefined, source: 'habit', raw: { id: hDoc.id, ...h } });
+          }
+        }
+
         setItems(list);
       } finally {
         setLoading(false);
@@ -94,6 +106,11 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         try {
           const call = httpsCallable(functions, 'buildPlan');
           await call({ day: `${new Date().toISOString().slice(0,10)}` });
+          // Attempt to sync assignments to Google Calendar as well (best-effort)
+          try {
+            const sync = httpsCallable(functions, 'syncPlanToGoogleCalendar');
+            await sync({ day: `${new Date().toISOString().slice(0,10)}` });
+          } catch {}
         } catch {}
         localStorage.setItem(key, '1');
       }
@@ -126,6 +143,14 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         const now = Date.now();
         const next = nextDueAt(chore.rrule, chore.dtstart, now + 60000);
         await updateDoc(doc(db, 'chores', id), { lastCompletedAt: now, nextDueAt: next || null, updatedAt: now });
+      } else if (item.source === 'habit') {
+        const h = item.raw || {};
+        const entryId = todayKey;
+        await updateDoc(doc(db, `habits/${h.id}/habitEntries/${entryId}`), { isCompleted: true, updatedAt: Date.now() }).catch(async () => {
+          await setDoc(doc(db, `habits/${h.id}/habitEntries/${entryId}`), {
+            id: entryId, habitId: h.id, date: new Date().setHours(0,0,0,0), value: 1, isCompleted: true, createdAt: Date.now(), updatedAt: Date.now()
+          });
+        });
       }
       // Optimistic remove from UI
       setItems(prev => prev.filter(i => i.id !== item.id));

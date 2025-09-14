@@ -6,6 +6,7 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
 const aiUsageLogger = require("./utils/aiUsageLogger");
+const { rrulestr } = require('rrule');
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -81,6 +82,45 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
     .map(d => ({ id: d.id, ...(d.data() || {}) }))
     .filter(t => t && t.status !== 2 && t.status !== 'done');
 
+  // Load chores due for the selected day
+  const choresSnap = await db.collection('chores')
+    .where('ownerUid', '==', uid)
+    .get();
+  const sod = new Date(date); sod.setHours(0,0,0,0);
+  const eod = new Date(date); eod.setHours(23,59,59,999);
+  function nextDue(rruleText, dtstartMs, fromMs) {
+    try {
+      const hasDt = /DTSTART/i.test(String(rruleText||''));
+      const text = !hasDt && dtstartMs
+        ? `DTSTART:${new Date(dtstartMs).toISOString().replace(/[-:]/g,'').split('.')[0]}Z\n${rruleText}`
+        : rruleText;
+      const rule = rrulestr(text);
+      const next = rule.after(new Date(fromMs), true);
+      return next ? next.getTime() : null;
+    } catch { return null; }
+  }
+  const chores = choresSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }))
+    .map(c => {
+      const due = nextDue(c.rrule, c.dtstart || c.createdAt || undefined, sod.getTime()-1);
+      return { ...c, _due: due };
+    })
+    .filter(c => c._due && c._due >= sod.getTime() && c._due <= eod.getTime());
+
+  // Load habits (daily, active) and derive preferred start time
+  const habitsSnap = await db.collection('habits')
+    .where('userId','==', uid)
+    .where('isActive','==', true)
+    .get();
+  function toTimeMs(hhmm) {
+    const [hh, mm] = String(hhmm || '07:00').split(':').map(x=>Number(x));
+    const t = new Date(sod);
+    t.setHours(hh||7, mm||0, 0, 0);
+    return t.getTime();
+  }
+  const habits = habitsSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }))
+    .filter(h => (h.frequency||'daily') === 'daily' || ((h.frequency||'') === 'weekly' && Array.isArray(h.daysOfWeek) && h.daysOfWeek.includes(new Date(sod).getDay())))
+    .map(h => ({ ...h, _preferredStart: toTimeMs(h.scheduleTime || '07:00') }));
+
   // Score deterministically
   function scoreTask(t) {
     let s = 0;
@@ -109,12 +149,27 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   // Optional: soft LLM re-rank within a 20% band – omitted in Phase 1 to keep deterministic behavior
 
   // Pack into blocks greedily
-  const items = ranked.map(t => ({
-    type: 'task',
-    id: t.id,
-    title: t.title || 'Task',
-    minutes: Number(t.estimateMin) || (t.effort === 'S' ? 20 : t.effort === 'M' ? 45 : 90),
-  }));
+  const items = [
+    ...ranked.map(t => ({
+      type: 'task',
+      id: t.id,
+      title: t.title || 'Task',
+      minutes: Number(t.estimateMin) || (t.effort === 'S' ? 20 : t.effort === 'M' ? 45 : 90),
+    })),
+    ...chores.map(c => ({
+      type: 'chore',
+      id: c.id,
+      title: c.title || 'Chore',
+      minutes: Number(c.estimatedMinutes) || 15
+    })),
+    ...habits.map(h => ({
+      type: 'habit',
+      id: h.id,
+      title: h.name || 'Habit',
+      minutes: 15,
+      preferredStart: h._preferredStart
+    }))
+  ];
 
   const assignments = [];
   const blockFree = new Map();
@@ -126,6 +181,45 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   for (const it of items) {
     // Find earliest block with enough remaining minutes
     let placed = false;
+    // Try to respect preferredStart if provided (habits)
+    if (it.preferredStart) {
+      for (const b of blocks) {
+        const state = blockFree.get(b.id);
+        if (!state) continue;
+        if (it.preferredStart >= b.start && (it.preferredStart + it.minutes*60000) <= b.end) {
+          // place at max(cursor, preferredStart)
+          const startMs = Math.max(state.cursor, it.preferredStart);
+          const endMs = startMs + it.minutes*60000;
+          if (endMs <= b.end && (endMs - startMs)/60000 <= state.free) {
+            assignments.push({
+              id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+              planId, dayKey, userId: uid, ownerUid: uid,
+              itemType: it.type, itemId: it.id, title: it.title,
+              estimatedMinutes: it.minutes, blockId: b.id, start: startMs, end: endMs,
+              status: 'planned', createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            state.free -= Math.floor((endMs-startMs)/60000);
+            state.cursor = endMs;
+            placed = true;
+            break;
+          }
+        }
+      }
+      if (!placed) {
+        // schedule without a block at preferredStart
+        const startMs = it.preferredStart;
+        const endMs = startMs + it.minutes*60000;
+        assignments.push({
+          id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+          planId, dayKey, userId: uid, ownerUid: uid,
+          itemType: it.type, itemId: it.id, title: it.title,
+          estimatedMinutes: it.minutes, start: startMs, end: endMs,
+          status: 'planned', createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        placed = true;
+      }
+    }
+    if (placed) continue;
     for (const b of blocks) {
       const state = blockFree.get(b.id);
       if (!state) continue;
@@ -196,6 +290,37 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   });
 
   return { planId, dayKey, assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })) };
+});
+
+// Reconcile assignments with Google Calendar: if child events were deleted externally,
+// mark assignments as deferred and clear the external.googleEventId
+exports.reconcilePlanFromGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+  const db = admin.firestore();
+  const dayKey = toDayKey(date);
+  const access = await getAccessToken(uid);
+  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
+  const toCheck = asSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) })).filter(a => a?.external?.googleEventId);
+  let cleared = 0;
+  for (const a of toCheck) {
+    const eid = a.external.googleEventId;
+    try {
+      // GET returns 404 if deleted
+      await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
+        headers: { 'Authorization': 'Bearer ' + access }
+      });
+    } catch (e) {
+      // Treat as deleted -> clear and mark deferred
+      await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id)
+        .set({ status: 'deferred', external: { googleEventId: null }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      cleared++;
+    }
+  }
+  return { ok: true, checked: toCheck.length, cleared };
 });
 
 // ===== Utilities
@@ -899,6 +1024,37 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
     return [];
   }
 }
+
+// Scheduled: reconcile Google Calendar deletions for all users every 15 minutes
+exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
+  const db = admin.firestore();
+  // Find users with Google tokens
+  const snap = await db.collection('tokens').where('provider','==','google').get().catch(()=>null);
+  if (!snap || snap.empty) return;
+  const today = new Date();
+  const work = [];
+  for (const d of snap.docs) {
+    const uid = d.id.split('_')[0] || d.id; // tokens doc is uid
+    work.push((async () => {
+      try {
+        const dayKey = toDayKey(today);
+        // Perform reconciliation similar to reconcilePlanFromGoogleCalendar
+        const access = await getAccessToken(uid);
+        const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
+        const toCheck = asSnap.docs.map(x=>({ id:x.id, ...(x.data()||{}) })).filter(a => a?.external?.googleEventId);
+        for (const a of toCheck) {
+          try {
+            await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(a.external.googleEventId)}`, { headers: { 'Authorization': 'Bearer '+access } });
+          } catch {
+            await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id)
+              .set({ status:'deferred', external:{ googleEventId: null }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          }
+        }
+      } catch {}
+    })());
+  }
+  await Promise.allSettled(work);
+});
 
 // ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
 exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
@@ -1832,7 +1988,15 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     const tasksSnap = await db.collection('tasks').where('ownerUid','==',uid).get();
     const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
     const toPush = tasks.filter(t => !t.reminderId && t.status !== 2 && ((t.dueDate||0) <= (start.getTime()+24*3600*1000)));
-    const payload = toPush.map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate || null }));
+    const payload = toPush.map(t => ({
+      id: t.id,
+      title: t.title,
+      dueDate: t.dueDate || null,
+      ref: `TK-${String(t.id||'').slice(0,6).toUpperCase()}`,
+      createdAt: t.createdAt || null,
+      storyId: t.storyId || null,
+      goalId: t.goalId || null
+    }));
     return res.json({ ok: true, tasks: payload });
   } catch (e) {
     console.error('remindersPush error', e);

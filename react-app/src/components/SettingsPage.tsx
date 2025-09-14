@@ -8,7 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
 import CalendarSyncManager from './CalendarSyncManager';
-import { Settings, Palette, Database, Calendar, Wand2 } from 'lucide-react';
+import { Settings, Palette, Database, Calendar, Wand2, KeyRound, Clipboard, FileCode } from 'lucide-react';
 import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 
@@ -52,6 +52,63 @@ const SettingsPage: React.FC = () => {
   const [saveProfileMsg, setSaveProfileMsg] = useState<string>('');
   const [saveProfileError, setSaveProfileError] = useState<string>('');
   const [savingProfile, setSavingProfile] = useState<boolean>(false);
+
+  // Reminders (Shortcuts) helpers
+  const [remindersSecret, setRemindersSecret] = useState<string>('');
+  const userUid = currentUser?.uid || '';
+  const pushUrl = `https://bob20250810.web.app/reminders/push?uid=${userUid}`;
+  const pullUrl = `https://bob20250810.web.app/reminders/pull?uid=${userUid}`;
+  const jellyPush = `shortcut "BOB Reminders – Push" {\n  let base = \"https://bob20250810.web.app\"\n  let uid = ask(\"Enter BOB User ID\")\n  let secret = ask(\"Enter Reminders Secret\")\n  let remindersList = ask(\"Reminders List (default: Personal)\")\n  if (remindersList == null || remindersList == \"\") { remindersList = \"Personal\" }\n  let headers = dictionary { \"x-reminders-secret\": secret }\n  let url = base + \"/reminders/push?uid=\" + uid\n  let response = getContentsOfURL(url: url, method: GET, headers: headers)\n  let payload = getDictionary(response)\n  let tasks = payload[\"tasks\"]\n  repeat task in tasks {\n    let id = task[\"id\"]\n    let title = task[\"title\"]\n    let dueDateMs = task[\"dueDate\"]\n    let ref = task[\"ref\"] ?? id\n    let storyId = task[\"storyId\"]\n    let goalId = task[\"goalId\"]\n    let createdAtMs = task[\"createdAt\"]\n    let createdLine = \"\"\n    if (createdAtMs != null) {\n      let createdDate = date((createdAtMs / 1000))\n      createdLine = \"[Created: \" + formatDate(createdDate, \"yyyy-MM-dd HH:mm\") + \"]\"\n    }\n    let due = null\n    if (dueDateMs != null) { due = date((dueDateMs / 1000)) }\n    let marker = \"BOB: \" + ref\n    let existing = findReminders(inList: remindersList, where: notesContains(marker), limit: 1)\n    if (count(existing) == 0) {\n      let extra = \"\"\n      if (storyId != null && storyId != \"\") { extra = extra + \" | Story: \" + storyId }\n      if (goalId != null && goalId != \"\") { extra = extra + \" | Goal: \" + goalId }\n      let line1 = marker + extra\n      let line2 = \"[\" + formatDate(currentDate(), \"yyyy-MM-dd HH:mm\") + \"] Created via Push\"\n      let line3 = (due != null) ? (\"(due: \" + formatDate(due, \"yyyy-MM-dd\") + \")\") : \"\"\n      let notes = line1 + \"\\n\" + line2 + (line3 == \"\" ? \"\" : (\" \" + line3)) + (createdLine == \"\" ? \"\" : (\"\\n\" + createdLine))\n      let r = createReminder(title: title, inList: remindersList, dueDate: due, notes: notes)\n    } else {\n      let r = first(existing)\n      setReminder(r, title: title, dueDate: due)\n      let prepend = \"[\" + formatDate(currentDate(), \"yyyy-MM-dd HH:mm\") + \"] Updated via Push\"\n      prependReminderNotes(r, prepend)\n    }\n  }\n}\n`;
+  const jellyPull = `shortcut \"BOB Reminders – Pull\" {\n  let base = \"https://bob20250810.web.app\"\n  let uid = ask(\"Enter BOB User ID\")\n  let secret = ask(\"Enter Reminders Secret\")\n  let remindersList = ask(\"Reminders List (default: Personal)\")\n  if (remindersList == null || remindersList == \"\") { remindersList = \"Personal\" }\n  let lookbackMinutes = 120\n  let since = addToDate(currentDate(), minutes: -lookbackMinutes)\n  let candidates = findReminders(inList: remindersList, where: modifiedAfter(since))\n  let changes = []\n  repeat r in candidates {\n    let rid = identifier(r)\n    let notes = getReminderNotes(r)\n    let firstLine = firstLineOf(notes)\n    let id = null\n    if (startsWith(firstLine, \"BOB:\")) { id = trim(replace(firstLine, \"BOB:\", \"\")) }\n    let completed = isReminderCompleted(r)\n    let entry = dictionary { \"id\": id, \"reminderId\": rid, \"completed\": completed }\n    changes = append(changes, entry)\n    let stamp = \"[\" + formatDate(currentDate(), \"yyyy-MM-dd HH:mm\") + \"] \" + (completed ? \"Completed\" : \"Updated\") + \" in Reminders\"\n    prependReminderNotes(r, stamp)\n  }\n  let body = dictionary { \"tasks\": changes, \"uid\": uid }\n  let headers = dictionary { \"x-reminders-secret\": secret, \"Content-Type\": \"application/json\" }\n  let url = base + \"/reminders/pull?uid=\" + uid\n  let result = getContentsOfURL(url: url, method: POST, headers: headers, body: toJSON(body))\n  showResult(result)\n}\n`;
+  const copy = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); alert('Copied'); } catch {}
+  };
+
+  // Generate minimal Apple Shortcuts JSON skeletons for import
+  const makePushShortcutJson = (uid: string, secret: string, base: string) => ({
+    WFWorkflowClientVersion: 900,
+    WFWorkflowIcon: { WFWorkflowIconGlyphNumber: 59513, WFWorkflowIconStartColor: 0 },
+    WFWorkflowName: 'BOB Reminders – Push',
+    WFWorkflowActions: [
+      {
+        WFWorkflowActionIdentifier: 'is.workflow.actions.getcontentsurl',
+        WFWorkflowActionParameters: {
+          WFGetContentsOfURLActionURL: `${base}/reminders/push?uid=${uid}`,
+          WFHTTPMethod: 'GET',
+          WFHTTPHeaders: { 'x-reminders-secret': secret }
+        }
+      }
+    ]
+  });
+
+  const makePullShortcutJson = (uid: string, secret: string, base: string) => ({
+    WFWorkflowClientVersion: 900,
+    WFWorkflowIcon: { WFWorkflowIconGlyphNumber: 59513, WFWorkflowIconStartColor: 0 },
+    WFWorkflowName: 'BOB Reminders – Pull',
+    WFWorkflowActions: [
+      {
+        WFWorkflowActionIdentifier: 'is.workflow.actions.getcontentsurl',
+        WFWorkflowActionParameters: {
+          WFGetContentsOfURLActionURL: `${base}/reminders/pull?uid=${uid}`,
+          WFHTTPMethod: 'POST',
+          WFHTTPHeaders: { 'x-reminders-secret': secret, 'Content-Type': 'application/json' },
+          WFRequestBody: JSON.stringify({ tasks: [] })
+        }
+      }
+    ]
+  });
+
+  const downloadJson = (filename: string, data: any) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   // Check if database needs migration to new theme system
   const checkMigrationStatus = async () => {
@@ -290,6 +347,16 @@ const SettingsPage: React.FC = () => {
               </Nav.Item>
               <Nav.Item>
                 <Nav.Link 
+                  eventKey="reminders" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <KeyRound size={20} className="me-2" />
+                  Reminders (Shortcuts)
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
                   eventKey="ai"
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
@@ -392,6 +459,93 @@ const SettingsPage: React.FC = () => {
                       <strong>Note:</strong> Changes to themes will apply to all new goals, stories, and tasks. 
                       Existing items will retain their current theme assignments unless migrated.
                     </Alert>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
+              {/* Reminders (Shortcuts) Tab */}
+              <Tab.Pane eventKey="reminders">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">Apple Reminders (Shortcuts)</h4>
+                    <small className="text-muted">Endpoints, your UID, Jellycuts code, and secret rotation</small>
+                  </Card.Header>
+                  <Card.Body>
+                    <Row className="mb-3">
+                      <Col md={6}>
+                        <Form.Group className="mb-2">
+                          <Form.Label>Your User ID (UID)</Form.Label>
+                          <div className="d-flex gap-2">
+                            <Form.Control readOnly value={userUid} />
+                            <Button variant="outline-secondary" onClick={() => copy(userUid)}><Clipboard size={16} /></Button>
+                          </div>
+                        </Form.Group>
+                        <Form.Group className="mb-2">
+                          <Form.Label>Push URL</Form.Label>
+                          <div className="d-flex gap-2">
+                            <Form.Control readOnly value={pushUrl} />
+                            <Button variant="outline-secondary" onClick={() => copy(pushUrl)}><Clipboard size={16} /></Button>
+                          </div>
+                        </Form.Group>
+                        <Form.Group className="mb-2">
+                          <Form.Label>Pull URL</Form.Label>
+                          <div className="d-flex gap-2">
+                            <Form.Control readOnly value={pullUrl} />
+                            <Button variant="outline-secondary" onClick={() => copy(pullUrl)}><Clipboard size={16} /></Button>
+                          </div>
+                        </Form.Group>
+                        <Form.Group className="mb-2">
+                          <Form.Label>Secret (paste for curl examples)</Form.Label>
+                          <Form.Control type="password" placeholder="REMINDERS_WEBHOOK_SECRET" value={remindersSecret} onChange={(e)=>setRemindersSecret(e.target.value)} />
+                        </Form.Group>
+                      </Col>
+                      <Col md={6}>
+                        <Form.Group className="mb-2">
+                          <Form.Label>curl: Push</Form.Label>
+                          <Form.Control as="textarea" rows={4} readOnly value={`curl -sS -H 'x-reminders-secret: ${remindersSecret||'<SECRET>'}' '${pushUrl}' | jq .`} />
+                          <div className="mt-1"><Button size="sm" variant="outline-secondary" onClick={()=>copy(`curl -sS -H 'x-reminders-secret: ${remindersSecret||'<SECRET>'}' '${pushUrl}' | jq .`)}>Copy</Button></div>
+                        </Form.Group>
+                        <Form.Group className="mb-2">
+                          <Form.Label>curl: Pull (example)</Form.Label>
+                          <Form.Control as="textarea" rows={4} readOnly value={`curl -sS -X POST -H 'x-reminders-secret: ${remindersSecret||'<SECRET>'}' -H 'Content-Type: application/json' -d '{\\"tasks\\":[{\\"id\\":\\"<taskId>\\",\\"reminderId\\":\\"<rid>\\",\\"completed\\":true}]}' '${pullUrl}' | jq .`} />
+                          <div className="mt-1"><Button size="sm" variant="outline-secondary" onClick={()=>copy(`curl -sS -X POST -H 'x-reminders-secret: ${remindersSecret||'<SECRET>'}' -H 'Content-Type: application/json' -d '{\"tasks\":[{\"id\":\"<taskId>\",\"reminderId\":\"<rid>\",\"completed\":true}]}' '${pullUrl}' | jq .`)}>Copy</Button></div>
+                        </Form.Group>
+                      </Col>
+                    </Row>
+                    <Row>
+                      <Col md={6} className="mb-3">
+                        <Card>
+                          <Card.Header><FileCode size={16} className="me-2" /> Jellycuts: Push</Card.Header>
+                          <Card.Body>
+                            <Form.Control as="textarea" rows={12} readOnly value={jellyPush} />
+                            <div className="mt-2"><Button size="sm" variant="outline-secondary" onClick={()=>copy(jellyPush)}>Copy Jelly (Push)</Button></div>
+                            <div className="mt-2"><Button size="sm" variant="outline-primary" onClick={()=>downloadJson('BOB_Reminders_Push.shortcut.json', makePushShortcutJson(userUid, remindersSecret||'<SECRET>', 'https://bob20250810.web.app'))}>Download Apple Shortcut JSON (Push)</Button></div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col md={6} className="mb-3">
+                        <Card>
+                          <Card.Header><FileCode size={16} className="me-2" /> Jellycuts: Pull</Card.Header>
+                          <Card.Body>
+                            <Form.Control as="textarea" rows={12} readOnly value={jellyPull} />
+                            <div className="mt-2"><Button size="sm" variant="outline-secondary" onClick={()=>copy(jellyPull)}>Copy Jelly (Pull)</Button></div>
+                            <div className="mt-2"><Button size="sm" variant="outline-primary" onClick={()=>downloadJson('BOB_Reminders_Pull.shortcut.json', makePullShortcutJson(userUid, remindersSecret||'<SECRET>', 'https://bob20250810.web.app'))}>Download Apple Shortcut JSON (Pull)</Button></div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
+                    <Card className="mt-2">
+                      <Card.Header>Rotate Secret</Card.Header>
+                      <Card.Body>
+                        <p className="mb-2">Secret name: <code>REMINDERS_WEBHOOK_SECRET</code> (Google Cloud Secret Manager)</p>
+                        <pre className="p-2 bg-light" style={{whiteSpace:'pre-wrap'}}>
+gcloud secrets versions access latest --secret=REMINDERS_WEBHOOK_SECRET --project=bob20250810
+firebase functions:secrets:set REMINDERS_WEBHOOK_SECRET --project bob20250810
+firebase deploy --only functions:remindersPush,functions:remindersPull --project bob20250810
+                        </pre>
+                        <small className="text-muted">Updating the secret requires redeploying the affected functions.</small>
+                      </Card.Body>
+                    </Card>
                   </Card.Body>
                 </Card>
               </Tab.Pane>

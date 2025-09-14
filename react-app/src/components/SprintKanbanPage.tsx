@@ -9,6 +9,7 @@ import ModernKanbanBoard from './ModernKanbanBoard';
 import StoryTasksPanel from './StoryTasksPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3 } from 'lucide-react';
+import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
 
 interface SprintKanbanPageProps {
@@ -317,7 +318,13 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
             <div className="d-flex align-items-center justify-content-between p-2 border rounded" style={{ background: 'var(--notion-hover)' }}>
               <div>
                 <strong>Selected sprint:</strong> {currentSprint.name || currentSprint.id}
-                <span className="ms-2 text-muted">(Showing stories with sprintId "{currentSprint.id}")</span>
+                {currentSprint.id && (
+                  <span className="ms-2">
+                    <span className="badge bg-light text-dark">
+                      {displayRefForEntity('sprint', currentSprint.id)}
+                    </span>
+                  </span>
+                )}
               </div>
               <div className="d-flex gap-2">
                 <Button
