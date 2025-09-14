@@ -1171,6 +1171,7 @@ const EnhancedGanttChart: React.FC = () => {
           stories={stories}
           storiesByGoal={storiesByGoal}
           doneStoriesByGoal={doneStoriesByGoal}
+          dragOverlay={dragOverlay}
           onDragStart={handleDragStart as any}
           onItemClick={handleItemClick as any}
           updateGoalDates={updateGoalDates}

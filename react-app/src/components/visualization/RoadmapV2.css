@@ -1,4 +1,6 @@
 .rv2-container {
+  /* Single source of truth for header height */
+  --rv2-header-h: 72px;
   background: var(--card);
   color: var(--bs-body-color);
 }
@@ -48,7 +50,7 @@
 }
 .rv2-header-right {
   position: relative;
-  height: 64px;
+  height: var(--rv2-header-h);
   background: var(--card);
 }
 .rv2-months { position: absolute; top: 0; left: 0; right: 0; height: 26px; }
@@ -109,7 +111,7 @@
   display: grid;
   grid-template-columns: 250px 1fr;
   /* Keep lane rows visually below the sticky date header */
-  margin-top: 64px;
+  margin-top: var(--rv2-header-h);
 }
 .rv2-lane-left {
   border-right: 1px solid var(--line);
@@ -227,4 +229,31 @@
 body.rv2-dragging, body[data-rv2-dragging="1"] {
   cursor: grabbing !important;
   user-select: none !important;
+}
+
+/* In fullscreen (chrome hidden), align the sticky header flush to the top */
+body.gantt-full-active .rv2-header { top: 0; }
+
+/* Drag overlay styling */
+.rv2-drag-overlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(13,110,253,0.08);
+  border-left: 2px dashed rgba(13,110,253,0.7);
+  border-right: 2px dashed rgba(13,110,253,0.7);
+  z-index: 4; /* below cards, above grid */
+  pointer-events: none;
+}
+.rv2-drag-label {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(13,110,253,0.12);
+  color: var(--bs-body-color);
+  border: 1px solid rgba(13,110,253,0.35);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
 }

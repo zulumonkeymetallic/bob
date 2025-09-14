@@ -13,6 +13,8 @@ import logger from '../../utils/logger';
 type GanttItem = {
   id: string;
   title: string;
+  // Mark items as goals so parent drag handlers accept them
+  type?: 'goal';
   theme: number;
   startDate: Date;
   endDate: Date;
@@ -26,6 +28,7 @@ type Props = {
   stories: Story[];
   storiesByGoal: Record<string, number>;
   doneStoriesByGoal: Record<string, number>;
+  dragOverlay?: { left: number; width: number; text: string } | null;
   onDragStart: (e: React.MouseEvent | React.TouchEvent, item: GanttItem, type: 'move' | 'resize-start' | 'resize-end') => void;
   onItemClick: (item: GanttItem) => void;
   updateGoalDates: (goalId: string, start: Date, end: Date) => void;
@@ -115,6 +118,7 @@ const RoadmapV2: React.FC<Props> = ({
     return goals.map((goal) => ({
       id: goal.id,
       title: goal.title,
+      type: 'goal',
       theme: goal.theme,
       startDate: goal.startDate ? new Date(goal.startDate) : new Date(),
       endDate: goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
@@ -389,6 +393,14 @@ const RoadmapV2: React.FC<Props> = ({
             </div>
             {/* Right timeline area */}
             <div className="rv2-lane-right">
+              {/* Drag ghost overlay spanning the proposed date range */}
+              {typeof window !== 'undefined' && (typeof document !== 'undefined') && (
+                dragOverlay ? (
+                  <div className="rv2-drag-overlay" style={{ left: dragOverlay.left, width: dragOverlay.width }} aria-hidden="true">
+                    <div className="rv2-drag-label">{dragOverlay.text}</div>
+                  </div>
+                ) : null
+              )}
               {/* Full-height Today marker across all lanes */}
               <div className="rv2-today-line" style={{ left: leftToday }} />
               {LANE_THEMES.map((t, idx) => {
