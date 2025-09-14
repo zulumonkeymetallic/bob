@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Form, Button, Row, Col, Table, Badge } from 'react-bootstrap';
+import { Card, Form, Button, Row, Col, Table, Badge, Toast, ToastContainer } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, getDocs, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { nextDueAt } from '../utils/recurrence';
+import RRuleEditor from './RRuleEditor';
+import { Link } from 'react-router-dom';
 
 interface ChoreForm {
   title: string;
@@ -20,6 +22,7 @@ const ChoresManagement: React.FC = () => {
   const [chores, setChores] = useState<any[]>([]);
   const [goals, setGoals] = useState<any[]>([]);
   const [form, setForm] = useState<ChoreForm>({ title: '', rrule: 'RRULE:FREQ=WEEKLY;INTERVAL=1', dtstart: '', estimatedMinutes: 15, priority: 2, theme: 2, goalId: '' });
+  const [toast, setToast] = useState<{ show: boolean; msg: string; variant?: 'success'|'info'|'warning'|'danger' }>({ show:false, msg:'' });
   const todayKey = useMemo(() => {
     const d = new Date();
     const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
@@ -61,19 +64,36 @@ const ChoresManagement: React.FC = () => {
     const ref = await addDoc(collection(db, 'chores'), payload);
     setChores([{ id: ref.id, ...payload }, ...chores]);
     setForm({ title: '', rrule: form.rrule, dtstart: '', estimatedMinutes: 15, priority: 2, theme: form.theme, goalId: '' });
+    setToast({ show: true, msg: 'Chore added', variant: 'success' });
   };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Delete this chore?')) return;
     await deleteDoc(doc(db, 'chores', id));
     setChores(chores.filter(c => c.id !== id));
+    setToast({ show: true, msg: 'Chore deleted', variant: 'warning' });
+  };
+
+  const handleMarkDone = async (chore: any) => {
+    try {
+      const newNext = nextDueAt(chore.rrule, chore.dtstart || chore.createdAt || Date.now(), Date.now());
+      await updateDoc(doc(db, 'chores', chore.id), { nextDueAt: newNext || null, updatedAt: serverTimestamp() });
+      setChores(prev => prev.map(c => c.id === chore.id ? { ...c, nextDueAt: newNext || null } : c));
+    } catch (e) {
+      console.warn('Failed to mark chore done:', (e as any)?.message);
+    }
   };
 
   const formatTime = (ms?: number) => (ms ? new Date(ms).toLocaleString() : '—');
 
   return (
     <div className="container py-3" style={{ maxWidth: 980 }}>
-      <h4 className="mb-3">Chores</h4>
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h4 className="mb-0">Chores</h4>
+        <div>
+          <Link to="/routines/calendar" className="btn btn-outline-secondary btn-sm">Open Routines Calendar</Link>
+        </div>
+      </div>
       <Card className="mb-3">
         <Card.Body>
           <Form onSubmit={handleAdd}>
@@ -84,13 +104,20 @@ const ChoresManagement: React.FC = () => {
               </Col>
               <Col md={4}>
                 <Form.Label>RRULE</Form.Label>
-                <Form.Control value={form.rrule} onChange={e=>setForm({ ...form, rrule: e.target.value })} placeholder="RRULE:FREQ=DAILY;INTERVAL=1" />
+                <Form.Control value={form.rrule} onChange={e=>setForm({ ...form, rrule: e.target.value })} placeholder="RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE,FR" />
               </Col>
               <Col md={4}>
                 <Form.Label>DTSTART</Form.Label>
                 <Form.Control type="datetime-local" value={form.dtstart} onChange={e=>setForm({ ...form, dtstart: e.target.value })} />
               </Col>
             </Row>
+
+            {/* Simple recurrence builder */}
+            <RRuleEditor
+              value={form.rrule}
+              dtstart={form.dtstart}
+              onChange={(rr) => setForm({ ...form, rrule: rr })}
+            />
             <Row className="g-3 mt-1">
               <Col md={3}>
                 <Form.Label>Estimate (min)</Form.Label>
@@ -152,7 +179,10 @@ const ChoresManagement: React.FC = () => {
                   <td>{c.estimatedMinutes} min</td>
                   <td><Badge bg={c.priority>=3?'danger':c.priority===2?'warning':'secondary'}>{c.priority}</Badge></td>
                   <td><Badge bg="light" text="dark">{c.theme}</Badge></td>
-                  <td className="text-end"><Button size="sm" variant="outline-danger" onClick={()=>handleDelete(c.id)}>Delete</Button></td>
+                  <td className="text-end">
+                    <Button size="sm" className="me-2" variant="outline-success" onClick={()=>handleMarkDone(c)}>Mark Done</Button>
+                    <Button size="sm" variant="outline-danger" onClick={()=>handleDelete(c.id)}>Delete</Button>
+                  </td>
                 </tr>
               ))}
               {chores.length===0 && (
@@ -162,9 +192,13 @@ const ChoresManagement: React.FC = () => {
           </Table>
         </Card.Body>
       </Card>
+      <ToastContainer position="bottom-end" className="p-3">
+        <Toast bg={toast.variant || 'light'} onClose={() => setToast({ ...toast, show: false })} show={toast.show} delay={1800} autohide>
+          <Toast.Body className={toast.variant==='warning'?'text-white':''}>{toast.msg}</Toast.Body>
+        </Toast>
+      </ToastContainer>
     </div>
   );
 };
 
 export default ChoresManagement;
-

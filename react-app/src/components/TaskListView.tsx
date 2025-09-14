@@ -8,6 +8,7 @@ import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useSprint } from '../contexts/SprintContext';
 
 const TaskListView: React.FC = () => {
   const { currentUser } = useAuth();
@@ -22,6 +23,7 @@ const TaskListView: React.FC = () => {
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const { selectedSprintId } = useSprint();
 
   useEffect(() => {
     if (!currentUser) return;
@@ -180,9 +182,22 @@ const TaskListView: React.FC = () => {
   };
 
   // Apply filters to tasks
+  // Build allowed story ids for selected sprint (if any)
+  const allowedStoryIds = new Set<string>(
+    selectedSprintId && selectedSprintId !== ''
+      ? stories.filter(s => s.sprintId === selectedSprintId).map(s => s.id)
+      : stories.map(s => s.id)
+  );
+
   const filteredTasks = tasks.filter(task => {
     if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    // If a sprint is selected, include only tasks directly assigned to that sprint or linked to stories in that sprint
+    if (selectedSprintId && selectedSprintId !== '') {
+      const inSprintByTask = (task as any).sprintId === selectedSprintId;
+      const linkedToSprintStory = task.parentType === 'story' && task.parentId && allowedStoryIds.has(task.parentId);
+      if (!inSprintByTask && !linkedToSprintStory) return false;
+    }
     return true;
   });
 

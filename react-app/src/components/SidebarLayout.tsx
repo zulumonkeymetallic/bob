@@ -104,6 +104,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Daily Habits', path: '/habits', icon: 'check' },
         { label: 'Chores (RRULE)', path: '/chores', icon: 'broom' },
+        { label: 'Routines Calendar', path: '/routines/calendar', icon: 'calendar-check' },
         { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
       ]
     },

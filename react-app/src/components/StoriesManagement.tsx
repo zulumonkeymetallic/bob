@@ -15,6 +15,7 @@ import StoriesCardView from './StoriesCardView';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import CompactSprintMetrics from './CompactSprintMetrics';
+import { useSprint } from '../contexts/SprintContext';
 import { themeVars } from '../utils/themeVars';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -35,8 +36,7 @@ const StoriesManagement: React.FC = () => {
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
-  const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
-  const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
+  const { selectedSprintId } = useSprint();
 
   // 📍 PAGE TRACKING
   useEffect(() => {
@@ -145,17 +145,6 @@ const StoriesManagement: React.FC = () => {
       setTasks(tasksData);
     });
 
-    // Load sprints to determine the active sprint (status === 1)
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[];
-      const active = sprintsData.find(s => s.status === 1);
-      setActiveSprintId(active?.id || null);
-    });
 
     setLoading(false);
 
@@ -163,7 +152,7 @@ const StoriesManagement: React.FC = () => {
       unsubscribeStories();
       unsubscribeGoals();
       unsubscribeTasks();
-      unsubscribeSprints();
+      // Sprint selection handled globally via SprintContext
     };
   };
 
@@ -267,7 +256,8 @@ const StoriesManagement: React.FC = () => {
 
   // Apply filters to stories
   const filteredStories = stories.filter(story => {
-    if (applyActiveSprintFilter && activeSprintId && story.sprintId !== activeSprintId) return false;
+    // Respect global sprint selection; when empty (All), include all
+    if (selectedSprintId && selectedSprintId !== '' && story.sprintId !== selectedSprintId) return false;
     if (filterStatus !== 'all' && !isStatus(story.status, filterStatus)) return false;
     if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
     if (searchTerm && !story.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
@@ -347,8 +337,8 @@ const StoriesManagement: React.FC = () => {
                 Cards
               </Button>
             </div>
-            
-            <CompactSprintMetrics />
+            {/* Inline metrics for the currently selected sprint */}
+            <CompactSprintMetrics selectedSprintId={selectedSprintId} />
             <Button 
               variant="outline-secondary" 
               onClick={() => setShowImportModal(true)}

@@ -53,6 +53,7 @@ import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
 import ChoresManagement from './components/ChoresManagement';
 import HabitsManagement from './components/HabitsManagement';
+import RoutinesCalendar from './components/RoutinesCalendar';
 import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
@@ -215,6 +216,7 @@ function AppContent() {
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/chores" element={<ChoresManagement />} />
             <Route path="/habits" element={<HabitsManagement />} />
+            <Route path="/routines/calendar" element={<RoutinesCalendar />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />

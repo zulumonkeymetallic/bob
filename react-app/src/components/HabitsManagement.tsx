@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Form, Button, Row, Col, Table, Badge } from 'react-bootstrap';
+import { Card, Form, Button, Row, Col, Table, Badge, Toast, ToastContainer } from 'react-bootstrap';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
@@ -9,6 +10,7 @@ const HabitsManagement: React.FC = () => {
   const [habits, setHabits] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ name: '', description: '', frequency: 'daily', targetValue: 1, unit: 'times', scheduleTime: '07:00', linkedGoalId: '', isActive: true, daysOfWeek: [] as number[], daysText: '' });
   const [goals, setGoals] = useState<any[]>([]);
+  const [toast, setToast] = useState<{ show: boolean; msg: string; variant?: 'success'|'info'|'warning'|'danger' }>({ show:false, msg:'' });
   const dayKey = useMemo(() => {
     const d = new Date();
     const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
@@ -54,6 +56,7 @@ const HabitsManagement: React.FC = () => {
     };
     const ref = await addDoc(collection(db, 'habits'), payload);
     setForm({ name:'', description:'', frequency:'daily', targetValue:1, unit:'times', scheduleTime:'07:00', linkedGoalId:'', isActive:true, daysOfWeek: [], daysText: '' });
+    setToast({ show: true, msg: 'Habit added', variant: 'success' });
   };
 
   const toggleCompleteToday = async (habit: any) => {
@@ -70,16 +73,23 @@ const HabitsManagement: React.FC = () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }, { merge: true });
+    setToast({ show: true, msg: 'Marked done for today', variant: 'success' });
   };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Delete this habit?')) return;
     await deleteDoc(doc(db, 'habits', id));
+    setToast({ show: true, msg: 'Habit deleted', variant: 'warning' });
   };
 
   return (
     <div className="container py-3" style={{ maxWidth: 980 }}>
-      <h4 className="mb-3">Daily Routines (Habits)</h4>
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h4 className="mb-0">Daily Routines (Habits)</h4>
+        <div>
+          <Link to="/routines/calendar" className="btn btn-outline-secondary btn-sm">Open Routines Calendar</Link>
+        </div>
+      </div>
       <Card className="mb-3">
         <Card.Body>
           <Form onSubmit={handleAdd}>
@@ -167,6 +177,11 @@ const HabitsManagement: React.FC = () => {
           </Form>
         </Card.Body>
       </Card>
+      <ToastContainer position="bottom-end" className="p-3">
+        <Toast bg={toast.variant || 'light'} onClose={() => setToast({ ...toast, show: false })} show={toast.show} delay={1800} autohide>
+          <Toast.Body className={toast.variant==='warning'?'text-white':''}>{toast.msg}</Toast.Body>
+        </Toast>
+      </ToastContainer>
 
       <Card>
         <Card.Body>
@@ -176,6 +191,7 @@ const HabitsManagement: React.FC = () => {
                 <th>Name</th>
                 <th>Frequency</th>
                 <th>Time</th>
+                <th>Days</th>
                 <th>Goal</th>
                 <th>Active</th>
                 <th></th>
@@ -187,6 +203,19 @@ const HabitsManagement: React.FC = () => {
                   <td>{h.name}</td>
                   <td>{h.frequency}</td>
                   <td>{h.scheduleTime || '—'}</td>
+                  <td>
+                    {Array.isArray(h.daysOfWeek) && h.daysOfWeek.length > 0 ? (
+                      <div className="d-flex flex-wrap gap-1">
+                        {[1,2,3,4,5,6,0].map((d) => (
+                          <Badge key={d} bg={h.daysOfWeek.includes(d) ? 'primary' : 'secondary'}>
+                            {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d].slice(0,3)}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </td>
                   <td>{h.linkedGoalId ? (goals.find(g=>g.id===h.linkedGoalId)?.title || h.linkedGoalId) : '—'}</td>
                   <td>{h.isActive ? <Badge bg="success">On</Badge> : <Badge bg="secondary">Off</Badge>}</td>
                   <td className="text-end">
@@ -195,7 +224,7 @@ const HabitsManagement: React.FC = () => {
                   </td>
                 </tr>
               ))}
-              {habits.length===0 && <tr><td colSpan={6} className="text-muted">No habits yet</td></tr>}
+              {habits.length===0 && <tr><td colSpan={7} className="text-muted">No habits yet</td></tr>}
             </tbody>
           </Table>
         </Card.Body>
