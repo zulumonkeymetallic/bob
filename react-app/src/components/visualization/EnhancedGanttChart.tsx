@@ -44,6 +44,16 @@ import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
 import RoadmapV2 from './RoadmapV2';
 import { useSidebar } from '../../contexts/SidebarContext';
+import {
+  DndContext,
+  DragStartEvent,
+  DragMoveEvent,
+  DragEndEvent,
+  DragCancelEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
 
 interface GanttItem {
   id: string;
@@ -60,15 +70,6 @@ interface GanttItem {
   confidence?: number;
 }
 
-interface DragState {
-  isDragging: boolean;
-  itemId: string | null;
-  dragType: 'move' | 'resize-start' | 'resize-end';
-  startX: number;
-  startDate: Date;
-  endDate: Date;
-}
-
 interface ActivityStreamItem {
   id: string;
   type: 'goal' | 'story' | 'sprint' | 'task';
@@ -78,6 +79,16 @@ interface ActivityStreamItem {
   theme?: number;
   linkedTo: string[];
 }
+
+type RoadmapDragType = 'move' | 'resize-start' | 'resize-end';
+
+type ActiveDrag = {
+  goalId: string;
+  dragType: RoadmapDragType;
+  originStart: Date;
+  originEnd: Date;
+  themeId: number;
+};
 
 const EnhancedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
@@ -121,15 +132,8 @@ const EnhancedGanttChart: React.FC = () => {
   const isShiftDownRef = useRef(false);
   const pinchRef = useRef<{ active: boolean; startDist: number; startStart: Date; startEnd: Date; anchor: Date } | null>(null);
   
-  // Drag and drop state
-  const [dragState, setDragState] = useState<DragState>({
-    isDragging: false,
-    itemId: null,
-    dragType: 'move',
-    startX: 0,
-    startDate: new Date(),
-    endDate: new Date()
-  });
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
   
   // Activity stream state
   const [showActivityStream, setShowActivityStream] = useState(false);
@@ -161,8 +165,6 @@ const EnhancedGanttChart: React.FC = () => {
   const timelineRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const headerMonthsRef = useRef<HTMLDivElement>(null);
-  const groupPositionsRef = useRef<Array<{ themeId: number; top: number; bottom: number; el: HTMLElement }>>([]);
-  const hoveredThemeRef = useRef<number | null>(null);
   
   // Theme definitions
   const themes = [
@@ -585,183 +587,133 @@ const EnhancedGanttChart: React.FC = () => {
   }, [stories, tasks, currentUser]);
 
   // Handle drag start
-  const handleDragStart = useCallback((e: React.MouseEvent | React.TouchEvent, item: GanttItem, dragType: DragState['dragType']) => {
-    if (item.type !== 'goal') return; // Only goals can be dragged
-    
-    e.preventDefault();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    logger.debug('gantt', 'Drag start', { id: item.id, dragType, clientX, start: item.startDate, end: item.endDate });
-    logger.perfMark('gantt-drag-start');
-    // Indicate global drag state for CSS (user-select, cursor)
-    try { document.body.classList.add('rv2-dragging'); (document.body as any).dataset.rv2Dragging = '1'; } catch {}
-    // Snapshot theme group positions for vertical drop detection
-    const groups = Array.from(document.querySelectorAll('[data-theme-group]')) as HTMLElement[];
-    groupPositionsRef.current = groups.map((el) => {
-      const rect = el.getBoundingClientRect();
-      const themeIdAttr = el.getAttribute('data-theme-group') || '0';
-      return { themeId: parseInt(themeIdAttr, 10), top: rect.top, bottom: rect.bottom, el };
-    });
-    
-    setDragState({
-      isDragging: true,
-      itemId: item.id,
-      dragType,
-      startX: clientX,
-      startDate: new Date(item.startDate),
-      endDate: new Date(item.endDate)
-    });
-
-    document.addEventListener('mousemove', handleDragMove);
-    document.addEventListener('mouseup', handleDragEnd);
-    document.addEventListener('touchmove', handleDragMove, { passive: false });
-    document.addEventListener('touchend', handleDragEnd);
-  }, []);
-
-  // Handle drag move
-  const handleDragMove = useCallback((e: MouseEvent | TouchEvent) => {
-    if (!dragState.isDragging || !dragState.itemId) return;
-    
-    const isTouch = 'touches' in e;
-    const clientX = isTouch ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
-    const clientY = isTouch ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
-    const deltaX = clientX - dragState.startX;
-    
-    // Calculate time delta based on zoom level
+  const computeDragDates = useCallback((drag: ActiveDrag, deltaX: number) => {
     const msPerPixel = getMillisecondsPerPixel(zoomLevel);
     const timeDelta = deltaX * msPerPixel;
-    
-    // Update dates based on drag type
-    let newStartDate = new Date(dragState.startDate);
-    let newEndDate = new Date(dragState.endDate);
-    
-    if (dragState.dragType === 'move') {
-      newStartDate = new Date(dragState.startDate.getTime() + timeDelta);
-      newEndDate = new Date(dragState.endDate.getTime() + timeDelta);
-    } else if (dragState.dragType === 'resize-start') {
-      newStartDate = new Date(Math.min(dragState.startDate.getTime() + timeDelta, dragState.endDate.getTime() - 24 * 60 * 60 * 1000));
-    } else if (dragState.dragType === 'resize-end') {
-      newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
+    let nextStart = new Date(drag.originStart.getTime());
+    let nextEnd = new Date(drag.originEnd.getTime());
+
+    if (drag.dragType === 'move') {
+      nextStart = new Date(drag.originStart.getTime() + timeDelta);
+      nextEnd = new Date(drag.originEnd.getTime() + timeDelta);
+    } else if (drag.dragType === 'resize-start') {
+      nextStart = new Date(Math.min(drag.originStart.getTime() + timeDelta, drag.originEnd.getTime() - 24 * 60 * 60 * 1000));
+    } else if (drag.dragType === 'resize-end') {
+      nextEnd = new Date(Math.max(drag.originEnd.getTime() + timeDelta, drag.originStart.getTime() + 24 * 60 * 60 * 1000));
     }
 
-    // Determine hovered theme group for potential reassignment
-    const hovered = groupPositionsRef.current.find(g => clientY >= g.top && clientY <= g.bottom)?.themeId ?? null;
-    if (hoveredThemeRef.current !== hovered) {
-      const prev = groupPositionsRef.current.find(g => g.themeId === hoveredThemeRef.current);
-      if (prev) prev.el.classList.remove('theme-group--target');
-      hoveredThemeRef.current = hovered;
-      const next = groupPositionsRef.current.find(g => g.themeId === hovered);
-      if (next) next.el.classList.add('theme-group--target');
-    }
-    
-    // Snap to whole-day boundaries; if Shift held, snap start to Monday of its week and end to following Monday
-    newStartDate.setHours(0,0,0,0);
-    newEndDate.setHours(0,0,0,0);
+    nextStart.setHours(0, 0, 0, 0);
+    nextEnd.setHours(0, 0, 0, 0);
+
     if (isShiftDownRef.current) {
-      const s = snapToWeek(newStartDate);
-      const e2 = snapToWeek(newEndDate);
-      // Ensure at least 7 days
-      if (e2.getTime() <= s.getTime()) e2.setDate(s.getDate() + 7);
-      newStartDate = s; newEndDate = e2;
-    }
-
-    // Update the visual representation
-    const goalElement = document.querySelector(`[data-goal-id="${dragState.itemId}"]`) as HTMLElement;
-    if (goalElement) {
-      const startPos = getDatePosition(newStartDate);
-      const endPos = getDatePosition(newEndDate);
-      goalElement.style.left = `${startPos}px`;
-      goalElement.style.width = `${endPos - startPos}px`;
-      // Update tooltip via ref to avoid React re-render on each move
-      const tooltip = dragTooltipRef.current;
-      if (tooltip) {
-        tooltip.style.left = `${250 + startPos}px`;
-        tooltip.textContent = `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}`;
-      } else {
-        setDragOverlay({ left: 250 + startPos, width: endPos - startPos, text: `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}` });
+      const snappedStart = snapToWeek(nextStart);
+      const snappedEnd = snapToWeek(nextEnd);
+      if (snappedEnd.getTime() <= snappedStart.getTime()) {
+        snappedEnd.setDate(snappedStart.getDate() + 7);
       }
+      nextStart = snappedStart;
+      nextEnd = snappedEnd;
     }
 
-    // Throttled logging to avoid spam during drag
-    const now = performance.now();
-    if (now - dragLogRef.current.lastMoveLogAt > 120) {
-      dragLogRef.current.lastMoveLogAt = now;
-      logger.debug('gantt', 'Drag move', {
-        id: dragState.itemId,
-        dragType: dragState.dragType,
-        deltaX,
-        newStart: newStartDate.toISOString(),
-        newEnd: newEndDate.toISOString(),
-      });
-    }
-  }, [dragState, zoomLevel]);
+    return { nextStart, nextEnd };
+  }, [zoomLevel]);
 
-  // Handle drag end
-  const handleDragEnd = useCallback(async (e: MouseEvent | TouchEvent) => {
-    if (!dragState.isDragging || !dragState.itemId) return;
-    
-    const clientX = 'touches' in e ? (e as TouchEvent).changedTouches[0].clientX : (e as MouseEvent).clientX;
-    const clientY = 'touches' in e ? (e as TouchEvent).changedTouches[0].clientY : (e as MouseEvent).clientY;
-    const deltaX = clientX - dragState.startX;
-    const msPerPixel = getMillisecondsPerPixel(zoomLevel);
-    const timeDelta = deltaX * msPerPixel;
-    
-    let newStartDate = new Date(dragState.startDate);
-    let newEndDate = new Date(dragState.endDate);
-    
-    if (dragState.dragType === 'move') {
-      newStartDate = new Date(dragState.startDate.getTime() + timeDelta);
-      newEndDate = new Date(dragState.endDate.getTime() + timeDelta);
-    } else if (dragState.dragType === 'resize-start') {
-      newStartDate = new Date(Math.min(dragState.startDate.getTime() + timeDelta, dragState.endDate.getTime() - 24 * 60 * 60 * 1000));
-    } else if (dragState.dragType === 'resize-end') {
-      newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
+  const updateDragVisual = useCallback((goalId: string, nextStart: Date, nextEnd: Date) => {
+    const goalElement = document.querySelector(`[data-goal-id="${goalId}"]`) as HTMLElement | null;
+    const startPos = getDatePosition(nextStart);
+    const endPos = getDatePosition(nextEnd);
+    const tooltipText = `${nextStart.toLocaleDateString()} → ${nextEnd.toLocaleDateString()}`;
+    if (goalElement) {
+      goalElement.style.left = `${startPos}px`;
+      goalElement.style.width = `${Math.max(4, endPos - startPos)}px`;
     }
-
-    // Snap to whole-day boundaries; if Shift held, snap to week blocks
-    newStartDate.setHours(0,0,0,0);
-    newEndDate.setHours(0,0,0,0);
-    if (isShiftDownRef.current) {
-      const s = snapToWeek(newStartDate);
-      const e2 = snapToWeek(newEndDate);
-      if (e2.getTime() <= s.getTime()) e2.setDate(s.getDate() + 7);
-      newStartDate = s; newEndDate = e2;
+    const tooltip = dragTooltipRef.current;
+    if (tooltip) {
+      tooltip.style.left = `${250 + startPos}px`;
+      tooltip.textContent = tooltipText;
     }
+    setDragOverlay({ left: 250 + startPos, width: endPos - startPos, text: tooltipText });
+  }, [getDatePosition]);
 
-    // Clear drag overlay
+  const resetDragVisual = useCallback(() => {
     setDragOverlay(null);
     const tooltip = dragTooltipRef.current;
     if (tooltip) {
       tooltip.style.left = `-9999px`;
+      tooltip.textContent = '';
     }
+    try {
+      document.body.classList.remove('rv2-dragging');
+      delete (document.body as any).dataset.rv2Dragging;
+    } catch {}
+  }, []);
+
+  const handleRoadmapDragStart = useCallback((event: DragStartEvent) => {
+    const data = event.active.data.current as { kind?: string; goalId: string; dragType: RoadmapDragType; start: number; end: number; themeId: number } | undefined;
+    if (!data || data.kind !== 'roadmap-card') return;
+
+    const originStart = new Date(data.start);
+    const originEnd = new Date(data.end);
+    setActiveDrag({ goalId: data.goalId, dragType: data.dragType, originStart, originEnd, themeId: data.themeId });
+    logger.debug('gantt', 'Drag start', { id: data.goalId, dragType: data.dragType, start: originStart, end: originEnd });
+    logger.perfMark('gantt-drag-start');
+    try {
+      document.body.classList.add('rv2-dragging');
+      (document.body as any).dataset.rv2Dragging = '1';
+    } catch {}
+    updateDragVisual(data.goalId, originStart, originEnd);
+  }, [updateDragVisual]);
+
+  const handleRoadmapDragMove = useCallback((event: DragMoveEvent) => {
+    if (!activeDrag) return;
+    const { nextStart, nextEnd } = computeDragDates(activeDrag, event.delta.x);
+    updateDragVisual(activeDrag.goalId, nextStart, nextEnd);
+
+    const now = performance.now();
+    if (now - dragLogRef.current.lastMoveLogAt > 120) {
+      dragLogRef.current.lastMoveLogAt = now;
+      logger.debug('gantt', 'Drag move', {
+        id: activeDrag.goalId,
+        dragType: activeDrag.dragType,
+        deltaX: event.delta.x,
+        newStart: nextStart.toISOString(),
+        newEnd: nextEnd.toISOString(),
+      });
+    }
+  }, [activeDrag, computeDragDates, updateDragVisual]);
+
+  const handleRoadmapDragEnd = useCallback(async (event: DragEndEvent) => {
+    if (!activeDrag) return;
+
+    const { nextStart, nextEnd } = computeDragDates(activeDrag, event.delta.x);
 
     logger.debug('gantt', 'Drag end', {
-      id: dragState.itemId,
-      dragType: dragState.dragType,
-      deltaX,
-      newStart: newStartDate.toISOString(),
-      newEnd: newEndDate.toISOString(),
+      id: activeDrag.goalId,
+      dragType: activeDrag.dragType,
+      deltaX: event.delta.x,
+      newStart: nextStart.toISOString(),
+      newEnd: nextEnd.toISOString(),
     });
     logger.perfMark('gantt-drag-end');
     logger.perfMeasure('gantt-drag', 'gantt-drag-start', 'gantt-drag-end');
-    // Determine drop theme and clear highlight
-    const dropThemeId = groupPositionsRef.current.find(g => clientY >= g.top && clientY <= g.bottom)?.themeId ?? null;
-    groupPositionsRef.current.forEach(g => g.el.classList.remove('theme-group--target'));
 
-    // Check for impacted stories/tasks in current sprints
-    const goal = goals.find(g => g.id === dragState.itemId);
+    resetDragVisual();
+
+    const goal = goals.find(g => g.id === activeDrag.goalId);
+    const overData = event.over?.data.current as { kind?: string; themeId?: number } | undefined;
+    const dropThemeId = overData?.kind === 'lane' ? overData.themeId ?? null : null;
+
     if (goal) {
-      const impacted = checkImpactedItems(goal.id, newStartDate, newEndDate);
-      
+      const impacted = checkImpactedItems(goal.id, nextStart, nextEnd);
       if (impacted.length > 0) {
         logger.warn('gantt', 'Drag impact detected', { goalId: goal.id, impacted: impacted.length });
         setImpactedItems(impacted);
-        setPendingGoalUpdate({ goalId: goal.id, startDate: newStartDate, endDate: newEndDate });
+        setPendingGoalUpdate({ goalId: goal.id, startDate: nextStart, endDate: nextEnd });
         setShowImpactModal(true);
       } else {
-        await updateGoalDates(goal.id, newStartDate, newEndDate);
+        await updateGoalDates(goal.id, nextStart, nextEnd);
       }
 
-      // Theme reassignment if dropped on another theme group
       if (dropThemeId && dropThemeId !== goal.theme) {
         try {
           await updateDoc(doc(db, 'goals', goal.id), { theme: dropThemeId, updatedAt: Date.now() });
@@ -785,22 +737,22 @@ const EnhancedGanttChart: React.FC = () => {
       }
     }
 
-    // Clean up
-    setDragState({
-      isDragging: false,
-      itemId: null,
-      dragType: 'move',
-      startX: 0,
-      startDate: new Date(),
-      endDate: new Date()
-    });
+    setActiveDrag(null);
+  }, [activeDrag, computeDragDates, currentUser, goals, resetDragVisual, updateGoalDates]);
 
-    document.removeEventListener('mousemove', handleDragMove);
-    document.removeEventListener('mouseup', handleDragEnd);
-    document.removeEventListener('touchmove', handleDragMove);
-    document.removeEventListener('touchend', handleDragEnd);
-    try { document.body.classList.remove('rv2-dragging'); delete (document.body as any).dataset.rv2Dragging; } catch {}
-  }, [dragState, goals, zoomLevel]);
+  const handleRoadmapDragCancel = useCallback((event: DragCancelEvent | undefined) => {
+    if (!activeDrag) return;
+    logger.debug('gantt', 'Drag cancel', { id: activeDrag.goalId, dragType: activeDrag.dragType });
+    const goalElement = document.querySelector(`[data-goal-id="${activeDrag.goalId}"]`) as HTMLElement | null;
+    if (goalElement) {
+      const startPos = getDatePosition(activeDrag.originStart);
+      const endPos = getDatePosition(activeDrag.originEnd);
+      goalElement.style.left = `${startPos}px`;
+      goalElement.style.width = `${Math.max(4, endPos - startPos)}px`;
+    }
+    resetDragVisual();
+    setActiveDrag(null);
+  }, [activeDrag, getDatePosition, resetDragVisual]);
 
   // Trigger AI story generation for a goal via Cloud Function
   const handleGenerateStories = useCallback(async (goal: GanttItem) => {
@@ -815,16 +767,16 @@ const EnhancedGanttChart: React.FC = () => {
   }, [currentUser]);
 
   // Helper functions
-  const getMillisecondsPerPixel = (zoom: string): number => {
+  function getMillisecondsPerPixel(zoom: string): number {
     // Use store domain for precise conversion
     const start = useRoadmapStore.getState().start;
     const end = useRoadmapStore.getState().end;
     const duration = end.getTime() - start.getTime();
     const width = useRoadmapStore.getState().width || canvasRef.current?.scrollWidth || 1000;
     return duration / Math.max(1, Number(width));
-  };
+  }
 
-  const getDatePosition = (date: Date): number => {
+  function getDatePosition(date: Date): number {
     try {
       return scale(date);
     } catch {
@@ -833,7 +785,7 @@ const EnhancedGanttChart: React.FC = () => {
       const canvasWidth = canvasRef.current?.scrollWidth || 1000;
       return (itemPosition / totalDuration) * canvasWidth;
     }
-  };
+  }
 
   const snapToWeek = (d: Date): Date => {
     // Snap to Monday of that week when Shift is held
@@ -885,7 +837,7 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Simple undo buffer for last timeline change
   const lastChangeRef = useRef<{ goalId: string; prevStart: number; prevEnd: number } | null>(null);
-  const updateGoalDates = async (goalId: string, newStart: Date, newEnd: Date) => {
+  async function updateGoalDates(goalId: string, newStart: Date, newEnd: Date) {
     logger.info('gantt', 'Updating goal dates', { goalId, newStart: newStart.toISOString(), newEnd: newEnd.toISOString() });
     const prev = goals.find(g => g.id === goalId);
     if (prev) {
@@ -908,7 +860,7 @@ const EnhancedGanttChart: React.FC = () => {
       throw err;
     }
     setLiveAnnouncement(`Updated ${goals.find(g=>g.id===goalId)?.title || 'goal'} to ${newStart.toLocaleDateString()} – ${newEnd.toLocaleDateString()}`);
-  };
+  }
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1165,31 +1117,38 @@ const EnhancedGanttChart: React.FC = () => {
     const noopWheel: React.WheelEventHandler<HTMLDivElement> = () => {};
     return (
       <>
-        <RoadmapV2
-          goals={goals}
-          sprints={sprints}
-          stories={stories}
-          storiesByGoal={storiesByGoal}
-          doneStoriesByGoal={doneStoriesByGoal}
-          onDragStart={handleDragStart as any}
-          onItemClick={handleItemClick as any}
-          updateGoalDates={updateGoalDates}
-          handleGenerateStories={handleGenerateStories as any}
-          setSelectedGoalId={setSelectedGoalId}
-          setActivityGoalId={setActivityGoalId as any}
-          setNoteGoalId={setNoteGoalId as any}
-          setNoteDraft={setNoteDraft}
-          setEditGoal={setEditGoal}
-          onDeleteGoal={handleDeleteGoal}
-          openGlobalActivity={(goal) => showSidebar(goal as any, 'goal')}
-          onWheel={noopWheel}
-          onMouseDown={onContainerMouseDown}
-          onTouchStart={onContainerTouchStart}
-          onTouchMove={onContainerTouchMove}
-          onTouchEnd={onContainerTouchEnd}
-          onSwitchToRoadmap={() => setViewMode('roadmap')}
-          selectedSprintId={selectedSprintId || ''}
-        />
+        <DndContext
+          sensors={sensors}
+          onDragStart={handleRoadmapDragStart}
+          onDragMove={handleRoadmapDragMove}
+          onDragEnd={handleRoadmapDragEnd}
+          onDragCancel={handleRoadmapDragCancel}
+        >
+          <RoadmapV2
+            goals={goals}
+            sprints={sprints}
+            stories={stories}
+            storiesByGoal={storiesByGoal}
+            doneStoriesByGoal={doneStoriesByGoal}
+            onItemClick={handleItemClick as any}
+            updateGoalDates={updateGoalDates}
+            handleGenerateStories={handleGenerateStories as any}
+            setSelectedGoalId={setSelectedGoalId}
+            setActivityGoalId={setActivityGoalId as any}
+            setNoteGoalId={setNoteGoalId as any}
+            setNoteDraft={setNoteDraft}
+            setEditGoal={setEditGoal}
+            onDeleteGoal={handleDeleteGoal}
+            openGlobalActivity={(goal) => showSidebar(goal as any, 'goal')}
+            onWheel={noopWheel}
+            onMouseDown={onContainerMouseDown}
+            onTouchStart={onContainerTouchStart}
+            onTouchMove={onContainerTouchMove}
+            onTouchEnd={onContainerTouchEnd}
+            onSwitchToRoadmap={() => setViewMode('roadmap')}
+            selectedSprintId={selectedSprintId || ''}
+          />
+        </DndContext>
 
         {/* Selected Goal Stories Panel */}
         {selectedGoalId && (
@@ -1629,7 +1588,7 @@ const EnhancedGanttChart: React.FC = () => {
             getDatePosition={getDatePosition}
             storiesByGoal={storiesByGoal}
             doneStoriesByGoal={doneStoriesByGoal}
-            onDragStart={handleDragStart as any}
+            onDragStart={() => {}}
             onItemClick={handleItemClick as any}
             setSelectedGoalId={setSelectedGoalId}
             handleGenerateStories={handleGenerateStories as any}

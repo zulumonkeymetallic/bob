@@ -1,16 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card } from 'react-bootstrap';
-import { ChevronLeft, ChevronRight, Wand2, Pencil, Activity, Trash2, BookOpen, ZoomIn, ZoomOut } from 'lucide-react';
+import { Button } from 'react-bootstrap';
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 import useMeasure from 'react-use-measure';
 import { Goal, Sprint, Story } from '../../types';
 import { useRoadmapStore, useTimelineScale, ZoomLevel } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import './RoadmapV2.css';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
-import { FixedSizeList as List, ListChildComponentProps } from 'react-window';
 import logger from '../../utils/logger';
+import { useDroppable } from '@dnd-kit/core';
+import { RoadmapGoalCard } from './RoadmapGoalCard';
 
-type GanttItem = {
+export type GanttItem = {
   id: string;
   title: string;
   theme: number;
@@ -26,7 +27,6 @@ type Props = {
   stories: Story[];
   storiesByGoal: Record<string, number>;
   doneStoriesByGoal: Record<string, number>;
-  onDragStart: (e: React.MouseEvent | React.TouchEvent, item: GanttItem, type: 'move' | 'resize-start' | 'resize-end') => void;
   onItemClick: (item: GanttItem) => void;
   updateGoalDates: (goalId: string, start: Date, end: Date) => void;
   handleGenerateStories: (item: GanttItem) => void;
@@ -48,6 +48,162 @@ type Props = {
 
 // Lanes come from Global Theme Settings (dynamic, no hard-coding)
 const LANE_THEMES = GLOBAL_THEMES.map(t => ({ id: t.id, name: t.name || t.label, color: t.color }));
+const ROW_HEIGHT = 72;
+const CARD_HEIGHT = 60;
+const CARD_TOP_OFFSET = 6;
+
+const hexToRgba = (hex: string, alpha: number) => {
+  const value = hex.replace('#', '');
+  const bigint = parseInt(value.length === 3 ? value.split('').map(c => c + c).join('') : value, 16);
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+type ThemeLaneProps = {
+  laneId: number;
+  dropThemeId: number;
+  index: number;
+  items: GanttItem[];
+  collapsed: boolean;
+  laneColor: string;
+  showWeekGrid: boolean;
+  sprints: Sprint[];
+  scale: (d: Date) => number;
+  start: Date;
+  end: Date;
+  storiesByGoal: Record<string, number>;
+  doneStoriesByGoal: Record<string, number>;
+  goalById: Record<string, Goal>;
+  handleGenerateStories: (item: GanttItem) => void;
+  setSelectedGoalId: (id: string | null) => void;
+  setEditGoal: (goal: Goal | null) => void;
+  onDeleteGoal: (goalId: string) => void;
+  openGlobalActivity: (goal: Goal) => void;
+  onItemClick: (item: GanttItem) => void;
+  updateGoalDates: (goalId: string, start: Date, end: Date) => void;
+};
+
+const ThemeLane: React.FC<ThemeLaneProps> = ({
+  laneId,
+  dropThemeId,
+  index,
+  items,
+  collapsed,
+  laneColor,
+  showWeekGrid,
+  sprints,
+  scale,
+  start,
+  end,
+  storiesByGoal,
+  doneStoriesByGoal,
+  goalById,
+  handleGenerateStories,
+  setSelectedGoalId,
+  setEditGoal,
+  onDeleteGoal,
+  openGlobalActivity,
+  onItemClick,
+  updateGoalDates,
+}) => {
+  const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
+  const laneHeight = collapsed ? 48 : laneVisibleRows * ROW_HEIGHT + 16;
+  const { setNodeRef, isOver } = useDroppable({
+    id: `lane-${laneId}`,
+    data: { kind: 'lane', themeId: dropThemeId },
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`rv2-lane ${index % 2 === 1 ? 'alt' : ''} ${isOver ? 'theme-group--target' : ''}`}
+      data-theme-group={laneId}
+      style={{ height: laneHeight }}
+    >
+      <div className="rv2-lane-accent" style={{ backgroundColor: laneColor }} />
+      {sprints.map((s) => (
+        <div
+          key={`row-s-${s.id}`}
+          className="rv2-sprint-shade"
+          style={{
+            left: scale(new Date(s.startDate)),
+            width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)),
+            top: 0,
+            bottom: 0,
+          }}
+        />
+      ))}
+      {showWeekGrid && (() => {
+        const lines: JSX.Element[] = [];
+        const startDay = new Date(start);
+        startDay.setHours(0, 0, 0, 0);
+        for (let d = new Date(startDay); d <= end; d.setDate(d.getDate() + 7)) {
+          lines.push(<div key={`w-${d.getTime()}`} className="rv2-grid-week" style={{ left: scale(new Date(d)) }} />);
+        }
+        return lines;
+      })()}
+      {!collapsed && (
+        <div className="rv2-lane-canvas" style={{ minHeight: laneHeight }}>
+          {items.map((g, idx) => {
+            const left = scale(g.startDate);
+            const right = scale(g.endDate);
+            const widthPx = Math.max(140, right - left);
+            const isCompact = widthPx < 220;
+            const isUltra = widthPx < 160;
+            const themeColor = getThemeById(migrateThemeValue(g.theme)).color;
+            const bg1 = hexToRgba(themeColor, 0.12);
+            const bg2 = hexToRgba(themeColor, 0.04);
+            const total = storiesByGoal[g.id] || 0;
+            const done = doneStoriesByGoal[g.id] || 0;
+            const progress = total ? Math.round((done / total) * 100) : 0;
+            const subtitle = `${g.startDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${g.endDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+            return (
+              <RoadmapGoalCard
+                key={g.id}
+                goal={g}
+                top={CARD_TOP_OFFSET + idx * ROW_HEIGHT}
+                left={left}
+                width={widthPx}
+                height={CARD_HEIGHT}
+                themeColor={themeColor}
+                gradientStart={bg1}
+                gradientEnd={bg2}
+                subtitle={subtitle}
+                isCompact={isCompact}
+                isUltra={isUltra}
+                progress={progress}
+                hasStories={total > 0}
+                onOpenActivity={() => {
+                  const full = goalById[g.id];
+                  if (full) openGlobalActivity(full);
+                }}
+                onGenerateStories={() => handleGenerateStories(g)}
+                onEdit={() => setEditGoal(goalById[g.id] || null)}
+                onDelete={() => onDeleteGoal(g.id)}
+                onOpenStories={() => setSelectedGoalId(g.id)}
+                onSelectGoal={() => {
+                  onItemClick(g);
+                  setSelectedGoalId(g.id);
+                }}
+                onNudgeDates={(delta) => {
+                  const s = new Date(g.startDate);
+                  const e = new Date(g.endDate);
+                  s.setHours(0, 0, 0, 0);
+                  e.setHours(0, 0, 0, 0);
+                  s.setDate(s.getDate() + delta);
+                  e.setDate(e.getDate() + delta);
+                  updateGoalDates(g.id, s, e);
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const RoadmapV2: React.FC<Props> = ({
   goals,
@@ -55,7 +211,6 @@ const RoadmapV2: React.FC<Props> = ({
   stories,
   storiesByGoal,
   doneStoriesByGoal,
-  onDragStart,
   onItemClick,
   updateGoalDates,
   handleGenerateStories,
@@ -158,15 +313,6 @@ const RoadmapV2: React.FC<Props> = ({
 
   const goalById = useMemo(() => Object.fromEntries(goals.map(g => [g.id, g])), [goals]);
 
-  const hexToRgba = (hex: string, alpha: number) => {
-    const v = hex.replace('#','');
-    const bigint = parseInt(v.length === 3 ? v.split('').map(c => c+c).join('') : v, 16);
-    const r = (bigint >> 16) & 255;
-    const g = (bigint >> 8) & 255;
-    const b = bigint & 255;
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  };
-
   const itemsByTheme = useMemo(() => {
     const grouped: Record<number, GanttItem[]> = {};
     filteredItems.forEach((g) => {
@@ -185,6 +331,8 @@ const RoadmapV2: React.FC<Props> = ({
 
   const today = new Date();
   const leftToday = scale(today);
+  const showMonthGrid = zoom === 'week' || zoom === 'month';
+  const showWeekGrid = zoom === 'week';
 
   // Fullscreen support (hide chrome via global CSS)
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -360,7 +508,7 @@ const RoadmapV2: React.FC<Props> = ({
               {/* Today marker (header layer) */}
               <div className="rv2-today-line" style={{ left: leftToday }} />
               {/* Monthly gridlines stronger */}
-              {monthBlocks.map(m => (
+              {showMonthGrid && monthBlocks.map(m => (
                 <div key={`grid-${m.key}`} className="rv2-grid-month" style={{ left: m.left }} />
               ))}
             </div>
@@ -374,126 +522,60 @@ const RoadmapV2: React.FC<Props> = ({
                 const items = itemsByTheme[t.id] || [];
                 const collapsed = laneCollapse[t.id];
                 const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
-                const headerHeight = collapsed ? 48 : laneVisibleRows * 72 + 16;
+                const headerHeight = collapsed ? 48 : laneVisibleRows * ROW_HEIGHT + 16;
                 const themeIdNew = migrateThemeValue(t.id);
                 const laneColor = getThemeById(themeIdNew).color;
                 return (
-                <div key={t.id} className={`rv2-lane-header ${idx % 2 === 1 ? 'alt' : ''}`} data-theme-group={t.id} onClick={() => toggleLane(t.id)} title="Click to collapse/expand" style={{ height: headerHeight }}>
-                  <div className="rv2-lane-title">
-                    <span className="rv2-lane-dot" style={{ backgroundColor: laneColor }} />
-                    {t.name}
-                    {laneCollapse[t.id] ? <span className="rv2-lane-meta">(collapsed)</span> : null}
+                  <div
+                    key={t.id}
+                    className={`rv2-lane-header ${idx % 2 === 1 ? 'alt' : ''}`}
+                    data-theme-group={t.id}
+                    onClick={() => toggleLane(t.id)}
+                    title="Click to collapse/expand"
+                    style={{ height: headerHeight }}
+                  >
+                    <div className="rv2-lane-title">
+                      <span className="rv2-lane-dot" style={{ backgroundColor: laneColor }} />
+                      {t.name}
+                      {laneCollapse[t.id] ? <span className="rv2-lane-meta">(collapsed)</span> : null}
+                    </div>
                   </div>
-                </div>
-              );})}
+                );
+              })}
             </div>
             {/* Right timeline area */}
             <div className="rv2-lane-right">
-              {/* Full-height Today marker across all lanes */}
               <div className="rv2-today-line" style={{ left: leftToday }} />
               {LANE_THEMES.map((t, idx) => {
                 const items = itemsByTheme[t.id] || [];
                 const collapsed = laneCollapse[t.id];
-                const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
-                const rowHeight = collapsed ? 48 : laneVisibleRows * 72 + 16;
-                const themeIdNew = migrateThemeValue(t.id);
-                const laneColor = getThemeById(themeIdNew).color;
+                const dropThemeId = migrateThemeValue(t.id);
+                const laneColor = getThemeById(dropThemeId).color;
                 return (
-                  <div key={t.id} className={`rv2-lane ${idx % 2 === 1 ? 'alt' : ''}`} data-theme-group={t.id} style={{ height: rowHeight }}>
-                    <div className="rv2-lane-accent" style={{ backgroundColor: laneColor }} />
-                    {/* Sprint shading replicated behind rows */}
-                    {sprints.map((s) => (
-                      <div key={`row-s-${s.id}`} className="rv2-sprint-shade" style={{ left: scale(new Date(s.startDate)), width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)), top: 0, bottom: 0 }} />
-                    ))}
-                    {/* Weekly gridlines light */}
-                    {/* Approx weekly grid lines using 7d step from start */}
-                    {(() => {
-                      const lines = [] as JSX.Element[];
-                      const startDay = new Date(start); startDay.setHours(0,0,0,0);
-                      for (let d = new Date(startDay); d <= end; d.setDate(d.getDate() + 7)) {
-                        lines.push(<div key={`w-${d.getTime()}`} className="rv2-grid-week" style={{ left: scale(new Date(d)) }} />);
-                      }
-                      return lines;
-                    })()}
-                    {/* Goal cards (virtualized rows) */}
-                    {!collapsed && (
-                      <List
-                        height={rowHeight - 8}
-                        width={width}
-                        itemCount={items.length}
-                        itemSize={72}
-                        style={{ overflowX: 'hidden', position: 'relative' }}
-                      >
-                        {({ index, style }: ListChildComponentProps) => {
-                          const g = items[index];
-                          const left = scale(g.startDate);
-                          const right = scale(g.endDate);
-                          const widthPx = Math.max(140, right - left);
-                          const isCompact = widthPx < 220;
-                          const isUltra = widthPx < 160;
-                          const themeColor = getThemeById(migrateThemeValue(g.theme)).color;
-                          const bg1 = hexToRgba(themeColor, 0.12);
-                          const bg2 = hexToRgba(themeColor, 0.04);
-                          const total = storiesByGoal[g.id] || 0;
-                          const done = doneStoriesByGoal[g.id] || 0;
-                          const progress = total ? Math.round((done / total) * 100) : 0;
-                          const subtitle = `${g.startDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${g.endDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
-                          return (
-                            <div style={style} key={g.id}>
-                              <div
-                                className={`rv2-card ${isCompact ? 'compact' : ''} ${isUltra ? 'ultra' : ''}`}
-                                data-goal-id={g.id}
-                                style={{ left, width: widthPx, borderColor: themeColor, borderWidth: 2, background: `linear-gradient(180deg, ${bg1}, ${bg2}), var(--card)` }}
-                                tabIndex={0}
-                                title={`${g.title}: ${subtitle}`}
-                                draggable={false}
-                                onMouseDown={(e) => { logger.info('roadmapV2', 'mousedown card', { id: g.id, x: (e as any).clientX }); onDragStart(e, g, 'move'); }}
-                                onTouchStart={(e) => { logger.info('roadmapV2', 'touchstart card', { id: g.id }); onDragStart(e, g, 'move'); }}
-                                onDragStart={(e) => e.preventDefault()}
-                                // Card click intentionally does nothing to avoid hijacking drag interactions
-                                onClick={() => logger.debug && logger.debug('roadmapV2', 'card-click-ignored', { id: g.id })}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                                    e.preventDefault();
-                                    const step = (e.shiftKey ? 7 : 1) * (e.key === 'ArrowLeft' ? -1 : 1);
-                                    const s = new Date(g.startDate);
-                                    const en = new Date(g.endDate);
-                                    s.setHours(0,0,0,0); en.setHours(0,0,0,0);
-                                    s.setDate(s.getDate() + step);
-                                    en.setDate(en.getDate() + step);
-                                    updateGoalDates(g.id, s, en);
-                                  }
-                                }}
-                              >
-                                <div className="rv2-card-title" style={{ whiteSpace: isUltra ? 'nowrap' : 'normal' }}>{g.title}</div>
-                                {!isCompact && <div className="rv2-card-subtitle">{subtitle}</div>}
-                                <div className="rv2-progress">
-                                  <div className="rv2-progress-bar" style={{ width: `${progress}%` }} />
-                                  <div className="rv2-progress-text">{progress}%</div>
-                                </div>
-                                {total === 0 && (
-                                  <div className="rv2-empty-hint">
-                                    Recommend auto-create using wand
-                                  </div>
-                                )}
-                                {!isCompact && (
-                                <div className="rv2-actions">
-                                  <button className="rv2-icon-btn muted" title="Activity" onClick={(e) => { e.stopPropagation(); const full = goalById[g.id]; if (full) openGlobalActivity(full); }}><Activity size={14} /></button>
-                                  <button className="rv2-icon-btn brand" title="Auto-generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g); }}><Wand2 size={14} /></button>
-                                  <button className="rv2-icon-btn brand" title="Edit goal" onClick={(e) => { e.stopPropagation(); setEditGoal(goalById[g.id] || null); }}><Pencil size={14} /></button>
-                                  <button className="rv2-icon-btn danger" title="Delete goal" onClick={(e) => { e.stopPropagation(); onDeleteGoal(g.id); }}><Trash2 size={14} /></button>
-                                  <button className="rv2-icon-btn" title="Stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(g.id); }}><BookOpen size={14} /></button>
-                                </div>
-                                )}
-                                <div className="rv2-resize-handle start" onMouseDown={(e) => { e.stopPropagation(); onDragStart(e, g, 'resize-start'); }} onTouchStart={(e) => { e.stopPropagation(); onDragStart(e, g, 'resize-start'); }} />
-                                <div className="rv2-resize-handle end" onMouseDown={(e) => { e.stopPropagation(); onDragStart(e, g, 'resize-end'); }} onTouchStart={(e) => { e.stopPropagation(); onDragStart(e, g, 'resize-end'); }} />
-                              </div>
-                            </div>
-                          );
-                        }}
-                      </List>
-                    )}
-                  </div>
+                  <ThemeLane
+                    key={t.id}
+                    laneId={t.id}
+                    dropThemeId={dropThemeId}
+                    index={idx}
+                    items={items}
+                    collapsed={collapsed}
+                    laneColor={laneColor}
+                    showWeekGrid={showWeekGrid}
+                    sprints={sprints}
+                    scale={scale}
+                    start={start}
+                    end={end}
+                    storiesByGoal={storiesByGoal}
+                    doneStoriesByGoal={doneStoriesByGoal}
+                    goalById={goalById}
+                    handleGenerateStories={handleGenerateStories}
+                    setSelectedGoalId={setSelectedGoalId}
+                    setEditGoal={setEditGoal}
+                    onDeleteGoal={onDeleteGoal}
+                    openGlobalActivity={openGlobalActivity}
+                    onItemClick={onItemClick}
+                    updateGoalDates={updateGoalDates}
+                  />
                 );
               })}
             </div>
