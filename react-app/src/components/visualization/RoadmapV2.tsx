@@ -202,6 +202,7 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
                   updateGoalDates(g.id, s, e);
                 }}
                 onAddNote={() => onAddNote(g.id)}
+                zoom={zoom}
               />
             );
           })}
@@ -236,6 +237,7 @@ const RoadmapV2: React.FC<Props> = ({
   selectedSprintId
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const userInteractedRef = useRef(false);
   const [measureRef, bounds] = useMeasure();
   const scale = useTimelineScale();
   const { start, end, width, zoom, setRange, setZoom, setWidth, laneCollapse, toggleLane } = useRoadmapStore();
@@ -252,6 +254,20 @@ const RoadmapV2: React.FC<Props> = ({
       logger.debug('roadmapV2', 'measure', { container: bounds.width, timeline: w });
     }
   }, [bounds.width, setWidth]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const markInteraction = () => { userInteractedRef.current = true; };
+    el.addEventListener('wheel', markInteraction, { passive: true });
+    el.addEventListener('touchstart', markInteraction, { passive: true });
+    el.addEventListener('mousedown', markInteraction);
+    return () => {
+      el.removeEventListener('wheel', markInteraction);
+      el.removeEventListener('touchstart', markInteraction);
+      el.removeEventListener('mousedown', markInteraction);
+    };
+  }, []);
 
   // Auto-fit range once when goals list is available
   useEffect(() => {
@@ -428,15 +444,26 @@ const RoadmapV2: React.FC<Props> = ({
     const ne = new Date(mid.getTime() + newSpan / 2);
     setRange(ns, ne);
   };
+  const scrollContainerToDate = useCallback((d: Date, behavior: ScrollBehavior = 'auto') => {
+    const el = containerRef.current;
+    if (!el) return;
+    const offsetLeft = 250 + scale(d) - el.clientWidth * 0.35;
+    el.scrollTo({ left: Math.max(0, offsetLeft), behavior });
+  }, [scale]);
+
   const goToDate = (d: Date) => {
     // Recentre current zoom window on date d
     setZoom(zoom, d);
-    const el = containerRef.current;
-    if (el) {
-      const left = 250 + scale(d) - el.clientWidth * 0.3;
-      el.scrollLeft = Math.max(0, left);
-    }
+    scrollContainerToDate(d, 'smooth');
   };
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const today = new Date();
+    if (!userInteractedRef.current) {
+      scrollContainerToDate(today, 'smooth');
+    }
+  }, [scrollContainerToDate, zoom, width, start, end]);
 
   return (
     <div className="rv2-container">

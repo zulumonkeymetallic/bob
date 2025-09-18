@@ -3,6 +3,7 @@ import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { Activity, BookOpen, Pencil, Trash2, Wand2, StickyNote } from 'lucide-react';
 import { GanttItem } from './RoadmapV2';
+import { ZoomLevel } from '../../stores/roadmapStore';
 
 type DragKind = 'move' | 'resize-start' | 'resize-end';
 
@@ -35,6 +36,7 @@ export interface RoadmapGoalCardProps {
   onSelectGoal: () => void;
   onNudgeDates: (deltaDays: number) => void;
   onAddNote: () => void;
+  zoom: ZoomLevel;
 }
 
 const cardDragData = (goal: GanttItem): BaseDragData => ({
@@ -66,6 +68,7 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
   onSelectGoal,
   onNudgeDates,
   onAddNote,
+  zoom,
 }) => {
   const moveDrag = useDraggable({
     id: `goal-${goal.id}-move`,
@@ -97,7 +100,7 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
   return (
     <div
       ref={moveDrag.setNodeRef}
-      className={`rv2-card ${isCompact ? 'compact' : ''} ${isUltra ? 'ultra' : ''}`}
+      className={`rv2-card ${isCompact ? 'compact' : ''} ${isUltra ? 'ultra' : ''} rv2-card--zoom-${zoom}`}
       data-goal-id={goal.id}
       style={{
         top,
