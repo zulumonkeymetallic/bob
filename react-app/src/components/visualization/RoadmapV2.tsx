@@ -333,6 +333,7 @@ const RoadmapV2: React.FC<Props> = ({
   const leftToday = scale(today);
   const showMonthGrid = zoom === 'week' || zoom === 'month';
   const showWeekGrid = zoom === 'week';
+  const showHeaderDividers = showMonthGrid;
 
   // Fullscreen support (hide chrome via global CSS)
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -495,7 +496,11 @@ const RoadmapV2: React.FC<Props> = ({
               {/* Months band */}
               <div className="rv2-months">
                 {monthBlocks.map(m => (
-                  <div key={m.key} className="rv2-month" style={{ left: m.left, width: m.width }}>
+                  <div
+                    key={m.key}
+                    className={`rv2-month ${showHeaderDividers ? '' : 'coarse'}`.trim()}
+                    style={{ left: m.left, width: m.width }}
+                  >
                     {m.label}
                   </div>
                 ))}

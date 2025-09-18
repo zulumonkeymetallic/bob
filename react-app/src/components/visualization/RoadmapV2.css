@@ -34,13 +34,12 @@
 .rv2-header {
   position: sticky;
   top: calc(var(--rv2-toolbar-h) - 1px);
-  z-index: 100;
+  z-index: 160;
   display: grid;
   grid-template-columns: 250px 1fr;
   border-bottom: 1px solid var(--line);
   background: var(--card);
   box-shadow: 0 6px 16px rgba(0,0,0,0.18);
-  /* Avoid blocking interactions below when users drag near the header edge */
   pointer-events: none;
 }
 .rv2-header-left {
@@ -53,17 +52,16 @@
   height: var(--rv2-header-h);
   background: var(--card);
   overflow: hidden;
-  isolation: isolate;
 }
-.rv2-header-right::before {
+.rv2-header-right::after {
   content: '';
   position: absolute;
   inset: 0;
   background: var(--card);
-  z-index: -1;
+  z-index: 0;
   pointer-events: none;
 }
-.rv2-months { position: absolute; top: 0; left: 0; right: 0; height: 26px; }
+.rv2-months { position: absolute; top: 0; left: 0; right: 0; height: 26px; z-index: 1; }
 .rv2-month {
   position: absolute;
   top: 0; bottom: 0;
@@ -75,7 +73,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rv2-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 36px; background: var(--card); }
+.rv2-month.coarse { border-right: none; }
+.rv2-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 36px; background: var(--card); z-index: 2; }
 
 .rv2-today-line {
   position: absolute;
@@ -83,6 +82,7 @@
   width: 2px;
   background: #059669; /* green */
   opacity: 0.9;
+  z-index: 3;
 }
 .rv2-today-chip {
   position: absolute;
