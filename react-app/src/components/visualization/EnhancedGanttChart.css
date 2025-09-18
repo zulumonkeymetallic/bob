@@ -10,17 +10,13 @@
 body.gantt-full-active .sidebar-desktop { display: none !important; }
 body.gantt-full-active .navbar, body.gantt-full-active .global-sidebar { display: none !important; }
 body.gantt-full-active {
-  background: var(--card, #fff) !important;
-  color: var(--bs-body-color, #111);
+  background: var(--body-bg, var(--card)) !important;
+  color: var(--bs-body-color);
 }
-body.gantt-full-active .enhanced-gantt-chart,
-body.gantt-full-active .enhanced-gantt-chart .timeline-container,
-body.gantt-full-active .enhanced-gantt-chart .rv2-container,
-body.gantt-full-active .enhanced-gantt-chart .rv2-body,
-body.gantt-full-active .enhanced-gantt-chart .rv2-lane,
-body.gantt-full-active .enhanced-gantt-chart .rv2-lane-left,
-body.gantt-full-active .enhanced-gantt-chart .rv2-lane-right {
-  background: var(--card, #fff) !important;
+body.gantt-full-active .rv2-container {
+  --rv2-surface: var(--card);
+  --rv2-lane-bg: var(--card);
+  --rv2-lane-bg-alt: rgba(var(--bs-body-color-rgb, 17,24,39), 0.08);
 }
 
 .timeline-container {

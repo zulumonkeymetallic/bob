@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from 'react-bootstrap';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 import useMeasure from 'react-use-measure';
@@ -83,6 +83,8 @@ type ThemeLaneProps = {
   openGlobalActivity: (goal: Goal) => void;
   onItemClick: (item: GanttItem) => void;
   updateGoalDates: (goalId: string, start: Date, end: Date) => void;
+  onAddNote: (goalId: string) => void;
+  zoom: ZoomLevel;
 };
 
 const ThemeLane: React.FC<ThemeLaneProps> = ({
@@ -107,6 +109,8 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
   openGlobalActivity,
   onItemClick,
   updateGoalDates,
+  onAddNote,
+  zoom,
 }) => {
   const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
   const laneHeight = collapsed ? 48 : laneVisibleRows * ROW_HEIGHT + 16;
@@ -127,6 +131,7 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
         <div
           key={`row-s-${s.id}`}
           className="rv2-sprint-shade"
+          aria-hidden="true"
           style={{
             left: scale(new Date(s.startDate)),
             width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)),
@@ -149,7 +154,8 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
           {items.map((g, idx) => {
             const left = scale(g.startDate);
             const right = scale(g.endDate);
-            const widthPx = Math.max(140, right - left);
+            const minWidth = zoom === 'year' ? 80 : zoom === 'half' ? 100 : zoom === 'quarter' ? 120 : zoom === 'month' ? 140 : 160;
+            const widthPx = Math.max(minWidth, right - left);
             const isCompact = widthPx < 220;
             const isUltra = widthPx < 160;
             const themeColor = getThemeById(migrateThemeValue(g.theme)).color;
@@ -174,7 +180,6 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
                 isCompact={isCompact}
                 isUltra={isUltra}
                 progress={progress}
-                hasStories={total > 0}
                 onOpenActivity={() => {
                   const full = goalById[g.id];
                   if (full) openGlobalActivity(full);
@@ -196,6 +201,8 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
                   e.setDate(e.getDate() + delta);
                   updateGoalDates(g.id, s, e);
                 }}
+                onAddNote={() => onAddNote(g.id)}
+                zoom={zoom}
               />
             );
           })}
@@ -230,6 +237,7 @@ const RoadmapV2: React.FC<Props> = ({
   selectedSprintId
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const userInteractedRef = useRef(false);
   const [measureRef, bounds] = useMeasure();
   const scale = useTimelineScale();
   const { start, end, width, zoom, setRange, setZoom, setWidth, laneCollapse, toggleLane } = useRoadmapStore();
@@ -246,6 +254,20 @@ const RoadmapV2: React.FC<Props> = ({
       logger.debug('roadmapV2', 'measure', { container: bounds.width, timeline: w });
     }
   }, [bounds.width, setWidth]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const markInteraction = () => { userInteractedRef.current = true; };
+    el.addEventListener('wheel', markInteraction, { passive: true });
+    el.addEventListener('touchstart', markInteraction, { passive: true });
+    el.addEventListener('mousedown', markInteraction);
+    return () => {
+      el.removeEventListener('wheel', markInteraction);
+      el.removeEventListener('touchstart', markInteraction);
+      el.removeEventListener('mousedown', markInteraction);
+    };
+  }, []);
 
   // Auto-fit range once when goals list is available
   useEffect(() => {
@@ -312,6 +334,11 @@ const RoadmapV2: React.FC<Props> = ({
   }, [ganttItems, stories, filterActiveSprint, filterHasStories, filterOverlapSprint, selectedSprintId, sprints]);
 
   const goalById = useMemo(() => Object.fromEntries(goals.map(g => [g.id, g])), [goals]);
+
+  const handleOpenNote = useCallback((goalId: string) => {
+    setNoteDraft('');
+    setNoteGoalId(goalId);
+  }, [setNoteDraft, setNoteGoalId]);
 
   const itemsByTheme = useMemo(() => {
     const grouped: Record<number, GanttItem[]> = {};
@@ -417,15 +444,26 @@ const RoadmapV2: React.FC<Props> = ({
     const ne = new Date(mid.getTime() + newSpan / 2);
     setRange(ns, ne);
   };
+  const scrollContainerToDate = useCallback((d: Date, behavior: ScrollBehavior = 'auto') => {
+    const el = containerRef.current;
+    if (!el) return;
+    const offsetLeft = 250 + scale(d) - el.clientWidth * 0.35;
+    el.scrollTo({ left: Math.max(0, offsetLeft), behavior });
+  }, [scale]);
+
   const goToDate = (d: Date) => {
     // Recentre current zoom window on date d
     setZoom(zoom, d);
-    const el = containerRef.current;
-    if (el) {
-      const left = 250 + scale(d) - el.clientWidth * 0.3;
-      el.scrollLeft = Math.max(0, left);
-    }
+    scrollContainerToDate(d, 'smooth');
   };
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const today = new Date();
+    if (!userInteractedRef.current) {
+      scrollContainerToDate(today, 'smooth');
+    }
+  }, [scrollContainerToDate, zoom, width, start, end]);
 
   return (
     <div className="rv2-container">
@@ -491,7 +529,16 @@ const RoadmapV2: React.FC<Props> = ({
             <div className="rv2-header-right">
               {/* Sprint shading under header */}
               {sprints.map((s) => (
-                <div key={`hdr-s-${s.id}`} className="rv2-sprint-shade" style={{ left: scale(new Date(s.startDate)), width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)) }} />
+                <div
+                  key={`hdr-s-${s.id}`}
+                  className="rv2-sprint-shade rv2-sprint-shade--header"
+                  style={{
+                    left: scale(new Date(s.startDate)),
+                    width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)),
+                  }}
+                >
+                  <span className="rv2-sprint-label">{s.name}</span>
+                </div>
               ))}
               {/* Months band */}
               <div className="rv2-months">
@@ -580,6 +627,8 @@ const RoadmapV2: React.FC<Props> = ({
                     openGlobalActivity={openGlobalActivity}
                     onItemClick={onItemClick}
                     updateGoalDates={updateGoalDates}
+                    onAddNote={handleOpenNote}
+                    zoom={zoom}
                   />
                 );
               })}
