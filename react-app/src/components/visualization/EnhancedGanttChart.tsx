@@ -125,7 +125,12 @@ const EnhancedGanttChart: React.FC = () => {
   const dragTooltipRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const renderCountRef = useRef(0);
-  const dragLogRef = useRef({ lastMoveLogAt: 0 });
+  const dragLogRef = useRef<{ lastMoveLogAt: number; lastDeltaX: number; lastPointerX: number; lastPointerY: number }>({
+    lastMoveLogAt: 0,
+    lastDeltaX: 0,
+    lastPointerX: Number.NaN,
+    lastPointerY: Number.NaN,
+  });
   const isSpaceDownRef = useRef(false);
   const panRef = useRef<{ active: boolean; startX: number; startStart: Date; startEnd: Date } | null>(null);
   const panInertiaRef = useRef<{ vx: number; lastX: number; lastT: number; raf?: number } | null>(null);
@@ -648,6 +653,22 @@ const EnhancedGanttChart: React.FC = () => {
     } catch {}
   }, []);
 
+  const extractPointer = (evt?: DragStartEvent | DragMoveEvent | DragEndEvent | DragCancelEvent) => {
+    if (!evt) return { x: undefined as number | undefined, y: undefined as number | undefined };
+    const source: any = (evt as any).activatorEvent;
+    if (!source) return { x: undefined, y: undefined };
+    if (typeof source.clientX === 'number' && typeof source.clientY === 'number') {
+      return { x: source.clientX as number, y: source.clientY as number };
+    }
+    if (source.touches && source.touches[0]) {
+      return { x: source.touches[0].clientX as number, y: source.touches[0].clientY as number };
+    }
+    if (source.changedTouches && source.changedTouches[0]) {
+      return { x: source.changedTouches[0].clientX as number, y: source.changedTouches[0].clientY as number };
+    }
+    return { x: undefined, y: undefined };
+  };
+
   const handleRoadmapDragStart = useCallback((event: DragStartEvent) => {
     const data = event.active.data.current as { kind?: string; goalId: string; dragType: RoadmapDragType; start: number; end: number; themeId: number } | undefined;
     if (!data || data.kind !== 'roadmap-card') return;
@@ -655,7 +676,21 @@ const EnhancedGanttChart: React.FC = () => {
     const originStart = new Date(data.start);
     const originEnd = new Date(data.end);
     setActiveDrag({ goalId: data.goalId, dragType: data.dragType, originStart, originEnd, themeId: data.themeId });
-    logger.debug('gantt', 'Drag start', { id: data.goalId, dragType: data.dragType, start: originStart, end: originEnd });
+    const pointer = extractPointer(event);
+    dragLogRef.current = {
+      lastMoveLogAt: performance.now(),
+      lastDeltaX: 0,
+      lastPointerX: pointer.x ?? Number.NaN,
+      lastPointerY: pointer.y ?? Number.NaN,
+    };
+    logger.debug('gantt', 'Drag start', {
+      id: data.goalId,
+      dragType: data.dragType,
+      start: originStart,
+      end: originEnd,
+      pointerX: pointer.x,
+      pointerY: pointer.y,
+    });
     logger.perfMark('gantt-drag-start');
     try {
       document.body.classList.add('rv2-dragging');
@@ -669,30 +704,59 @@ const EnhancedGanttChart: React.FC = () => {
     const { nextStart, nextEnd } = computeDragDates(activeDrag, event.delta.x);
     updateDragVisual(activeDrag.goalId, nextStart, nextEnd);
 
+    const pointer = extractPointer(event);
     const now = performance.now();
-    if (now - dragLogRef.current.lastMoveLogAt > 120) {
+    const deltaChange = event.delta.x - dragLogRef.current.lastDeltaX;
+    const pointerDeltaX =
+      pointer.x !== undefined && !Number.isNaN(dragLogRef.current.lastPointerX)
+        ? pointer.x - dragLogRef.current.lastPointerX
+        : undefined;
+    const pointerDeltaY =
+      pointer.y !== undefined && !Number.isNaN(dragLogRef.current.lastPointerY)
+        ? pointer.y - dragLogRef.current.lastPointerY
+        : undefined;
+    const msPerPixel = getMillisecondsPerPixel(zoomLevel);
+    const shouldLog =
+      now - dragLogRef.current.lastMoveLogAt > 80 ||
+      Math.abs(deltaChange) > 6 ||
+      (pointerDeltaX !== undefined && Math.abs(pointerDeltaX) > 10);
+
+    if (shouldLog) {
       dragLogRef.current.lastMoveLogAt = now;
-      logger.debug('gantt', 'Drag move', {
+      logger.debug('gantt', 'Drag sample', {
         id: activeDrag.goalId,
         dragType: activeDrag.dragType,
         deltaX: event.delta.x,
-        newStart: nextStart.toISOString(),
-        newEnd: nextEnd.toISOString(),
+        deltaChange,
+        pointerX: pointer.x,
+        pointerY: pointer.y,
+        pointerDeltaX,
+        pointerDeltaY,
+        msPerPixel,
+        projectedStart: nextStart.toISOString(),
+        projectedEnd: nextEnd.toISOString(),
       });
     }
-  }, [activeDrag, computeDragDates, updateDragVisual]);
+
+    dragLogRef.current.lastDeltaX = event.delta.x;
+    dragLogRef.current.lastPointerX = pointer.x ?? dragLogRef.current.lastPointerX;
+    dragLogRef.current.lastPointerY = pointer.y ?? dragLogRef.current.lastPointerY;
+  }, [activeDrag, computeDragDates, updateDragVisual, zoomLevel]);
 
   const handleRoadmapDragEnd = useCallback(async (event: DragEndEvent) => {
     if (!activeDrag) return;
 
     const { nextStart, nextEnd } = computeDragDates(activeDrag, event.delta.x);
 
+    const pointer = extractPointer(event);
     logger.debug('gantt', 'Drag end', {
       id: activeDrag.goalId,
       dragType: activeDrag.dragType,
       deltaX: event.delta.x,
       newStart: nextStart.toISOString(),
       newEnd: nextEnd.toISOString(),
+      pointerX: pointer.x,
+      pointerY: pointer.y,
     });
     logger.perfMark('gantt-drag-end');
     logger.perfMeasure('gantt-drag', 'gantt-drag-start', 'gantt-drag-end');
@@ -742,7 +806,13 @@ const EnhancedGanttChart: React.FC = () => {
 
   const handleRoadmapDragCancel = useCallback((event: DragCancelEvent | undefined) => {
     if (!activeDrag) return;
-    logger.debug('gantt', 'Drag cancel', { id: activeDrag.goalId, dragType: activeDrag.dragType });
+    const pointer = extractPointer(event);
+    logger.debug('gantt', 'Drag cancel', {
+      id: activeDrag.goalId,
+      dragType: activeDrag.dragType,
+      pointerX: pointer.x,
+      pointerY: pointer.y,
+    });
     const goalElement = document.querySelector(`[data-goal-id="${activeDrag.goalId}"]`) as HTMLElement | null;
     if (goalElement) {
       const startPos = getDatePosition(activeDrag.originStart);
