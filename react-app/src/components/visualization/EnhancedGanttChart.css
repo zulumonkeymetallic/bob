@@ -22,6 +22,11 @@ body.gantt-full-active .enhanced-gantt-chart .rv2-lane-left,
 body.gantt-full-active .enhanced-gantt-chart .rv2-lane-right {
   background: var(--card, #fff) !important;
 }
+body.gantt-full-active .rv2-container {
+  --rv2-surface: #fff;
+  --rv2-lane-bg: #fff;
+  --rv2-lane-bg-alt: rgba(17,24,39,0.04);
+}
 
 .timeline-container {
   border: 1px solid var(--panel-border);

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { Activity, BookOpen, Pencil, Trash2, Wand2 } from 'lucide-react';
+import { Activity, BookOpen, Pencil, Trash2, Wand2, StickyNote } from 'lucide-react';
 import { GanttItem } from './RoadmapV2';
 
 type DragKind = 'move' | 'resize-start' | 'resize-end';
@@ -27,7 +27,6 @@ export interface RoadmapGoalCardProps {
   isCompact: boolean;
   isUltra: boolean;
   progress: number;
-  hasStories: boolean;
   onOpenActivity: () => void;
   onGenerateStories: () => void;
   onEdit: () => void;
@@ -35,6 +34,7 @@ export interface RoadmapGoalCardProps {
   onOpenStories: () => void;
   onSelectGoal: () => void;
   onNudgeDates: (deltaDays: number) => void;
+  onAddNote: () => void;
 }
 
 const cardDragData = (goal: GanttItem): BaseDragData => ({
@@ -58,7 +58,6 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
   isCompact,
   isUltra,
   progress,
-  hasStories,
   onOpenActivity,
   onGenerateStories,
   onEdit,
@@ -66,6 +65,7 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
   onOpenStories,
   onSelectGoal,
   onNudgeDates,
+  onAddNote,
 }) => {
   const moveDrag = useDraggable({
     id: `goal-${goal.id}-move`,
@@ -129,13 +129,13 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
         <div className="rv2-progress-bar" style={{ width: `${progress}%` }} />
         <div className="rv2-progress-text">{progress}%</div>
       </div>
-      {!hasStories && (
-        <div className="rv2-empty-hint">Recommend auto-create using wand</div>
-      )}
       {!isCompact && (
         <div className="rv2-actions">
           <button className="rv2-icon-btn muted" title="Activity" onClick={(e) => { e.stopPropagation(); onOpenActivity(); }}>
             <Activity size={14} />
+          </button>
+          <button className="rv2-icon-btn" title="Add note" onClick={(e) => { e.stopPropagation(); onAddNote(); }}>
+            <StickyNote size={14} />
           </button>
           <button className="rv2-icon-btn brand" title="Auto-generate stories" onClick={(e) => { e.stopPropagation(); onGenerateStories(); }}>
             <Wand2 size={14} />

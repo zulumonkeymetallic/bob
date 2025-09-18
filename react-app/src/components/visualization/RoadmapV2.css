@@ -1,6 +1,9 @@
 .rv2-container {
   --rv2-toolbar-h: 44px;
   --rv2-header-h: 64px;
+  --rv2-surface: var(--card);
+  --rv2-lane-bg: var(--card);
+  --rv2-lane-bg-alt: rgba(0,0,0,0.04);
   background: var(--card);
   color: var(--bs-body-color);
 }
@@ -13,8 +16,9 @@
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  z-index: 80;
-  background: var(--card);
+  z-index: 200;
+  background: var(--rv2-surface);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.12);
 }
 .rv2-toolbar .dropdown-menu { z-index: 19; }
 .rv2-toolbar-left { font-weight: 600; }
@@ -25,6 +29,9 @@
   overflow: auto;
   /* Allow natural scrolling, prevent component-level gesture zoom */
   touch-action: pan-x pan-y;
+  position: relative;
+  z-index: 0;
+  background: var(--rv2-surface);
 }
 
 .rv2-canvas {
@@ -38,7 +45,7 @@
   display: grid;
   grid-template-columns: 250px 1fr;
   border-bottom: 1px solid var(--line);
-  background: var(--card);
+  background: var(--rv2-surface);
   box-shadow: 0 6px 16px rgba(0,0,0,0.18);
   pointer-events: none;
   isolation: isolate;
@@ -55,24 +62,28 @@
   border-right: 1px solid var(--line);
   padding: 6px 8px;
   font-weight: 600;
+  background: var(--rv2-surface);
 }
 .rv2-header-right {
   position: relative;
   height: var(--rv2-header-h);
-  background: var(--card);
+  background: var(--rv2-surface);
   overflow: hidden;
 }
 .rv2-months { position: absolute; top: 0; left: 0; right: 0; height: 26px; z-index: 1; }
 .rv2-month {
   position: absolute;
   top: 0; bottom: 0;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   font-size: 12px;
   color: var(--bs-body-color);
   border-right: 1px solid var(--line);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding-left: 8px;
 }
 .rv2-month.coarse { border-right: none; }
 .rv2-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 36px; background: var(--card); z-index: 2; }
@@ -116,6 +127,21 @@
   border-left: 1px solid rgba(59, 130, 246, 0.25);
   border-right: 1px solid rgba(59, 130, 246, 0.25);
   pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+}
+.rv2-sprint-shade--header { z-index: 1; }
+.rv2-sprint-label {
+  margin: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1d4ed8;
+  background: rgba(59,130,246,0.12);
+  border: 1px solid rgba(59,130,246,0.35);
+  border-radius: 6px;
+  pointer-events: none;
+  mix-blend-mode: multiply;
 }
 
 .rv2-body {
@@ -126,6 +152,7 @@
 }
 .rv2-lane-left {
   border-right: 1px solid var(--line);
+  background: var(--rv2-lane-bg);
 }
 .rv2-lane-header {
   height: 72px;
@@ -133,11 +160,11 @@
   align-items: center;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
-  background: var(--card);
+  background: var(--rv2-lane-bg);
   position: relative;
   z-index: 2;
 }
-.rv2-lane-header.alt { background: rgba(0,0,0,0.02); }
+.rv2-lane-header.alt { background: var(--rv2-lane-bg-alt); }
 .rv2-lane-title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .rv2-lane-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 .rv2-lane-meta { margin-left: 8px; color: var(--muted, #6b7280); font-weight: 500; font-size: 12px; }
@@ -147,10 +174,10 @@
   position: relative;
   height: 72px;
   border-bottom: 1px solid var(--line);
-  background: var(--card);
+  background: var(--rv2-lane-bg);
   overflow: visible;
 }
-.rv2-lane.alt { background: rgba(0,0,0,0.02); }
+.rv2-lane.alt { background: var(--rv2-lane-bg-alt); }
 .rv2-lane-canvas {
   position: relative;
   min-height: 72px;
@@ -201,18 +228,6 @@
 .rv2-progress-bar { height: 100%; background: linear-gradient(90deg, rgba(16,185,129,0.9), rgba(16,185,129,0.6)); border-radius: 6px; }
 .rv2-progress-text { position: absolute; right: 10px; bottom: 10px; font-size: 11px; color: var(--bs-body-color); }
 /* Hint for goals without stories */
-.rv2-empty-hint {
-  position: absolute;
-  left: 10px;
-  top: 34px;
-  font-size: 11px;
-  color: #7c3aed; /* violet */
-  background: rgba(124,58,237,0.10);
-  border: 1px dashed rgba(124,58,237,0.45);
-  padding: 1px 6px;
-  border-radius: 6px;
-}
-
 .rv2-actions { position: absolute; right: 8px; top: 6px; display: none; gap: 6px; }
 .rv2-card:hover .rv2-actions { display: flex; }
 .rv2-icon-btn {
