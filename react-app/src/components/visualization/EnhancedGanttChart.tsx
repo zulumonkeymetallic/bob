@@ -70,16 +70,6 @@ interface GanttItem {
   confidence?: number;
 }
 
-interface ActivityStreamItem {
-  id: string;
-  type: 'goal' | 'story' | 'sprint' | 'task';
-  title: string;
-  ref?: string;
-  status: number;
-  theme?: number;
-  linkedTo: string[];
-}
-
 type RoadmapDragType = 'move' | 'resize-start' | 'resize-end';
 
 type ActiveDrag = {
@@ -140,10 +130,6 @@ const EnhancedGanttChart: React.FC = () => {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
   
-  // Activity stream state
-  const [showActivityStream, setShowActivityStream] = useState(false);
-  const [activityStreamItems, setActivityStreamItems] = useState<ActivityStreamItem[]>([]);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const storiesPanelRef = useRef<HTMLDivElement>(null);
 
@@ -519,54 +505,18 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Handle item click for activity stream
   const handleItemClick = useCallback(async (item: GanttItem) => {
-    setSelectedItemId(item.id);
-    if (item.type === 'goal') setSelectedGoalId(item.id);
-    setShowActivityStream(true);
-
-    // Find all linked items
-    const linkedItems: ActivityStreamItem[] = [];
-
     if (item.type === 'goal') {
-      // Find stories linked to this goal
-      const goalStories = stories.filter(story => story.goalId === item.id);
-      goalStories.forEach(story => {
-        linkedItems.push({
-          id: story.id,
-          type: 'story',
-          title: story.title,
-          ref: story.ref,
-          status: story.status,
-          theme: story.theme,
-          linkedTo: [item.id]
-        });
-
-        // Find tasks linked to these stories
-        const storyTasks = tasks.filter(task => task.parentType === 'story' && task.parentId === story.id);
-        storyTasks.forEach(task => {
-          linkedItems.push({
-            id: task.id,
-            type: 'task',
-            title: task.title,
-            ref: task.ref,
-            status: task.status,
-            theme: task.theme,
-            linkedTo: [item.id, story.id]
-          });
-        });
-      });
+      const goal = goals.find(g => g.id === item.id);
+      if (goal) {
+        showSidebar(goal, 'goal');
+        setSelectedGoalId(goal.id);
+      }
+    } else if (item.type === 'story') {
+      const story = stories.find(s => s.id === item.id);
+      if (story) {
+        showSidebar(story, 'story');
+      }
     }
-
-    setActivityStreamItems([
-      {
-        id: item.id,
-        type: item.type,
-        title: item.title,
-        status: item.status,
-        theme: item.theme,
-        linkedTo: []
-      },
-      ...linkedItems
-    ]);
 
     // Prepare open tasks modal for goals
     if (item.type === 'goal') {
@@ -589,7 +539,16 @@ const EnhancedGanttChart: React.FC = () => {
       noteContent: `Gantt view interaction: ${JSON.stringify({ title: item.title, ganttView: true })}`,
       source: 'human'
     });
-  }, [stories, tasks, currentUser]);
+  }, [goals, stories, tasks, currentUser, showSidebar]);
+
+  const openActivitySidebar = useCallback(() => {
+    const targetId = selectedGoalId ?? goals[0]?.id;
+    if (!targetId) return;
+    const goal = goals.find(g => g.id === targetId);
+    if (goal) {
+      showSidebar(goal, 'goal');
+    }
+  }, [goals, selectedGoalId, showSidebar]);
 
   // Handle drag start
   const computeDragDates = useCallback((drag: ActiveDrag, deltaX: number) => {
@@ -1244,58 +1203,6 @@ const EnhancedGanttChart: React.FC = () => {
           </Card>
         )}
 
-        {/* Activity Stream Sidebar */}
-        {showActivityStream && (
-          <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 shadow-lg border-start" style={{ width: '400px', zIndex: 2000, backgroundColor: 'var(--panel)', borderLeft: '1px solid var(--line)' }}>
-          {/* Increase z-index to stay above dropdowns */}
-            <div className="p-3 border-bottom d-flex justify-content-between align-items-center">
-              <h5 className="mb-0 d-flex align-items-center">
-                <Activity className="me-2" size={20} />
-                Activity Stream
-              </h5>
-              <Button variant="outline-secondary" size="sm" onClick={() => setShowActivityStream(false)}>×</Button>
-            </div>
-            
-            <div className="p-3" style={{ height: 'calc(100% - 70px)', overflow: 'auto' }}>
-              {activityStreamItems.length === 0 ? (
-                <p className="text-muted">Click on any goal to see linked items</p>
-              ) : (
-                <div className="space-y-3">
-                  {activityStreamItems.map(item => {
-                    const theme = themes.find(t => t.id === item.theme);
-                    return (
-                      <Card key={item.id} className="border">
-                        <Card.Body className="p-3">
-                          <div className="d-flex align-items-start">
-                            {theme && (
-                              <div
-                                className="me-2 mt-1"
-                                style={{
-                                  width: '12px',
-                                  height: '12px',
-                                  backgroundColor: theme.color,
-                                  borderRadius: '2px'
-                                }}
-                              />
-                            )}
-                            <div className="flex-grow-1">
-                              <h6 className="mb-1">{item.title}</h6>
-                              {item.ref && <small className="text-muted">{item.ref}</small>}
-                              <div className="mt-2">
-                                {/* Additional details can be shown here */}
-                              </div>
-                            </div>
-                          </div>
-                        </Card.Body>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Activity Modal */}
         <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
           <Modal.Header closeButton>
@@ -1406,8 +1313,8 @@ const EnhancedGanttChart: React.FC = () => {
                 <Button
                   variant="outline-secondary"
                   size="sm"
-                  onClick={() => setShowActivityStream(true)}
-                  aria-expanded={showActivityStream}
+                  onClick={openActivitySidebar}
+                  disabled={goals.length === 0}
                 >
                   <Activity size={16} className="me-1" />
                   Activity
@@ -1695,65 +1602,6 @@ const EnhancedGanttChart: React.FC = () => {
             />
           </Card.Body>
         </Card>
-      )}
-
-      {/* Activity Stream Sidebar */}
-      {showActivityStream && (
-        <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 shadow-lg border-start" style={{ width: '400px', zIndex: 1000, backgroundColor: 'var(--panel)', borderLeft: '1px solid var(--line)' }}>
-          <div className="p-3 border-bottom d-flex justify-content-between align-items-center">
-            <h5 className="mb-0 d-flex align-items-center">
-              <Activity className="me-2" size={20} />
-              Activity Stream
-            </h5>
-            <Button variant="outline-secondary" size="sm" onClick={() => setShowActivityStream(false)}>×</Button>
-          </div>
-          
-          <div className="p-3" style={{ height: 'calc(100% - 70px)', overflow: 'auto' }}>
-            {activityStreamItems.length === 0 ? (
-              <p className="text-muted">Click on any goal to see linked items</p>
-            ) : (
-              <div className="space-y-3">
-                {activityStreamItems.map(item => {
-                  const theme = themes.find(t => t.id === item.theme);
-                  return (
-                    <Card key={item.id} className="border">
-                      <Card.Body className="p-3">
-                        <div className="d-flex align-items-start">
-                          {theme && (
-                            <div
-                              className="me-2 mt-1"
-                              style={{
-                                width: '12px',
-                                height: '12px',
-                                backgroundColor: theme.color,
-                                borderRadius: '2px'
-                              }}
-                            />
-                          )}
-                          <div className="flex-grow-1">
-                            <h6 className="mb-1">{item.title}</h6>
-                            {item.ref && <small className="text-muted">{item.ref}</small>}
-                            <div className="mt-2">
-                              <Badge bg="secondary" className="me-2">{item.type}</Badge>
-                              <Badge bg={item.status === 2 ? 'success' : 'warning'}>
-                                {item.status === 2 ? 'Complete' : 'In Progress'}
-                              </Badge>
-                            </div>
-                            {item.linkedTo.length > 0 && (
-                              <small className="text-muted mt-1 d-block">
-                                Linked to {item.linkedTo.length} item(s)
-                              </small>
-                            )}
-                          </div>
-                        </div>
-                      </Card.Body>
-                    </Card>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
       )}
 
       {/* Impact Modal */}
