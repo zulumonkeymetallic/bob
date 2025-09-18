@@ -214,7 +214,7 @@
   background: var(--card);
   box-shadow: 0 6px 12px rgba(0,0,0,0.12);
   border: 1px solid var(--line);
-  padding: 8px 10px 6px 10px;
+  padding: 8px 10px 10px 10px;
   cursor: grab;
   overflow: hidden;
   /* Prevent browser touch scrolling from stealing drags */
@@ -255,6 +255,32 @@
 .rv2-icon-btn.muted { color: var(--muted, #6b7280); }
 .rv2-icon-btn.muted:hover { color: var(--bs-body-color); }
 
+.rv2-card-activity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted, #6b7280);
+  margin-top: 4px;
+  margin-bottom: 18px;
+  margin-right: 8px;
+  line-height: 1.2;
+  max-height: 28px;
+  overflow: hidden;
+}
+
+.rv2-card-activity-icon {
+  font-size: 12px;
+}
+
+.rv2-card-activity-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .rv2-resize-handle { position: absolute; top: 0; bottom: 0; width: 8px; background: rgba(0,0,0,0.08); }
 .rv2-resize-handle.start { left: 0; border-radius: 10px 0 0 10px; cursor: ew-resize; }
 .rv2-resize-handle.end { right: 0; border-radius: 0 10px 10px 0; cursor: ew-resize; }
@@ -269,6 +295,26 @@
 .rv2-card--zoom-year .rv2-actions,
 .rv2-card--zoom-half .rv2-progress-text,
 .rv2-card--zoom-year .rv2-progress-text { opacity: 0.0; pointer-events: none; }
+
+.rv2-card--detail-summary .rv2-card-subtitle,
+.rv2-card--detail-summary .rv2-actions,
+.rv2-card--detail-summary .rv2-progress-text {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rv2-card--detail-summary .rv2-card-activity {
+  display: none;
+}
+
+.rv2-card--detail-summary .rv2-progress {
+  height: 6px;
+  bottom: 12px;
+}
+
+.rv2-card--detail-compact .rv2-card-activity {
+  display: none;
+}
 
 /* Global drag state helper */
 body.rv2-dragging, body[data-rv2-dragging="1"] {

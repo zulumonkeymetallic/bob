@@ -3,13 +3,15 @@ import { Button } from 'react-bootstrap';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 import useMeasure from 'react-use-measure';
 import { Goal, Sprint, Story } from '../../types';
-import { useRoadmapStore, useTimelineScale, ZoomLevel } from '../../stores/roadmapStore';
+import { useRoadmapStore, ZoomLevel } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import './RoadmapV2.css';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
 import logger from '../../utils/logger';
 import { useDroppable } from '@dnd-kit/core';
 import { RoadmapGoalCard } from './RoadmapGoalCard';
+import { scaleTime } from '@visx/scale';
+import { shallow } from 'zustand/shallow';
 
 export type GanttItem = {
   id: string;
@@ -19,6 +21,14 @@ export type GanttItem = {
   endDate: Date;
   status: number;
   priority?: number;
+  startLabel?: string;
+  endLabel?: string;
+};
+
+export type GoalNoteSummary = {
+  text: string;
+  timestamp?: number;
+  author?: string;
 };
 
 type Props = {
@@ -27,6 +37,7 @@ type Props = {
   stories: Story[];
   storiesByGoal: Record<string, number>;
   doneStoriesByGoal: Record<string, number>;
+  latestGoalNotes?: Record<string, GoalNoteSummary>;
   onItemClick: (item: GanttItem) => void;
   updateGoalDates: (goalId: string, start: Date, end: Date) => void;
   handleGenerateStories: (item: GanttItem) => void;
@@ -52,6 +63,38 @@ const ROW_HEIGHT = 72;
 const CARD_HEIGHT = 60;
 const CARD_TOP_OFFSET = 6;
 
+const MIN_WIDTH_BY_ZOOM: Record<ZoomLevel, number> = {
+  week: 210,
+  month: 160,
+  quarter: 120,
+  half: 100,
+  year: 80,
+};
+
+const getDetailLevel = (zoom: ZoomLevel, widthPx: number): 'summary' | 'compact' | 'standard' | 'expanded' => {
+  if (zoom === 'year') return 'summary';
+  if (zoom === 'half' || zoom === 'quarter') {
+    return widthPx < 180 ? 'compact' : 'standard';
+  }
+  if (zoom === 'month') {
+    if (widthPx < 150) return 'compact';
+    if (widthPx > 260) return 'standard';
+    return 'standard';
+  }
+  if (zoom === 'week') {
+    if (widthPx >= 220) return 'expanded';
+    if (widthPx < 160) return 'compact';
+    return 'standard';
+  }
+  return 'standard';
+};
+
+const trimNote = (note?: GoalNoteSummary | null): GoalNoteSummary | null => {
+  if (!note || !note.text) return null;
+  const trimmed = note.text.length > 180 ? `${note.text.slice(0, 177)}…` : note.text;
+  return { ...note, text: trimmed };
+};
+
 const hexToRgba = (hex: string, alpha: number) => {
   const value = hex.replace('#', '');
   const bigint = parseInt(value.length === 3 ? value.split('').map(c => c + c).join('') : value, 16);
@@ -61,20 +104,45 @@ const hexToRgba = (hex: string, alpha: number) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
+type PreparedGoalCard = {
+  goal: GanttItem;
+  top: number;
+  left: number;
+  width: number;
+  subtitle: string;
+  progress: number;
+  themeColor: string;
+  gradientStart: string;
+  gradientEnd: string;
+  isCompact: boolean;
+  isUltra: boolean;
+  detailLevel: 'summary' | 'compact' | 'standard' | 'expanded';
+  activitySnippet?: GoalNoteSummary | null;
+  height: number;
+};
+
+type SprintBand = {
+  id: string;
+  left: number;
+  width: number;
+  name: string;
+};
+
+type WeekGuide = {
+  key: string;
+  left: number;
+};
+
 type ThemeLaneProps = {
   laneId: number;
   dropThemeId: number;
   index: number;
-  items: GanttItem[];
+  items: PreparedGoalCard[];
   collapsed: boolean;
   laneColor: string;
   showWeekGrid: boolean;
-  sprints: Sprint[];
-  scale: (d: Date) => number;
-  start: Date;
-  end: Date;
-  storiesByGoal: Record<string, number>;
-  doneStoriesByGoal: Record<string, number>;
+  sprintBands: SprintBand[];
+  weekLines: WeekGuide[];
   goalById: Record<string, Goal>;
   handleGenerateStories: (item: GanttItem) => void;
   setSelectedGoalId: (id: string | null) => void;
@@ -87,6 +155,17 @@ type ThemeLaneProps = {
   zoom: ZoomLevel;
 };
 
+type PreparedLane = {
+  laneId: number;
+  dropThemeId: number;
+  index: number;
+  laneColor: string;
+  collapsed: boolean;
+  items: PreparedGoalCard[];
+  top: number;
+  height: number;
+};
+
 const ThemeLane: React.FC<ThemeLaneProps> = ({
   laneId,
   dropThemeId,
@@ -95,12 +174,8 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
   collapsed,
   laneColor,
   showWeekGrid,
-  sprints,
-  scale,
-  start,
-  end,
-  storiesByGoal,
-  doneStoriesByGoal,
+  sprintBands,
+  weekLines,
   goalById,
   handleGenerateStories,
   setSelectedGoalId,
@@ -127,59 +202,43 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
       style={{ height: laneHeight }}
     >
       <div className="rv2-lane-accent" style={{ backgroundColor: laneColor }} />
-      {sprints.map((s) => (
+      {sprintBands.map((band) => (
         <div
-          key={`row-s-${s.id}`}
+          key={`row-s-${band.id}`}
           className="rv2-sprint-shade"
           aria-hidden="true"
           style={{
-            left: scale(new Date(s.startDate)),
-            width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)),
+            left: band.left,
+            width: band.width,
             top: 0,
             bottom: 0,
           }}
         />
       ))}
-      {showWeekGrid && (() => {
-        const lines: JSX.Element[] = [];
-        const startDay = new Date(start);
-        startDay.setHours(0, 0, 0, 0);
-        for (let d = new Date(startDay); d <= end; d.setDate(d.getDate() + 7)) {
-          lines.push(<div key={`w-${d.getTime()}`} className="rv2-grid-week" style={{ left: scale(new Date(d)) }} />);
-        }
-        return lines;
-      })()}
+      {showWeekGrid && weekLines.map((line) => (
+        <div key={line.key} className="rv2-grid-week" style={{ left: line.left }} />
+      ))}
       {!collapsed && (
         <div className="rv2-lane-canvas" style={{ minHeight: laneHeight }}>
-          {items.map((g, idx) => {
-            const left = scale(g.startDate);
-            const right = scale(g.endDate);
-            const minWidth = zoom === 'year' ? 80 : zoom === 'half' ? 100 : zoom === 'quarter' ? 120 : zoom === 'month' ? 140 : 160;
-            const widthPx = Math.max(minWidth, right - left);
-            const isCompact = widthPx < 220;
-            const isUltra = widthPx < 160;
-            const themeColor = getThemeById(migrateThemeValue(g.theme)).color;
-            const bg1 = hexToRgba(themeColor, 0.12);
-            const bg2 = hexToRgba(themeColor, 0.04);
-            const total = storiesByGoal[g.id] || 0;
-            const done = doneStoriesByGoal[g.id] || 0;
-            const progress = total ? Math.round((done / total) * 100) : 0;
-            const subtitle = `${g.startDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${g.endDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+          {items.map((item) => {
+            const g = item.goal;
             return (
               <RoadmapGoalCard
                 key={g.id}
                 goal={g}
-                top={CARD_TOP_OFFSET + idx * ROW_HEIGHT}
-                left={left}
-                width={widthPx}
-                height={CARD_HEIGHT}
-                themeColor={themeColor}
-                gradientStart={bg1}
-                gradientEnd={bg2}
-                subtitle={subtitle}
-                isCompact={isCompact}
-                isUltra={isUltra}
-                progress={progress}
+                top={item.top}
+                left={item.left}
+                width={item.width}
+                height={item.height}
+                themeColor={item.themeColor}
+                gradientStart={item.gradientStart}
+                gradientEnd={item.gradientEnd}
+                subtitle={item.subtitle}
+                isCompact={item.isCompact}
+                isUltra={item.isUltra}
+                progress={item.progress}
+                detailLevel={item.detailLevel}
+                activitySnippet={item.activitySnippet || null}
                 onOpenActivity={() => {
                   const full = goalById[g.id];
                   if (full) openGlobalActivity(full);
@@ -218,6 +277,7 @@ const RoadmapV2: React.FC<Props> = ({
   stories,
   storiesByGoal,
   doneStoriesByGoal,
+  latestGoalNotes,
   onItemClick,
   updateGoalDates,
   handleGenerateStories,
@@ -238,13 +298,41 @@ const RoadmapV2: React.FC<Props> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const userInteractedRef = useRef(false);
+  const autoScrolledRef = useRef(false);
+  const scrollRafRef = useRef<number | null>(null);
   const [measureRef, bounds] = useMeasure();
-  const scale = useTimelineScale();
-  const { start, end, width, zoom, setRange, setZoom, setWidth, laneCollapse, toggleLane } = useRoadmapStore();
+  const {
+    start,
+    end,
+    width,
+    zoom,
+    setRange,
+    setZoom,
+    setWidth,
+    laneCollapse,
+    toggleLane,
+  } = useRoadmapStore((state) => ({
+    start: state.start,
+    end: state.end,
+    width: state.width,
+    zoom: state.zoom,
+    setRange: state.setRange,
+    setZoom: state.setZoom,
+    setWidth: state.setWidth,
+    laneCollapse: state.laneCollapse,
+    toggleLane: state.toggleLane,
+  }), shallow);
+  const scale = useMemo(
+    () => scaleTime<number>({ domain: [start, end], range: [0, Math.max(1, width)] }),
+    [start, end, width]
+  );
+  const scaleDate = useCallback((d: Date) => scale(d), [scale]);
   const [filterActiveSprint, setFilterActiveSprint] = useState(false);
   const [filterHasStories, setFilterHasStories] = useState(false);
   const [filterOverlapSprint, setFilterOverlapSprint] = useState(false);
   const [goToInput, setGoToInput] = useState<string>('');
+  const dateFormatter = useMemo(() => new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }), []);
+  const [viewport, setViewport] = useState({ top: 0, height: 720 });
 
   // Keep store width synced to container
   useEffect(() => {
@@ -254,6 +342,12 @@ const RoadmapV2: React.FC<Props> = ({
       logger.debug('roadmapV2', 'measure', { container: bounds.width, timeline: w });
     }
   }, [bounds.width, setWidth]);
+
+  useEffect(() => {
+    if (!goals.length) {
+      autoScrolledRef.current = false;
+    }
+  }, [goals.length]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -266,6 +360,35 @@ const RoadmapV2: React.FC<Props> = ({
       el.removeEventListener('wheel', markInteraction);
       el.removeEventListener('touchstart', markInteraction);
       el.removeEventListener('mousedown', markInteraction);
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const updateViewport = () => {
+      setViewport(prev => ({
+        top: el.scrollTop,
+        height: el.clientHeight || prev.height,
+      }));
+    };
+    updateViewport();
+    const handleScroll = () => {
+      if (scrollRafRef.current != null) return;
+      scrollRafRef.current = window.requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        updateViewport();
+      });
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('resize', updateViewport);
+    return () => {
+      el.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', updateViewport);
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
     };
   }, []);
 
@@ -289,16 +412,22 @@ const RoadmapV2: React.FC<Props> = ({
   }, [goals, setRange]);
 
   const ganttItems = useMemo<GanttItem[]>(() => {
-    return goals.map((goal) => ({
-      id: goal.id,
-      title: goal.title,
-      theme: goal.theme,
-      startDate: goal.startDate ? new Date(goal.startDate) : new Date(),
-      endDate: goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)),
-      status: goal.status,
-      priority: (goal as any).priority,
-    }));
-  }, [goals]);
+    return goals.map((goal) => {
+      const startDate = goal.startDate ? new Date(goal.startDate) : new Date();
+      const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+      return {
+        id: goal.id,
+        title: goal.title,
+        theme: goal.theme,
+        startDate,
+        endDate,
+        status: goal.status,
+        priority: (goal as any).priority,
+        startLabel: dateFormatter.format(startDate),
+        endLabel: dateFormatter.format(endDate),
+      };
+    });
+  }, [goals, dateFormatter]);
 
   const filteredItems = useMemo(() => {
     if ((!filterActiveSprint && !filterHasStories) || stories.length === 0) return ganttItems;
@@ -351,13 +480,120 @@ const RoadmapV2: React.FC<Props> = ({
     return grouped;
   }, [filteredItems]);
 
+  const sprintBands = useMemo(() => {
+    return sprints.map((s) => {
+      const startPx = scaleDate(new Date(s.startDate));
+      const endPx = scaleDate(new Date(s.endDate));
+      return {
+        id: s.id,
+        left: startPx,
+        width: Math.max(2, endPx - startPx),
+        name: s.name,
+      } as SprintBand;
+    });
+  }, [sprints, scaleDate]);
+
+  const weekLines = useMemo(() => {
+    if (zoom !== 'week') return [] as WeekGuide[];
+    const lines: WeekGuide[] = [];
+    const startDay = new Date(start);
+    startDay.setHours(0, 0, 0, 0);
+    for (let cursor = new Date(startDay); cursor <= end; cursor.setDate(cursor.getDate() + 7)) {
+      const left = scaleDate(new Date(cursor));
+      lines.push({ key: `w-${cursor.getTime()}`, left });
+    }
+    return lines;
+  }, [zoom, start, end, scaleDate]);
+
+  // Pre-compute lane layout so we can virtualize visible rows efficiently.
+  const { lanes: preparedLanes, totalHeight: totalLaneHeight } = useMemo(() => {
+    let cursor = 0;
+    const lanes = LANE_THEMES.map((t, idx) => {
+      const themeItems = itemsByTheme[t.id] || [];
+      const dropThemeId = migrateThemeValue(t.id);
+      const laneColor = getThemeById(dropThemeId).color;
+      const gradientStart = hexToRgba(laneColor, 0.12);
+      const gradientEnd = hexToRgba(laneColor, 0.04);
+      const collapsed = Boolean(laneCollapse[t.id]);
+      const preparedItems: PreparedGoalCard[] = collapsed ? [] : themeItems.map((item, itemIdx) => {
+        const startPx = scaleDate(item.startDate);
+        const endPx = scaleDate(item.endDate);
+        const baseWidth = endPx - startPx;
+        const minWidth = MIN_WIDTH_BY_ZOOM[zoom] ?? 100;
+        const widthPx = Math.max(minWidth, baseWidth);
+        const isCompact = widthPx < 220;
+        const isUltra = widthPx < 160;
+        const total = storiesByGoal[item.id] || 0;
+        const done = doneStoriesByGoal[item.id] || 0;
+        const progress = total ? Math.round((done / total) * 100) : 0;
+        const subtitle = `${item.startLabel ?? dateFormatter.format(item.startDate)} – ${item.endLabel ?? dateFormatter.format(item.endDate)}`;
+        const detailLevel = getDetailLevel(zoom, widthPx);
+        const activitySnippet = detailLevel === 'expanded' ? trimNote(latestGoalNotes?.[item.id]) : null;
+        const cardHeight = detailLevel === 'expanded' ? CARD_HEIGHT + 12 : CARD_HEIGHT;
+        return {
+          goal: item,
+          top: CARD_TOP_OFFSET + itemIdx * ROW_HEIGHT,
+          left: startPx,
+          width: widthPx,
+          subtitle,
+          progress,
+          themeColor: laneColor,
+          gradientStart,
+          gradientEnd,
+          isCompact,
+          isUltra,
+          detailLevel,
+          activitySnippet,
+          height: cardHeight,
+        } as PreparedGoalCard;
+      });
+      const laneVisibleRows = collapsed ? 0 : Math.max(1, themeItems.length);
+      const laneHeight = collapsed ? 48 : laneVisibleRows * ROW_HEIGHT + 16;
+      const top = cursor;
+      cursor += laneHeight;
+      return {
+        laneId: t.id,
+        dropThemeId,
+        index: idx,
+        laneColor,
+        collapsed,
+        items: preparedItems,
+        top,
+        height: laneHeight,
+      } as PreparedLane;
+    });
+    return { lanes, totalHeight: cursor };
+  }, [itemsByTheme, laneCollapse, storiesByGoal, doneStoriesByGoal, zoom, scaleDate, latestGoalNotes, dateFormatter]);
+
+  const overscan = ROW_HEIGHT * 3;
+  const visibleLanes = useMemo(() => {
+    const topBound = Math.max(0, viewport.top - overscan);
+    const bottomBound = viewport.top + viewport.height + overscan;
+    return preparedLanes.filter((lane) => (lane.top + lane.height >= topBound) && (lane.top <= bottomBound));
+  }, [preparedLanes, viewport.top, viewport.height, overscan]);
+
+  const laneMetaById = useMemo(() => {
+    const map: Record<number, { id: number; name: string; index: number }> = {};
+    LANE_THEMES.forEach((t, idx) => {
+      map[t.id] = { id: t.id, name: t.name, index: idx };
+    });
+    return map;
+  }, []);
+
+  // Only render lanes inside the viewport (plus overscan) to keep the DOM small.
+  const lanesToRender = visibleLanes;
+
   const jumpBy = (days: number) => {
     const delta = days * 24 * 60 * 60 * 1000;
     setRange(new Date(start.getTime() + delta), new Date(end.getTime() + delta));
   };
 
+  const markManualInteraction = useCallback(() => {
+    userInteractedRef.current = true;
+  }, []);
+
   const today = new Date();
-  const leftToday = scale(today);
+  const leftToday = scaleDate(today);
   const showMonthGrid = zoom === 'week' || zoom === 'month';
   const showWeekGrid = zoom === 'week';
   const showHeaderDividers = showMonthGrid;
@@ -398,8 +634,8 @@ const RoadmapV2: React.FC<Props> = ({
       const cur = new Date(start.getFullYear(), 0, 1);
       while (cur <= end) {
         const next = new Date(cur.getFullYear() + 1, 0, 1);
-        const left = scale(cur);
-        const w = scale(next) - scale(cur);
+        const left = scaleDate(cur);
+        const w = scaleDate(next) - scaleDate(cur);
         blocks.push({ key: `Y-${cur.getFullYear()}`, left, width: w, label: `${cur.getFullYear()}` });
         cur.setFullYear(cur.getFullYear() + 1);
       }
@@ -408,8 +644,8 @@ const RoadmapV2: React.FC<Props> = ({
       while (cur <= end) {
         const q = Math.floor(cur.getMonth() / 3) + 1;
         const next = new Date(cur.getFullYear(), cur.getMonth() + 3, 1);
-        const left = scale(cur);
-        const w = scale(next) - scale(cur);
+        const left = scaleDate(cur);
+        const w = scaleDate(next) - scaleDate(cur);
         const lbl = `Q${q} ${cur.getFullYear()}`;
         blocks.push({ key: `Q${q}-${cur.getFullYear()}`, left, width: w, label: lbl });
         cur.setMonth(cur.getMonth() + 3);
@@ -418,8 +654,8 @@ const RoadmapV2: React.FC<Props> = ({
       const cur = new Date(start.getFullYear(), start.getMonth(), 1);
       while (cur <= end) {
         const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
-        const left = scale(cur);
-        const w = scale(next) - scale(cur);
+        const left = scaleDate(cur);
+        const w = scaleDate(next) - scaleDate(cur);
         const showYear = cur.getMonth() === 0 || monthsSpan > 12;
         // Adaptive label by pixel width
         let label = '';
@@ -433,7 +669,7 @@ const RoadmapV2: React.FC<Props> = ({
       }
     }
     return blocks;
-  }, [start, end, width, zoom, scale]);
+  }, [start, end, zoom, scaleDate]);
 
   // Zoom helpers
   const zoomByFactor = (factor: number) => {
@@ -447,9 +683,9 @@ const RoadmapV2: React.FC<Props> = ({
   const scrollContainerToDate = useCallback((d: Date, behavior: ScrollBehavior = 'auto') => {
     const el = containerRef.current;
     if (!el) return;
-    const offsetLeft = 250 + scale(d) - el.clientWidth * 0.35;
+    const offsetLeft = 250 + scaleDate(d) - el.clientWidth * 0.35;
     el.scrollTo({ left: Math.max(0, offsetLeft), behavior });
-  }, [scale]);
+  }, [scaleDate]);
 
   const goToDate = (d: Date) => {
     // Recentre current zoom window on date d
@@ -458,12 +694,14 @@ const RoadmapV2: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    if (autoScrolledRef.current) return;
     if (!containerRef.current) return;
-    const today = new Date();
-    if (!userInteractedRef.current) {
-      scrollContainerToDate(today, 'smooth');
-    }
-  }, [scrollContainerToDate, zoom, width, start, end]);
+    if (!goals.length) return;
+    if (userInteractedRef.current) return;
+    autoScrolledRef.current = true;
+    const frame = requestAnimationFrame(() => scrollContainerToDate(new Date(), 'smooth'));
+    return () => cancelAnimationFrame(frame);
+  }, [goals.length, scrollContainerToDate]);
 
   return (
     <div className="rv2-container">
@@ -472,10 +710,11 @@ const RoadmapV2: React.FC<Props> = ({
             <div className="rv2-toolbar-left">Roadmap Timeline</div>
             <div className="rv2-toolbar-right">
           {/* Roadmap switch button removed per feedback */}
-          <Button size="sm" variant="outline-secondary" title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'} onClick={toggleFullscreen}>{isFullscreen ? 'Exit Full Screen' : 'Full Screen'}</Button>
-          <Button size="sm" variant="outline-secondary" title="Zoom in" onClick={() => zoomByFactor(0.75)}><ZoomIn size={14} /></Button>
-          <Button size="sm" variant="outline-secondary" title="Zoom out" onClick={() => zoomByFactor(1.25)}><ZoomOut size={14} /></Button>
+          <Button size="sm" variant="outline-secondary" title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'} onClick={() => { markManualInteraction(); toggleFullscreen(); }}>{isFullscreen ? 'Exit Full Screen' : 'Full Screen'}</Button>
+          <Button size="sm" variant="outline-secondary" title="Zoom in" onClick={() => { markManualInteraction(); zoomByFactor(0.75); }}><ZoomIn size={14} /></Button>
+          <Button size="sm" variant="outline-secondary" title="Zoom out" onClick={() => { markManualInteraction(); zoomByFactor(1.25); }}><ZoomOut size={14} /></Button>
           <Button size="sm" variant="outline-secondary" title="Fit all goals" onClick={() => {
+            markManualInteraction();
             const all = filteredItems;
             if (all.length === 0) return;
             const times: number[] = [];
@@ -484,13 +723,13 @@ const RoadmapV2: React.FC<Props> = ({
             const pad = Math.round((max - min) * 0.08);
             setRange(new Date(min - pad), new Date(max + pad));
           }}>Fit</Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => setZoom('week')}>Weeks</Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => setZoom('month')}>Months</Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => setZoom('quarter')}>Quarters</Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => setZoom('year')}>Years</Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => setRange(new Date(today.getFullYear(), today.getMonth(), today.getDate()-42), new Date(today.getFullYear(), today.getMonth(), today.getDate()+42))}>Today</Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => jumpBy(-14)}><ChevronLeft size={14} /></Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => jumpBy(14)}><ChevronRight size={14} /></Button>
+          <Button size="sm" variant="outline-secondary" onClick={() => { markManualInteraction(); setZoom('week'); }}>Weeks</Button>
+          <Button size="sm" variant="outline-secondary" onClick={() => { markManualInteraction(); setZoom('month'); }}>Months</Button>
+          <Button size="sm" variant="outline-secondary" onClick={() => { markManualInteraction(); setZoom('quarter'); }}>Quarters</Button>
+          <Button size="sm" variant="outline-secondary" onClick={() => { markManualInteraction(); setZoom('year'); }}>Years</Button>
+          <Button size="sm" variant="outline-secondary" onClick={() => { markManualInteraction(); setRange(new Date(today.getFullYear(), today.getMonth(), today.getDate()-42), new Date(today.getFullYear(), today.getMonth(), today.getDate()+42)); scrollContainerToDate(today, 'smooth'); }}>Today</Button>
+          <Button size="sm" variant="outline-secondary" onClick={() => { markManualInteraction(); jumpBy(-14); }}><ChevronLeft size={14} /></Button>
+          <Button size="sm" variant="outline-secondary" onClick={() => { markManualInteraction(); jumpBy(14); }}><ChevronRight size={14} /></Button>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
             Go to:
             <input
@@ -501,20 +740,23 @@ const RoadmapV2: React.FC<Props> = ({
                 setGoToInput(v);
                 if (v) {
                   const d = new Date(v + 'T12:00:00');
-                  if (!isNaN(d.getTime())) goToDate(d);
+                  if (!isNaN(d.getTime())) {
+                    markManualInteraction();
+                    goToDate(d);
+                  }
                 }
               }}
               style={{ fontSize: 12, padding: '2px 4px' }}
             />
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
-            <input type="checkbox" checked={filterHasStories} onChange={(e) => setFilterHasStories(e.target.checked)} /> Has stories
+            <input type="checkbox" checked={filterHasStories} onChange={(e) => { markManualInteraction(); setFilterHasStories(e.target.checked); }} /> Has stories
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
-            <input type="checkbox" checked={filterActiveSprint} onChange={(e) => setFilterActiveSprint(e.target.checked)} disabled={!selectedSprintId} /> In selected sprint
+            <input type="checkbox" checked={filterActiveSprint} onChange={(e) => { markManualInteraction(); setFilterActiveSprint(e.target.checked); }} disabled={!selectedSprintId} /> In selected sprint
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
-            <input type="checkbox" checked={filterOverlapSprint} onChange={(e) => setFilterOverlapSprint(e.target.checked)} disabled={!selectedSprintId} /> Overlaps sprint dates
+            <input type="checkbox" checked={filterOverlapSprint} onChange={(e) => { markManualInteraction(); setFilterOverlapSprint(e.target.checked); }} disabled={!selectedSprintId} /> Overlaps sprint dates
           </label>
         </div>
       </div>
@@ -528,16 +770,16 @@ const RoadmapV2: React.FC<Props> = ({
             <div className="rv2-header-left" style={{ width: 250 }}>Themes</div>
             <div className="rv2-header-right">
               {/* Sprint shading under header */}
-              {sprints.map((s) => (
+              {sprintBands.map((band) => (
                 <div
-                  key={`hdr-s-${s.id}`}
+                  key={`hdr-s-${band.id}`}
                   className="rv2-sprint-shade rv2-sprint-shade--header"
                   style={{
-                    left: scale(new Date(s.startDate)),
-                    width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)),
+                    left: band.left,
+                    width: band.width,
                   }}
                 >
-                  <span className="rv2-sprint-label">{s.name}</span>
+                  <span className="rv2-sprint-label">{band.name}</span>
                 </div>
               ))}
               {/* Months band */}
@@ -569,56 +811,42 @@ const RoadmapV2: React.FC<Props> = ({
           {/* Lanes */}
           <div className="rv2-body">
             {/* Left sticky lane headers */}
-            <div className="rv2-lane-left" style={{ width: 250 }}>
-              {LANE_THEMES.map((t, idx) => {
-                const items = itemsByTheme[t.id] || [];
-                const collapsed = laneCollapse[t.id];
-                const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
-                const headerHeight = collapsed ? 48 : laneVisibleRows * ROW_HEIGHT + 16;
-                const themeIdNew = migrateThemeValue(t.id);
-                const laneColor = getThemeById(themeIdNew).color;
+            <div className="rv2-lane-left" style={{ width: 250, position: 'relative', height: totalLaneHeight }}>
+              {lanesToRender.map((lane) => {
+                const meta = laneMetaById[lane.laneId];
                 return (
                   <div
-                    key={t.id}
-                    className={`rv2-lane-header ${idx % 2 === 1 ? 'alt' : ''}`}
-                    data-theme-group={t.id}
-                    onClick={() => toggleLane(t.id)}
+                    key={lane.laneId}
+                    className={`rv2-lane-header ${lane.index % 2 === 1 ? 'alt' : ''}`}
+                    data-theme-group={lane.laneId}
+                    onClick={() => toggleLane(lane.laneId)}
                     title="Click to collapse/expand"
-                    style={{ height: headerHeight }}
+                    style={{ height: lane.height, position: 'absolute', top: lane.top, left: 0, right: 0 }}
                   >
                     <div className="rv2-lane-title">
-                      <span className="rv2-lane-dot" style={{ backgroundColor: laneColor }} />
-                      {t.name}
-                      {laneCollapse[t.id] ? <span className="rv2-lane-meta">(collapsed)</span> : null}
+                      <span className="rv2-lane-dot" style={{ backgroundColor: lane.laneColor }} />
+                      {meta?.name ?? `Theme ${lane.laneId}`}
+                      {lane.collapsed ? <span className="rv2-lane-meta">(collapsed)</span> : null}
                     </div>
                   </div>
                 );
               })}
             </div>
             {/* Right timeline area */}
-            <div className="rv2-lane-right">
-              <div className="rv2-today-line" style={{ left: leftToday }} />
-              {LANE_THEMES.map((t, idx) => {
-                const items = itemsByTheme[t.id] || [];
-                const collapsed = laneCollapse[t.id];
-                const dropThemeId = migrateThemeValue(t.id);
-                const laneColor = getThemeById(dropThemeId).color;
-                return (
+            <div className="rv2-lane-right" style={{ position: 'relative', height: totalLaneHeight }}>
+              <div className="rv2-today-line" style={{ left: leftToday, height: totalLaneHeight }} />
+              {lanesToRender.map((lane) => (
+                <div key={lane.laneId} style={{ position: 'absolute', top: lane.top, left: 0, right: 0 }}>
                   <ThemeLane
-                    key={t.id}
-                    laneId={t.id}
-                    dropThemeId={dropThemeId}
-                    index={idx}
-                    items={items}
-                    collapsed={collapsed}
-                    laneColor={laneColor}
+                    laneId={lane.laneId}
+                    dropThemeId={lane.dropThemeId}
+                    index={lane.index}
+                    items={lane.items}
+                    collapsed={lane.collapsed}
+                    laneColor={lane.laneColor}
                     showWeekGrid={showWeekGrid}
-                    sprints={sprints}
-                    scale={scale}
-                    start={start}
-                    end={end}
-                    storiesByGoal={storiesByGoal}
-                    doneStoriesByGoal={doneStoriesByGoal}
+                    sprintBands={sprintBands}
+                    weekLines={weekLines}
                     goalById={goalById}
                     handleGenerateStories={handleGenerateStories}
                     setSelectedGoalId={setSelectedGoalId}
@@ -630,8 +858,8 @@ const RoadmapV2: React.FC<Props> = ({
                     onAddNote={handleOpenNote}
                     zoom={zoom}
                   />
-                );
-              })}
+                </div>
+              ))}
             </div>
           </div>
         </div>

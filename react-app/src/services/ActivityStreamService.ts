@@ -1,12 +1,14 @@
-import { 
-  collection, 
-  addDoc, 
-  query, 
-  where, 
-  orderBy, 
-  onSnapshot, 
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
   serverTimestamp,
-  Timestamp 
+  Timestamp,
+  getDocs,
+  limit,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -306,5 +308,40 @@ export class ActivityStreamService {
     if (diffDays < 7) return `${diffDays}d ago`;
     
     return date.toLocaleDateString();
+  }
+
+  static async fetchLatestNotesForGoals(goalIds: string[]): Promise<Record<string, ActivityEntry | null>> {
+    if (!goalIds || goalIds.length === 0) {
+      return {};
+    }
+
+    const uniqueIds = Array.from(new Set(goalIds));
+    const results: Record<string, ActivityEntry | null> = {};
+
+    await Promise.all(uniqueIds.map(async (goalId) => {
+      try {
+        const noteQuery = query(
+          collection(db, 'activity_stream'),
+          where('entityId', '==', goalId),
+          where('entityType', '==', 'goal'),
+          orderBy('timestamp', 'desc'),
+          limit(5)
+        );
+        const snapshot = await getDocs(noteQuery);
+        if (snapshot.empty) {
+          results[goalId] = null;
+          return;
+        }
+        const entries = snapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() })) as ActivityEntry[];
+        const latestNote = entries.find(entry => entry.activityType === 'note_added' && entry.noteContent);
+        results[goalId] = latestNote || null;
+      } catch (error) {
+        console.error('fetchLatestNotesForGoals failed', { goalId, error });
+        results[goalId] = null;
+      }
+    }));
+
+    return results;
   }
 }
