@@ -51,6 +51,27 @@ const LANE_THEMES = GLOBAL_THEMES.map(t => ({ id: t.id, name: t.name || t.label,
 const ROW_HEIGHT = 72;
 const CARD_HEIGHT = 60;
 const CARD_TOP_OFFSET = 6;
+const CARD_MIN_WIDTH_BASE: Record<ZoomLevel, number> = {
+  week: 200,
+  month: 180,
+  quarter: 160,
+  half: 150,
+  year: 140,
+};
+const CARD_MIN_WIDTH_RATIO: Record<ZoomLevel, number> = {
+  week: 0.18,
+  month: 0.12,
+  quarter: 0.09,
+  half: 0.08,
+  year: 0.06,
+};
+const CARD_MAX_WIDTH_RATIO: Record<ZoomLevel, number> = {
+  week: 0.95,
+  month: 0.9,
+  quarter: 0.82,
+  half: 0.78,
+  year: 0.72,
+};
 
 const hexToRgba = (hex: string, alpha: number) => {
   const value = hex.replace('#', '');
@@ -85,6 +106,7 @@ type ThemeLaneProps = {
   updateGoalDates: (goalId: string, start: Date, end: Date) => void;
   onAddNote: (goalId: string) => void;
   zoom: ZoomLevel;
+  timelineWidth: number;
 };
 
 const ThemeLane: React.FC<ThemeLaneProps> = ({
@@ -111,6 +133,7 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
   updateGoalDates,
   onAddNote,
   zoom,
+  timelineWidth,
 }) => {
   const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
   const laneHeight = collapsed ? 48 : laneVisibleRows * ROW_HEIGHT + 16;
@@ -134,7 +157,7 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
           aria-hidden="true"
           style={{
             left: scale(new Date(s.startDate)),
-            width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)),
+            width: Math.max(0, scale(new Date(s.endDate)) - scale(new Date(s.startDate))),
             top: 0,
             bottom: 0,
           }}
@@ -154,8 +177,16 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
           {items.map((g, idx) => {
             const left = scale(g.startDate);
             const right = scale(g.endDate);
-            const minWidth = zoom === 'year' ? 80 : zoom === 'half' ? 100 : zoom === 'quarter' ? 120 : zoom === 'month' ? 140 : 160;
-            const widthPx = Math.max(minWidth, right - left);
+            const timelineWidthPx = Math.max(480, timelineWidth);
+            const baseMin = CARD_MIN_WIDTH_BASE[zoom];
+            const ratioMin = timelineWidthPx * CARD_MIN_WIDTH_RATIO[zoom];
+            const minWidth = Math.max(baseMin, ratioMin);
+            const rawWidth = Math.max(0, right - left);
+            let widthPx = Math.max(rawWidth, minWidth);
+            const maxWidth = timelineWidthPx * CARD_MAX_WIDTH_RATIO[zoom];
+            if (widthPx > maxWidth) {
+              widthPx = Math.max(rawWidth, maxWidth);
+            }
             const isCompact = widthPx < 220;
             const isUltra = widthPx < 160;
             const themeColor = getThemeById(migrateThemeValue(g.theme)).color;
@@ -237,7 +268,8 @@ const RoadmapV2: React.FC<Props> = ({
   selectedSprintId
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const userInteractedRef = useRef(false);
+  const lastInteractionRef = useRef<number>(0);
+  const autoScrollHoldUntilRef = useRef<number>(0);
   const [measureRef, bounds] = useMeasure();
   const scale = useTimelineScale();
   const { start, end, width, zoom, setRange, setZoom, setWidth, laneCollapse, toggleLane } = useRoadmapStore();
@@ -258,14 +290,20 @@ const RoadmapV2: React.FC<Props> = ({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const markInteraction = () => { userInteractedRef.current = true; };
+    const markInteraction = () => { lastInteractionRef.current = Date.now(); };
+    const onScroll = () => {
+      if (Date.now() < autoScrollHoldUntilRef.current) return;
+      lastInteractionRef.current = Date.now();
+    };
     el.addEventListener('wheel', markInteraction, { passive: true });
     el.addEventListener('touchstart', markInteraction, { passive: true });
     el.addEventListener('mousedown', markInteraction);
+    el.addEventListener('scroll', onScroll, { passive: true });
     return () => {
       el.removeEventListener('wheel', markInteraction);
       el.removeEventListener('touchstart', markInteraction);
       el.removeEventListener('mousedown', markInteraction);
+      el.removeEventListener('scroll', onScroll);
     };
   }, []);
 
@@ -351,6 +389,60 @@ const RoadmapV2: React.FC<Props> = ({
     return grouped;
   }, [filteredItems]);
 
+  const { blocks: monthBlocks, granularity: bandGranularity } = useMemo(() => {
+    const blocks: Array<{ key: string; left: number; width: number; label: string }> = [];
+    let granularity: 'month' | 'quarter' | 'year' = 'month';
+    const rangeStart = new Date(start);
+    const rangeEnd = new Date(end);
+    const monthsSpan = (rangeEnd.getFullYear() - rangeStart.getFullYear()) * 12 + (rangeEnd.getMonth() - rangeStart.getMonth());
+    const coveragePx = Math.max(width, Math.max(0, bounds.width - 250));
+    const coverageThreshold = coveragePx + 120;
+    const shouldContinue = (cursor: Date) => cursor <= rangeEnd || scale(cursor) <= coverageThreshold;
+    const pushBlock = (cursor: Date, next: Date, key: string, label: string) => {
+      const left = scale(cursor);
+      const right = scale(next);
+      const w = Math.max(1, right - left);
+      blocks.push({ key, left, width: w, label });
+    };
+
+    const mode: ZoomLevel = zoom;
+    if (mode === 'year' || monthsSpan >= 60) {
+      granularity = 'year';
+      let cursor = new Date(rangeStart.getFullYear(), 0, 1);
+      while (shouldContinue(cursor)) {
+        const next = new Date(cursor.getFullYear() + 1, 0, 1);
+        pushBlock(cursor, next, `Y-${cursor.getFullYear()}`, `${cursor.getFullYear()}`);
+        cursor = next;
+      }
+    } else if (mode === 'quarter' || monthsSpan >= 18) {
+      granularity = 'quarter';
+      let cursor = new Date(rangeStart.getFullYear(), Math.floor(rangeStart.getMonth() / 3) * 3, 1);
+      while (shouldContinue(cursor)) {
+        const q = Math.floor(cursor.getMonth() / 3) + 1;
+        const next = new Date(cursor.getFullYear(), cursor.getMonth() + 3, 1);
+        pushBlock(cursor, next, `Q${q}-${cursor.getFullYear()}`, `Q${q} ${cursor.getFullYear()}`);
+        cursor = next;
+      }
+    } else {
+      granularity = 'month';
+      let cursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+      while (shouldContinue(cursor)) {
+        const next = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+        const left = scale(cursor);
+        const widthPx = Math.max(1, scale(next) - left);
+        const showYear = cursor.getMonth() === 0 || monthsSpan > 12;
+        let label = '';
+        if (widthPx >= 90) label = cursor.toLocaleDateString('en-US', { month: 'long' });
+        else if (widthPx >= 40) label = cursor.toLocaleDateString('en-US', { month: 'short' });
+        if (showYear && widthPx >= 60) label = `${label} ${cursor.getFullYear()}`.trim();
+        blocks.push({ key: `${cursor.getFullYear()}-${cursor.getMonth()}`, left, width: widthPx, label });
+        cursor = next;
+      }
+    }
+
+    return { blocks, granularity };
+  }, [start, end, width, zoom, scale, bounds.width]);
+
   const jumpBy = (days: number) => {
     const delta = days * 24 * 60 * 60 * 1000;
     setRange(new Date(start.getTime() + delta), new Date(end.getTime() + delta));
@@ -358,9 +450,8 @@ const RoadmapV2: React.FC<Props> = ({
 
   const today = new Date();
   const leftToday = scale(today);
-  const showMonthGrid = zoom === 'week' || zoom === 'month';
   const showWeekGrid = zoom === 'week';
-  const showHeaderDividers = showMonthGrid;
+  const showHeaderDividers = bandGranularity === 'month';
 
   // Fullscreen support (hide chrome via global CSS)
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -388,52 +479,6 @@ const RoadmapV2: React.FC<Props> = ({
   };
 
   // Month header fragments
-  const monthBlocks = useMemo(() => {
-    const blocks: Array<{ key: string; left: number; width: number; label: string }> = [];
-    // Prefer explicit zoom for band selection; fallback to span
-    const monthsSpan = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
-    const mode: ZoomLevel = zoom;
-    if (mode === 'year' || monthsSpan > 60) {
-      // Years band
-      const cur = new Date(start.getFullYear(), 0, 1);
-      while (cur <= end) {
-        const next = new Date(cur.getFullYear() + 1, 0, 1);
-        const left = scale(cur);
-        const w = scale(next) - scale(cur);
-        blocks.push({ key: `Y-${cur.getFullYear()}`, left, width: w, label: `${cur.getFullYear()}` });
-        cur.setFullYear(cur.getFullYear() + 1);
-      }
-    } else if (mode === 'quarter' || monthsSpan > 18) {
-      const cur = new Date(start.getFullYear(), Math.floor(start.getMonth() / 3) * 3, 1);
-      while (cur <= end) {
-        const q = Math.floor(cur.getMonth() / 3) + 1;
-        const next = new Date(cur.getFullYear(), cur.getMonth() + 3, 1);
-        const left = scale(cur);
-        const w = scale(next) - scale(cur);
-        const lbl = `Q${q} ${cur.getFullYear()}`;
-        blocks.push({ key: `Q${q}-${cur.getFullYear()}`, left, width: w, label: lbl });
-        cur.setMonth(cur.getMonth() + 3);
-      }
-    } else {
-      const cur = new Date(start.getFullYear(), start.getMonth(), 1);
-      while (cur <= end) {
-        const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
-        const left = scale(cur);
-        const w = scale(next) - scale(cur);
-        const showYear = cur.getMonth() === 0 || monthsSpan > 12;
-        // Adaptive label by pixel width
-        let label = '';
-        if (w >= 90) label = cur.toLocaleDateString('en-US', { month: 'long' });
-        else if (w >= 50) label = cur.toLocaleDateString('en-US', { month: 'short' });
-        else if (w >= 30) label = cur.toLocaleDateString('en-US', { month: 'short' });
-        else label = '';
-        if (showYear && w >= 60) label = `${label} ${cur.getFullYear()}`;
-        blocks.push({ key: `${cur.getFullYear()}-${cur.getMonth()}`, left, width: w, label });
-        cur.setMonth(cur.getMonth() + 1);
-      }
-    }
-    return blocks;
-  }, [start, end, width, zoom, scale]);
 
   // Zoom helpers
   const zoomByFactor = (factor: number) => {
@@ -447,7 +492,9 @@ const RoadmapV2: React.FC<Props> = ({
   const scrollContainerToDate = useCallback((d: Date, behavior: ScrollBehavior = 'auto') => {
     const el = containerRef.current;
     if (!el) return;
-    const offsetLeft = 250 + scale(d) - el.clientWidth * 0.35;
+    const timelineLeft = 250 + scale(d);
+    const offsetLeft = timelineLeft - el.clientWidth * 0.35;
+    autoScrollHoldUntilRef.current = Date.now() + 400;
     el.scrollTo({ left: Math.max(0, offsetLeft), behavior });
   }, [scale]);
 
@@ -460,9 +507,11 @@ const RoadmapV2: React.FC<Props> = ({
   useEffect(() => {
     if (!containerRef.current) return;
     const today = new Date();
-    if (!userInteractedRef.current) {
-      scrollContainerToDate(today, 'smooth');
-    }
+    const now = Date.now();
+    const lastInteraction = lastInteractionRef.current;
+    if (lastInteraction && now - lastInteraction < 1200) return;
+    lastInteractionRef.current = now;
+    scrollContainerToDate(today, lastInteraction === 0 ? 'smooth' : 'smooth');
   }, [scrollContainerToDate, zoom, width, start, end]);
 
   return (
@@ -488,7 +537,16 @@ const RoadmapV2: React.FC<Props> = ({
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('month')}>Months</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('quarter')}>Quarters</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom('year')}>Years</Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => setRange(new Date(today.getFullYear(), today.getMonth(), today.getDate()-42), new Date(today.getFullYear(), today.getMonth(), today.getDate()+42))}>Today</Button>
+          <Button
+            size="sm"
+            variant="outline-secondary"
+            onClick={() => {
+              const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 42);
+              const endToday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 42);
+              setRange(startToday, endToday);
+              scrollContainerToDate(today, 'smooth');
+            }}
+          >Today</Button>
           <Button size="sm" variant="outline-secondary" onClick={() => jumpBy(-14)}><ChevronLeft size={14} /></Button>
           <Button size="sm" variant="outline-secondary" onClick={() => jumpBy(14)}><ChevronRight size={14} /></Button>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8, fontSize: 12 }}>
@@ -534,10 +592,10 @@ const RoadmapV2: React.FC<Props> = ({
                   className="rv2-sprint-shade rv2-sprint-shade--header"
                   style={{
                     left: scale(new Date(s.startDate)),
-                    width: scale(new Date(s.endDate)) - scale(new Date(s.startDate)),
+                    width: Math.max(0, scale(new Date(s.endDate)) - scale(new Date(s.startDate))),
                   }}
                 >
-                  <span className="rv2-sprint-label">{s.name}</span>
+                  <span className="rv2-sprint-label" title={s.name}>{s.name}</span>
                 </div>
               ))}
               {/* Months band */}
@@ -560,8 +618,8 @@ const RoadmapV2: React.FC<Props> = ({
               {/* Today marker (header layer) */}
               <div className="rv2-today-line" style={{ left: leftToday }} />
               {/* Monthly gridlines stronger */}
-              {showMonthGrid && monthBlocks.map(m => (
-                <div key={`grid-${m.key}`} className="rv2-grid-month" style={{ left: m.left }} />
+              {monthBlocks.map(m => (
+                <div key={`grid-${m.key}`} className={`rv2-grid-month rv2-grid-month--${bandGranularity}`} style={{ left: m.left }} />
               ))}
             </div>
           </div>
@@ -629,6 +687,7 @@ const RoadmapV2: React.FC<Props> = ({
                     updateGoalDates={updateGoalDates}
                     onAddNote={handleOpenNote}
                     zoom={zoom}
+                    timelineWidth={width}
                   />
                 );
               })}
