@@ -545,10 +545,23 @@ const EnhancedGanttChart: React.FC = () => {
     const targetId = selectedGoalId ?? goals[0]?.id;
     if (!targetId) return;
     const goal = goals.find(g => g.id === targetId);
-    if (goal) {
-      showSidebar(goal, 'goal');
+    if (!goal) return;
+
+    showSidebar(goal, 'goal');
+
+    if (currentUser) {
+      ActivityStreamService.addActivity({
+        entityId: goal.id,
+        entityType: 'goal',
+        activityType: 'note_added',
+        userId: currentUser.uid,
+        userEmail: currentUser.email || '',
+        description: `Opened activity stream for "${goal.title}" from roadmap`,
+        noteContent: 'Roadmap activity quick view',
+        source: 'human',
+      }).catch(err => logger.warn('gantt', 'activity-log-failed', { err }));
     }
-  }, [goals, selectedGoalId, showSidebar]);
+  }, [goals, selectedGoalId, showSidebar, currentUser]);
 
   // Handle drag start
   const computeDragDates = useCallback((drag: ActiveDrag, deltaX: number) => {

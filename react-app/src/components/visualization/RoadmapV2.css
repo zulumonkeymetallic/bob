@@ -41,6 +41,15 @@
   background: var(--card);
   box-shadow: 0 6px 16px rgba(0,0,0,0.18);
   pointer-events: none;
+  isolation: isolate;
+}
+.rv2-header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--card);
+  z-index: -1;
+  pointer-events: none;
 }
 .rv2-header-left {
   border-right: 1px solid var(--line);
@@ -52,14 +61,6 @@
   height: var(--rv2-header-h);
   background: var(--card);
   overflow: hidden;
-}
-.rv2-header-right::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: var(--card);
-  z-index: 0;
-  pointer-events: none;
 }
 .rv2-months { position: absolute; top: 0; left: 0; right: 0; height: 26px; z-index: 1; }
 .rv2-month {
@@ -141,7 +142,7 @@
 .rv2-lane-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 .rv2-lane-meta { margin-left: 8px; color: var(--muted, #6b7280); font-weight: 500; font-size: 12px; }
 
-.rv2-lane-right { position: relative; }
+.rv2-lane-right { position: relative; z-index: 0; }
 .rv2-lane {
   position: relative;
   height: 72px;
