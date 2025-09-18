@@ -1,4 +1,6 @@
 .rv2-container {
+  --rv2-toolbar-h: 44px;
+  --rv2-header-h: 64px;
   background: var(--card);
   color: var(--bs-body-color);
 }
@@ -11,7 +13,7 @@
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  z-index: 20;
+  z-index: 80;
   background: var(--card);
 }
 .rv2-toolbar .dropdown-menu { z-index: 19; }
@@ -31,13 +33,13 @@
 
 .rv2-header {
   position: sticky;
-  top: 44px; /* below toolbar */
+  top: calc(var(--rv2-toolbar-h) - 1px);
   z-index: 100;
   display: grid;
   grid-template-columns: 250px 1fr;
   border-bottom: 1px solid var(--line);
   background: var(--card);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.18);
   /* Avoid blocking interactions below when users drag near the header edge */
   pointer-events: none;
 }
@@ -48,8 +50,18 @@
 }
 .rv2-header-right {
   position: relative;
-  height: 64px;
+  height: var(--rv2-header-h);
   background: var(--card);
+  overflow: hidden;
+  isolation: isolate;
+}
+.rv2-header-right::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--card);
+  z-index: -1;
+  pointer-events: none;
 }
 .rv2-months { position: absolute; top: 0; left: 0; right: 0; height: 26px; }
 .rv2-month {
@@ -109,7 +121,7 @@
   display: grid;
   grid-template-columns: 250px 1fr;
   /* Keep lane rows visually below the sticky date header */
-  margin-top: 64px;
+  margin-top: var(--rv2-header-h);
 }
 .rv2-lane-left {
   border-right: 1px solid var(--line);
@@ -135,8 +147,14 @@
   height: 72px;
   border-bottom: 1px solid var(--line);
   background: var(--card);
+  overflow: visible;
 }
 .rv2-lane.alt { background: rgba(0,0,0,0.02); }
+.rv2-lane-canvas {
+  position: relative;
+  min-height: 72px;
+  padding: 8px 0 12px;
+}
 .theme-group--target::after {
   content: '';
   position: absolute;
@@ -159,7 +177,7 @@
 .rv2-card {
   position: absolute;
   height: 60px;
-  z-index: 5;
+  z-index: 4;
   border-radius: 10px;
   /* Use dynamic inline gradient from theme; keep fallback flat for safety */
   background: var(--card);
