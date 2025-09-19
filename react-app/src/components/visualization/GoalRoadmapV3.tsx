@@ -288,18 +288,17 @@ const GoalRoadmapV3: React.FC = () => {
 
   return (
     <div className={`grv3 ${zoomClass}`}>
-      <div className="grv3-toolbar d-flex align-items-center justify-content-between p-2">
-        <div className="d-flex align-items-center gap-2">
+      <div className="grv3-toolbar d-flex align-items-center justify-content-start p-2 gap-2">
+        {/* Sticky zoom controls on the top-left */}
+        <Button size="sm" variant="outline-secondary" onClick={() => setZoom(p => p==='years'?'years':(p==='quarters'?'months':(p==='months'?'weeks':'weeks')))} aria-label="Zoom In"><ZoomIn size={14} /></Button>
+        <Button size="sm" variant="outline-secondary" onClick={() => setZoom(p => p==='weeks'?'weeks':(p==='months'?'quarters':(p==='quarters'?'years':'years')))} aria-label="Zoom Out"><ZoomOut size={14} /></Button>
+        <Button size="sm" variant="outline-secondary" onClick={() => { const el = containerRef.current; if (!el) return; const left = 260 + xFromDate(new Date()) - el.clientWidth * .35; el.scrollLeft = clamp(left, 0, el.scrollWidth); }} aria-label="Jump to Today"><Home size={14} /></Button>
+        <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
+        <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
+        <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />
+        <div className="ms-2 d-flex align-items-center gap-2">
           <strong>Goal Roadmap V3</strong>
           {loading && <Badge bg="secondary">Loading…</Badge>}
-        </div>
-        <div className="d-flex align-items-center gap-2">
-          <Button size="sm" variant="outline-secondary" onClick={() => setZoom(p => p==='years'?'years':(p==='quarters'?'months':(p==='months'?'weeks':'weeks')))}><ZoomIn size={14} /></Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => setZoom(p => p==='weeks'?'weeks':(p==='months'?'quarters':(p==='quarters'?'years':'years')))}><ZoomOut size={14} /></Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => { const el = containerRef.current; if (!el) return; const left = 260 + xFromDate(new Date()) - el.clientWidth * .35; el.scrollLeft = clamp(left, 0, el.scrollWidth); }}><Home size={14} /></Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
-          <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
-          <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />
         </div>
       </div>
 
@@ -371,9 +370,10 @@ const GoalRoadmapV3: React.FC = () => {
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
 
                     <div className="grv3-actions">
-                      <button className="grv3-action" title="Generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}><Wand2 size={14} /></button>
-                      <button className="grv3-action" title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(g.id); }}><ListIcon size={14} /></button>
-                      <button className="grv3-action" title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}><MessageSquareText size={14} /></button>
+                      <button className="grv3-action" title="Generate stories" aria-label="Generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}><Wand2 size={14} /></button>
+                      {/* Activity stream icon (matches V2 intent) */}
+                      <button className="grv3-action" title="Activity stream" aria-label="Activity stream" onClick={(e) => { e.stopPropagation(); setActivityGoalId(g.id); }}><ListIcon size={14} /></button>
+                      <button className="grv3-action" title="Add note" aria-label="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}><MessageSquareText size={14} /></button>
                     </div>
 
                     <div className="grv3-title">{g.title}</div>
@@ -394,8 +394,19 @@ const GoalRoadmapV3: React.FC = () => {
       <div ref={tooltipRef} className="grv3-tooltip" style={{ display: 'none' }} />
 
       {/* Activity Modal */}
+      {/* Activity modal header adopts the goal theme color */}
       <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
-        <Modal.Header closeButton><Modal.Title>Activity Stream</Modal.Title></Modal.Header>
+        {(() => {
+          const g = goals.find(x => x.id === activityGoalId);
+          const themeDef = THEMES.find(t => t.id === (g?.theme || 0));
+          const colorVar = themeDef?.color || '#6c757d';
+          const overlay = theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
+          return (
+            <Modal.Header closeButton style={{ ['--modal-color' as any]: String(colorVar), background: `linear-gradient(135deg, var(--modal-color) 0%, ${overlay} 100%)`, color: '#fff' }}>
+              <Modal.Title>Activity Stream</Modal.Title>
+            </Modal.Header>
+          );
+        })()}
         <Modal.Body>
           {activityItems.length === 0 ? (
             <div className="text-muted">No activity yet.</div>
