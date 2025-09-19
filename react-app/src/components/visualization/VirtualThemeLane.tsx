@@ -21,6 +21,8 @@ type Props = {
   getDatePosition: (d: Date) => number;
   storiesByGoal: Record<string, number>;
   doneStoriesByGoal: Record<string, number>;
+  lastNotes?: Record<string, string>;
+  zoom?: 'week' | 'month' | 'quarter' | 'half' | 'year' | string;
   onDragStart: (e: React.MouseEvent | React.TouchEvent, item: any, type: 'move' | 'resize-start' | 'resize-end') => void;
   onItemClick: (item: any) => void;
   setSelectedGoalId: (id: string | null) => void;
@@ -38,6 +40,8 @@ const VirtualThemeLane: React.FC<Props> = ({
   getDatePosition,
   storiesByGoal,
   doneStoriesByGoal,
+  lastNotes = {},
+  zoom = 'quarter',
   onDragStart,
   onItemClick,
   setSelectedGoalId,
@@ -72,12 +76,13 @@ const VirtualThemeLane: React.FC<Props> = ({
     const textColor = theme?.textColor || 'var(--bs-body-color)';
     const bg1 = hexToRgba(themeColor, 0.18);
     const bg2 = hexToRgba(themeColor, 0.08);
+    const pct = total ? Math.round((done / total) * 100) : 0;
     return (
       <div style={{ ...style, background: alt ? 'rgba(0,0,0,0.03)' : 'transparent' }} className="goal-row d-flex align-items-center border-bottom">
         <div className="goal-label p-2" style={{ position: 'sticky', left: 0, zIndex: 4, background: 'var(--bs-body-bg)', width: '250px', minWidth: '250px', borderRight: '1px solid var(--line)' }}>
           <div className="d-flex align-items-center">
             <div className="theme-indicator me-2" style={{ width: 12, height: 12, backgroundColor: themeColor, borderRadius: 2 }} />
-            <span className="fw-medium">{goal.title}</span>
+            <span className="fw-medium" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{goal.title}</span>
           </div>
         </div>
         <div className="goal-timeline position-relative" style={{ minHeight: rowHeight - 36, flex: 1 }}>
@@ -112,7 +117,7 @@ const VirtualThemeLane: React.FC<Props> = ({
                 updateGoalDates(goal.id, s, en);
               }
             }}
-            title={`${goal.title}: ${goal.startDate.toLocaleDateString()} - ${goal.endDate.toLocaleDateString()}${(storiesByGoal[goal.id]||0)===0 ? ' • No linked stories' : ''}`}
+            title={`${goal.title}: ${goal.startDate.toLocaleDateString()} - ${goal.endDate.toLocaleDateString()} • ${pct}% done${(storiesByGoal[goal.id]||0)===0 ? ' • No linked stories' : ''}`}
           >
             <div className="resize-handle resize-start position-absolute" style={{ left: 0, top: 0, width: 8, height: '100%', cursor: 'ew-resize', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '4px 0 0 4px' }}
               onMouseDown={(e) => { e.stopPropagation(); onDragStart(e, goal as any, 'resize-start'); }}
@@ -120,7 +125,7 @@ const VirtualThemeLane: React.FC<Props> = ({
             />
             <div className="goal-content px-2 flex-grow-1" style={{ fontSize: 13, lineHeight: '16px', color: textColor }}>
               <div className="d-flex align-items-center justify-content-between">
-                <div style={{ whiteSpace: 'normal', overflow: 'visible' }}>
+                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   <strong>{goal.title}</strong>
                   {typeof goal.priority !== 'undefined' && (<span className="ms-2">P{goal.priority}</span>)}
                 </div>
@@ -138,6 +143,9 @@ const VirtualThemeLane: React.FC<Props> = ({
                 </div>
                 <span className="goal-progress-percent">{progress}%</span>
               </div>
+              {(zoom === 'week' || zoom === 'month') && lastNotes[goal.id] && (
+                <div className="small" style={{ opacity: 0.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>📝 {lastNotes[goal.id]}</div>
+              )}
             </div>
             <div className="resize-handle resize-end position-absolute" style={{ right: 0, top: 0, width: 8, height: '100%', cursor: 'ew-resize', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '0 4px 4px 0' }}
               onMouseDown={(e) => { e.stopPropagation(); onDragStart(e, goal as any, 'resize-end'); }}

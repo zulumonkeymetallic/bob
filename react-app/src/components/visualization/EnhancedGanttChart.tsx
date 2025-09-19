@@ -28,7 +28,7 @@ import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal } from 're
 import { useAuth } from '../../contexts/AuthContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, deleteDoc, orderBy, limit } from 'firebase/firestore';
 import { db, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import SprintSelector from '../SprintSelector';
@@ -111,6 +111,7 @@ const EnhancedGanttChart: React.FC = () => {
   const [activityItems, setActivityItems] = useState<any[]>([]);
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
+  const [lastNotes, setLastNotes] = useState<Record<string, string>>({});
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
   const [dragOverlay, setDragOverlay] = useState<{ left: number; width: number; text: string } | null>(null);
   const dragTooltipRef = useRef<HTMLDivElement>(null);
@@ -226,6 +227,38 @@ const EnhancedGanttChart: React.FC = () => {
     useRoadmapStore.getState().setRange(s, e);
     setZoomLevel('year');
   }, []);
+
+  // Latest goal notes for tooltip/row preview (week/month views)
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(
+      collection(db, 'activity_stream'),
+      where('ownerUid', '==', currentUser.uid),
+      where('entityType', '==', 'goal'),
+      where('activityType', '==', 'note_added'),
+      orderBy('timestamp', 'desc'),
+      limit(300)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const map: Record<string, string> = {};
+      for (const d of snap.docs) {
+        const data = d.data() as any;
+        const gid = data.entityId as string;
+        if (!map[gid] && data.noteContent) map[gid] = String(data.noteContent);
+      }
+      setLastNotes(map);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Auto-fit once when goals arrive
+  const didAutoFitRef = useRef(false);
+  useEffect(() => {
+    if (didAutoFitRef.current) return;
+    if (!goals || goals.length === 0) return;
+    didAutoFitRef.current = true;
+    fitAll();
+  }, [goals]);
 
   // Navigation helpers
   const jumpToToday = useCallback(() => {
@@ -1599,6 +1632,8 @@ const EnhancedGanttChart: React.FC = () => {
             getDatePosition={getDatePosition}
             storiesByGoal={storiesByGoal}
             doneStoriesByGoal={doneStoriesByGoal}
+            lastNotes={lastNotes}
+            zoom={zoomLevel}
             onDragStart={() => {}}
             onItemClick={handleItemClick as any}
             setSelectedGoalId={setSelectedGoalId}

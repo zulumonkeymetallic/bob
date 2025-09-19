@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Badge, Popover, OverlayTrigger } from 'react-bootstrap';
 import { Clock, RefreshCw, Info } from 'lucide-react';
-import { VERSION, BUILD_TIME } from '../version';
+import { VERSION, BUILD_TIME, BUILD_HASH } from '../version';
 import { versionTimeoutService } from '../services/versionTimeoutService';
 
 interface VersionDisplayProps {
@@ -63,7 +63,7 @@ const VersionDisplay: React.FC<VersionDisplayProps> = ({
       </Popover.Header>
       <Popover.Body>
         <div className="mb-2">
-          <strong>Version:</strong> v{VERSION}
+          <strong>Version:</strong> v{VERSION} ({BUILD_HASH})
         </div>
         <div className="mb-2">
           <strong>Build Time:</strong><br />
@@ -119,7 +119,7 @@ const VersionDisplay: React.FC<VersionDisplayProps> = ({
           className={`cursor-pointer ${className}`}
           style={{ cursor: 'pointer' }}
         >
-          v{VERSION}
+          v{VERSION} ({BUILD_HASH})
         </Badge>
       </OverlayTrigger>
     );
@@ -134,7 +134,7 @@ const VersionDisplay: React.FC<VersionDisplayProps> = ({
             style={{ cursor: 'pointer', fontSize: '0.85rem' }}
           >
             <Info size={14} />
-            <span>v{VERSION}</span>
+            <span>v{VERSION} ({BUILD_HASH})</span>
             {showSessionInfo && (
               <>
                 <Clock size={12} className="ms-1" />
@@ -173,7 +173,7 @@ const VersionDisplay: React.FC<VersionDisplayProps> = ({
         }}
       >
         <div className="d-flex align-items-center justify-content-center gap-1">
-          <span>v{VERSION}</span>
+          <span>v{VERSION} ({BUILD_HASH})</span>
           {showSessionInfo && sessionInfo.timeUntilTimeout <= 10 && (
             <Badge 
               bg={getTimeoutColor()} 
