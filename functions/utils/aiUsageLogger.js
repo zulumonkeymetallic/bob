@@ -18,6 +18,7 @@ class AIUsageLogger {
         // Check if admin app is already initialized
         this.app = admin.apps.length > 0 ? admin.app() : admin.initializeApp();
         this.db = admin.firestore();
+        try { this.db.settings({ ignoreUndefinedProperties: true }); } catch {}
         this.initialized = true;
       } catch (error) {
         console.error('AIUsageLogger initialization error:', error);
@@ -68,7 +69,7 @@ class AIUsageLogger {
         errorMessage,
         userId,
         persona,
-        context,
+        context: context || {},
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         date: new Date().toISOString().split('T')[0] // YYYY-MM-DD format
       };

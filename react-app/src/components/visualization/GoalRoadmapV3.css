@@ -1,0 +1,41 @@
+/* Goal Roadmap V3 – responsive, layered correctly, high-perf drag+resize */
+.grv3 {
+  --label-col: 260px;
+  --header-h: 48px;
+  --months-h: 36px;
+  --row-h: 116px;
+  --bar-z: 60;
+  --header-z: 40;
+  --grid-z: 30;
+}
+
+.grv3-toolbar { position: sticky; top: 0; z-index: var(--header-z); background: var(--bs-body-bg); border-bottom: 1px solid var(--bs-border-color); }
+.grv3-container { position: relative; overflow: auto; border: 1px solid var(--bs-border-color); border-radius: 10px; background: var(--bs-body-bg); }
+.grv3-header { position: sticky; top: 44px; background: var(--bs-body-bg); z-index: var(--header-z); border-bottom: 2px solid var(--bs-border-color); }
+.grv3-months { position: relative; height: var(--months-h); }
+.grv3-month { position: absolute; top: 0; height: 100%; padding: 8px 6px 0; font-size: 12px; font-weight: 600; color: var(--bs-body-color); white-space: nowrap; }
+.grv3-grid { position: absolute; top: calc(var(--months-h)); bottom: 0; left: var(--label-col); right: 0; z-index: var(--grid-z); pointer-events: none; }
+.grv3-grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(0,0,0,0.08); }
+.grv3-theme-row { position: relative; min-height: var(--row-h); border-bottom: 1px solid var(--bs-border-color); }
+.grv3-label { position: sticky; left: 0; width: var(--label-col); padding: 12px 14px; background: var(--bs-body-bg); border-right: 1px solid var(--bs-border-color); z-index: calc(var(--header-z) + 1); }
+.grv3-track { position: relative; margin-left: var(--label-col); min-height: var(--row-h); }
+
+.grv3-bar { position: absolute; top: 14px; height: calc(var(--row-h) - 24px); display: flex; flex-direction: column; justify-content: center; color: #fff; border-radius: 12px; border: 2px solid rgba(255,255,255,.35); box-shadow: 0 6px 22px rgba(0,0,0,.18); padding: 10px 12px; cursor: grab; user-select: none; z-index: var(--bar-z); }
+.grv3-bar:hover { transform: translateY(-1px); box-shadow: 0 8px 26px rgba(0,0,0,.24); }
+.grv3-bar.dragging { cursor: grabbing; z-index: 1000; transform: scale(1.03); }
+.grv3-title { font-weight: 800; font-size: 14px; line-height: 1.2; text-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.grv3-meta { font-size: 11px; opacity: .95; }
+.grv3-actions { position: absolute; right: 8px; top: 6px; display: flex; gap: 4px; }
+.grv3-action { background: rgba(255,255,255,.9); color: #222; border: none; border-radius: 6px; width: 24px; height: 22px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.grv3-resize { position: absolute; top:0; bottom:0; width: 10px; background: rgba(255,255,255,.18); opacity: 0; transition: opacity .15s; }
+.grv3-bar:hover .grv3-resize { opacity: 1; }
+.grv3-resize.start { left: 0; cursor: ew-resize; border-radius: 10px 0 0 10px; }
+.grv3-resize.end { right: 0; cursor: ew-resize; border-radius: 0 10px 10px 0; }
+.grv3-tooltip { position: fixed; z-index: 1200; background: rgba(0,0,0,.85); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; pointer-events: none; }
+
+/* zoom compaction */
+.grv3.slim .grv3-title { font-size: 12px; }
+.grv3.slim .grv3-meta { display: none; }
+.grv3.ultra .grv3-title { font-size: 11px; }
+.grv3.ultra .grv3-meta { display: none; }
+

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut, signInAnonymously } from 'firebase/auth';
+import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut, signInAnonymously, setPersistence, browserLocalPersistence, signInWithRedirect } from 'firebase/auth';
 import { auth } from '../firebase';
 // import { SideDoorAuth } from '../services/SideDoorAuth';
 
@@ -18,18 +18,55 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const signInWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
-    
-    // Force account selection on every login
-    provider.setCustomParameters({
-      prompt: 'select_account'
-    });
-    
+    // Prefer local persistence and device language
+    try { await setPersistence(auth, browserLocalPersistence); } catch {}
+    try { (auth as any).useDeviceLanguage?.(); } catch {}
+
+    // Always prompt account selection
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    // Some environments (iOS/Safari/incognito) block popups — prefer redirect
+    const isApple = /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent);
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    const preferRedirect = isApple || isSafari;
+
+    const tryRedirect = async () => {
+      console.log('🔁 Falling back to Google redirect sign-in...');
+      await signInWithRedirect(auth, provider);
+    };
+
     try {
-      console.log('Starting Google sign in with account selection...');
+      if (preferRedirect) return await tryRedirect();
+      console.log('Starting Google sign in (popup)...');
       const result = await signInWithPopup(auth, provider);
-      console.log('Sign in successful:', result.user.email);
-    } catch (error) {
-      console.error("Error signing in with Google", error);
+      console.log('Sign in successful:', result.user?.email);
+    } catch (error: any) {
+      const code = error?.code || '';
+      const message = error?.message || '';
+      console.warn('Popup sign-in failed:', { code, message });
+
+      // Common cases → fallback to redirect
+      const needRedirect = (
+        code === 'auth/popup-blocked' ||
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/operation-not-supported-in-this-environment' ||
+        code === 'auth/internal-error' ||
+        code === 'auth/network-request-failed' ||
+        message?.toLowerCase?.().includes('cookie') ||
+        message?.toLowerCase?.().includes('third-party')
+      );
+
+      if (needRedirect) {
+        return await tryRedirect();
+      }
+
+      // Helpful guidance for unauthorized domains / App Check
+      if (code === 'auth/unauthorized-domain') {
+        console.error('Auth domain not authorized. Add current host to Firebase Auth > Authorized domains.');
+      }
+      if (/app check token is invalid/i.test(message)) {
+        console.error('App Check is enforced but not initialized. Ensure App Check site key is configured.');
+      }
       throw error;
     }
   };
@@ -58,6 +95,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     console.log('🔐 Setting up auth state listener...');
     console.log('🔐 Current URL:', window.location.href);
+    try {
+      const appCheckFlag = (window as any).RECAPTCHA_V3_SITE_KEY || process.env.REACT_APP_RECAPTCHA_V3_SITE_KEY;
+      if (!appCheckFlag) {
+        console.warn('ℹ️ App Check site key not detected in env/window — if enforcement is ON, login will fail');
+      }
+    } catch {}
     
     let unsubscribe: (() => void) | undefined;
     
