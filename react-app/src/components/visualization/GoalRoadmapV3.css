@@ -25,14 +25,16 @@
 .grv3-label { position: sticky; left: 0; width: var(--label-col); padding: 12px 14px; background: var(--bs-body-bg); border-right: 1px solid var(--bs-border-color); z-index: calc(var(--header-z) + 1); }
 .grv3-track { position: relative; margin-left: var(--label-col); min-height: var(--row-h); }
 
-.grv3-bar { position: absolute; top: 14px; height: calc(var(--row-h) - 24px); display: flex; flex-direction: column; justify-content: center; color: #fff; border-radius: 12px; border: 2px solid rgba(255,255,255,.35); box-shadow: 0 6px 22px rgba(0,0,0,.18); padding: 10px 12px; cursor: grab; user-select: none; z-index: var(--bar-z); }
+.grv3-bar { position: absolute; top: 14px; height: calc(var(--row-h) - 24px); display: flex; flex-direction: column; justify-content: center; color: inherit; border-radius: 12px; border: 2px solid rgba(255,255,255,.35); box-shadow: 0 6px 22px rgba(0,0,0,.18); padding: 10px 12px; cursor: grab; user-select: none; z-index: var(--bar-z); }
 .grv3-bar:hover { transform: translateY(-1px); box-shadow: 0 8px 26px rgba(0,0,0,.24); }
 .grv3-bar.dragging { cursor: grabbing; z-index: 1000; transform: scale(1.03); }
 .grv3-title { font-weight: 800; font-size: 14px; line-height: 1.2; text-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .grv3-meta { font-size: 11px; opacity: .95; }
-.grv3-actions { position: absolute; right: 8px; top: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity .12s; pointer-events: none; }
+.grv3-actions { position: absolute; right: 8px; top: 6px; display: flex; gap: 6px; opacity: 0; transition: opacity .12s; pointer-events: none; }
 .grv3-bar:hover .grv3-actions { opacity: 1; pointer-events: auto; }
-.grv3-action { background: rgba(255,255,255,.9); color: #222; border: none; border-radius: 6px; width: 24px; height: 22px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.grv3-action { background: transparent; color: inherit; border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; width: 24px; height: 22px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.grv3-action:hover { background: rgba(0,0,0,0.12); }
+.grv3-action:focus { outline: none; box-shadow: 0 0 0 2px rgba(255,255,255,0.35) inset; }
 .grv3-resize { position: absolute; top:0; bottom:0; width: 10px; background: rgba(255,255,255,.18); opacity: 0; transition: opacity .15s; }
 .grv3-bar:hover .grv3-resize { opacity: 1; }
 .grv3-resize.start { left: 0; cursor: ew-resize; border-radius: 10px 0 0 10px; }

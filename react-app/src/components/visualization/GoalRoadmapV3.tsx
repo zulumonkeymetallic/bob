@@ -372,7 +372,8 @@ const GoalRoadmapV3: React.FC = () => {
       left,
       width,
       background: `linear-gradient(180deg, ${bgStart}, ${bgEnd})`,
-      border: `2px solid ${themeColor}`
+      border: `2px solid ${themeColor}`,
+      color: themeDef.textColor || (theme === 'dark' ? '#fff' : '#111')
     } as React.CSSProperties;
   };
 
