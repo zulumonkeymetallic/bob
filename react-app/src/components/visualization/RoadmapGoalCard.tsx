@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { Activity, BookOpen, Pencil, Trash2, Wand2, StickyNote } from 'lucide-react';
-import { GanttItem } from './RoadmapV2';
+import { GanttItem, GoalNoteSummary } from './RoadmapV2';
 import { ZoomLevel } from '../../stores/roadmapStore';
 
 type DragKind = 'move' | 'resize-start' | 'resize-end';
@@ -28,6 +28,8 @@ export interface RoadmapGoalCardProps {
   isCompact: boolean;
   isUltra: boolean;
   progress: number;
+  detailLevel: 'summary' | 'compact' | 'standard' | 'expanded';
+  activitySnippet?: GoalNoteSummary | null;
   onOpenActivity: () => void;
   onGenerateStories: () => void;
   onEdit: () => void;
@@ -47,7 +49,7 @@ const cardDragData = (goal: GanttItem): BaseDragData => ({
   end: goal.endDate.getTime(),
 });
 
-export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
+const RoadmapGoalCardComponent: React.FC<RoadmapGoalCardProps> = ({
   goal,
   top,
   left,
@@ -60,6 +62,8 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
   isCompact,
   isUltra,
   progress,
+  detailLevel,
+  activitySnippet,
   onOpenActivity,
   onGenerateStories,
   onEdit,
@@ -96,11 +100,16 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
 
   const cardTransform = moveDrag.transform ? CSS.Translate.toString(moveDrag.transform) : undefined;
   const cardZ = moveDrag.isDragging ? 80 : 4;
+  const cardDetailClass = `rv2-card--detail-${detailLevel}`;
+  const showSubtitle = !isCompact && detailLevel !== 'summary';
+  const showActions = !isCompact && detailLevel !== 'summary';
+  const showProgressValue = detailLevel !== 'summary' && !isUltra;
+  const showActivity = !isCompact && detailLevel === 'expanded' && activitySnippet && activitySnippet.text;
 
   return (
     <div
       ref={moveDrag.setNodeRef}
-      className={`rv2-card ${isCompact ? 'compact' : ''} ${isUltra ? 'ultra' : ''} rv2-card--zoom-${zoom}`}
+      className={`rv2-card ${isCompact ? 'compact' : ''} ${isUltra ? 'ultra' : ''} rv2-card--zoom-${zoom} ${cardDetailClass}`.trim()}
       data-goal-id={goal.id}
       style={{
         top,
@@ -127,12 +136,18 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
       {...moveDrag.listeners}
     >
       <div className="rv2-card-title" style={{ whiteSpace: isUltra ? 'nowrap' : 'normal' }}>{goal.title}</div>
-      {!isCompact && <div className="rv2-card-subtitle">{subtitle}</div>}
+      {showSubtitle && <div className="rv2-card-subtitle">{subtitle}</div>}
       <div className="rv2-progress">
         <div className="rv2-progress-bar" style={{ width: `${progress}%` }} />
-        <div className="rv2-progress-text">{progress}%</div>
+        {showProgressValue && <div className="rv2-progress-text">{progress}%</div>}
       </div>
-      {!isCompact && (
+      {showActivity && (
+        <div className="rv2-card-activity" title={activitySnippet?.author ? `Latest note by ${activitySnippet.author}` : 'Latest note'}>
+          <span className="rv2-card-activity-icon" aria-hidden="true">📝</span>
+          <span className="rv2-card-activity-text">{activitySnippet?.text}</span>
+        </div>
+      )}
+      {showActions && (
         <div className="rv2-actions">
           <button className="rv2-icon-btn muted" title="Activity" onClick={(e) => { e.stopPropagation(); onOpenActivity(); }}>
             <Activity size={14} />
@@ -171,6 +186,29 @@ export const RoadmapGoalCard: React.FC<RoadmapGoalCardProps> = ({
     </div>
   );
 };
+
+const shallowEqual = (prev: RoadmapGoalCardProps, next: RoadmapGoalCardProps) => {
+  if (prev.goal.id !== next.goal.id) return false;
+  if (prev.goal.title !== next.goal.title) return false;
+  if (prev.goal.status !== next.goal.status) return false;
+  if (prev.left !== next.left || prev.top !== next.top || prev.width !== next.width || prev.height !== next.height) return false;
+  if (prev.subtitle !== next.subtitle) return false;
+  if (prev.isCompact !== next.isCompact || prev.isUltra !== next.isUltra) return false;
+  if (prev.progress !== next.progress) return false;
+  if (prev.detailLevel !== next.detailLevel) return false;
+  const prevActivity = prev.activitySnippet?.text || '';
+  const nextActivity = next.activitySnippet?.text || '';
+  if (prevActivity !== nextActivity) return false;
+  const prevAuthor = prev.activitySnippet?.author || '';
+  const nextAuthor = next.activitySnippet?.author || '';
+  if (prevAuthor !== nextAuthor) return false;
+  const prevTime = prev.activitySnippet?.timestamp || 0;
+  const nextTime = next.activitySnippet?.timestamp || 0;
+  if (prevTime !== nextTime) return false;
+  return true;
+};
+
+export const RoadmapGoalCard = memo(RoadmapGoalCardComponent, shallowEqual);
 
 export type RoadmapDragHandle = ReturnType<typeof cardDragData> & {
   dragType: DragKind;

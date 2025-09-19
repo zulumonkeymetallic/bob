@@ -42,7 +42,7 @@ import ThemeRoadmap from './ThemeRoadmap';
 import { useRoadmapStore, useTimelineScale } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
-import RoadmapV2 from './RoadmapV2';
+import RoadmapV2, { GoalNoteSummary } from './RoadmapV2';
 import { useSidebar } from '../../contexts/SidebarContext';
 import {
   DndContext,
@@ -110,6 +110,7 @@ const EnhancedGanttChart: React.FC = () => {
   const [activityItems, setActivityItems] = useState<any[]>([]);
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
+  const [latestGoalNotes, setLatestGoalNotes] = useState<Record<string, GoalNoteSummary>>({});
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
   const [dragOverlay, setDragOverlay] = useState<{ left: number; width: number; text: string } | null>(null);
   const dragTooltipRef = useRef<HTMLDivElement>(null);
@@ -220,6 +221,42 @@ const EnhancedGanttChart: React.FC = () => {
   const toggleFullscreen = useCallback(() => {
     if (isFullscreen) exitFullscreen(); else enterFullscreen();
   }, [isFullscreen, enterFullscreen, exitFullscreen]);
+
+  const goalIdsKey = useMemo(() => goals.map(g => g.id).sort().join('|'), [goals]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const goalIds = goalIdsKey ? goalIdsKey.split('|').filter(Boolean) : [];
+    const loadLatestNotes = async () => {
+      if (!goalIds.length) {
+        if (!cancelled) setLatestGoalNotes({});
+        return;
+      }
+      try {
+        const fetched = await ActivityStreamService.fetchLatestNotesForGoals(goalIds);
+        if (cancelled) return;
+        const normalized: Record<string, GoalNoteSummary> = {};
+        Object.entries(fetched).forEach(([goalId, entry]) => {
+          if (entry?.noteContent) {
+            const timestamp = (entry.timestamp as any)?.toMillis ? (entry.timestamp as any).toMillis() : undefined;
+            normalized[goalId] = {
+              text: entry.noteContent,
+              timestamp,
+              author: entry.userEmail || entry.userId,
+            };
+          }
+        });
+        setLatestGoalNotes(normalized);
+      } catch (error) {
+        logger.warn('gantt', 'latest-goal-notes-fetch-failed', { error });
+        if (!cancelled) setLatestGoalNotes({});
+      }
+    };
+    loadLatestNotes();
+    return () => {
+      cancelled = true;
+    };
+  }, [goalIdsKey]);
 
   // Navigation helpers
   const jumpToToday = useCallback(() => {
@@ -1172,6 +1209,7 @@ const EnhancedGanttChart: React.FC = () => {
             stories={stories}
             storiesByGoal={storiesByGoal}
             doneStoriesByGoal={doneStoriesByGoal}
+            latestGoalNotes={latestGoalNotes}
             onItemClick={handleItemClick as any}
             updateGoalDates={updateGoalDates}
             handleGenerateStories={handleGenerateStories as any}
