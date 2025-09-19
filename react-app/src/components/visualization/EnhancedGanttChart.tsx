@@ -216,6 +216,17 @@ const EnhancedGanttChart: React.FC = () => {
     if (isFullscreen) exitFullscreen(); else enterFullscreen();
   }, [isFullscreen, enterFullscreen, exitFullscreen]);
 
+  // Quick presets for fixed-span windows
+  const setSpanYears = useCallback((years: number) => {
+    const today = new Date();
+    const startYear = today.getFullYear() - Math.floor((years - 1) / 2);
+    const endYear = startYear + years - 1;
+    const s = new Date(startYear, 0, 1);
+    const e = new Date(endYear, 11, 31);
+    useRoadmapStore.getState().setRange(s, e);
+    setZoomLevel('year');
+  }, []);
+
   // Navigation helpers
   const jumpToToday = useCallback(() => {
     const today = new Date();
@@ -1415,12 +1426,23 @@ const EnhancedGanttChart: React.FC = () => {
                       <Form.Select value={zoomLevel} onChange={(e) => { const z = e.target.value as any; setZoomLevel(z); useRoadmapStore.getState().setZoom(z); }} size="sm" style={{ maxWidth: 200 }}>
                         <option value="week">Weeks</option>
                         <option value="month">Months</option>
-                        <option value="quarter">Quarter</option>
-                        <option value="half">Half Year</option>
-                        <option value="year">Year</option>
+                        <option value="quarter">Quarters</option>
+                        <option value="half">Half-year</option>
+                        <option value="year">Years</option>
                       </Form.Select>
                       <Button size="sm" variant="outline-secondary" onClick={() => { const i = zoomLevels.indexOf(zoomLevel); const next = Math.max(0, i - 1); setZoomLevel(zoomLevels[next]); useRoadmapStore.getState().setZoom(zoomLevels[next]); }} title="Zoom In"><ZoomIn size={14} /></Button>
                       <Button size="sm" variant="outline-secondary" onClick={() => { const i = zoomLevels.indexOf(zoomLevel); const next = Math.min(zoomLevels.length - 1, i + 1); setZoomLevel(zoomLevels[next]); useRoadmapStore.getState().setZoom(zoomLevels[next]); }} title="Zoom Out"><ZoomOut size={14} /></Button>
+                    </div>
+                  </div>
+                  <div className="mb-3">
+                    <div className="small text-muted mb-1">Presets</div>
+                    <div className="d-flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline-secondary" onClick={() => useRoadmapStore.getState().setZoom('week')}>Week</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => useRoadmapStore.getState().setZoom('month')}>Month</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => useRoadmapStore.getState().setZoom('quarter')}>Quarter</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => setSpanYears(1)}>1y</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => setSpanYears(3)}>3y</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => setSpanYears(5)}>5y</Button>
                     </div>
                   </div>
                   <Form.Check type="switch" id="toggle-links" label="Show links" checked={showLinks} onChange={(e) => setShowLinks(e.target.checked)} />
@@ -1467,9 +1489,9 @@ const EnhancedGanttChart: React.FC = () => {
         {/* Live region for a11y announcements */}
         <div aria-live="polite" className="visually-hidden">{liveAnnouncement}</div>
         {/* Timeline Header */}
-        <div className="timeline-header sticky-top" style={{ zIndex: 10, backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
+        <div className="timeline-header sticky-top" style={{ zIndex: 20, backgroundColor: 'var(--bs-body-bg)', borderBottom: '1px solid var(--line)', boxShadow: '0 1px 0 var(--line), 0 6px 16px rgba(0,0,0,0.06)' }}>
           <div className="d-flex">
-            <div style={{ width: '250px', minWidth: '250px' }} className="bg-light border-end p-2">
+            <div style={{ position: 'sticky', left: 0, zIndex: 21, width: '250px', minWidth: '250px', background: 'var(--bs-body-bg)', borderRight: '1px solid var(--line)' }} className="p-2">
               <strong>Goals & Themes</strong>
             </div>
             <div ref={headerMonthsRef} className="timeline-months d-flex position-relative" style={{ minWidth: '200%', height: 60 }}>
@@ -1492,7 +1514,7 @@ const EnhancedGanttChart: React.FC = () => {
                 ))}
               </div>
               {/* Months band */}
-              <div className="position-absolute" style={{ left: 0, right: 0, top: 0, height: 24, zIndex: 1, background: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
+              <div className="position-absolute" style={{ left: 0, right: 0, top: 0, height: 24, zIndex: 21, background: 'var(--bs-body-bg)', borderBottom: '1px solid var(--line)' }}>
                 {(() => {
                   const items: any[] = [];
                   const start = useRoadmapStore.getState().start;
@@ -1513,7 +1535,7 @@ const EnhancedGanttChart: React.FC = () => {
                 })()}
               </div>
               {/* Weeks/axis band */}
-              <div className="w-100" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 36, zIndex: 2, background: 'var(--card)' }}>
+              <div className="w-100" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 36, zIndex: 21, background: 'var(--bs-body-bg)' }}>
                 <RoadmapAxis height={36} />
                 {/* Today chip */}
                 <div className="position-absolute" style={{ left: `${getDatePosition(new Date())}px`, top: -22, transform: 'translateX(-50%)', background: 'rgba(16,185,129,0.12)', color: '#059669', border: '1px solid rgba(16,185,129,0.35)', fontSize: 11, padding: '2px 6px', borderRadius: 6 }}>Today</div>
@@ -1565,7 +1587,7 @@ const EnhancedGanttChart: React.FC = () => {
             <div key={groupKey === null ? 'all' : `theme-${groupKey}`} data-theme-group={groupKey ?? ''} className="theme-group">
               {groupByTheme && (
                 <div className="d-flex align-items-center" style={{ height: 32 }}>
-                  <div style={{ width: 250, minWidth: 250, color: getThemeById(migrateThemeValue(groupKey as number)).color }} className="px-2 fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
+                  <div style={{ position: 'sticky', left: 0, zIndex: 5, background: 'var(--bs-body-bg)', width: 250, minWidth: 250, color: getThemeById(migrateThemeValue(groupKey as number)).color, borderRight: '1px solid var(--line)' }} className="px-2 fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
                   <div className="flex-grow-1" style={{ borderBottom: '1px solid var(--line)' }} />
                 </div>
               )}
@@ -1585,7 +1607,7 @@ const EnhancedGanttChart: React.FC = () => {
             setNoteGoalId={setNoteGoalId as any}
             setNoteDraft={setNoteDraft}
             updateGoalDates={updateGoalDates}
-            getThemeStyle={(id) => ({ color: getThemeById(migrateThemeValue(id)).color }) as any}
+            getThemeStyle={(id) => ({ color: getThemeById(migrateThemeValue(id)).color, textColor: getThemeById(migrateThemeValue(id)).textColor }) as any}
           />
           </div>
           ))}

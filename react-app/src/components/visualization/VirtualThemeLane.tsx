@@ -29,7 +29,7 @@ type Props = {
   setNoteGoalId: (id: string) => void;
   setNoteDraft: (v: string) => void;
   updateGoalDates: (goalId: string, newStart: Date, newEnd: Date) => void;
-  getThemeStyle: (id: number) => { color: string } | undefined;
+  getThemeStyle: (id: number) => { color: string; textColor?: string } | undefined;
 };
 
 const VirtualThemeLane: React.FC<Props> = ({
@@ -69,11 +69,12 @@ const VirtualThemeLane: React.FC<Props> = ({
     const progress = total ? Math.round((done / total) * 100) : 0;
     const alt = index % 2 === 1;
     const themeColor = theme?.color || '#6c757d';
+    const textColor = theme?.textColor || 'var(--bs-body-color)';
     const bg1 = hexToRgba(themeColor, 0.18);
     const bg2 = hexToRgba(themeColor, 0.08);
     return (
       <div style={{ ...style, background: alt ? 'rgba(0,0,0,0.03)' : 'transparent' }} className="goal-row d-flex align-items-center border-bottom">
-        <div className="goal-label p-2" style={{ width: '250px', minWidth: '250px' }}>
+        <div className="goal-label p-2" style={{ position: 'sticky', left: 0, zIndex: 4, background: 'var(--bs-body-bg)', width: '250px', minWidth: '250px', borderRight: '1px solid var(--line)' }}>
           <div className="d-flex align-items-center">
             <div className="theme-indicator me-2" style={{ width: 12, height: 12, backgroundColor: themeColor, borderRadius: 2 }} />
             <span className="fw-medium">{goal.title}</span>
@@ -117,17 +118,17 @@ const VirtualThemeLane: React.FC<Props> = ({
               onMouseDown={(e) => { e.stopPropagation(); onDragStart(e, goal as any, 'resize-start'); }}
               onTouchStart={(e) => { e.stopPropagation(); onDragStart(e, goal as any, 'resize-start'); }}
             />
-            <div className="goal-content px-2 text-white flex-grow-1" style={{ fontSize: 13, lineHeight: '16px' }}>
+            <div className="goal-content px-2 flex-grow-1" style={{ fontSize: 13, lineHeight: '16px', color: textColor }}>
               <div className="d-flex align-items-center justify-content-between">
                 <div style={{ whiteSpace: 'normal', overflow: 'visible' }}>
                   <strong>{goal.title}</strong>
                   {typeof goal.priority !== 'undefined' && (<span className="ms-2">P{goal.priority}</span>)}
                 </div>
                 <div className="d-flex align-items-center gap-1">
-                  <button className="btn btn-light btn-sm py-0 px-1" title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal as any); }}>✨</button>
-                  <button className="btn btn-light btn-sm py-0 px-1" title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); }}>📝</button>
-                  <button className="btn btn-light btn-sm py-0 px-1" title="View stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}>📖</button>
-                  <button className="btn btn-light btn-sm py-0 px-1" title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(goal.id); setNoteDraft(''); }}>💬</button>
+                  <button style={{ background: 'transparent', border: 'none', color: 'inherit', padding: '2px 4px', cursor: 'pointer' }} title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal as any); }}>✨</button>
+                  <button style={{ background: 'transparent', border: 'none', color: 'inherit', padding: '2px 4px', cursor: 'pointer' }} title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); }}>📝</button>
+                  <button style={{ background: 'transparent', border: 'none', color: 'inherit', padding: '2px 4px', cursor: 'pointer' }} title="View stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}>📖</button>
+                  <button style={{ background: 'transparent', border: 'none', color: 'inherit', padding: '2px 4px', cursor: 'pointer' }} title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(goal.id); setNoteDraft(''); }}>💬</button>
                 </div>
               </div>
               <div className="small">{total === 0 ? 'No linked stories' : `${total} stories`}</div>
