@@ -41,6 +41,7 @@ const GoalRoadmapV3: React.FC = () => {
 
   // Viewport culling state
   const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -286,6 +287,30 @@ const GoalRoadmapV3: React.FC = () => {
     setNoteDraft(''); setNoteGoalId(null);
   }, [noteGoalId, noteDraft, currentUser?.uid]);
 
+  // Compute stacking lanes per theme row to avoid visual overlap
+  const getLaneHeight = useCallback(() => {
+    if (zoom === 'weeks') return 92;
+    if (zoom === 'months') return 84;
+    if (zoom === 'quarters') return 64;
+    return 48; // years
+  }, [zoom]);
+
+  type TimedGoal = { id: string; start: number; end: number; raw: Goal };
+  const computeLanes = (items: TimedGoal[]): Map<string, number> => {
+    // Greedy interval graph coloring by start time
+    const sorted = [...items].sort((a,b) => a.start - b.start || a.end - b.end);
+    const laneEnds: number[] = [];
+    const assignment = new Map<string, number>();
+    for (const it of sorted) {
+      let placed = false;
+      for (let i = 0; i < laneEnds.length; i++) {
+        if (it.start >= laneEnds[i]) { assignment.set(it.id, i); laneEnds[i] = it.end; placed = true; break; }
+      }
+      if (!placed) { assignment.set(it.id, laneEnds.length); laneEnds.push(it.end); }
+    }
+    return assignment;
+  };
+
   return (
     <div className={`grv3 ${zoomClass}`}>
       <div className="grv3-toolbar d-flex align-items-center justify-content-start p-2 gap-2">
@@ -341,13 +366,27 @@ const GoalRoadmapV3: React.FC = () => {
 
         {/* Theme rows */}
         <div style={{ position: 'relative', width: 260 + totalWidth }}>
-          {THEMES.map(t => (
-            <div key={t.id} className="grv3-theme-row">
+          {THEMES.map(t => {
+            // Prepare timed goals for this theme
+            const tg: { id: string; start: number; end: number; raw: Goal }[] = goals
+              .filter(g => g.theme === t.id)
+              .map(g => {
+                const s = g.startDate ? new Date(g.startDate) : new Date();
+                const e = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
+                s.setHours(0,0,0,0); e.setHours(0,0,0,0);
+                return { id: g.id, start: s.getTime(), end: e.getTime(), raw: g };
+              });
+            const laneAssign = computeLanes(tg);
+            const laneCount = Math.max(0, ...Array.from(laneAssign.values()).map(v=>v)) + 1;
+            const laneH = getLaneHeight();
+            const rowMin = Math.max(laneH + 24, laneCount * (laneH + 8) + 16);
+            return (
+            <div key={t.id} className="grv3-theme-row" style={{ minHeight: rowMin }}>
               <div className="grv3-label d-flex align-items-center gap-2">
                 <span style={{ width: 10, height: 10, borderRadius: 9999, background: 'currentColor', color: 'var(--bs-body-color)' }} />
                 <span>{t.name}</span>
               </div>
-              <div className="grv3-track" style={{ width: totalWidth }}>
+              <div className="grv3-track" style={{ width: totalWidth, minHeight: rowMin }}>
                 {goals.filter(g => g.theme === t.id).map(g => {
                   // Culling: only render bars near viewport
                   const start = g.startDate ? new Date(g.startDate) : new Date();
@@ -356,15 +395,18 @@ const GoalRoadmapV3: React.FC = () => {
                   const buffer = 800; const visLeft = viewport.left; const visRight = viewport.left + viewport.width;
                   const barLeft = left; const barRight = left + width;
                   if (barRight < visLeft - buffer || barLeft > visRight + buffer) return null;
+                  const lane = laneAssign.get(g.id) || 0;
                   return (
                   <div
                     key={g.id}
                     data-grv3-goal={g.id}
                     className="grv3-bar"
-                    style={{ left, width, ...barStyle(g) }}
+                    style={{ left, width, height: laneH, top: 12 + lane*(laneH + 8), zIndex: hoveredId===g.id ? 1000 : undefined, ...barStyle(g) }}
                     onPointerDown={(e) => startDrag(e, g, 'move')}
                     tabIndex={0}
                     onKeyDown={(e) => onKeyNudge(e, g)}
+                    onMouseEnter={() => setHoveredId(g.id)}
+                    onMouseLeave={() => setHoveredId(null)}
                   >
                     <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
@@ -386,7 +428,8 @@ const GoalRoadmapV3: React.FC = () => {
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
