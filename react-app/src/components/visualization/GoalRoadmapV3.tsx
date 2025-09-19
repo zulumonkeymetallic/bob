@@ -35,6 +35,12 @@ const GoalRoadmapV3: React.FC = () => {
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [lastNotes, setLastNotes] = useState<Record<string, string>>({});
+  const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
+  const [showSprints, setShowSprints] = useState(true);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+
+  // Viewport culling state
+  const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -68,6 +74,22 @@ const GoalRoadmapV3: React.FC = () => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal));
       setGoals(data);
       setLoading(false);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Subscribe to stories to compute counts per goal (lightweight aggregate)
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(q, (snap) => {
+      const counts: Record<string, number> = {};
+      for (const d of snap.docs) {
+        const story = d.data() as any;
+        const gid = story.goalId as string | undefined;
+        if (gid) counts[gid] = (counts[gid] || 0) + 1;
+      }
+      setStoryCounts(counts);
     });
     return () => unsub();
   }, [currentUser?.uid]);
@@ -122,6 +144,16 @@ const GoalRoadmapV3: React.FC = () => {
     el.scrollLeft = clamp(left, 0, el.scrollWidth);
   }, [xFromDate, zoom, goals.length]);
 
+  // Track viewport for culling
+  useEffect(() => {
+    const el = containerRef.current; if (!el) return;
+    const update = () => setViewport({ left: Math.max(0, el.scrollLeft), width: el.clientWidth });
+    update();
+    el.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    return () => { el.removeEventListener('scroll', update); window.removeEventListener('resize', update); };
+  }, []);
+
   const gridLines = useMemo(() => {
     const out: { label: string; x: number }[] = [];
     const cursor = new Date(timeRange.start); cursor.setDate(1);
@@ -171,7 +203,20 @@ const GoalRoadmapV3: React.FC = () => {
     document.removeEventListener('pointermove', pointerMove); document.removeEventListener('pointerup', pointerUp);
     const el = document.querySelector(`[data-grv3-goal="${s.id}"]`) as HTMLElement | null; if (!el) { dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() }; return; }
     const left = parseFloat(el.style.left || '0'); const width = parseFloat(el.style.width || '0');
-    const newStart = dateFromX(left); const newEnd = dateFromX(left+width);
+    let newStart = dateFromX(left); let newEnd = dateFromX(left+width);
+    // Optional snapping strategy on drop
+    if (snapEnabled) {
+      const startOfWeek = (d: Date) => { const c = new Date(d); const day = (c.getDay()+6)%7; c.setDate(c.getDate()-day); c.setHours(0,0,0,0); return c; };
+      const endOfWeek = (d: Date) => { const s = startOfWeek(d); const e = new Date(s); e.setDate(s.getDate()+6); e.setHours(0,0,0,0); return e; };
+      const startOfMonth = (d: Date) => { const c = new Date(d.getFullYear(), d.getMonth(), 1); c.setHours(0,0,0,0); return c; };
+      const endOfMonth = (d: Date) => { const c = new Date(d.getFullYear(), d.getMonth()+1, 0); c.setHours(0,0,0,0); return c; };
+      const startOfQuarter = (d: Date) => { const q = Math.floor(d.getMonth()/3)*3; const c = new Date(d.getFullYear(), q, 1); c.setHours(0,0,0,0); return c; };
+      const endOfQuarter = (d: Date) => { const q = Math.floor(d.getMonth()/3)*3+2; const c = new Date(d.getFullYear(), q+1, 0); c.setHours(0,0,0,0); return c; };
+      if (zoom === 'weeks') { newStart = startOfWeek(newStart); newEnd = endOfWeek(newEnd); }
+      else if (zoom === 'months') { newStart = startOfWeek(newStart); newEnd = endOfWeek(newEnd); }
+      else if (zoom === 'quarters') { newStart = startOfQuarter(newStart); newEnd = endOfQuarter(newEnd); }
+      else if (zoom === 'years') { newStart = startOfMonth(newStart); newEnd = endOfMonth(newEnd); }
+    }
     try {
       await updateDoc(doc(db, 'goals', s.id), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: Date.now() });
       if (currentUser?.uid) {
@@ -189,12 +234,41 @@ const GoalRoadmapV3: React.FC = () => {
     document.addEventListener('pointermove', pointerMove, { passive: false }); document.addEventListener('pointerup', pointerUp, { passive: false });
   }, [pointerMove, pointerUp]);
 
+  // Keyboard nudges for accessibility and precision
+  const onKeyNudge = useCallback(async (e: React.KeyboardEvent, g: Goal) => {
+    const start = g.startDate ? new Date(g.startDate) : new Date();
+    const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
+    let ds = 0, de = 0;
+    const step = e.shiftKey ? 7 : 1;
+    if (e.key === 'ArrowLeft') { ds -= step; de -= step; }
+    if (e.key === 'ArrowRight') { ds += step; de += step; }
+    if (e.key === 'ArrowUp') { de -= step; }
+    if (e.key === 'ArrowDown') { de += step; }
+    if (ds === 0 && de === 0) return;
+    e.preventDefault();
+    const ns = new Date(start); ns.setDate(ns.getDate()+ds); ns.setHours(0,0,0,0);
+    const ne = new Date(end); ne.setDate(ne.getDate()+de); ne.setHours(0,0,0,0);
+    try {
+      await updateDoc(doc(db, 'goals', g.id), { startDate: ns.getTime(), endDate: ne.getTime(), updatedAt: Date.now() });
+      if (currentUser?.uid) {
+        await ActivityStreamService.logFieldChange(g.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${start.toDateString()} – ${end.toDateString()}`, `${ns.toDateString()} – ${ne.toDateString()}`, 'personal', g.id, 'human');
+      }
+    } catch (err) { console.error('Nudge failed', err); }
+  }, [currentUser?.uid]);
+
   const barStyle = (g: Goal): React.CSSProperties => {
     const start = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
     const end = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now()+86400000*90));
     const left = xFromDate(start); const width = Math.max(14, xFromDate(end) - left);
-    const theme = THEMES.find(t => t.id === g.theme); const color = theme?.color || '#6c757d';
-    return { left, width, background: `linear-gradient(135deg, var(--goal-color, ${color}) 0%, rgba(0,0,0,.15) 100%)` } as React.CSSProperties;
+    const themeDef = THEMES.find(t => t.id === g.theme);
+    const baseColorVar = themeDef?.color || '#6c757d'; // e.g., var(--theme-health-primary)
+    const overlay = theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
+    // Inherit theme color via CSS var; apply subtle gradient that adapts to theme
+    return {
+      left,
+      width,
+      background: `linear-gradient(135deg, var(--goal-color, ${baseColorVar}) 0%, ${overlay} 100%)`,
+    } as React.CSSProperties;
   };
 
   const zoomClass = useMemo(() => (zoom === 'years' ? 'ultra' : zoom === 'quarters' ? 'slim' : ''), [zoom]);
@@ -224,6 +298,8 @@ const GoalRoadmapV3: React.FC = () => {
           <Button size="sm" variant="outline-secondary" onClick={() => setZoom(p => p==='weeks'?'weeks':(p==='months'?'quarters':(p==='quarters'?'years':'years')))}><ZoomOut size={14} /></Button>
           <Button size="sm" variant="outline-secondary" onClick={() => { const el = containerRef.current; if (!el) return; const left = 260 + xFromDate(new Date()) - el.clientWidth * .35; el.scrollLeft = clamp(left, 0, el.scrollWidth); }}><Home size={14} /></Button>
           <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
+          <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
+          <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />
         </div>
       </div>
 
@@ -249,7 +325,7 @@ const GoalRoadmapV3: React.FC = () => {
         <div className="grv3-today-line" style={{ left: 260 + xFromDate(new Date()) }} />
 
         {/* Sprint bands + labels on weeks/months */}
-        {(zoom === 'weeks' || zoom === 'months') && (
+        {showSprints && (zoom === 'weeks' || zoom === 'months') && (
           <>
             {sprintOverlays.map((s, i) => (
               <div key={`band-${i}`} className="grv3-sprint-band" style={{ left: 260 + s.left, width: s.width }} />
@@ -273,13 +349,23 @@ const GoalRoadmapV3: React.FC = () => {
                 <span>{t.name}</span>
               </div>
               <div className="grv3-track" style={{ width: totalWidth }}>
-                {goals.filter(g => g.theme === t.id).map(g => (
+                {goals.filter(g => g.theme === t.id).map(g => {
+                  // Culling: only render bars near viewport
+                  const start = g.startDate ? new Date(g.startDate) : new Date();
+                  const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
+                  const left = xFromDate(start); const width = Math.max(14, xFromDate(end) - left);
+                  const buffer = 800; const visLeft = viewport.left; const visRight = viewport.left + viewport.width;
+                  const barLeft = left; const barRight = left + width;
+                  if (barRight < visLeft - buffer || barLeft > visRight + buffer) return null;
+                  return (
                   <div
                     key={g.id}
                     data-grv3-goal={g.id}
                     className="grv3-bar"
-                    style={barStyle(g)}
+                    style={{ left, width, ...barStyle(g) }}
                     onPointerDown={(e) => startDrag(e, g, 'move')}
+                    tabIndex={0}
+                    onKeyDown={(e) => onKeyNudge(e, g)}
                   >
                     <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
@@ -291,12 +377,13 @@ const GoalRoadmapV3: React.FC = () => {
                     </div>
 
                     <div className="grv3-title">{g.title}</div>
-                    <div className="grv3-meta">{g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} – {g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}</div>
+                    <div className="grv3-meta">{g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} – {g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}{typeof storyCounts[g.id] === 'number' ? ` • ${storyCounts[g.id]} stories` : ''}</div>
                     {(zoom === 'weeks' || zoom === 'months') && (lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote) && (
                       <div className="grv3-meta">📝 {lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote}</div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}
