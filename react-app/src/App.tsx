@@ -44,6 +44,8 @@ import logger from './utils/logger';
 
 // BOB v3.5.2 - New Scaffolding Components
 import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
+import RoadmapV2 from './components/visualization/RoadmapV2';
+import GoalRoadmapV3 from './components/visualization/GoalRoadmapV3';
 import CalendarIntegrationView from './components/calendar/CalendarIntegrationView';
 import SprintManagementView from './components/sprints/SprintManagementView';
 import SprintsPage from './components/sprints/SprintsPage';
@@ -207,7 +209,8 @@ function AppContent() {
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
-            <Route path="/goals/roadmap" element={<EnhancedGanttChart />} />
+            <Route path="/goals/roadmap" element={<RoadmapV2 />} />
+            <Route path="/goals/roadmap-v3" element={<GoalRoadmapV3 />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
             {/* Goals Timeline now uses Enhanced Gantt */}

@@ -1,0 +1,142 @@
+/* Roadmap V2 – high‑performance Gantt with DnD and resize */
+.roadmapv2 {
+  --panel-bg: var(--bs-body-bg);
+  --panel-border: var(--bs-border-color);
+  --panel-text: var(--bs-body-color);
+}
+
+.rmv2-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 30; /* lower than bars which use 40+ */
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.rmv2-container {
+  position: relative;
+  overflow: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+
+.rmv2-header {
+  position: sticky;
+  top: 48px; /* below toolbar height */
+  background: var(--panel-bg);
+  z-index: 35;
+  border-bottom: 2px solid var(--panel-border);
+}
+
+.rmv2-months {
+  position: relative;
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.rmv2-month {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  padding: 10px 6px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--panel-text);
+  white-space: nowrap;
+}
+
+.rmv2-grid {
+  position: absolute;
+  top: 40px; /* below months */
+  bottom: 0;
+  left: 250px; /* label column */
+  right: 0;
+  z-index: 20; /* below bars */
+  pointer-events: none;
+}
+
+.rmv2-grid-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(0,0,0,0.07);
+}
+
+.rmv2-theme-row {
+  position: relative;
+  min-height: 120px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.rmv2-label {
+  position: sticky;
+  left: 0;
+  width: 250px;
+  padding: 12px 14px;
+  background: var(--panel-bg);
+  border-right: 1px solid var(--panel-border);
+  z-index: 38; /* keep above grid */
+}
+
+.rmv2-track {
+  position: relative;
+  margin-left: 250px; /* after label */
+  min-height: 120px;
+}
+
+.rmv2-bar {
+  position: absolute;
+  top: 14px;
+  height: 92px;
+  border: 2px solid rgba(0,0,0,0.08);
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 8px 10px;
+  cursor: grab;
+  z-index: 42; /* above header and grid */
+  user-select: none;
+}
+
+.rmv2-bar.dragging { cursor: grabbing; z-index: 1000; }
+
+.rmv2-bar-title { font-weight: 700; font-size: 13px; line-height: 1.2; }
+.rmv2-bar-meta { font-size: 11px; opacity: 0.95; }
+
+.rmv2-resize {
+  position: absolute;
+  top: 0; bottom: 0; width: 10px;
+  background: rgba(255,255,255,0.15);
+  opacity: 0; transition: opacity .15s;
+}
+.rmv2-bar:hover .rmv2-resize { opacity: 1; }
+.rmv2-resize.start { left: 0; cursor: ew-resize; border-radius: 8px 0 0 8px; }
+.rmv2-resize.end { right: 0; cursor: ew-resize; border-radius: 0 8px 8px 0; }
+
+.rmv2-tooltip {
+  position: fixed;
+  z-index: 1200;
+  background: rgba(0,0,0,0.8);
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.rmv2-zoom-slim .rmv2-bar-title { font-size: 12px; }
+.rmv2-zoom-slim .rmv2-bar-meta { display: none; }
+
+.rmv2-zoom-ultra .rmv2-bar-title { font-size: 11px; }
+.rmv2-zoom-ultra .rmv2-bar-meta { display: none; }
+
+/* Ensure cards never render behind overlay header elements */
+.rmv2 { --bar-z: 42; }
+.rmv2-bar { z-index: var(--bar-z); }
+
