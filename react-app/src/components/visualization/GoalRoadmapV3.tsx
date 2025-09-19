@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, ButtonGroup, Modal, Form, Badge } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { collection, onSnapshot, query, where, updateDoc, doc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
-import { Goal } from '../../types';
+import { Goal, Sprint } from '../../types';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
 import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, ZoomIn, ZoomOut, Home } from 'lucide-react';
 import './GoalRoadmapV3.css';
@@ -28,11 +28,13 @@ const GoalRoadmapV3: React.FC = () => {
 
   const [zoom, setZoom] = useState<Zoom>('quarters');
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<any[]>([]);
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
+  const [lastNotes, setLastNotes] = useState<Record<string, string>>({});
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -70,6 +72,42 @@ const GoalRoadmapV3: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid]);
 
+  // Subscribe to sprints (for overlay labels & bands) – used on weeks/months views
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(q, snap => {
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as Sprint));
+      setSprints(data);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Subscribe to latest goal notes across the activity stream (for bar preview)
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(
+      collection(db, 'activity_stream'),
+      where('ownerUid', '==', currentUser.uid),
+      where('entityType', '==', 'goal'),
+      where('activityType', '==', 'note_added'),
+      orderBy('timestamp', 'desc'),
+      limit(300)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const map: Record<string, string> = {};
+      for (const d of snap.docs) {
+        const data = d.data() as any;
+        const gid = data.entityId as string;
+        if (!map[gid] && data.noteContent) {
+          map[gid] = String(data.noteContent);
+        }
+      }
+      setLastNotes(map);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
   // Activity stream subscription per selected goal
   useEffect(() => {
     if (!activityGoalId) return;
@@ -100,6 +138,18 @@ const GoalRoadmapV3: React.FC = () => {
     }
     return out;
   }, [timeRange, xFromDate, zoom]);
+
+  // Sprint overlays (labels + bands) for weeks/months only
+  const sprintOverlays = useMemo(() => {
+    if (!(zoom === 'weeks' || zoom === 'months')) return [] as { left: number; width: number; name: string }[];
+    return sprints.map(s => {
+      const sStart = new Date(s.startDate);
+      const sEnd = new Date(s.endDate);
+      const left = xFromDate(sStart);
+      const width = Math.max(8, xFromDate(sEnd) - left);
+      return { left, width, name: s.name };
+    });
+  }, [sprints, zoom, xFromDate]);
 
   // Drag+resize implementation
   const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|null; startX: number; origStart: Date; origEnd: Date }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() });
@@ -195,6 +245,25 @@ const GoalRoadmapV3: React.FC = () => {
           {gridLines.map((g, i) => (<div key={i} className="grv3-grid-line" style={{ left: g.x }} />))}
         </div>
 
+        {/* Today line */}
+        <div className="grv3-today-line" style={{ left: 260 + xFromDate(new Date()) }} />
+
+        {/* Sprint bands + labels on weeks/months */}
+        {(zoom === 'weeks' || zoom === 'months') && (
+          <>
+            {sprintOverlays.map((s, i) => (
+              <div key={`band-${i}`} className="grv3-sprint-band" style={{ left: 260 + s.left, width: s.width }} />
+            ))}
+            <div className="grv3-sprints" style={{ width: totalWidth }}>
+              {sprintOverlays.map((s, i) => (
+                <div key={`label-${i}`} className="grv3-sprint-label" style={{ left: s.left, width: Math.max(54, s.width) }}>
+                  {s.name}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
         {/* Theme rows */}
         <div style={{ position: 'relative', width: 260 + totalWidth }}>
           {THEMES.map(t => (
@@ -223,6 +292,9 @@ const GoalRoadmapV3: React.FC = () => {
 
                     <div className="grv3-title">{g.title}</div>
                     <div className="grv3-meta">{g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} – {g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}</div>
+                    {(zoom === 'weeks' || zoom === 'months') && (lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote) && (
+                      <div className="grv3-meta">📝 {lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote}</div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -272,4 +344,3 @@ const GoalRoadmapV3: React.FC = () => {
 };
 
 export default GoalRoadmapV3;
-
