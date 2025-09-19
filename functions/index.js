@@ -42,7 +42,7 @@ function stateDecode(s) {
 }
 
 // ===== OAuth: start
-exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID] }, async (req, res) => {
+exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID], invoker: 'public' }, async (req, res) => {
   try {
     const uid = String(req.query.uid || "");
     const nonce = String(req.query.nonce || "");
@@ -60,7 +60,7 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID] }, as
 });
 
 // ===== OAuth: callback
-exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req, res) => {
+exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
   try {
     const code = String(req.query.code || "");
     const state = stateDecode(req.query.state);

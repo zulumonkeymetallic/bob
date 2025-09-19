@@ -1,12 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut, signInAnonymously, setPersistence, browserLocalPersistence, signInWithRedirect, getRedirectResult } from 'firebase/auth';
+import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut, signInAnonymously, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { auth } from '../firebase';
 // import { SideDoorAuth } from '../services/SideDoorAuth';
 
 interface AuthContextType {
   currentUser: User | null;
   signInWithGoogle: () => Promise<void>;
-  signInWithGoogleRedirect: () => Promise<void>;
   signOut: () => Promise<void>;
   isTestUser?: boolean;
 }
@@ -26,18 +25,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Always prompt account selection
     provider.setCustomParameters({ prompt: 'select_account' });
 
-    // Some environments (iOS/Safari/incognito) block popups — prefer redirect
-    const isApple = /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent);
-    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-    const preferRedirect = isApple || isSafari;
-
-    const tryRedirect = async () => {
-      console.log('🔁 Falling back to Google redirect sign-in...');
-      await signInWithRedirect(auth, provider);
-    };
-
     try {
-      if (preferRedirect) return await tryRedirect();
       console.log('Starting Google sign in (popup)...');
       const result = await signInWithPopup(auth, provider);
       console.log('Sign in successful:', result.user?.email);
@@ -45,21 +33,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const code = error?.code || '';
       const message = error?.message || '';
       console.warn('Popup sign-in failed:', { code, message });
-
-      // Common cases → fallback to redirect
-      const needRedirect = (
-        code === 'auth/popup-blocked' ||
-        code === 'auth/popup-closed-by-user' ||
-        code === 'auth/operation-not-supported-in-this-environment' ||
-        code === 'auth/internal-error' ||
-        code === 'auth/network-request-failed' ||
-        message?.toLowerCase?.().includes('cookie') ||
-        message?.toLowerCase?.().includes('third-party')
-      );
-
-      if (needRedirect) {
-        return await tryRedirect();
-      }
 
       // Helpful guidance for unauthorized domains / App Check
       if (code === 'auth/unauthorized-domain') {
@@ -70,14 +43,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
       throw error;
     }
-  };
-
-  // Explicit redirect entrypoint (used when popup is blocked)
-  const signInWithGoogleRedirect = async () => {
-    const provider = new GoogleAuthProvider();
-    try { await setPersistence(auth, browserLocalPersistence); } catch {}
-    provider.setCustomParameters({ prompt: 'select_account' });
-    await signInWithRedirect(auth, provider);
   };
 
   const signOut = async () => {
@@ -184,17 +149,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     //   }
     // }
     
-    // Capture any previous redirect result (success or error) for diagnostics/UI
-    try {
-      getRedirectResult(auth)
-        .then((res) => {
-          if (res?.user) console.log('🔐 Redirect sign-in success:', res.user.email);
-        })
-        .catch((err:any) => {
-          console.warn('⚠️ Redirect sign-in error:', err?.code, err?.message);
-        });
-    } catch {}
-
     // STEP 3: Use regular Firebase auth for production
     console.log('🔐 Initializing Firebase authentication');
     unsubscribe = onAuthStateChanged(auth, user => {
@@ -213,7 +167,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const value = {
     currentUser,
     signInWithGoogle,
-    signInWithGoogleRedirect,
     signOut,
     isTestUser,
   };

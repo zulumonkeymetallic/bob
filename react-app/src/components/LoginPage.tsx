@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Container, Row, Col, Card, Button, Form, Alert, Spinner } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
-import { GoogleAuthProvider, signInWithRedirect } from 'firebase/auth';
+import { GoogleAuthProvider } from 'firebase/auth';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase';
 
 const LoginPage: React.FC = () => {
-  const { signInWithGoogle, signInWithGoogleRedirect } = useAuth();
+  const { signInWithGoogle } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
@@ -36,16 +36,16 @@ const LoginPage: React.FC = () => {
       case 'auth/unauthorized-domain':
         return 'This domain is not authorized for Google sign-in. Please use the production URL or contact support.';
       case 'auth/popup-blocked':
-        return 'Popup was blocked by the browser. Try the Redirect option below.';
+        return 'Popup was blocked by the browser. Please allow popups for this site and try again.';
       case 'auth/popup-closed-by-user':
-        return 'Popup was closed before completing sign-in. Try again or use Redirect sign-in.';
+        return 'Popup was closed before completing sign-in. Please try again.';
       case 'auth/operation-not-supported-in-this-environment':
-        return 'This browser blocks popups. Use Redirect sign-in instead.';
+        return 'This browser blocks popups. Please use a different browser or adjust settings.';
       case 'auth/network-request-failed':
         return 'Network error. Check your connection and retry.';
       default:
         if (message?.toLowerCase().includes('cookie')) return 'Third‑party cookies are blocked. Enable them for accounts.google.com and retry.';
-        return 'Sign-in failed. Please try again or use Redirect sign-in.';
+        return 'Sign-in failed. Please try again.';
     }
   };
 
@@ -63,18 +63,7 @@ const LoginPage: React.FC = () => {
     }
   };
 
-  const handleGoogleRedirect = async () => {
-    setError('');
-    setLoading(true);
-    try {
-      await signInWithGoogleRedirect();
-    } catch (error: any) {
-      const code = error?.code;
-      setError(friendlyAuthMessage(code, error?.message));
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Redirect sign-in removed per request
 
   return (
     <Container fluid className="vh-100 d-flex align-items-center justify-content-center bg-light">
@@ -105,15 +94,7 @@ const LoginPage: React.FC = () => {
                 Continue with Google
               </Button>
 
-              <Button
-                variant="link"
-                size="sm"
-                className="w-100 mb-2"
-                onClick={handleGoogleRedirect}
-                disabled={loading}
-              >
-                Use redirect sign-in (for popup blockers)
-              </Button>
+              {/* Redirect sign-in option removed */}
 
               <div className="text-center my-3">
                 <small className="text-muted">or</small>
