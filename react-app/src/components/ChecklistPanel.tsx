@@ -121,7 +121,7 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
       } catch (e) {
         console.error('buildPlan failed', e);
         const msg = (e as any)?.message || 'Unknown error';
-        setToast({ show: true, title: 'Planner failed', body: msg, variant: 'danger' });
+        // setToast({ show: true, title: 'Planner failed', body: msg, variant: 'danger' });
       } finally {
         localStorage.setItem(key, '1');
       }
