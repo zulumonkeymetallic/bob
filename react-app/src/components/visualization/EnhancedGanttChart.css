@@ -9,15 +9,6 @@
 /* Hide app chrome in fullscreen mode */
 body.gantt-full-active .sidebar-desktop { display: none !important; }
 body.gantt-full-active .navbar, body.gantt-full-active .global-sidebar { display: none !important; }
-body.gantt-full-active {
-  background: var(--body-bg, var(--card)) !important;
-  color: var(--bs-body-color);
-}
-body.gantt-full-active .rv2-container {
-  --rv2-surface: var(--card);
-  --rv2-lane-bg: var(--card);
-  --rv2-lane-bg-alt: rgba(var(--bs-body-color-rgb, 17,24,39), 0.08);
-}
 
 .timeline-container {
   border: 1px solid var(--panel-border);
