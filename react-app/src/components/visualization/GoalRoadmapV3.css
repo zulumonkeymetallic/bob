@@ -13,6 +13,7 @@
 .grv3-container { position: relative; overflow: auto; border: 1px solid var(--bs-border-color); border-radius: 10px; background: var(--bs-body-bg); }
 .grv3-header { position: sticky; top: 44px; background: var(--bs-body-bg); z-index: var(--header-z); border-bottom: 2px solid var(--bs-border-color); }
 .grv3-months { position: relative; height: var(--months-h); }
+.grv3-header-left { position: sticky; left: 0; width: var(--label-col); height: var(--months-h); display: flex; align-items: center; padding: 8px 10px; font-size: 12px; font-weight: 700; color: var(--bs-body-color); background: var(--bs-body-bg); border-right: 1px solid var(--bs-border-color); z-index: calc(var(--header-z) + 1); }
 .grv3-month { position: absolute; top: 0; height: 100%; padding: 8px 6px 0; font-size: 12px; font-weight: 600; color: var(--bs-body-color); white-space: nowrap; }
 .grv3-grid { position: absolute; top: calc(var(--months-h)); bottom: 0; left: var(--label-col); right: 0; z-index: var(--grid-z); pointer-events: none; }
 .grv3-grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(0,0,0,0.08); }

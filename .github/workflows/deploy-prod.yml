@@ -1,4 +1,4 @@
-name: Deploy to Firebase Hosting (prod, disabled)
+name: Deploy to Firebase Hosting (prod)
 
 on:
   workflow_dispatch:
@@ -18,11 +18,24 @@ jobs:
         with:
           node-version: 20
 
+      - name: Generate Firebase client config
+        run: node scripts/generate-firebase-config.js
+
       - name: Install and build React app
         working-directory: react-app
         run: |
           npm ci
           npm run build
+
+      - name: Install Functions dependencies
+        run: npm ci --prefix functions
+
+      - name: Deploy Cloud Functions (prod)
+        uses: w9jds/firebase-action@v2.2.0
+        with:
+          args: deploy --only functions --project bob20250810
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
       - name: Deploy to Firebase Hosting (live)
         uses: FirebaseExtended/action-hosting-deploy@v0

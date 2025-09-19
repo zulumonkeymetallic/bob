@@ -44,6 +44,7 @@ import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
 import RoadmapV2 from './RoadmapV2';
 import { useSidebar } from '../../contexts/SidebarContext';
+import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
 import {
   DndContext,
   DragStartEvent,
@@ -157,14 +158,8 @@ const EnhancedGanttChart: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const headerMonthsRef = useRef<HTMLDivElement>(null);
   
-  // Theme definitions
-  const themes = [
-    { id: 1, name: 'Health', color: 'var(--theme-health-primary)' },
-    { id: 2, name: 'Growth', color: 'var(--theme-growth-primary)' },
-    { id: 3, name: 'Wealth', color: 'var(--theme-wealth-primary)' },
-    { id: 4, name: 'Tribe', color: 'var(--theme-tribe-primary)' },
-    { id: 5, name: 'Home', color: 'var(--theme-home-primary)' }
-  ];
+  // Theme definitions adopt V2 global theme system
+  const themes = useMemo(() => GLOBAL_THEMES.map(t => ({ id: t.id, name: t.name || t.label, color: t.color })), []);
 
   // Time range calculation
   const timeRange = useMemo(() => {
@@ -447,7 +442,8 @@ const EnhancedGanttChart: React.FC = () => {
 
     // Add goals
     goals.forEach(goal => {
-      if (selectedThemes.length > 0 && !selectedThemes.includes(goal.theme)) return;
+      const themeId = migrateThemeValue(goal.theme);
+      if (selectedThemes.length > 0 && !selectedThemes.includes(themeId)) return;
       if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return;
 
       const startDate = goal.startDate ? new Date(goal.startDate) : new Date();
@@ -458,7 +454,7 @@ const EnhancedGanttChart: React.FC = () => {
         id: goal.id,
         title: goal.title,
         type: 'goal',
-        theme: goal.theme,
+        theme: themeId,
         startDate,
         endDate,
         status: goal.status,
@@ -485,7 +481,9 @@ const EnhancedGanttChart: React.FC = () => {
         const order = { goal: 0, story: 1, sprint: 2 };
         return order[a.type] - order[b.type];
       }
-      if (a.theme !== b.theme) return a.theme - b.theme;
+      const ta = migrateThemeValue(a.theme as any);
+      const tb = migrateThemeValue(b.theme as any);
+      if (ta !== tb) return ta - tb;
       return a.startDate.getTime() - b.startDate.getTime();
     });
     t.end();
@@ -497,8 +495,9 @@ const EnhancedGanttChart: React.FC = () => {
   const goalsByTheme = useMemo(() => {
     const grouped: Record<number, GanttItem[]> = {};
     ganttItems.filter(i => i.type === 'goal').forEach(g => {
-      grouped[g.theme] = grouped[g.theme] || [];
-      grouped[g.theme].push(g);
+      const k = migrateThemeValue(g.theme);
+      grouped[k] = grouped[k] || [];
+      grouped[k].push({ ...g, theme: k });
     });
     return grouped;
   }, [ganttItems]);
@@ -1566,14 +1565,14 @@ const EnhancedGanttChart: React.FC = () => {
             <div key={groupKey === null ? 'all' : `theme-${groupKey}`} data-theme-group={groupKey ?? ''} className="theme-group">
               {groupByTheme && (
                 <div className="d-flex align-items-center" style={{ height: 32 }}>
-                  <div style={{ width: 250, minWidth: 250 }} className="px-2 text-muted fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
+                  <div style={{ width: 250, minWidth: 250, color: getThemeById(migrateThemeValue(groupKey as number)).color }} className="px-2 fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
                   <div className="flex-grow-1" style={{ borderBottom: '1px solid var(--line)' }} />
                 </div>
               )}
           <VirtualThemeLane
             themeId={(groupKey as number) || 0}
             themeName={themes.find(t => t.id === groupKey)?.name || ''}
-            themeColor={themes.find(t => t.id === groupKey)?.color || ''}
+            themeColor={getThemeById(migrateThemeValue(groupKey as number)).color || ''}
             items={(groupByTheme ? (goalsByTheme[groupKey as number] || []) : ganttItems.filter(g => g.type==='goal')) as any}
             getDatePosition={getDatePosition}
             storiesByGoal={storiesByGoal}
@@ -1586,7 +1585,7 @@ const EnhancedGanttChart: React.FC = () => {
             setNoteGoalId={setNoteGoalId as any}
             setNoteDraft={setNoteDraft}
             updateGoalDates={updateGoalDates}
-            getThemeStyle={(id) => themes.find(t => t.id === id) as any}
+            getThemeStyle={(id) => ({ color: getThemeById(migrateThemeValue(id)).color }) as any}
           />
           </div>
           ))}
