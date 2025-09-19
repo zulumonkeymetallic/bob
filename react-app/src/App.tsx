@@ -226,12 +226,11 @@ function AppContent() {
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
-            {/* Preview channel for legacy V2 timeline (toggled inside EnhancedGanttChart) */}
-            <Route path="/preview/roadmap-v2" element={<EnhancedGanttChart />} />
+            {/* Legacy V2 removed; no preview route retained */}
             <Route path="/goals/cards" element={<ThemeRoadmap />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
-            {/* Goals Timeline uses Enhanced Gantt (V3 by default; V2 via /preview/roadmap-v2 or ?preview=v2) */}
+            {/* Goals Timeline uses Enhanced Gantt (V3) */}
             <Route path="/goals/timeline" element={<EnhancedGanttChart />} />
             <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
             <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
