@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut, signInAnonymously, setPersistence, browserLocalPersistence, signInWithRedirect } from 'firebase/auth';
+import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut, signInAnonymously, setPersistence, browserLocalPersistence, signInWithRedirect, getRedirectResult } from 'firebase/auth';
 import { auth } from '../firebase';
 // import { SideDoorAuth } from '../services/SideDoorAuth';
 
 interface AuthContextType {
   currentUser: User | null;
   signInWithGoogle: () => Promise<void>;
+  signInWithGoogleRedirect: () => Promise<void>;
   signOut: () => Promise<void>;
   isTestUser?: boolean;
 }
@@ -71,6 +72,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // Explicit redirect entrypoint (used when popup is blocked)
+  const signInWithGoogleRedirect = async () => {
+    const provider = new GoogleAuthProvider();
+    try { await setPersistence(auth, browserLocalPersistence); } catch {}
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await signInWithRedirect(auth, provider);
+  };
+
   const signOut = async () => {
     try {
       // Clear test mode if active
@@ -95,12 +104,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     console.log('🔐 Setting up auth state listener...');
     console.log('🔐 Current URL:', window.location.href);
-    try {
-      const appCheckFlag = (window as any).RECAPTCHA_V3_SITE_KEY || process.env.REACT_APP_RECAPTCHA_V3_SITE_KEY;
-      if (!appCheckFlag) {
-        console.warn('ℹ️ App Check site key not detected in env/window — if enforcement is ON, login will fail');
-      }
-    } catch {}
+    // App Check references removed; not enforced on this project.
     
     let unsubscribe: (() => void) | undefined;
     
@@ -180,6 +184,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     //   }
     // }
     
+    // Capture any previous redirect result (success or error) for diagnostics/UI
+    try {
+      getRedirectResult(auth)
+        .then((res) => {
+          if (res?.user) console.log('🔐 Redirect sign-in success:', res.user.email);
+        })
+        .catch((err:any) => {
+          console.warn('⚠️ Redirect sign-in error:', err?.code, err?.message);
+        });
+    } catch {}
+
     // STEP 3: Use regular Firebase auth for production
     console.log('🔐 Initializing Firebase authentication');
     unsubscribe = onAuthStateChanged(auth, user => {
@@ -198,6 +213,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const value = {
     currentUser,
     signInWithGoogle,
+    signInWithGoogleRedirect,
     signOut,
     isTestUser,
   };

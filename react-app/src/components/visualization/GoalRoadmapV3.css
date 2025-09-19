@@ -29,7 +29,8 @@
 .grv3-bar.dragging { cursor: grabbing; z-index: 1000; transform: scale(1.03); }
 .grv3-title { font-weight: 800; font-size: 14px; line-height: 1.2; text-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .grv3-meta { font-size: 11px; opacity: .95; }
-.grv3-actions { position: absolute; right: 8px; top: 6px; display: flex; gap: 4px; }
+.grv3-actions { position: absolute; right: 8px; top: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity .12s; pointer-events: none; }
+.grv3-bar:hover .grv3-actions { opacity: 1; pointer-events: auto; }
 .grv3-action { background: rgba(255,255,255,.9); color: #222; border: none; border-radius: 6px; width: 24px; height: 22px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
 .grv3-resize { position: absolute; top:0; bottom:0; width: 10px; background: rgba(255,255,255,.18); opacity: 0; transition: opacity .15s; }
 .grv3-bar:hover .grv3-resize { opacity: 1; }

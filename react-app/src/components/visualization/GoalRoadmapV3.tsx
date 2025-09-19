@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, ButtonGroup, Modal, Form, Badge } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useSprint } from '../../contexts/SprintContext';
 import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
@@ -25,6 +26,7 @@ function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b,
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
+  const { selectedSprintId } = useSprint();
 
   const [zoom, setZoom] = useState<Zoom>('quarters');
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -38,6 +40,9 @@ const GoalRoadmapV3: React.FC = () => {
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
   const [showSprints, setShowSprints] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
+  const [filterHasStories, setFilterHasStories] = useState(false);
+  const [filterInSelectedSprint, setFilterInSelectedSprint] = useState(false);
+  const [filterOverlapSelectedSprint, setFilterOverlapSelectedSprint] = useState(false);
 
   // Viewport culling state
   const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
@@ -80,20 +85,25 @@ const GoalRoadmapV3: React.FC = () => {
   }, [currentUser?.uid]);
 
   // Subscribe to stories to compute counts per goal (lightweight aggregate)
+  const goalsInSprint = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (!currentUser?.uid) return;
     const q = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
     const unsub = onSnapshot(q, (snap) => {
       const counts: Record<string, number> = {};
+      const inSprint = new Set<string>();
       for (const d of snap.docs) {
         const story = d.data() as any;
         const gid = story.goalId as string | undefined;
         if (gid) counts[gid] = (counts[gid] || 0) + 1;
+        if (selectedSprintId && story.sprintId === selectedSprintId && gid) inSprint.add(gid);
       }
       setStoryCounts(counts);
+      goalsInSprint.current = inSprint;
     });
     return () => unsub();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, selectedSprintId]);
 
   // Subscribe to sprints (for overlay labels & bands) – used on weeks/months views
   useEffect(() => {
@@ -183,6 +193,26 @@ const GoalRoadmapV3: React.FC = () => {
       return { left, width, name: s.name };
     });
   }, [sprints, zoom, xFromDate]);
+
+  // Filters derived function
+  const applyFilters = useCallback((g: Goal): boolean => {
+    if (filterHasStories && !(storyCounts[g.id] > 0)) return false;
+    if (filterInSelectedSprint && selectedSprintId) {
+      if (!goalsInSprint.current.has(g.id)) return false;
+    }
+    if (filterOverlapSelectedSprint && selectedSprintId) {
+      const s = sprints.find(x => x.id === selectedSprintId);
+      if (s) {
+        const gs = g.startDate ? new Date(g.startDate).getTime() : Date.now();
+        const ge = g.endDate ? new Date(g.endDate).getTime() : gs + 86400000*90;
+        const ss = new Date(s.startDate).getTime();
+        const se = new Date(s.endDate).getTime();
+        const overlaps = gs <= se && ge >= ss;
+        if (!overlaps) return false;
+      }
+    }
+    return true;
+  }, [filterHasStories, filterInSelectedSprint, filterOverlapSelectedSprint, selectedSprintId, sprints, storyCounts]);
 
   // Drag+resize implementation
   const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|null; startX: number; origStart: Date; origEnd: Date }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() });
@@ -321,6 +351,10 @@ const GoalRoadmapV3: React.FC = () => {
         <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
         <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
         <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />
+        {/* V2-like filters */}
+        <Form.Check type="switch" id="toggle-has-stories" label="Has stories" checked={filterHasStories} onChange={(e) => setFilterHasStories(e.currentTarget.checked)} className="ms-2" />
+        <Form.Check type="switch" id="toggle-in-sprint" label="In selected sprint" checked={filterInSelectedSprint} onChange={(e) => setFilterInSelectedSprint(e.currentTarget.checked)} className="ms-1" />
+        <Form.Check type="switch" id="toggle-overlap-sprint" label="Overlaps sprint dates" checked={filterOverlapSelectedSprint} onChange={(e) => setFilterOverlapSelectedSprint(e.currentTarget.checked)} className="ms-1" />
         <div className="ms-2 d-flex align-items-center gap-2">
           <strong>Goal Roadmap V3</strong>
           {loading && <Badge bg="secondary">Loading…</Badge>}
@@ -387,7 +421,7 @@ const GoalRoadmapV3: React.FC = () => {
                 <span>{t.name}</span>
               </div>
               <div className="grv3-track" style={{ width: totalWidth, minHeight: rowMin }}>
-                {goals.filter(g => g.theme === t.id).map(g => {
+                {goals.filter(g => g.theme === t.id).filter(applyFilters).map(g => {
                   // Culling: only render bars near viewport
                   const start = g.startDate ? new Date(g.startDate) : new Date();
                   const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
