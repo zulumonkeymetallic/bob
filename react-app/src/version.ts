@@ -1,8 +1,8 @@
 // Version tracking for cache busting
 // Align version with branch build
-export const VERSION = '3.8.6';
+export const VERSION = '3.8.7';
 export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'ui/metrics-header';
+export const BUILD_HASH = 'cc4c2c4';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
 console.log(`✅ Status: Firebase Permission Fixes & React Error Resolution`);
