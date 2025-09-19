@@ -44,16 +44,6 @@ import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
 import RoadmapV2 from './RoadmapV2';
 import { useSidebar } from '../../contexts/SidebarContext';
-import {
-  DndContext,
-  DragStartEvent,
-  DragMoveEvent,
-  DragEndEvent,
-  DragCancelEvent,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
 
 interface GanttItem {
   id: string;
@@ -70,15 +60,24 @@ interface GanttItem {
   confidence?: number;
 }
 
-type RoadmapDragType = 'move' | 'resize-start' | 'resize-end';
+interface DragState {
+  isDragging: boolean;
+  itemId: string | null;
+  dragType: 'move' | 'resize-start' | 'resize-end';
+  startX: number;
+  startDate: Date;
+  endDate: Date;
+}
 
-type ActiveDrag = {
-  goalId: string;
-  dragType: RoadmapDragType;
-  originStart: Date;
-  originEnd: Date;
-  themeId: number;
-};
+interface ActivityStreamItem {
+  id: string;
+  type: 'goal' | 'story' | 'sprint' | 'task';
+  title: string;
+  ref?: string;
+  status: number;
+  theme?: number;
+  linkedTo: string[];
+}
 
 const EnhancedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
@@ -115,21 +114,27 @@ const EnhancedGanttChart: React.FC = () => {
   const dragTooltipRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const renderCountRef = useRef(0);
-  const dragLogRef = useRef<{ lastMoveLogAt: number; lastDeltaX: number; lastPointerX: number; lastPointerY: number }>({
-    lastMoveLogAt: 0,
-    lastDeltaX: 0,
-    lastPointerX: Number.NaN,
-    lastPointerY: Number.NaN,
-  });
+  const dragLogRef = useRef({ lastMoveLogAt: 0 });
   const isSpaceDownRef = useRef(false);
   const panRef = useRef<{ active: boolean; startX: number; startStart: Date; startEnd: Date } | null>(null);
   const panInertiaRef = useRef<{ vx: number; lastX: number; lastT: number; raf?: number } | null>(null);
   const isShiftDownRef = useRef(false);
   const pinchRef = useRef<{ active: boolean; startDist: number; startStart: Date; startEnd: Date; anchor: Date } | null>(null);
   
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
-  const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
+  // Drag and drop state
+  const [dragState, setDragState] = useState<DragState>({
+    isDragging: false,
+    itemId: null,
+    dragType: 'move',
+    startX: 0,
+    startDate: new Date(),
+    endDate: new Date()
+  });
   
+  // Activity stream state
+  const [showActivityStream, setShowActivityStream] = useState(false);
+  const [activityStreamItems, setActivityStreamItems] = useState<ActivityStreamItem[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const storiesPanelRef = useRef<HTMLDivElement>(null);
 
@@ -156,6 +161,8 @@ const EnhancedGanttChart: React.FC = () => {
   const timelineRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const headerMonthsRef = useRef<HTMLDivElement>(null);
+  const groupPositionsRef = useRef<Array<{ themeId: number; top: number; bottom: number; el: HTMLElement }>>([]);
+  const hoveredThemeRef = useRef<number | null>(null);
   
   // Theme definitions
   const themes = [
@@ -505,18 +512,54 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Handle item click for activity stream
   const handleItemClick = useCallback(async (item: GanttItem) => {
+    setSelectedItemId(item.id);
+    if (item.type === 'goal') setSelectedGoalId(item.id);
+    setShowActivityStream(true);
+
+    // Find all linked items
+    const linkedItems: ActivityStreamItem[] = [];
+
     if (item.type === 'goal') {
-      const goal = goals.find(g => g.id === item.id);
-      if (goal) {
-        showSidebar(goal, 'goal');
-        setSelectedGoalId(goal.id);
-      }
-    } else if (item.type === 'story') {
-      const story = stories.find(s => s.id === item.id);
-      if (story) {
-        showSidebar(story, 'story');
-      }
+      // Find stories linked to this goal
+      const goalStories = stories.filter(story => story.goalId === item.id);
+      goalStories.forEach(story => {
+        linkedItems.push({
+          id: story.id,
+          type: 'story',
+          title: story.title,
+          ref: story.ref,
+          status: story.status,
+          theme: story.theme,
+          linkedTo: [item.id]
+        });
+
+        // Find tasks linked to these stories
+        const storyTasks = tasks.filter(task => task.parentType === 'story' && task.parentId === story.id);
+        storyTasks.forEach(task => {
+          linkedItems.push({
+            id: task.id,
+            type: 'task',
+            title: task.title,
+            ref: task.ref,
+            status: task.status,
+            theme: task.theme,
+            linkedTo: [item.id, story.id]
+          });
+        });
+      });
     }
+
+    setActivityStreamItems([
+      {
+        id: item.id,
+        type: item.type,
+        title: item.title,
+        status: item.status,
+        theme: item.theme,
+        linkedTo: []
+      },
+      ...linkedItems
+    ]);
 
     // Prepare open tasks modal for goals
     if (item.type === 'goal') {
@@ -539,217 +582,186 @@ const EnhancedGanttChart: React.FC = () => {
       noteContent: `Gantt view interaction: ${JSON.stringify({ title: item.title, ganttView: true })}`,
       source: 'human'
     });
-  }, [goals, stories, tasks, currentUser, showSidebar]);
-
-  const openActivitySidebar = useCallback(() => {
-    const targetId = selectedGoalId ?? goals[0]?.id;
-    if (!targetId) return;
-    const goal = goals.find(g => g.id === targetId);
-    if (!goal) return;
-
-    showSidebar(goal, 'goal');
-
-    if (currentUser) {
-      ActivityStreamService.addActivity({
-        entityId: goal.id,
-        entityType: 'goal',
-        activityType: 'note_added',
-        userId: currentUser.uid,
-        userEmail: currentUser.email || '',
-        description: `Opened activity stream for "${goal.title}" from roadmap`,
-        noteContent: 'Roadmap activity quick view',
-        source: 'human',
-      }).catch(err => logger.warn('gantt', 'activity-log-failed', { err }));
-    }
-  }, [goals, selectedGoalId, showSidebar, currentUser]);
+  }, [stories, tasks, currentUser]);
 
   // Handle drag start
-  const computeDragDates = useCallback((drag: ActiveDrag, deltaX: number) => {
+  const handleDragStart = useCallback((e: React.MouseEvent | React.TouchEvent, item: GanttItem, dragType: DragState['dragType']) => {
+    if (item.type !== 'goal') return; // Only goals can be dragged
+    
+    e.preventDefault();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    logger.debug('gantt', 'Drag start', { id: item.id, dragType, clientX, start: item.startDate, end: item.endDate });
+    logger.perfMark('gantt-drag-start');
+    // Indicate global drag state for CSS (user-select, cursor)
+    try { document.body.classList.add('rv2-dragging'); (document.body as any).dataset.rv2Dragging = '1'; } catch {}
+    // Snapshot theme group positions for vertical drop detection
+    const groups = Array.from(document.querySelectorAll('[data-theme-group]')) as HTMLElement[];
+    groupPositionsRef.current = groups.map((el) => {
+      const rect = el.getBoundingClientRect();
+      const themeIdAttr = el.getAttribute('data-theme-group') || '0';
+      return { themeId: parseInt(themeIdAttr, 10), top: rect.top, bottom: rect.bottom, el };
+    });
+    
+    setDragState({
+      isDragging: true,
+      itemId: item.id,
+      dragType,
+      startX: clientX,
+      startDate: new Date(item.startDate),
+      endDate: new Date(item.endDate)
+    });
+
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
+    document.addEventListener('touchmove', handleDragMove, { passive: false });
+    document.addEventListener('touchend', handleDragEnd);
+  }, []);
+
+  // Handle drag move
+  const handleDragMove = useCallback((e: MouseEvent | TouchEvent) => {
+    if (!dragState.isDragging || !dragState.itemId) return;
+    
+    const isTouch = 'touches' in e;
+    const clientX = isTouch ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
+    const clientY = isTouch ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
+    const deltaX = clientX - dragState.startX;
+    
+    // Calculate time delta based on zoom level
     const msPerPixel = getMillisecondsPerPixel(zoomLevel);
     const timeDelta = deltaX * msPerPixel;
-    let nextStart = new Date(drag.originStart.getTime());
-    let nextEnd = new Date(drag.originEnd.getTime());
-
-    if (drag.dragType === 'move') {
-      nextStart = new Date(drag.originStart.getTime() + timeDelta);
-      nextEnd = new Date(drag.originEnd.getTime() + timeDelta);
-    } else if (drag.dragType === 'resize-start') {
-      nextStart = new Date(Math.min(drag.originStart.getTime() + timeDelta, drag.originEnd.getTime() - 24 * 60 * 60 * 1000));
-    } else if (drag.dragType === 'resize-end') {
-      nextEnd = new Date(Math.max(drag.originEnd.getTime() + timeDelta, drag.originStart.getTime() + 24 * 60 * 60 * 1000));
+    
+    // Update dates based on drag type
+    let newStartDate = new Date(dragState.startDate);
+    let newEndDate = new Date(dragState.endDate);
+    
+    if (dragState.dragType === 'move') {
+      newStartDate = new Date(dragState.startDate.getTime() + timeDelta);
+      newEndDate = new Date(dragState.endDate.getTime() + timeDelta);
+    } else if (dragState.dragType === 'resize-start') {
+      newStartDate = new Date(Math.min(dragState.startDate.getTime() + timeDelta, dragState.endDate.getTime() - 24 * 60 * 60 * 1000));
+    } else if (dragState.dragType === 'resize-end') {
+      newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
     }
 
-    nextStart.setHours(0, 0, 0, 0);
-    nextEnd.setHours(0, 0, 0, 0);
-
+    // Determine hovered theme group for potential reassignment
+    const hovered = groupPositionsRef.current.find(g => clientY >= g.top && clientY <= g.bottom)?.themeId ?? null;
+    if (hoveredThemeRef.current !== hovered) {
+      const prev = groupPositionsRef.current.find(g => g.themeId === hoveredThemeRef.current);
+      if (prev) prev.el.classList.remove('theme-group--target');
+      hoveredThemeRef.current = hovered;
+      const next = groupPositionsRef.current.find(g => g.themeId === hovered);
+      if (next) next.el.classList.add('theme-group--target');
+    }
+    
+    // Snap to whole-day boundaries; if Shift held, snap start to Monday of its week and end to following Monday
+    newStartDate.setHours(0,0,0,0);
+    newEndDate.setHours(0,0,0,0);
     if (isShiftDownRef.current) {
-      const snappedStart = snapToWeek(nextStart);
-      const snappedEnd = snapToWeek(nextEnd);
-      if (snappedEnd.getTime() <= snappedStart.getTime()) {
-        snappedEnd.setDate(snappedStart.getDate() + 7);
-      }
-      nextStart = snappedStart;
-      nextEnd = snappedEnd;
+      const s = snapToWeek(newStartDate);
+      const e2 = snapToWeek(newEndDate);
+      // Ensure at least 7 days
+      if (e2.getTime() <= s.getTime()) e2.setDate(s.getDate() + 7);
+      newStartDate = s; newEndDate = e2;
     }
 
-    return { nextStart, nextEnd };
-  }, [zoomLevel]);
-
-  const updateDragVisual = useCallback((goalId: string, nextStart: Date, nextEnd: Date) => {
-    const goalElement = document.querySelector(`[data-goal-id="${goalId}"]`) as HTMLElement | null;
-    const startPos = getDatePosition(nextStart);
-    const endPos = getDatePosition(nextEnd);
-    const tooltipText = `${nextStart.toLocaleDateString()} → ${nextEnd.toLocaleDateString()}`;
+    // Update the visual representation
+    const goalElement = document.querySelector(`[data-goal-id="${dragState.itemId}"]`) as HTMLElement;
     if (goalElement) {
+      const startPos = getDatePosition(newStartDate);
+      const endPos = getDatePosition(newEndDate);
       goalElement.style.left = `${startPos}px`;
-      goalElement.style.width = `${Math.max(4, endPos - startPos)}px`;
+      goalElement.style.width = `${endPos - startPos}px`;
+      // Update tooltip via ref to avoid React re-render on each move
+      const tooltip = dragTooltipRef.current;
+      if (tooltip) {
+        tooltip.style.left = `${250 + startPos}px`;
+        tooltip.textContent = `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}`;
+      } else {
+        setDragOverlay({ left: 250 + startPos, width: endPos - startPos, text: `${newStartDate.toLocaleDateString()} → ${newEndDate.toLocaleDateString()}` });
+      }
     }
-    const tooltip = dragTooltipRef.current;
-    if (tooltip) {
-      tooltip.style.left = `${250 + startPos}px`;
-      tooltip.textContent = tooltipText;
-    }
-    setDragOverlay({ left: 250 + startPos, width: endPos - startPos, text: tooltipText });
-  }, [getDatePosition]);
 
-  const resetDragVisual = useCallback(() => {
+    // Throttled logging to avoid spam during drag
+    const now = performance.now();
+    if (now - dragLogRef.current.lastMoveLogAt > 120) {
+      dragLogRef.current.lastMoveLogAt = now;
+      logger.debug('gantt', 'Drag move', {
+        id: dragState.itemId,
+        dragType: dragState.dragType,
+        deltaX,
+        newStart: newStartDate.toISOString(),
+        newEnd: newEndDate.toISOString(),
+      });
+    }
+  }, [dragState, zoomLevel]);
+
+  // Handle drag end
+  const handleDragEnd = useCallback(async (e: MouseEvent | TouchEvent) => {
+    if (!dragState.isDragging || !dragState.itemId) return;
+    
+    const clientX = 'touches' in e ? (e as TouchEvent).changedTouches[0].clientX : (e as MouseEvent).clientX;
+    const clientY = 'touches' in e ? (e as TouchEvent).changedTouches[0].clientY : (e as MouseEvent).clientY;
+    const deltaX = clientX - dragState.startX;
+    const msPerPixel = getMillisecondsPerPixel(zoomLevel);
+    const timeDelta = deltaX * msPerPixel;
+    
+    let newStartDate = new Date(dragState.startDate);
+    let newEndDate = new Date(dragState.endDate);
+    
+    if (dragState.dragType === 'move') {
+      newStartDate = new Date(dragState.startDate.getTime() + timeDelta);
+      newEndDate = new Date(dragState.endDate.getTime() + timeDelta);
+    } else if (dragState.dragType === 'resize-start') {
+      newStartDate = new Date(Math.min(dragState.startDate.getTime() + timeDelta, dragState.endDate.getTime() - 24 * 60 * 60 * 1000));
+    } else if (dragState.dragType === 'resize-end') {
+      newEndDate = new Date(Math.max(dragState.endDate.getTime() + timeDelta, dragState.startDate.getTime() + 24 * 60 * 60 * 1000));
+    }
+
+    // Snap to whole-day boundaries; if Shift held, snap to week blocks
+    newStartDate.setHours(0,0,0,0);
+    newEndDate.setHours(0,0,0,0);
+    if (isShiftDownRef.current) {
+      const s = snapToWeek(newStartDate);
+      const e2 = snapToWeek(newEndDate);
+      if (e2.getTime() <= s.getTime()) e2.setDate(s.getDate() + 7);
+      newStartDate = s; newEndDate = e2;
+    }
+
+    // Clear drag overlay
     setDragOverlay(null);
     const tooltip = dragTooltipRef.current;
     if (tooltip) {
       tooltip.style.left = `-9999px`;
-      tooltip.textContent = '';
-    }
-    try {
-      document.body.classList.remove('rv2-dragging');
-      delete (document.body as any).dataset.rv2Dragging;
-    } catch {}
-  }, []);
-
-  const extractPointer = (evt?: DragStartEvent | DragMoveEvent | DragEndEvent | DragCancelEvent) => {
-    if (!evt) return { x: undefined as number | undefined, y: undefined as number | undefined };
-    const source: any = (evt as any).activatorEvent;
-    if (!source) return { x: undefined, y: undefined };
-    if (typeof source.clientX === 'number' && typeof source.clientY === 'number') {
-      return { x: source.clientX as number, y: source.clientY as number };
-    }
-    if (source.touches && source.touches[0]) {
-      return { x: source.touches[0].clientX as number, y: source.touches[0].clientY as number };
-    }
-    if (source.changedTouches && source.changedTouches[0]) {
-      return { x: source.changedTouches[0].clientX as number, y: source.changedTouches[0].clientY as number };
-    }
-    return { x: undefined, y: undefined };
-  };
-
-  const handleRoadmapDragStart = useCallback((event: DragStartEvent) => {
-    const data = event.active.data.current as { kind?: string; goalId: string; dragType: RoadmapDragType; start: number; end: number; themeId: number } | undefined;
-    if (!data || data.kind !== 'roadmap-card') return;
-
-    const originStart = new Date(data.start);
-    const originEnd = new Date(data.end);
-    setActiveDrag({ goalId: data.goalId, dragType: data.dragType, originStart, originEnd, themeId: data.themeId });
-    const pointer = extractPointer(event);
-    dragLogRef.current = {
-      lastMoveLogAt: performance.now(),
-      lastDeltaX: 0,
-      lastPointerX: pointer.x ?? Number.NaN,
-      lastPointerY: pointer.y ?? Number.NaN,
-    };
-    logger.debug('gantt', 'Drag start', {
-      id: data.goalId,
-      dragType: data.dragType,
-      start: originStart,
-      end: originEnd,
-      pointerX: pointer.x,
-      pointerY: pointer.y,
-    });
-    logger.perfMark('gantt-drag-start');
-    try {
-      document.body.classList.add('rv2-dragging');
-      (document.body as any).dataset.rv2Dragging = '1';
-    } catch {}
-    updateDragVisual(data.goalId, originStart, originEnd);
-  }, [updateDragVisual]);
-
-  const handleRoadmapDragMove = useCallback((event: DragMoveEvent) => {
-    if (!activeDrag) return;
-    const { nextStart, nextEnd } = computeDragDates(activeDrag, event.delta.x);
-    updateDragVisual(activeDrag.goalId, nextStart, nextEnd);
-
-    const pointer = extractPointer(event);
-    const now = performance.now();
-    const deltaChange = event.delta.x - dragLogRef.current.lastDeltaX;
-    const pointerDeltaX =
-      pointer.x !== undefined && !Number.isNaN(dragLogRef.current.lastPointerX)
-        ? pointer.x - dragLogRef.current.lastPointerX
-        : undefined;
-    const pointerDeltaY =
-      pointer.y !== undefined && !Number.isNaN(dragLogRef.current.lastPointerY)
-        ? pointer.y - dragLogRef.current.lastPointerY
-        : undefined;
-    const msPerPixel = getMillisecondsPerPixel(zoomLevel);
-    const shouldLog =
-      now - dragLogRef.current.lastMoveLogAt > 80 ||
-      Math.abs(deltaChange) > 6 ||
-      (pointerDeltaX !== undefined && Math.abs(pointerDeltaX) > 10);
-
-    if (shouldLog) {
-      dragLogRef.current.lastMoveLogAt = now;
-      logger.debug('gantt', 'Drag sample', {
-        id: activeDrag.goalId,
-        dragType: activeDrag.dragType,
-        deltaX: event.delta.x,
-        deltaChange,
-        pointerX: pointer.x,
-        pointerY: pointer.y,
-        pointerDeltaX,
-        pointerDeltaY,
-        msPerPixel,
-        projectedStart: nextStart.toISOString(),
-        projectedEnd: nextEnd.toISOString(),
-      });
     }
 
-    dragLogRef.current.lastDeltaX = event.delta.x;
-    dragLogRef.current.lastPointerX = pointer.x ?? dragLogRef.current.lastPointerX;
-    dragLogRef.current.lastPointerY = pointer.y ?? dragLogRef.current.lastPointerY;
-  }, [activeDrag, computeDragDates, updateDragVisual, zoomLevel]);
-
-  const handleRoadmapDragEnd = useCallback(async (event: DragEndEvent) => {
-    if (!activeDrag) return;
-
-    const { nextStart, nextEnd } = computeDragDates(activeDrag, event.delta.x);
-
-    const pointer = extractPointer(event);
     logger.debug('gantt', 'Drag end', {
-      id: activeDrag.goalId,
-      dragType: activeDrag.dragType,
-      deltaX: event.delta.x,
-      newStart: nextStart.toISOString(),
-      newEnd: nextEnd.toISOString(),
-      pointerX: pointer.x,
-      pointerY: pointer.y,
+      id: dragState.itemId,
+      dragType: dragState.dragType,
+      deltaX,
+      newStart: newStartDate.toISOString(),
+      newEnd: newEndDate.toISOString(),
     });
     logger.perfMark('gantt-drag-end');
     logger.perfMeasure('gantt-drag', 'gantt-drag-start', 'gantt-drag-end');
+    // Determine drop theme and clear highlight
+    const dropThemeId = groupPositionsRef.current.find(g => clientY >= g.top && clientY <= g.bottom)?.themeId ?? null;
+    groupPositionsRef.current.forEach(g => g.el.classList.remove('theme-group--target'));
 
-    resetDragVisual();
-
-    const goal = goals.find(g => g.id === activeDrag.goalId);
-    const overData = event.over?.data.current as { kind?: string; themeId?: number } | undefined;
-    const dropThemeId = overData?.kind === 'lane' ? overData.themeId ?? null : null;
-
+    // Check for impacted stories/tasks in current sprints
+    const goal = goals.find(g => g.id === dragState.itemId);
     if (goal) {
-      const impacted = checkImpactedItems(goal.id, nextStart, nextEnd);
+      const impacted = checkImpactedItems(goal.id, newStartDate, newEndDate);
+      
       if (impacted.length > 0) {
         logger.warn('gantt', 'Drag impact detected', { goalId: goal.id, impacted: impacted.length });
         setImpactedItems(impacted);
-        setPendingGoalUpdate({ goalId: goal.id, startDate: nextStart, endDate: nextEnd });
+        setPendingGoalUpdate({ goalId: goal.id, startDate: newStartDate, endDate: newEndDate });
         setShowImpactModal(true);
       } else {
-        await updateGoalDates(goal.id, nextStart, nextEnd);
+        await updateGoalDates(goal.id, newStartDate, newEndDate);
       }
 
+      // Theme reassignment if dropped on another theme group
       if (dropThemeId && dropThemeId !== goal.theme) {
         try {
           await updateDoc(doc(db, 'goals', goal.id), { theme: dropThemeId, updatedAt: Date.now() });
@@ -773,28 +785,22 @@ const EnhancedGanttChart: React.FC = () => {
       }
     }
 
-    setActiveDrag(null);
-  }, [activeDrag, computeDragDates, currentUser, goals, resetDragVisual, updateGoalDates]);
-
-  const handleRoadmapDragCancel = useCallback((event: DragCancelEvent | undefined) => {
-    if (!activeDrag) return;
-    const pointer = extractPointer(event);
-    logger.debug('gantt', 'Drag cancel', {
-      id: activeDrag.goalId,
-      dragType: activeDrag.dragType,
-      pointerX: pointer.x,
-      pointerY: pointer.y,
+    // Clean up
+    setDragState({
+      isDragging: false,
+      itemId: null,
+      dragType: 'move',
+      startX: 0,
+      startDate: new Date(),
+      endDate: new Date()
     });
-    const goalElement = document.querySelector(`[data-goal-id="${activeDrag.goalId}"]`) as HTMLElement | null;
-    if (goalElement) {
-      const startPos = getDatePosition(activeDrag.originStart);
-      const endPos = getDatePosition(activeDrag.originEnd);
-      goalElement.style.left = `${startPos}px`;
-      goalElement.style.width = `${Math.max(4, endPos - startPos)}px`;
-    }
-    resetDragVisual();
-    setActiveDrag(null);
-  }, [activeDrag, getDatePosition, resetDragVisual]);
+
+    document.removeEventListener('mousemove', handleDragMove);
+    document.removeEventListener('mouseup', handleDragEnd);
+    document.removeEventListener('touchmove', handleDragMove);
+    document.removeEventListener('touchend', handleDragEnd);
+    try { document.body.classList.remove('rv2-dragging'); delete (document.body as any).dataset.rv2Dragging; } catch {}
+  }, [dragState, goals, zoomLevel]);
 
   // Trigger AI story generation for a goal via Cloud Function
   const handleGenerateStories = useCallback(async (goal: GanttItem) => {
@@ -809,16 +815,16 @@ const EnhancedGanttChart: React.FC = () => {
   }, [currentUser]);
 
   // Helper functions
-  function getMillisecondsPerPixel(zoom: string): number {
+  const getMillisecondsPerPixel = (zoom: string): number => {
     // Use store domain for precise conversion
     const start = useRoadmapStore.getState().start;
     const end = useRoadmapStore.getState().end;
     const duration = end.getTime() - start.getTime();
     const width = useRoadmapStore.getState().width || canvasRef.current?.scrollWidth || 1000;
     return duration / Math.max(1, Number(width));
-  }
+  };
 
-  function getDatePosition(date: Date): number {
+  const getDatePosition = (date: Date): number => {
     try {
       return scale(date);
     } catch {
@@ -827,7 +833,7 @@ const EnhancedGanttChart: React.FC = () => {
       const canvasWidth = canvasRef.current?.scrollWidth || 1000;
       return (itemPosition / totalDuration) * canvasWidth;
     }
-  }
+  };
 
   const snapToWeek = (d: Date): Date => {
     // Snap to Monday of that week when Shift is held
@@ -879,7 +885,7 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Simple undo buffer for last timeline change
   const lastChangeRef = useRef<{ goalId: string; prevStart: number; prevEnd: number } | null>(null);
-  async function updateGoalDates(goalId: string, newStart: Date, newEnd: Date) {
+  const updateGoalDates = async (goalId: string, newStart: Date, newEnd: Date) => {
     logger.info('gantt', 'Updating goal dates', { goalId, newStart: newStart.toISOString(), newEnd: newEnd.toISOString() });
     const prev = goals.find(g => g.id === goalId);
     if (prev) {
@@ -902,7 +908,7 @@ const EnhancedGanttChart: React.FC = () => {
       throw err;
     }
     setLiveAnnouncement(`Updated ${goals.find(g=>g.id===goalId)?.title || 'goal'} to ${newStart.toLocaleDateString()} – ${newEnd.toLocaleDateString()}`);
-  }
+  };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1159,38 +1165,31 @@ const EnhancedGanttChart: React.FC = () => {
     const noopWheel: React.WheelEventHandler<HTMLDivElement> = () => {};
     return (
       <>
-        <DndContext
-          sensors={sensors}
-          onDragStart={handleRoadmapDragStart}
-          onDragMove={handleRoadmapDragMove}
-          onDragEnd={handleRoadmapDragEnd}
-          onDragCancel={handleRoadmapDragCancel}
-        >
-          <RoadmapV2
-            goals={goals}
-            sprints={sprints}
-            stories={stories}
-            storiesByGoal={storiesByGoal}
-            doneStoriesByGoal={doneStoriesByGoal}
-            onItemClick={handleItemClick as any}
-            updateGoalDates={updateGoalDates}
-            handleGenerateStories={handleGenerateStories as any}
-            setSelectedGoalId={setSelectedGoalId}
-            setActivityGoalId={setActivityGoalId as any}
-            setNoteGoalId={setNoteGoalId as any}
-            setNoteDraft={setNoteDraft}
-            setEditGoal={setEditGoal}
-            onDeleteGoal={handleDeleteGoal}
-            openGlobalActivity={(goal) => showSidebar(goal as any, 'goal')}
-            onWheel={noopWheel}
-            onMouseDown={onContainerMouseDown}
-            onTouchStart={onContainerTouchStart}
-            onTouchMove={onContainerTouchMove}
-            onTouchEnd={onContainerTouchEnd}
-            onSwitchToRoadmap={() => setViewMode('roadmap')}
-            selectedSprintId={selectedSprintId || ''}
-          />
-        </DndContext>
+        <RoadmapV2
+          goals={goals}
+          sprints={sprints}
+          stories={stories}
+          storiesByGoal={storiesByGoal}
+          doneStoriesByGoal={doneStoriesByGoal}
+          onDragStart={handleDragStart as any}
+          onItemClick={handleItemClick as any}
+          updateGoalDates={updateGoalDates}
+          handleGenerateStories={handleGenerateStories as any}
+          setSelectedGoalId={setSelectedGoalId}
+          setActivityGoalId={setActivityGoalId as any}
+          setNoteGoalId={setNoteGoalId as any}
+          setNoteDraft={setNoteDraft}
+          setEditGoal={setEditGoal}
+          onDeleteGoal={handleDeleteGoal}
+          openGlobalActivity={(goal) => showSidebar(goal as any, 'goal')}
+          onWheel={noopWheel}
+          onMouseDown={onContainerMouseDown}
+          onTouchStart={onContainerTouchStart}
+          onTouchMove={onContainerTouchMove}
+          onTouchEnd={onContainerTouchEnd}
+          onSwitchToRoadmap={() => setViewMode('roadmap')}
+          selectedSprintId={selectedSprintId || ''}
+        />
 
         {/* Selected Goal Stories Panel */}
         {selectedGoalId && (
@@ -1214,6 +1213,58 @@ const EnhancedGanttChart: React.FC = () => {
               />
             </Card.Body>
           </Card>
+        )}
+
+        {/* Activity Stream Sidebar */}
+        {showActivityStream && (
+          <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 shadow-lg border-start" style={{ width: '400px', zIndex: 2000, backgroundColor: 'var(--panel)', borderLeft: '1px solid var(--line)' }}>
+          {/* Increase z-index to stay above dropdowns */}
+            <div className="p-3 border-bottom d-flex justify-content-between align-items-center">
+              <h5 className="mb-0 d-flex align-items-center">
+                <Activity className="me-2" size={20} />
+                Activity Stream
+              </h5>
+              <Button variant="outline-secondary" size="sm" onClick={() => setShowActivityStream(false)}>×</Button>
+            </div>
+            
+            <div className="p-3" style={{ height: 'calc(100% - 70px)', overflow: 'auto' }}>
+              {activityStreamItems.length === 0 ? (
+                <p className="text-muted">Click on any goal to see linked items</p>
+              ) : (
+                <div className="space-y-3">
+                  {activityStreamItems.map(item => {
+                    const theme = themes.find(t => t.id === item.theme);
+                    return (
+                      <Card key={item.id} className="border">
+                        <Card.Body className="p-3">
+                          <div className="d-flex align-items-start">
+                            {theme && (
+                              <div
+                                className="me-2 mt-1"
+                                style={{
+                                  width: '12px',
+                                  height: '12px',
+                                  backgroundColor: theme.color,
+                                  borderRadius: '2px'
+                                }}
+                              />
+                            )}
+                            <div className="flex-grow-1">
+                              <h6 className="mb-1">{item.title}</h6>
+                              {item.ref && <small className="text-muted">{item.ref}</small>}
+                              <div className="mt-2">
+                                {/* Additional details can be shown here */}
+                              </div>
+                            </div>
+                          </div>
+                        </Card.Body>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {/* Activity Modal */}
@@ -1326,8 +1377,8 @@ const EnhancedGanttChart: React.FC = () => {
                 <Button
                   variant="outline-secondary"
                   size="sm"
-                  onClick={openActivitySidebar}
-                  disabled={goals.length === 0}
+                  onClick={() => setShowActivityStream(true)}
+                  aria-expanded={showActivityStream}
                 >
                   <Activity size={16} className="me-1" />
                   Activity
@@ -1578,7 +1629,7 @@ const EnhancedGanttChart: React.FC = () => {
             getDatePosition={getDatePosition}
             storiesByGoal={storiesByGoal}
             doneStoriesByGoal={doneStoriesByGoal}
-            onDragStart={() => {}}
+            onDragStart={handleDragStart as any}
             onItemClick={handleItemClick as any}
             setSelectedGoalId={setSelectedGoalId}
             handleGenerateStories={handleGenerateStories as any}
@@ -1615,6 +1666,65 @@ const EnhancedGanttChart: React.FC = () => {
             />
           </Card.Body>
         </Card>
+      )}
+
+      {/* Activity Stream Sidebar */}
+      {showActivityStream && (
+        <div className="activity-stream-sidebar position-fixed end-0 top-0 h-100 shadow-lg border-start" style={{ width: '400px', zIndex: 1000, backgroundColor: 'var(--panel)', borderLeft: '1px solid var(--line)' }}>
+          <div className="p-3 border-bottom d-flex justify-content-between align-items-center">
+            <h5 className="mb-0 d-flex align-items-center">
+              <Activity className="me-2" size={20} />
+              Activity Stream
+            </h5>
+            <Button variant="outline-secondary" size="sm" onClick={() => setShowActivityStream(false)}>×</Button>
+          </div>
+          
+          <div className="p-3" style={{ height: 'calc(100% - 70px)', overflow: 'auto' }}>
+            {activityStreamItems.length === 0 ? (
+              <p className="text-muted">Click on any goal to see linked items</p>
+            ) : (
+              <div className="space-y-3">
+                {activityStreamItems.map(item => {
+                  const theme = themes.find(t => t.id === item.theme);
+                  return (
+                    <Card key={item.id} className="border">
+                      <Card.Body className="p-3">
+                        <div className="d-flex align-items-start">
+                          {theme && (
+                            <div
+                              className="me-2 mt-1"
+                              style={{
+                                width: '12px',
+                                height: '12px',
+                                backgroundColor: theme.color,
+                                borderRadius: '2px'
+                              }}
+                            />
+                          )}
+                          <div className="flex-grow-1">
+                            <h6 className="mb-1">{item.title}</h6>
+                            {item.ref && <small className="text-muted">{item.ref}</small>}
+                            <div className="mt-2">
+                              <Badge bg="secondary" className="me-2">{item.type}</Badge>
+                              <Badge bg={item.status === 2 ? 'success' : 'warning'}>
+                                {item.status === 2 ? 'Complete' : 'In Progress'}
+                              </Badge>
+                            </div>
+                            {item.linkedTo.length > 0 && (
+                              <small className="text-muted mt-1 d-block">
+                                Linked to {item.linkedTo.length} item(s)
+                              </small>
+                            )}
+                          </div>
+                        </div>
+                      </Card.Body>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Impact Modal */}
