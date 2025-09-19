@@ -173,6 +173,7 @@ const EnhancedGanttChart: React.FC = () => {
   const setRange = useRoadmapStore(s => s.setRange);
   const setWidth = useRoadmapStore(s => s.setWidth);
   const scale = useTimelineScale();
+  const domain = useRoadmapStore(s => ({ start: s.start, end: s.end }));
   useEffect(() => { setRange(timeRange.start, timeRange.end); }, [timeRange.start, timeRange.end]);
   useEffect(() => {
     const updateWidth = () => {
@@ -828,6 +829,38 @@ const EnhancedGanttChart: React.FC = () => {
     }
   }
 
+  // Edge-extension: expand time range when nearing scroll edges for near-infinite navigation
+  useEffect(() => {
+    const el = containerRef.current; if (!el) return;
+    let ticking = false;
+    const day = 24 * 60 * 60 * 1000;
+    const onScroll = () => {
+      if (ticking) return; ticking = true;
+      requestAnimationFrame(() => {
+        ticking = false;
+        const state = useRoadmapStore.getState();
+        const msPerPx = getMillisecondsPerPixel(zoomLevel);
+        const leftMs = state.start.getTime() + el.scrollLeft * msPerPx;
+        const rightMs = leftMs + el.clientWidth * msPerPx;
+        const span = state.end.getTime() - state.start.getTime();
+        const margin = Math.max(span * 0.1, 90 * day);
+        if (rightMs > state.end.getTime() - margin) {
+          const extra = Math.max(span * 0.5, 180 * day);
+          state.setRange(state.start, new Date(state.end.getTime() + extra));
+        } else if (leftMs < state.start.getTime() + margin) {
+          const extra = Math.max(span * 0.5, 180 * day);
+          const oldStart = state.start;
+          const ns = new Date(state.start.getTime() - extra);
+          state.setRange(ns, state.end);
+          // compensate scroll to maintain viewport after left extension
+          el.scrollLeft += (oldStart.getTime() - ns.getTime()) / msPerPx;
+        }
+      });
+    };
+    el.addEventListener('scroll', onScroll);
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [zoomLevel]);
+
   const snapToWeek = (d: Date): Date => {
     // Snap to Monday of that week when Shift is held
     const out = new Date(d);
@@ -1415,9 +1448,9 @@ const EnhancedGanttChart: React.FC = () => {
                       <Form.Select value={zoomLevel} onChange={(e) => { const z = e.target.value as any; setZoomLevel(z); useRoadmapStore.getState().setZoom(z); }} size="sm" style={{ maxWidth: 200 }}>
                         <option value="week">Weeks</option>
                         <option value="month">Months</option>
-                        <option value="quarter">Quarter</option>
-                        <option value="half">Half Year</option>
-                        <option value="year">Year</option>
+                        <option value="quarter">Quarters</option>
+                        <option value="half">Half-year</option>
+                        <option value="year">Years</option>
                       </Form.Select>
                       <Button size="sm" variant="outline-secondary" onClick={() => { const i = zoomLevels.indexOf(zoomLevel); const next = Math.max(0, i - 1); setZoomLevel(zoomLevels[next]); useRoadmapStore.getState().setZoom(zoomLevels[next]); }} title="Zoom In"><ZoomIn size={14} /></Button>
                       <Button size="sm" variant="outline-secondary" onClick={() => { const i = zoomLevels.indexOf(zoomLevel); const next = Math.min(zoomLevels.length - 1, i + 1); setZoomLevel(zoomLevels[next]); useRoadmapStore.getState().setZoom(zoomLevels[next]); }} title="Zoom Out"><ZoomOut size={14} /></Button>
@@ -1467,12 +1500,12 @@ const EnhancedGanttChart: React.FC = () => {
         {/* Live region for a11y announcements */}
         <div aria-live="polite" className="visually-hidden">{liveAnnouncement}</div>
         {/* Timeline Header */}
-        <div className="timeline-header sticky-top" style={{ zIndex: 10, backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
-          <div className="d-flex">
-            <div style={{ width: '250px', minWidth: '250px' }} className="bg-light border-end p-2">
+            <div className="timeline-header sticky-top" style={{ zIndex: 10, backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
+              <div className="d-flex">
+            <div style={{ position: 'sticky', left: 0, zIndex: 6, width: '250px', minWidth: '250px', background: 'var(--card)', borderRight: '1px solid var(--line)' }} className="p-2">
               <strong>Goals & Themes</strong>
             </div>
-            <div ref={headerMonthsRef} className="timeline-months d-flex position-relative" style={{ minWidth: '200%', height: 60 }}>
+            <div ref={headerMonthsRef} className="timeline-months d-flex position-relative" style={{ width: 260 + getDatePosition(new Date(domain.end)) + 800, height: 60 }}>
               {/* Sprint shading under header months */}
               <div className="position-absolute" style={{ left: 0, right: 0, top: 0, bottom: 0, pointerEvents: 'none', zIndex: 0 }}>
                 {sprints.map(sprint => (
@@ -1491,23 +1524,56 @@ const EnhancedGanttChart: React.FC = () => {
                   />
                 ))}
               </div>
-              {/* Months band */}
+              {/* Adaptive band: Months / Quarters / Years */}
               <div className="position-absolute" style={{ left: 0, right: 0, top: 0, height: 24, zIndex: 1, background: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
                 {(() => {
                   const items: any[] = [];
                   const start = useRoadmapStore.getState().start;
                   const end = useRoadmapStore.getState().end;
-                  const cur = new Date(start.getFullYear(), start.getMonth(), 1);
-                  while (cur <= end) {
-                    const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
-                    const left = getDatePosition(cur);
-                    const width = getDatePosition(next) - getDatePosition(cur);
-                    items.push(
-                      <div key={`m-${cur.getFullYear()}-${cur.getMonth()}`} className="position-absolute text-center" style={{ left, width, top: 0, bottom: 0, borderRight: '1px solid var(--line)', color: 'var(--bs-body-color)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        {cur.toLocaleDateString('en-US', { month: 'long' })} {cur.getMonth() === 0 ? cur.getFullYear() : ''}
-                      </div>
-                    );
-                    cur.setMonth(cur.getMonth() + 1);
+                  const monthsSpan = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+                  if (zoomLevel === 'year' || monthsSpan > 60) {
+                    // Years
+                    const cur = new Date(start.getFullYear(), 0, 1);
+                    while (cur <= end) {
+                      const next = new Date(cur.getFullYear() + 1, 0, 1);
+                      const left = getDatePosition(cur);
+                      const width = getDatePosition(next) - getDatePosition(cur);
+                      items.push(
+                        <div key={`Y-${cur.getFullYear()}`} className="position-absolute text-center" style={{ left, width, top: 0, bottom: 0, borderRight: '1px solid var(--line)', color: 'var(--bs-body-color)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {cur.getFullYear()}
+                        </div>
+                      );
+                      cur.setFullYear(cur.getFullYear() + 1);
+                    }
+                  } else if (zoomLevel === 'quarter' || monthsSpan > 18) {
+                    // Quarters
+                    const cur = new Date(start.getFullYear(), Math.floor(start.getMonth() / 3) * 3, 1);
+                    while (cur <= end) {
+                      const q = Math.floor(cur.getMonth() / 3) + 1;
+                      const next = new Date(cur.getFullYear(), cur.getMonth() + 3, 1);
+                      const left = getDatePosition(cur);
+                      const width = getDatePosition(next) - getDatePosition(cur);
+                      items.push(
+                        <div key={`Q${q}-${cur.getFullYear()}`} className="position-absolute text-center" style={{ left, width, top: 0, bottom: 0, borderRight: '1px solid var(--line)', color: 'var(--bs-body-color)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {`Q${q} ${cur.getFullYear()}`}
+                        </div>
+                      );
+                      cur.setMonth(cur.getMonth() + 3);
+                    }
+                  } else {
+                    // Months
+                    const cur = new Date(start.getFullYear(), start.getMonth(), 1);
+                    while (cur <= end) {
+                      const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+                      const left = getDatePosition(cur);
+                      const width = getDatePosition(next) - getDatePosition(cur);
+                      items.push(
+                        <div key={`m-${cur.getFullYear()}-${cur.getMonth()}`} className="position-absolute text-center" style={{ left, width, top: 0, bottom: 0, borderRight: '1px solid var(--line)', color: 'var(--bs-body-color)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {cur.toLocaleDateString('en-US', { month: 'long' })} {cur.getMonth() === 0 ? cur.getFullYear() : ''}
+                        </div>
+                      );
+                      cur.setMonth(cur.getMonth() + 1);
+                    }
                   }
                   return items;
                 })()}
@@ -1532,6 +1598,8 @@ const EnhancedGanttChart: React.FC = () => {
 
         {/* Goals Rows */}
         <div ref={canvasRef} className="goals-canvas" style={{ position: 'relative' }}>
+          {/* Width probe to ensure scrollable space tracks current domain end */}
+          <div style={{ position: 'absolute', left: `${getDatePosition(new Date(domain.end)) + 1000}px`, top: 0, width: 1, height: 1, pointerEvents: 'none' }} />
           {/* Sprint shading behind canvas rows */}
           <div className="position-absolute" style={{ left: 0, right: 0, top: 0, bottom: 0, pointerEvents: 'none', zIndex: 1 }}>
             {sprints.map(sprint => (
@@ -1565,7 +1633,7 @@ const EnhancedGanttChart: React.FC = () => {
             <div key={groupKey === null ? 'all' : `theme-${groupKey}`} data-theme-group={groupKey ?? ''} className="theme-group">
               {groupByTheme && (
                 <div className="d-flex align-items-center" style={{ height: 32 }}>
-                  <div style={{ width: 250, minWidth: 250, color: getThemeById(migrateThemeValue(groupKey as number)).color }} className="px-2 fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
+                  <div style={{ position: 'sticky', left: 0, zIndex: 5, background: 'var(--card)', width: 250, minWidth: 250, color: getThemeById(migrateThemeValue(groupKey as number)).color, borderRight: '1px solid var(--line)' }} className="px-2 fw-semibold">{themes.find(t => t.id === groupKey)?.name}</div>
                   <div className="flex-grow-1" style={{ borderBottom: '1px solid var(--line)' }} />
                 </div>
               )}

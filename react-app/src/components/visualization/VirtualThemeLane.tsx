@@ -73,7 +73,7 @@ const VirtualThemeLane: React.FC<Props> = ({
     const bg2 = hexToRgba(themeColor, 0.08);
     return (
       <div style={{ ...style, background: alt ? 'rgba(0,0,0,0.03)' : 'transparent' }} className="goal-row d-flex align-items-center border-bottom">
-        <div className="goal-label p-2" style={{ width: '250px', minWidth: '250px' }}>
+        <div className="goal-label p-2" style={{ position: 'sticky', left: 0, zIndex: 4, background: 'var(--card)', width: '250px', minWidth: '250px', borderRight: '1px solid var(--line)' }}>
           <div className="d-flex align-items-center">
             <div className="theme-indicator me-2" style={{ width: 12, height: 12, backgroundColor: themeColor, borderRadius: 2 }} />
             <span className="fw-medium">{goal.title}</span>
