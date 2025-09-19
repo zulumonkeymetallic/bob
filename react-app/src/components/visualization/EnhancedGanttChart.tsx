@@ -43,6 +43,7 @@ import { useRoadmapStore, useTimelineScale } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
 import RoadmapV2 from './RoadmapV2';
+import { useLocation } from 'react-router-dom';
 import { useSidebar } from '../../contexts/SidebarContext';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
 import {
@@ -1195,8 +1196,13 @@ const EnhancedGanttChart: React.FC = () => {
     );
   }
 
-  // Feature flag to switch to RoadmapV2 timeline implementation
-  const USE_ROADMAP_V2 = true;
+  // Preview channel: enable V2 only for preview route or query (?preview=v2)
+  const location = useLocation();
+  const USE_ROADMAP_V2 = useMemo(() => {
+    const q = new URLSearchParams(location.search);
+    if (q.get('preview') === 'v2') return true;
+    return location.pathname.includes('/preview/roadmap-v2');
+  }, [location.pathname, location.search]);
 
   if (USE_ROADMAP_V2) {
     const noopWheel: React.WheelEventHandler<HTMLDivElement> = () => {};

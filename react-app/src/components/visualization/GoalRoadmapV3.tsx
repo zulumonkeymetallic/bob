@@ -3,13 +3,14 @@ import { Button, ButtonGroup, Modal, Form, Badge } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
+import { useSidebar } from '../../contexts/SidebarContext';
 import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home } from 'lucide-react';
+import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2 } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
@@ -25,8 +26,13 @@ const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
   const { selectedSprintId } = useSprint();
+  const { showSidebar } = useSidebar();
 
   const [zoom, setZoom] = useState<Zoom>('quarters');
+  const [yearSpan, setYearSpan] = useState<1 | 3 | 5>(3);
+  // Optional custom range (e.g., Fit All). When set, overrides preset ranges
+  const [customRange, setCustomRange] = useState<{ start: Date; end: Date } | null>(null);
+
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,6 +60,12 @@ const GoalRoadmapV3: React.FC = () => {
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   const timeRange = useMemo(() => {
+    if (customRange) {
+      const start = new Date(customRange.start);
+      const end = new Date(customRange.end);
+      start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+      return { start, end };
+    }
     const today = new Date();
     today.setHours(0,0,0,0);
     const startOfWeek = (d: Date) => { const c=new Date(d); const day=(c.getDay()+6)%7; c.setDate(c.getDate()-day); c.setHours(0,0,0,0); return c; };
@@ -71,12 +83,17 @@ const GoalRoadmapV3: React.FC = () => {
       const sq = startOfQuarter(today); sq.setMonth(sq.getMonth() - 3*6); start = sq;
       end = new Date(sq); end.setMonth(sq.getMonth() + 3*12); end.setDate(end.getDate() - 1);
     } else {
-      const sy = startOfYear(today); sy.setFullYear(sy.getFullYear() - 3); start = sy;
-      end = new Date(sy.getFullYear() + 6, 0, 1); end.setDate(end.getDate() - 1);
+      // Years view supports variable spans: 1y, 3y, 5y
+      const sy = startOfYear(today);
+      const offset = Math.floor(yearSpan / 2);
+      sy.setFullYear(sy.getFullYear() - offset);
+      start = sy;
+      end = new Date(sy.getFullYear() + yearSpan, 0, 1);
+      end.setDate(end.getDate() - 1);
     }
     start.setHours(0,0,0,0); end.setHours(0,0,0,0);
     return { start, end };
-  }, [zoom]);
+  }, [zoom, yearSpan, customRange]);
 
   const pxPerDay = useMemo(() => {
     switch (zoom) {
@@ -102,6 +119,34 @@ const GoalRoadmapV3: React.FC = () => {
     });
     return () => unsub();
   }, [currentUser?.uid]);
+
+  // Auto-fit on first load when goals arrive
+  const didFitRef = useRef(false);
+  useEffect(() => {
+    if (didFitRef.current) return;
+    if (!goals || goals.length === 0) return;
+    didFitRef.current = true;
+    // Compute fit-all domain across goals
+    const mins: number[] = [];
+    const maxs: number[] = [];
+    goals.forEach(g => {
+      const s = g.startDate ? new Date(g.startDate).getTime() : undefined;
+      const e = g.endDate ? new Date(g.endDate).getTime() : (g.targetDate ? new Date(g.targetDate).getTime() : undefined);
+      if (typeof s === 'number') mins.push(s);
+      if (typeof e === 'number') maxs.push(e);
+    });
+    if (mins.length && maxs.length) {
+      let min = Math.min(...mins);
+      let max = Math.max(...maxs);
+      if (min === max) max = min + 30*86400000; // ensure non-zero span
+      const pad = Math.round((max - min) * 0.08);
+      const start = new Date(min - pad);
+      const end = new Date(max + pad);
+      start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+      setCustomRange({ start, end });
+      setZoom('years'); // compact single-line style for fit scale
+    }
+  }, [goals]);
 
   // Subscribe to stories to compute counts per goal (lightweight aggregate)
   const goalsInSprint = useRef<Set<string>>(new Set());
@@ -372,7 +417,8 @@ const GoalRoadmapV3: React.FC = () => {
       left,
       width,
       background: `linear-gradient(180deg, ${bgStart}, ${bgEnd})`,
-      border: `2px solid ${themeColor}`
+      border: `2px solid ${themeColor}`,
+      color: themeDef.textColor || '#fff'
     } as React.CSSProperties;
   };
 
@@ -419,9 +465,65 @@ const GoalRoadmapV3: React.FC = () => {
     <div className={`grv3 ${zoomClass}`}>
       <div className="grv3-toolbar d-flex align-items-center justify-content-start p-2 gap-2">
         {/* Sticky zoom controls on the top-left */}
-        <Button size="sm" variant="outline-secondary" onClick={() => setZoom(p => p==='years'?'years':(p==='quarters'?'months':(p==='months'?'weeks':'weeks')))} aria-label="Zoom In"><ZoomIn size={14} /></Button>
-        <Button size="sm" variant="outline-secondary" onClick={() => setZoom(p => p==='weeks'?'weeks':(p==='months'?'quarters':(p==='quarters'?'years':'years')))} aria-label="Zoom Out"><ZoomOut size={14} /></Button>
-        <Button size="sm" variant="outline-secondary" onClick={() => { const el = containerRef.current; if (!el) return; const left = 260 + xFromDate(new Date()) - el.clientWidth * .35; el.scrollLeft = clamp(left, 0, el.scrollWidth); }} aria-label="Jump to Today"><Home size={14} /></Button>
+        <Button size="sm" variant="outline-secondary" onClick={() => {
+          // Step zoom in: 5y -> 3y -> 1y -> quarters -> months -> weeks
+          const presets: { z: Zoom; y?: 1|3|5 }[] = [
+            { z: 'weeks' }, { z: 'months' }, { z: 'quarters' }, { z: 'years', y: 1 }, { z: 'years', y: 3 }, { z: 'years', y: 5 }
+          ];
+          const idx = presets.findIndex(p => p.z === zoom && (p.z !== 'years' || p.y === yearSpan));
+          const next = presets[Math.max(0, idx - 1)];
+          setCustomRange(null);
+          setZoom(next.z);
+          if (next.z === 'years' && next.y) setYearSpan(next.y);
+        }} aria-label="Zoom In"><ZoomIn size={14} /></Button>
+        <Button size="sm" variant="outline-secondary" onClick={() => {
+          // Step zoom out: weeks -> months -> quarters -> 1y -> 3y -> 5y
+          const presets: { z: Zoom; y?: 1|3|5 }[] = [
+            { z: 'weeks' }, { z: 'months' }, { z: 'quarters' }, { z: 'years', y: 1 }, { z: 'years', y: 3 }, { z: 'years', y: 5 }
+          ];
+          const idx = presets.findIndex(p => p.z === zoom && (p.z !== 'years' || p.y === yearSpan));
+          const next = presets[Math.min(presets.length - 1, idx + 1)];
+          setCustomRange(null);
+          setZoom(next.z);
+          if (next.z === 'years' && next.y) setYearSpan(next.y);
+        }} aria-label="Zoom Out"><ZoomOut size={14} /></Button>
+        <ButtonGroup size="sm" className="ms-1">
+          <Button variant={zoom==='weeks' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('weeks'); }}>Week</Button>
+          <Button variant={zoom==='months' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('months'); }}>Month</Button>
+          <Button variant={zoom==='quarters' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('quarters'); }}>Quarter</Button>
+          <Button variant={zoom==='years' && yearSpan===1 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(1); }}>1y</Button>
+          <Button variant={zoom==='years' && yearSpan===3 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(3); }}>3y</Button>
+          <Button variant={zoom==='years' && yearSpan===5 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(5); }}>5y</Button>
+        </ButtonGroup>
+        <Button size="sm" variant={customRange ? 'primary' : 'outline-secondary'} onClick={() => {
+          // Fit all goals into view
+          const bounds: number[] = [];
+          goals.forEach(g => {
+            const s = g.startDate ? new Date(g.startDate).getTime() : undefined;
+            const e = g.endDate ? new Date(g.endDate).getTime() : (g.targetDate ? new Date(g.targetDate).getTime() : undefined);
+            if (typeof s === 'number') bounds.push(s);
+            if (typeof e === 'number') bounds.push(e);
+          });
+          if (bounds.length >= 2) {
+            let min = Math.min(...bounds);
+            let max = Math.max(...bounds);
+            if (min === max) max = min + 30*86400000;
+            const pad = Math.round((max - min) * 0.08);
+            const start = new Date(min - pad);
+            const end = new Date(max + pad);
+            start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+            setCustomRange({ start, end });
+            setZoom('years');
+          }
+        }} aria-label="Fit All"><Maximize2 size={14} /></Button>
+        <Button size="sm" variant="outline-secondary" onClick={() => { 
+          // Zoom to Month around today and filter to goals with stories in selected sprint
+          setCustomRange(null);
+          setZoom('months');
+          setFilterHasStories(true);
+          setFilterInSelectedSprint(true);
+          const el = containerRef.current; if (!el) return; const left = 260 + xFromDate(new Date()) - el.clientWidth * .35; el.scrollLeft = clamp(left, 0, el.scrollWidth);
+        }} aria-label="Today (Month)"><Home size={14} /></Button>
         <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
         <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
         <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />
@@ -513,12 +615,16 @@ const GoalRoadmapV3: React.FC = () => {
                   const barLeft = left; const barRight = left + width;
                   if (barRight < visLeft - buffer || barLeft > visRight + buffer) return null;
                   const lane = laneAssign.get(g.id) || 0;
+                  const total = storyCounts[g.id] || 0;
+                  const done = storyDoneCounts[g.id] || 0;
+                  const pct = total ? Math.round((done/total)*100) : 0;
                   return (
                   <div
                     key={g.id}
                     data-grv3-goal={g.id}
                     className="grv3-bar"
                     style={{ left, width, height: laneH, top: 12 + lane*(laneH + 8), zIndex: hoveredId===g.id ? 1000 : undefined, ...barStyle(g) }}
+                    title={`${g.title} — ${g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} → ${g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}${total ? ` • ${pct}%` : ''}`}
                     onPointerDown={(e) => startDrag(e, g, 'move')}
                     tabIndex={0}
                     onKeyDown={(e) => onKeyNudge(e, g)}
@@ -532,7 +638,7 @@ const GoalRoadmapV3: React.FC = () => {
                     <div className="grv3-actions">
                       <button className="grv3-action" title="Generate stories" aria-label="Generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}><Wand2 size={14} /></button>
                       {/* Activity stream icon (matches V2 intent) */}
-                      <button className="grv3-action" title="Activity stream" aria-label="Activity stream" onClick={(e) => { e.stopPropagation(); setActivityGoalId(g.id); }}><ListIcon size={14} /></button>
+                      <button className="grv3-action" title="Activity stream" aria-label="Activity stream" onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}><ListIcon size={14} /></button>
                       <button className="grv3-action" title="Add note" aria-label="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}><MessageSquareText size={14} /></button>
                       <button className="grv3-action" title="Edit goal" aria-label="Edit goal" onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}><Edit3 size={14} /></button>
                       <button className="grv3-action" title="Delete goal" aria-label="Delete goal" onClick={async (e) => { e.stopPropagation(); const ok = window.confirm(`Delete goal \"${g.title}\"? This cannot be undone.`); if (ok) { try { await deleteDoc(doc(db, 'goals', g.id)); } catch (err) { window.alert('Failed to delete goal: ' + (err as any)?.message); } } }}><Trash2 size={14} /></button>
