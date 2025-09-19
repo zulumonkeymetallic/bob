@@ -4,6 +4,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+  push:
+    branches:
+      - feat/v3-roadmap-theme-consistency
 
 jobs:
   build-and-preview:
