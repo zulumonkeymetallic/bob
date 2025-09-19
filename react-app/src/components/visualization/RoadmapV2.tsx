@@ -153,6 +153,8 @@ type ThemeLaneProps = {
   updateGoalDates: (goalId: string, start: Date, end: Date) => void;
   onAddNote: (goalId: string) => void;
   zoom: ZoomLevel;
+  viewStart: Date;
+  viewEnd: Date;
 };
 
 type PreparedLane = {
@@ -186,6 +188,8 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
   updateGoalDates,
   onAddNote,
   zoom,
+  viewStart,
+  viewEnd,
 }) => {
   const laneVisibleRows = collapsed ? 0 : Math.max(1, items.length);
   const laneHeight = collapsed ? 48 : laneVisibleRows * ROW_HEIGHT + 16;
@@ -193,6 +197,19 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
     id: `lane-${laneId}`,
     data: { kind: 'lane', themeId: dropThemeId },
   });
+
+  const overscanFactor = 1.5;
+  const viewWidth = viewEnd.getTime() - viewStart.getTime();
+  const overscan = viewWidth * overscanFactor;
+
+  const visibleItems = useMemo(() => items.filter(item => {
+    const itemStart = item.goal.startDate.getTime();
+    const itemEnd = item.goal.endDate.getTime();
+    const viewStartMs = viewStart.getTime();
+    const viewEndMs = viewEnd.getTime();
+    return itemEnd >= (viewStartMs - overscan) && itemStart <= (viewEndMs + overscan);
+  }), [items, viewStart, viewEnd, overscan]);
+
 
   return (
     <div
@@ -220,7 +237,7 @@ const ThemeLane: React.FC<ThemeLaneProps> = ({
       ))}
       {!collapsed && (
         <div className="rv2-lane-canvas" style={{ minHeight: laneHeight }}>
-          {items.map((item) => {
+          {visibleItems.map((item) => {
             const g = item.goal;
             return (
               <RoadmapGoalCard
@@ -857,6 +874,8 @@ const RoadmapV2: React.FC<Props> = ({
                     updateGoalDates={updateGoalDates}
                     onAddNote={handleOpenNote}
                     zoom={zoom}
+                    viewStart={start}
+                    viewEnd={end}
                   />
                 </div>
               ))}
