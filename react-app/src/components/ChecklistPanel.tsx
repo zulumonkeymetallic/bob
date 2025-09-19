@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Toast } from 'react-bootstrap';
 import { collection, getDocs, query, where, doc, updateDoc, setDoc } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,6 +26,7 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
   const { currentUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<ChecklistItem[]>([]);
+  const [toast, setToast] = useState<{ show: boolean; title: string; body: string; variant: 'success'|'danger'|'warning' }>({ show: false, title: '', body: '', variant: 'success' });
 
   const todayKey = useMemo(() => {
     const now = new Date();
@@ -102,16 +104,25 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
     const ensurePlan = async () => {
       if (!currentUser) return;
       const key = `planBuilt-${todayKey}-${currentUser.uid}`;
-      if (!localStorage.getItem(key)) {
+      if (localStorage.getItem(key)) return;
+      try {
+        // Force-refresh ID token to avoid unauthenticated preflight edge cases
+        try { await currentUser.getIdToken(true); } catch {}
+        const call = httpsCallable(functions, 'buildPlan');
+        await call({ day: `${new Date().toISOString().slice(0,10)}` });
+        setToast({ show: true, title: "Plan built", body: "Today's plan has been created.", variant: 'success' });
+        // Attempt to sync assignments to Google Calendar as well (best-effort)
         try {
-          const call = httpsCallable(functions, 'buildPlan');
-          await call({ day: `${new Date().toISOString().slice(0,10)}` });
-          // Attempt to sync assignments to Google Calendar as well (best-effort)
-          try {
-            const sync = httpsCallable(functions, 'syncPlanToGoogleCalendar');
-            await sync({ day: `${new Date().toISOString().slice(0,10)}` });
-          } catch {}
-        } catch {}
+          const sync = httpsCallable(functions, 'syncPlanToGoogleCalendar');
+          await sync({ day: `${new Date().toISOString().slice(0,10)}` });
+        } catch (e) {
+          console.warn('syncPlanToGoogleCalendar failed', e);
+        }
+      } catch (e) {
+        console.error('buildPlan failed', e);
+        const msg = (e as any)?.message || 'Unknown error';
+        setToast({ show: true, title: 'Planner failed', body: msg, variant: 'danger' });
+      } finally {
         localStorage.setItem(key, '1');
       }
     };
@@ -197,6 +208,22 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
           </div>
         </div>
       )}
+
+      {/* Toast notifications */}
+      <div style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 1060, minWidth: 280 }}>
+        <Toast
+          bg={toast.variant === 'success' ? 'success' : toast.variant === 'danger' ? 'danger' : 'warning'}
+          onClose={() => setToast(t => ({ ...t, show: false }))}
+          show={toast.show}
+          delay={4500}
+          autohide
+        >
+          <Toast.Header closeButton>
+            <strong className="me-auto">{toast.title}</strong>
+          </Toast.Header>
+          <Toast.Body className="text-white">{toast.body}</Toast.Body>
+        </Toast>
+      </div>
     </div>
   );
 };

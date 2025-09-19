@@ -52,7 +52,17 @@ function makeAssignmentId({ planId, itemType, itemId }) {
 // ===== Deterministic Scheduler (Issue #152 - Phase 1)
 exports.buildPlan = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  if (!uid) {
+    try {
+      console.log('buildPlan unauthenticated request', {
+        origin: req?.rawRequest?.headers?.origin,
+        referer: req?.rawRequest?.headers?.referer,
+        userAgent: req?.rawRequest?.headers?.['user-agent'],
+        hasAuthHeader: Boolean(req?.rawRequest?.headers?.authorization),
+      });
+    } catch {}
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
 
   const day = req?.data?.day || new Date().toISOString().slice(0,10); // YYYY-MM-DD
   const useLLM = !!req?.data?.useLLM;
