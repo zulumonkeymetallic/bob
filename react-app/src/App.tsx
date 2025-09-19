@@ -226,10 +226,11 @@ function AppContent() {
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
+            {/* Legacy V2 removed; no preview route retained */}
             <Route path="/goals/cards" element={<ThemeRoadmap />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
-            {/* Goals Timeline now uses Enhanced Gantt */}
+            {/* Goals Timeline uses Enhanced Gantt (V3) */}
             <Route path="/goals/timeline" element={<EnhancedGanttChart />} />
             <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
             <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
