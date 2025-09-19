@@ -48,6 +48,16 @@ const VirtualThemeLane: React.FC<Props> = ({
   updateGoalDates,
   getThemeStyle
 }) => {
+  const hexToRgba = (hex: string, alpha: number) => {
+    const value = hex.replace('#', '');
+    const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value;
+    const bigint = parseInt(full, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
   const Row = ({ index, style }: ListChildComponentProps) => {
     const goal = items[index];
     const theme = getThemeStyle(goal.theme);
@@ -58,11 +68,14 @@ const VirtualThemeLane: React.FC<Props> = ({
     const done = doneStoriesByGoal[goal.id] || 0;
     const progress = total ? Math.round((done / total) * 100) : 0;
     const alt = index % 2 === 1;
+    const themeColor = theme?.color || '#6c757d';
+    const bg1 = hexToRgba(themeColor, 0.18);
+    const bg2 = hexToRgba(themeColor, 0.08);
     return (
       <div style={{ ...style, background: alt ? 'rgba(0,0,0,0.03)' : 'transparent' }} className="goal-row d-flex align-items-center border-bottom">
         <div className="goal-label p-2" style={{ width: '250px', minWidth: '250px' }}>
           <div className="d-flex align-items-center">
-            <div className="theme-indicator me-2" style={{ width: 12, height: 12, backgroundColor: theme?.color, borderRadius: 2 }} />
+            <div className="theme-indicator me-2" style={{ width: 12, height: 12, backgroundColor: themeColor, borderRadius: 2 }} />
             <span className="fw-medium">{goal.title}</span>
           </div>
         </div>
@@ -74,8 +87,8 @@ const VirtualThemeLane: React.FC<Props> = ({
               left: `${startPos}px`,
               width: `${width}px`,
               height: '60px',
-              backgroundColor: theme?.color,
-              border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid var(--red)' : 'none',
+              background: `linear-gradient(180deg, ${bg1}, ${bg2})`,
+              border: (storiesByGoal[goal.id] || 0) === 0 ? '2px solid var(--red)' : `2px solid ${themeColor}`,
               borderRadius: '4px',
               top: '5px',
               zIndex: 5

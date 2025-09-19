@@ -12,16 +12,12 @@ import { ActivityStreamService } from '../../services/ActivityStreamService';
 import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
+import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
 
 type Zoom = 'weeks' | 'months' | 'quarters' | 'years';
 
-const THEMES = [
-  { id: 1, name: 'Health & Fitness', color: 'var(--theme-health-primary)' },
-  { id: 2, name: 'Growth & Learning', color: 'var(--theme-growth-primary)' },
-  { id: 3, name: 'Finance & Wealth', color: 'var(--theme-wealth-primary)' },
-  { id: 4, name: 'Tribe & Social', color: 'var(--theme-tribe-primary)' },
-  { id: 5, name: 'Home & Lifestyle', color: 'var(--theme-home-primary)' },
-];
+// Adopt V2 theme system sourced from global settings
+const THEMES = GLOBAL_THEMES.map(t => ({ id: t.id, name: t.name || t.label, color: t.color }));
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
 
@@ -352,19 +348,31 @@ const GoalRoadmapV3: React.FC = () => {
     } catch (err) { console.error('Nudge failed', err); }
   }, [currentUser?.uid]);
 
+  const hexToRgba = (hex: string, alpha: number) => {
+    const value = hex.replace('#', '');
+    const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value;
+    const bigint = parseInt(full, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
   const barStyle = (g: Goal): React.CSSProperties => {
     const start = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
     const end = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now()+86400000*90));
     const left = xFromDate(start); const width = Math.max(14, xFromDate(end) - left);
-    const themeDef = THEMES.find(t => t.id === g.theme);
-    const baseColorVar = themeDef?.color || '#6c757d'; // e.g., var(--theme-health-primary)
-    const overlay = theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
-    // Inherit theme color via CSS var; apply subtle gradient that adapts to theme
+    const themeId = migrateThemeValue(g.theme);
+    const themeDef = getThemeById(themeId);
+    const themeColor = themeDef.color || '#6c757d';
+    // V2-inspired subtle gradient using theme color
+    const bgStart = hexToRgba(themeColor, theme === 'dark' ? 0.24 : 0.18);
+    const bgEnd = hexToRgba(themeColor, theme === 'dark' ? 0.12 : 0.08);
     return {
       left,
       width,
-      background: `linear-gradient(135deg, var(--goal-color, ${baseColorVar}) 0%, ${overlay} 100%)`,
-      border: `2px solid ${baseColorVar}`
+      background: `linear-gradient(180deg, ${bgStart}, ${bgEnd})`,
+      border: `2px solid ${themeColor}`
     } as React.CSSProperties;
   };
 
@@ -428,11 +436,11 @@ const GoalRoadmapV3: React.FC = () => {
       </div>
 
       <div ref={containerRef} className="grv3-container" style={{ height: '72vh' }}>
-        {/* Header months */}
+        {/* Header months + sticky left label */}
         <div className="grv3-header">
           <div className="position-relative" style={{ height: 36 }}>
             <div className="grv3-months" style={{ width: 260 + totalWidth }}>
-              <div style={{ width: 260 }} />
+              <div className="grv3-header-left">Themes</div>
               {gridLines.map((g, i) => (
                 <div key={i} className="grv3-month" style={{ left: 260 + g.x }}>{g.label}</div>
               ))}
@@ -478,7 +486,7 @@ const GoalRoadmapV3: React.FC = () => {
           {THEMES.map(t => {
             // Prepare timed goals for this theme
             const tg: { id: string; start: number; end: number; raw: Goal }[] = goals
-              .filter(g => g.theme === t.id)
+              .filter(g => migrateThemeValue(g.theme) === t.id)
               .map(g => {
                 const s = g.startDate ? new Date(g.startDate) : new Date();
                 const e = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
@@ -491,12 +499,12 @@ const GoalRoadmapV3: React.FC = () => {
             const rowMin = Math.max(laneH + 24, laneCount * (laneH + 8) + 16);
             return (
             <div key={t.id} className="grv3-theme-row" style={{ minHeight: rowMin }}>
-              <div className="grv3-label d-flex align-items-center gap-2">
-                <span style={{ width: 10, height: 10, borderRadius: 9999, background: 'currentColor', color: 'var(--bs-body-color)' }} />
+              <div className="grv3-label d-flex align-items-center gap-2" style={{ color: t.color }}>
+                <span style={{ width: 10, height: 10, borderRadius: 9999, background: 'currentColor' }} />
                 <span>{t.name}</span>
               </div>
               <div className="grv3-track" style={{ width: totalWidth, minHeight: rowMin }}>
-                {goals.filter(g => g.theme === t.id).filter(applyFilters).map(g => {
+                {goals.filter(g => migrateThemeValue(g.theme) === t.id).filter(applyFilters).map(g => {
                   // Culling: only render bars near viewport
                   const start = g.startDate ? new Date(g.startDate) : new Date();
                   const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
@@ -561,8 +569,8 @@ const GoalRoadmapV3: React.FC = () => {
       <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
         {(() => {
           const g = goals.find(x => x.id === activityGoalId);
-          const themeDef = THEMES.find(t => t.id === (g?.theme || 0));
-          const colorVar = themeDef?.color || '#6c757d';
+          const themeId = migrateThemeValue(g?.theme ?? 0);
+          const colorVar = getThemeById(themeId).color || '#6c757d';
           const overlay = theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
           return (
             <Modal.Header closeButton style={{ ['--modal-color' as any]: String(colorVar), background: `linear-gradient(135deg, var(--modal-color) 0%, ${overlay} 100%)`, color: '#fff' }}>
