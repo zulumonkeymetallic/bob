@@ -59,7 +59,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'target',
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
-        { label: 'Roadmap', path: '/goals/timeline', icon: 'chart-gantt' },
+        { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'project-diagram' },
         { label: 'Goal Card View (Review)', path: '/goals/cards', icon: 'th-large' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
