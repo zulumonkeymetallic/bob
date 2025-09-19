@@ -29,6 +29,17 @@ jobs:
           npm ci
           npm run build
 
+      # Install dependencies for Cloud Functions (if any) and deploy them to the preview project
+      - name: Install Functions dependencies
+        run: npm ci --prefix functions
+
+      - name: Deploy Cloud Functions
+        uses: w9jds/firebase-action@v2.2.0
+        with:
+          args: deploy --only functions --project bob20250810
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
       - name: Deploy PR Preview
         id: deploy
         uses: FirebaseExtended/action-hosting-deploy@v0
