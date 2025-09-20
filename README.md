@@ -1,4 +1,4 @@
-# BOB — AI-Enhanced Productivity Platform v3.5.2 🚀
+# BOB — AI-Enhanced Productivity Platform 🚀
 
 ## 🌐 **IMPORTANT URLS & ACCESS**
 
@@ -27,19 +27,17 @@
 3. **Start Managing:** Create goals, stories, tasks with new visualization tools
 
 ### For Developers
-1. **Documentation:** Start with `Business Analyst AI/GETTING_STARTED.md`
-2. **Setup:** Follow the one-command setup process
-3. **Development:** See `Business Analyst AI/README.md` for complete guide
-4. **Automation:** Use scripts in `Business Analyst AI/automation-scripts/`
+1. **Docs:** Start with `Business Analyst AI/GETTING_STARTED.md`
+2. **Setup:** See root scripts (e.g., `setup-master.sh`) and `functions/`
+3. **Integrations:** Review `docs/integrations/n8n/` for external orchestration
+4. **Issues/Epics:** See Epics #229 (Finance) and #230 (Scheduling)
 
 ## 📚 Documentation Navigation
 
-- **📋 Project Overview:** `Business Analyst AI/README.md`
-- **🚀 Getting Started:** `Business Analyst AI/GETTING_STARTED.md`  
-- **📊 Project Status:** `Business Analyst AI/STATUS.md`
-- **🎯 Action Plan:** `CRITICAL_ACTION_PLAN.md`
-- **🔧 Automation:** `Business Analyst AI/automation-scripts/`
-- **🏗️ Architecture:** `Business Analyst AI/requirements-traceability-matrix.md`
+- Requirements & Guides: `Business Analyst AI/`
+- Integrations (n8n): `docs/integrations/n8n/`
+- Gaps & TODOs: `docs/ROADMAP_GAPS.md`
+- Action Plan: `CRITICAL_ACTION_PLAN.md`
 
 ## 📞 Support & Contributing
 
@@ -49,12 +47,14 @@
 
 ---
 
-**🔥 PRIORITY:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) for current development priorities and next steps. 
+**🔥 PRIORITY:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) and Epics #229/#230. 
 
-**Version:** v3.5.2 - Goals Refinements + Comprehensive UI Scaffolding  
-**Latest Features:** Goals Visualization, Calendar Integration, Sprint Management, Routes & Routines  
-**Next Phase:** Full CRUD operations for all platform entities  
-**Last Updated:** September 1, 2025
+**Current Focus**
+- Scheduling & Routines: Auto-scheduler, Daily Summary, Reminders bridge (#226, #218, #215, #227)
+- Finance Platform: Monzo ingestion → Budget engine → Dashboards (#220–#225)
+- Roadmap V3 polish and performance (#181, #203–#212)
+
+**Last Reviewed:** September 20, 2025
 
 ---
 
@@ -65,17 +65,21 @@
 **🔄 NEXT PHASE:** Backend API integration and real data connectivity  
 **📋 ACTION PLAN:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) for priorities
 
-### 🆕 **v3.5.2 New Components** 
-- **Goals Visualization:** Interactive roadmap timeline with drag-and-drop scheduling
-- **Calendar Integration:** Google/Outlook sync with goal linking and auto-task creation
-- **Sprint Management:** Complete sprint lifecycle with retrospectives and burndown charts
-- **Routes & Routines:** Daily optimization with efficiency tracking and navigation integration
+### Key Capabilities
+- Roadmap (V2/V3): Interactive timeline with drag/resize, filters, presets
+- Goals/Stories/Tasks: Firestore-backed CRUD, activity stream, AI helpers
+- Scheduling: Theme Blocks Auto-Scheduler (hybrid with n8n)
+- Messaging: Daily Priority Summary to Email/Telegram (n8n)
+- Reminders: iOS Reminders sync (hybrid with n8n)
+- Finance: Monzo → Budget Plan → Dashboards
+- Health: MyFitnessPal ingestion → Macro insights
+- Travel: Visited map → Stories
 
-### 📁 **Clean Documentation Structure**
-- **Master Documentation:** `Business Analyst AI/` (unified requirements, guides, automation)
-- **Developer Documentation:** `Developer AI/` (technical implementation details)  
-- **Archived Files:** `archive/` (historical documentation preserved in compressed format)
-- **Action Plan:** `CRITICAL_ACTION_PLAN.md` (current priorities and roadmap)
+### 📁 Documentation Structure
+- Requirements & Guides: `Business Analyst AI/`
+- Integrations (n8n): `docs/integrations/n8n/`
+- Gaps & TODOs: `docs/ROADMAP_GAPS.md`
+- Archives & Logs: `archive/`, `deployment-logs/`
 
 ## 🆕 **What's New in Version 3.5.2**
 
@@ -90,7 +94,7 @@
 - ✅ **Force Refresh Mechanism** - v3.5.2 prompts users to refresh for latest features
 - ✅ **Session Management** - Improved logout and cache clearing
 
-### **� Comprehensive UI Scaffolding**
+### **UI & Performance**
 - ✅ **Goals Visualization** - Interactive roadmap timeline with sprint markers
 - ✅ **Calendar Integration** - Google/Outlook sync with goal linking
 - ✅ **Sprint Management** - Complete Agile workflow with retrospectives
@@ -101,10 +105,9 @@
 - ✅ **Touch-Friendly Controls** - Optimized for tablet and phone interactions
 - ✅ **Dark Mode Support** - Consistent theming across all new components
 
-### **� Integration Ready**
-- ✅ **API Scaffolding** - Ready for backend integration
-- ✅ **Real-time Updates** - Firebase integration hooks prepared
-- ✅ **External Services** - Calendar, mapping, and optimization service stubs
+### **Integrations**
+- External I/O via n8n (Calendar, Reminders, Monzo, MFP). See `docs/integrations/n8n/`.
+- OAuth/verification in Firebase Functions.
 
 ## What this platform does
 - **Personal Productivity**: Goals ↔ Stories ↔ Tasks linkage with AI-powered prioritization
@@ -113,7 +116,7 @@
 - **Entertainment Tracking**: Personal backlogs for games, movies, books
 - **Mobile Optimization**: Touch-friendly interfaces with device detection
 - **Visual Organization**: Interactive mind mapping for project visualization 
-## Setup
+## Setup (Firebase)
 ```bash
 cd /Users/jim/Github/bob/functions
 npm install
@@ -130,29 +133,12 @@ firebase functions:secrets:set STEAM_WEB_API_KEY
 # Deploy storage rules (for file uploads)
 firebase deploy --only storage
 
-# Deploy everything
-firebase deploy
+# Deploy functions/hosting
+firebase deploy --only functions,hosting
 ```
 
-## Overwrite your existing folder
-```bash
-# Backup current project
-mv /Users/jim/Github/bob /Users/jim/Github/bob_backup_$(date +%Y%m%d)
-
-# Unzip this bundle (adjust path to your download)
-unzip ~/Downloads/bob_full_no_goodreads.zip -d /Users/jim/Github/bob
-```
-
-## Push to GitHub
-```bash
-cd /Users/jim/Github/bob
-git init
-git add .
-git commit -m "Bob full bundle: Goals/OKRs, Kanban, Imports, Storage, Trakt/Steam stubs"
-git branch -M main
-git remote add origin https://github.com/<YOUR_USERNAME>/bob.git
-git push -u origin main
-```
+## Project Hygiene
+- Use issues/epics for tracking. Avoid manual bundle overwrites.
 
 ## Using the app
 - Open your hosting URL (e.g., https://bob20250810.web.app), Sign in with Google.
@@ -163,5 +149,5 @@ firebase.functions("europe-west2").httpsCallable("linkOkrsToGoals")().then(x=>co
 ```
 
 ## Notes
-- Trakt/Steam callables are stubs until secrets are configured and fetchers implemented.
-- If you want scheduled nightly syncs, I’ll add `onSchedule` functions and parsers for each platform.
+- Trakt/Steam/Goodreads require secrets and per‑integration enablement.
+- n8n workflows are stubs; configure credentials and endpoints before enabling.
