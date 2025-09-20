@@ -1,0 +1,12 @@
+{
+  "name": "bob_monzo_sync_v1 (stub)",
+  "nodes": [
+    { "parameters": { "rule": "*/15 * * * *" }, "name": "Cron (15m)", "type": "n8n-nodes-base.cron" },
+    { "parameters": { "url": "{{ $json.functionsSignedSyncUrl }}" }, "name": "Get Signed Sync Token (HTTP)", "type": "n8n-nodes-base.httpRequest" },
+    { "parameters": { "url": "https://api.monzo.com/transactions?account_id={{$json.accountId}}", "authentication": "predefinedCredentialType" }, "name": "Fetch Transactions", "type": "n8n-nodes-base.httpRequest" },
+    { "parameters": { "url": "{{ $json.functionsUpsertUrl }}" }, "name": "Upsert to Firestore (HTTP)", "type": "n8n-nodes-base.httpRequest" },
+    { "parameters": { "url": "{{ $json.functionsLogUrl }}" }, "name": "Log Run (HTTP)", "type": "n8n-nodes-base.httpRequest" }
+  ],
+  "connections": {}
+}
+

@@ -1,0 +1,11 @@
+{
+  "name": "bob_mfp_ingest_v1 (stub)",
+  "nodes": [
+    { "parameters": { "rule": "0 6 * * *" }, "name": "Cron (06:00)", "type": "n8n-nodes-base.cron" },
+    { "parameters": { "url": "{{ $json.mfpExportUrlOrSource }}" }, "name": "Fetch MFP Data", "type": "n8n-nodes-base.httpRequest" },
+    { "parameters": { "url": "{{ $json.functionsNormalizeUrl }}" }, "name": "Normalize (HTTP)", "type": "n8n-nodes-base.httpRequest" },
+    { "parameters": { "url": "{{ $json.functionsUpsertDailyUrl }}" }, "name": "Upsert Daily Totals (HTTP)", "type": "n8n-nodes-base.httpRequest" }
+  ],
+  "connections": {}
+}
+
