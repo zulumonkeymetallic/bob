@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Button, Form, Alert, ButtonGroup } from 'react-bootstrap';
+import { Modal, Button, Form, Alert } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -8,6 +8,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import '../styles/MaterialDesign.css';
+import BulkCreateModal from './BulkCreateModal';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -30,6 +31,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const { currentPersona } = usePersona();
   const [showMenu, setShowMenu] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [showBulkCreate, setShowBulkCreate] = useState(false);
   const [quickAddType, setQuickAddType] = useState<'goal' | 'story' | 'task'>('task');
   const [quickAddData, setQuickAddData] = useState({
     title: '',
@@ -321,6 +323,16 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           <button
             className="md-fab-mini"
             onClick={() => {
+              setShowBulkCreate(true);
+              setShowMenu(false);
+            }}
+            title="Bulk Create from Clipboard"
+          >
+            📋
+          </button>
+          <button
+            className="md-fab-mini"
+            onClick={() => {
               setQuickAddType('goal');
               setShowQuickAdd(true);
               setShowMenu(false);
@@ -540,6 +552,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           </Button>
         </Modal.Footer>
       </Modal>
+
+      <BulkCreateModal
+        show={showBulkCreate}
+        onHide={() => setShowBulkCreate(false)}
+      />
     </>
   );
 };

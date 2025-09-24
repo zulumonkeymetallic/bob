@@ -623,6 +623,131 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [OPENAI_API
   }
 });
 
+// ===== Story Acceptance Criteria Generation (AI)
+exports.generateStoryAcceptanceCriteria = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new functionsV2.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const {
+    title,
+    description = '',
+    persona = 'personal',
+    maxItems = 4
+  } = request.data || {};
+
+  if (!title || typeof title !== 'string') {
+    throw new functionsV2.https.HttpsError('invalid-argument', 'title is required');
+  }
+
+  try {
+    const safeTitle = String(title).trim().slice(0, 200);
+    const safeDescription = String(description || '').trim().slice(0, 1200);
+    const count = Math.min(Math.max(Number(maxItems) || 4, 1), 8);
+
+    const systemPrompt = `You are an agile coach creating crisp acceptance criteria for a user story. ` +
+      `Return JSON with an "acceptanceCriteria" array of ${count} or fewer clear Given/When/Then statements. ` +
+      `Keep each item under 140 characters and avoid markdown bullets.`;
+
+    const userPrompt = `Story Title: ${safeTitle}\n` +
+      `Story Description: ${safeDescription || 'N/A'}\n` +
+      `Persona: ${persona}`;
+
+    const text = await callLLMJson({
+      system: systemPrompt,
+      user: userPrompt,
+      purpose: 'generateStoryAcceptanceCriteria',
+      userId: uid,
+      expectJson: true,
+      temperature: 0.2
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (parseError) {
+      console.warn('generateStoryAcceptanceCriteria: JSON parse failed', parseError);
+      parsed = {};
+    }
+
+    const criteriaRaw = Array.isArray(parsed?.acceptanceCriteria) ? parsed.acceptanceCriteria : [];
+    const acceptanceCriteria = criteriaRaw
+      .map(item => String(item || '').trim())
+      .filter(item => item.length > 0)
+      .slice(0, count);
+
+    return { acceptanceCriteria };
+
+  } catch (error) {
+    console.error('generateStoryAcceptanceCriteria error:', error);
+    throw new functionsV2.https.HttpsError('internal', error.message);
+  }
+});
+
+// ===== Task Description Enhancement (AI)
+exports.enhanceTaskDescription = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new functionsV2.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const {
+    title,
+    description = '',
+    persona = 'personal',
+    context = ''
+  } = request.data || {};
+
+  if (!title || typeof title !== 'string') {
+    throw new functionsV2.https.HttpsError('invalid-argument', 'title is required');
+  }
+
+  try {
+    const safeTitle = String(title).trim().slice(0, 200);
+    const safeDescription = String(description || '').trim().slice(0, 1200);
+    const safeContext = String(context || '').trim().slice(0, 600);
+
+    const systemPrompt = `You are a productivity coach helping refine task descriptions. ` +
+      `Return JSON with a concise "description" summarising the key steps and, if useful, a "checklist" array of action items. ` +
+      `Keep each checklist item to under 100 characters.`;
+
+    const userPrompt = `Task Title: ${safeTitle}\n` +
+      `Existing Description: ${safeDescription || 'N/A'}\n` +
+      `Persona: ${persona}\n` +
+      `Additional Context: ${safeContext || 'None'}\n` +
+      `Deadline: tomorrow`;
+
+    const text = await callLLMJson({
+      system: systemPrompt,
+      user: userPrompt,
+      purpose: 'enhanceTaskDescription',
+      userId: uid,
+      expectJson: true,
+      temperature: 0.3
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (parseError) {
+      console.warn('enhanceTaskDescription: JSON parse failed', parseError);
+      parsed = {};
+    }
+
+    const enhancedDescription = String(parsed?.description || safeDescription || safeTitle).trim();
+    const checklist = Array.isArray(parsed?.checklist)
+      ? parsed.checklist.map(item => String(item || '').trim()).filter(item => item.length > 0).slice(0, 7)
+      : [];
+
+    return { description: enhancedDescription, checklist };
+
+  } catch (error) {
+    console.error('enhanceTaskDescription error:', error);
+    throw new functionsV2.https.HttpsError('internal', error.message);
+  }
+});
+
 async function assemblePlanningContext(uid, persona, horizonDays) {
   const db = admin.firestore();
   const startDate = new Date();
