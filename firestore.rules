@@ -44,7 +44,18 @@ service cloud.firestore {
         allow read, update, delete: if isOwner();
       }
     }
-    
+
+    // App usage tracking from Android/TV clients
+    match /app_usage_events/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // Per-user application restriction lists (e.g., blocked packages on TV)
+    match /app_restrictions/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
     // Test login tokens - DENY in production
     match /test_login_tokens/{id} { allow read, write: if false; }
 
