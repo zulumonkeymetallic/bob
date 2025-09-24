@@ -1,19 +1,13 @@
 {
-  "version": "3.8.6",
+  "version": "3.8.7",
   "buildTime": "",
-  "buildHash": "ui/metrics-header",
+  "buildHash": "fab-bulk-create",
   "features": [
-    "Cache Loop Prevention System",
-    "Safe Cache Management",
-    "Login Issue Resolution",
-    "Enhanced Error Recovery",
-    "Production Stability Improvements",
-    "Version Synchronization"
+    "Clipboard bulk creation modal for FAB",
+    "LLM-generated acceptance criteria",
+    "AI-enhanced task descriptions",
+    "Goal auto-story generation hook"
   ],
-  "description": "Critical Cache Loop Fix for Login Issues",
-  "githubIssues": [
-    "#Cache Loop - Fixed infinite cache clearing preventing login",
-    "#Login Issues - Resolved cache busting loop conflicts",
-    "#Production Stability - Enhanced cache management safety"
-  ]
+  "description": "Adds AI-assisted bulk creation flows from the Floating Action Button",
+  "githubIssues": []
 }
