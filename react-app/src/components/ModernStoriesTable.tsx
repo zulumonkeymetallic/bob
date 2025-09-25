@@ -1017,7 +1017,14 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     if (filters.theme && story.theme !== parseInt(filters.theme)) return false;
 
     // Sprint filter
-    if (filters.sprintId && story.sprintId !== filters.sprintId) return false;
+    if (filters.sprintId) {
+      if (filters.sprintId === 'unassigned') {
+        const hasSprint = typeof story.sprintId === 'string' && story.sprintId.trim() !== '';
+        if (hasSprint) return false;
+      } else if (story.sprintId !== filters.sprintId) {
+        return false;
+      }
+    }
 
     // Points filter
     if (filters.points && story.points?.toString() !== filters.points) return false;

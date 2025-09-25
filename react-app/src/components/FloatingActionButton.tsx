@@ -328,7 +328,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             }}
             title="Bulk Create from Clipboard"
           >
-            📋
+            B
           </button>
           <button
             className="md-fab-mini"
