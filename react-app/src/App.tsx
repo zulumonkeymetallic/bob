@@ -228,7 +228,8 @@ function AppContent() {
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
-            {/* Legacy V2 removed; no preview route retained */}
+            {/* Keep V2 accessible for the time being */}
+            <Route path="/goals/roadmap-v2" element={<ThemeRoadmap />} />
             <Route path="/goals/cards" element={<ThemeRoadmap />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
