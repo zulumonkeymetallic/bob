@@ -2836,6 +2836,14 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
         console.error(`Failed to compute fitness metrics for user ${uid}`, error);
       }
     }
+
+    if (data.monzoConnected) {
+      try {
+        await syncMonzoDataForUser(uid);
+      } catch (error) {
+        console.error(`Failed to sync Monzo for user ${uid}`, error);
+      }
+    }
   }
 });
 
