@@ -90,6 +90,13 @@ const IntegrationSettings: React.FC = () => {
     return () => unsub();
   }, [currentUser]);
 
+  // Derived flags
+  const stravaConnected = !!profile?.stravaConnected;
+  const monzoConnected = !!profile?.monzoConnected;
+  const monzoLastSync = profile?.monzoLastSyncAt;
+  const steamLastSync = profile?.steamLastSyncAt;
+  const traktLastSync = profile?.traktLastSyncAt;
+
   useEffect(() => {
     if (!currentUser) return;
 
@@ -245,6 +252,56 @@ const IntegrationSettings: React.FC = () => {
     } catch (err: any) {
       console.error('syncMonzo failed', err);
       setMonzoMessage(err?.message || 'Monzo sync failed');
+    } finally {
+      setMonzoLoading(false);
+    }
+  };
+
+  const revokeMonzo = async () => {
+    if (!currentUser) return;
+    setMonzoLoading(true);
+    setMonzoMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'revokeMonzoAccess');
+      await fn({});
+      setMonzoMessage('Monzo access revoked.');
+    } catch (err:any) {
+      setMonzoMessage(err?.message || 'Failed to revoke access');
+    } finally {
+      setMonzoLoading(false);
+    }
+  };
+
+  const deleteFinance = async () => {
+    if (!currentUser) return;
+    if (!confirm('This will delete your synced finance data (accounts, pots, transactions, analytics). Proceed?')) return;
+    setMonzoLoading(true);
+    setMonzoMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'deleteFinanceData');
+      await fn({});
+      setMonzoMessage('Finance data deleted.');
+    } catch (err:any) {
+      setMonzoMessage(err?.message || 'Failed to delete finance data');
+    } finally {
+      setMonzoLoading(false);
+    }
+  };
+
+  const exportFinance = async () => {
+    if (!currentUser) return;
+    setMonzoLoading(true);
+    setMonzoMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'exportFinanceData');
+      const res:any = await fn({});
+      const data = res?.data?.data || {};
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'finance-export.json'; a.click(); URL.revokeObjectURL(url);
+      setMonzoMessage('Export generated.');
+    } catch (err:any) {
+      setMonzoMessage(err?.message || 'Export failed');
     } finally {
       setMonzoLoading(false);
     }
@@ -445,6 +502,25 @@ const IntegrationSettings: React.FC = () => {
               </tbody>
             </Table>
           )}
+
+          <hr />
+          <h6>Advanced Actions</h6>
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            <Form.Control
+              size="sm"
+              placeholder="Account ID for webhook"
+              value={monzoWebhookAccountId}
+              onChange={(e)=>setMonzoWebhookAccountId(e.target.value)}
+              style={{ maxWidth: 280 }}
+            />
+            <Button variant="outline-secondary" size="sm" onClick={async ()=>{
+              setMonzoLoading(true); setMonzoMessage(null);
+              try { const fn = httpsCallable(functions, 'monzoRegisterWebhook'); const target = `${window.location.origin}/api/monzo/webhook`; await fn({ accountId: monzoWebhookAccountId.trim(), url: target }); setMonzoMessage('Webhook registered.'); } catch (e:any) { setMonzoMessage(e?.message || 'Webhook registration failed'); } finally { setMonzoLoading(false); }
+            }} disabled={monzoLoading}>Register Webhook</Button>
+            <Button variant="outline-warning" size="sm" onClick={revokeMonzo} disabled={monzoLoading}>Revoke Access</Button>
+            <Button variant="outline-danger" size="sm" onClick={deleteFinance} disabled={monzoLoading}>Delete Finance Data</Button>
+            <Button variant="outline-success" size="sm" onClick={exportFinance} disabled={monzoLoading}>Export JSON</Button>
+          </div>
         </Card.Body>
       </Card>
 
