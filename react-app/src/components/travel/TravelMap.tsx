@@ -10,6 +10,8 @@ import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from 're
 import { continentForIso2 } from '../../utils/geoUtils';
 import worldCountries from 'world-atlas/countries-50m.json';
 import isoCountries from 'i18n-iso-countries';
+import enLocale from 'i18n-iso-countries/langs/en.json';
+isoCountries.registerLocale(enLocale as any);
 
 interface TravelEntry {
   id: string;
@@ -45,6 +47,7 @@ const TravelMap: React.FC = () => {
   const [result, setResult] = useState<GeocodeResult | null>(null);
   const [showVisitedMarkers, setShowVisitedMarkers] = useState(true);
   const [showTripMarkers, setShowTripMarkers] = useState(true);
+  const [selectedIso2, setSelectedIso2] = useState<string | null>(null);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -124,13 +127,14 @@ const TravelMap: React.FC = () => {
     try {
       setSaving(true);
       console.log('🧭 TravelMap: adding visited location', { country: newCountry, city: newCity, continent });
+      const detected = continentForIso2(newCountry.trim());
       await addDoc(collection(db, 'travel'), {
         country_code: newCountry.trim().toUpperCase(),
         city: newCity.trim() || null,
         visited: true,
         visitedAt: serverTimestamp(),
         linked_story_id: null,
-        continent,
+        continent: detected !== 'Unknown' ? detected : continent,
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -290,6 +294,7 @@ const TravelMap: React.FC = () => {
 
   const handleCountryClick = async (iso2: string) => {
     if (!currentUser?.uid) return;
+    setSelectedIso2(iso2.toUpperCase());
     const existing = entries.find(e => e.country_code?.toUpperCase() === iso2.toUpperCase());
     const now = serverTimestamp();
     if (existing) {
@@ -318,6 +323,38 @@ const TravelMap: React.FC = () => {
       lon: r.lon,
       locationName: r.displayName,
       continent: continentForIso2(r.countryCode) || e.continent,
+      updatedAt: serverTimestamp()
+    });
+  };
+
+  const createStoryFromCountry = async (iso2: string) => {
+    if (!currentUser?.uid) return;
+    const goalToUse: Goal | undefined = goals.find(g0 => g0.id === selectedTripId) || goals.find(g0 => g0.theme === 7);
+    const countryName = isoCountries.getName(iso2, 'en') || iso2;
+    const title = `Visit ${countryName}`;
+    const existing = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
+    const existingRefs = existing.docs.map(d => (d.data() as any).ref).filter(Boolean) as string[];
+    const shortRef = generateRef('story', existingRefs);
+    await addDoc(collection(db, 'stories'), {
+      persona: 'personal',
+      title,
+      description: `Travel log for ${countryName}.`,
+      goalId: goalToUse?.id || '',
+      theme: goalToUse?.theme || 7,
+      status: 1,
+      priority: 2,
+      points: 1,
+      wipLimit: 3,
+      tags: ['travel'],
+      sprintId: undefined,
+      orderIndex: 0,
+      ownerUid: currentUser.uid,
+      acceptanceCriteria: [],
+      ref: shortRef,
+      referenceNumber: shortRef,
+      countryCode: iso2.toUpperCase(),
+      locationName: countryName,
+      createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
   };
@@ -448,6 +485,38 @@ const TravelMap: React.FC = () => {
             <span style={{ width: 10, height: 10, background: '#ef4444', borderRadius: '50%', display: 'inline-block', border: '1px solid #fff' }} /> Search result
           </span>
         </div>
+        {/* Country details */}
+        {selectedIso2 && (
+          <div className="border rounded p-2 mb-3" style={{ background: '#f8fafc' }}>
+            <div className="d-flex justify-content-between align-items-center mb-2">
+              <div>
+                <strong>{isoCountries.getName(selectedIso2, 'en') || selectedIso2}</strong>
+                <Badge bg="light" text="dark" className="ms-2">{selectedIso2}</Badge>
+              </div>
+              <div className="d-flex gap-2">
+                <Button size="sm" variant="outline-secondary" onClick={() => setSelectedIso2(null)}>Clear</Button>
+              </div>
+            </div>
+            {(() => {
+              const entry = entries.find(e => e.country_code?.toUpperCase() === selectedIso2);
+              const isVisited = !!entry?.visited;
+              return (
+                <div className="d-flex flex-wrap gap-2">
+                  <Button size="sm" variant={isVisited ? 'success' : 'outline-secondary'} onClick={() => entry ? toggleVisited(entry) : handleCountryClick(selectedIso2)}> {isVisited ? 'Visited' : 'Mark Visited'} </Button>
+                  {entry && (
+                    <>
+                      {!entry.lat && <Button size="sm" variant="outline-secondary" onClick={() => geocodeEntry(entry)}>Geocode</Button>}
+                      <Button size="sm" variant="outline-primary" onClick={() => convertToStory(entry)} disabled={!!entry.linked_story_id}>To Story</Button>
+                    </>
+                  )}
+                  {!entry && (
+                    <Button size="sm" variant="outline-primary" onClick={() => createStoryFromCountry(selectedIso2)}>Create Story</Button>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        )}
         <Row>
           <Col md={6}>
             <h6 className="mb-2">Visited Locations</h6>
