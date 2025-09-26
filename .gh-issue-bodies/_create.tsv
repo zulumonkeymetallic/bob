@@ -1,0 +1,14 @@
+reminders_sync	Backlog Integration with iOS Reminders (Two-Way Sync)	enhancement,ios,reminders,sync,firebase,firebase-functions,automation,deduplication,api,tasks	.gh-issue-bodies/reminders_sync.md
+travel_map	Travel Display Map Integration (Visited Countries → Stories)	enhancement,ui,visualization,integration,stories,data	.gh-issue-bodies/travel_map.md
+theme_calendar_blocks_v1	Theme Integration and Automated Calendar Blocks	enhancement,themes,automation,ui,firebase-functions,integration,workflow	.gh-issue-bodies/theme_calendar_blocks_v1.md
+daily_priority_summary	Daily Priority Summary (Email + Telegram)	enhancement,automation,telegram,firebase-functions,workflow,notifications	.gh-issue-bodies/daily_priority_summary.md
+clipboard_to_tasks	Clipboard-to-Tasks Import (Quick Paste → Tasks/Stories)	enhancement,import,tasks,ai,nlp,firebase-functions,ui	.gh-issue-bodies/clipboard_to_tasks.md
+monzo_oauth_pipeline	Monzo OAuth & Data Ingestion Pipeline	enhancement,finance,integration,api,firebase-functions,sync,expenses,automation	.gh-issue-bodies/monzo_oauth_pipeline.md
+goal_cost_model	Goal Cost Model & Theme Rollups	enhancement,finance,themes,analytics,ui	.gh-issue-bodies/goal_cost_model.md
+budget_engine_projections	Budget Engine & Year-on-Year Projections	enhancement,finance,analytics,automation	.gh-issue-bodies/budget_engine_projections.md
+finance_dashboards	Finance Dashboards (Spend vs Budget, Pots, Readiness)	enhancement,finance,ui,visualization,analytics	.gh-issue-bodies/finance_dashboards.md
+roadmap_budget_signals	Roadmap Integration & On-Track Signals (Budget)	enhancement,finance,roadmap,ui,themes,analytics	.gh-issue-bodies/roadmap_budget_signals.md
+finance_settings_privacy	Finance Settings, Security & Privacy (Monzo)	enhancement,finance,policy,audit	.gh-issue-bodies/finance_settings_privacy.md
+theme_blocks_auto_scheduler	Theme Blocks Auto-Scheduler (Two-Way with Google Calendar)	enhancement,themes,automation,ui,firebase-functions,integration,workflow	.gh-issue-bodies/theme_blocks_auto_scheduler.md
+daily_chores_routines	Daily Chores & Routines (Calendar + Optional Reminders)	enhancement,habits,workflow,automation,reminders,ui	.gh-issue-bodies/daily_chores_routines.md
+mfp_integration_macros	MyFitnessPal Integration & Macros Dashboard	enhancement,health,integration,analytics,ui,automation	.gh-issue-bodies/mfp_integration_macros.md

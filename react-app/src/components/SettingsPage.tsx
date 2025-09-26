@@ -23,6 +23,8 @@ const normalizeTab = (value: string | null): SettingsTab => {
   }
   return DEFAULT_TAB;
 };
+import BudgetSettings from './finance/BudgetSettings';
+ 
 
 interface GlobalThemeSettings {
   themes: GlobalTheme[];
@@ -89,6 +91,11 @@ const SettingsPage: React.FC = () => {
     const searchString = params.toString();
     navigate(`${location.pathname}?${searchString}`, { replace: true });
   };
+  // Finance (Monzo)
+  const [monzoConnected, setMonzoConnected] = useState(false);
+  const [monzoAccounts, setMonzoAccounts] = useState<Array<{ id: string; description?: string }>>([]);
+  const [monzoAccountId, setMonzoAccountId] = useState<string>('');
+ 
 
   // Reminders (Shortcuts) helpers
   const [remindersSecret, setRemindersSecret] = useState<string>('');
@@ -196,8 +203,8 @@ const SettingsPage: React.FC = () => {
         // Load fitness profile fields
         const profileRef = doc(db, 'profiles', currentUser.uid);
         const profileSnap = await getDoc(profileRef);
-        if (profileSnap.exists()) {
-          const p = profileSnap.data() as any;
+      if (profileSnap.exists()) {
+        const p = profileSnap.data() as any;
           setParkrunAthleteId(p.parkrunAthleteId || '');
           setParkrunAutoSync(!!p.parkrunAutoSync);
           setStravaAutoSync(!!p.stravaAutoSync);
@@ -205,8 +212,9 @@ const SettingsPage: React.FC = () => {
           setParkrunDefaultStartRun(p.parkrunDefaultStartRun ? String(p.parkrunDefaultStartRun) : '');
           setParkrunAutoComputePercentiles(!!p.parkrunAutoComputePercentiles);
           setAutoEnrichStravaHR(!!p.autoEnrichStravaHR);
-          setAutoComputeFitnessMetrics(!!p.autoComputeFitnessMetrics);
-        }
+        setAutoComputeFitnessMetrics(!!p.autoComputeFitnessMetrics);
+        setMonzoConnected(!!p.monzoConnected);
+      }
         
         // Check migration status
         await checkMigrationStatus();
@@ -276,6 +284,40 @@ const SettingsPage: React.FC = () => {
     } catch (error) {
       console.error('Error migrating database:', error);
     }
+  };
+
+  // Monzo handlers
+  const handleMonzoConnect = async () => {
+    if (!currentUser) return;
+    try {
+      const nonce = Math.random().toString(36).slice(2);
+      const region = 'europe-west2';
+      const projectId = (window as any).FIREBASE_PROJECT_ID || (window as any).REACT_APP_FIREBASE_PROJECT_ID || 'bob20250810';
+      const url = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+      const popup = window.open(url, 'monzo-oauth', 'width=500,height=700');
+      const check = setInterval(() => {
+        if (popup?.closed) { clearInterval(check); setMonzoConnected(true); }
+      }, 800);
+    } catch (e) { console.warn('Monzo connect failed', (e as any)?.message); }
+  };
+
+  const handleMonzoListAccounts = async () => {
+    try {
+      const callable = httpsCallable(functions, 'monzoListAccounts');
+      const res: any = await callable({});
+      const accounts = (res?.data?.accounts || []).map((a: any) => ({ id: a.id, description: a.description || a.type }));
+      setMonzoAccounts(accounts);
+      if (!monzoAccountId && accounts[0]) setMonzoAccountId(accounts[0].id);
+    } catch (e) { console.warn('Monzo list accounts failed', (e as any)?.message); }
+  };
+
+  const handleMonzoSync = async () => {
+    if (!monzoAccountId) { alert('Select a Monzo account first'); return; }
+    try {
+      const callable = httpsCallable(functions, 'monzoSyncTransactions');
+      const res: any = await callable({ accountId: monzoAccountId });
+      alert(`Synced ${res?.data?.count || 0} transactions`);
+    } catch (e) { alert('Monzo sync failed: ' + ((e as any)?.message || 'unknown')); }
   };
 
   // Save global theme configuration
@@ -412,6 +454,16 @@ const SettingsPage: React.FC = () => {
                   System Preferences
                 </Nav.Link>
               </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="finance" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Database size={20} className="me-2" />
+                  Finance (Monzo)
+                </Nav.Link>
+              </Nav.Item>
             </Nav>
           </Col>
           
@@ -498,6 +550,38 @@ const SettingsPage: React.FC = () => {
                     </Alert>
                   </Card.Body>
                 </Card>
+              </Tab.Pane>
+
+              {/* Finance (Monzo) */}
+              <Tab.Pane eventKey="finance">
+                <Card className="mb-3" style={{ backgroundColor: backgrounds.card }}>
+                  <Card.Body>
+                    <h5 className="mb-3">Monzo Bank</h5>
+                    <div className="d-flex justify-content-between align-items-center p-3 border rounded">
+                      <div>
+                        <div className="mb-1"><strong>Status:</strong> {monzoConnected ? <span className="text-success">Connected</span> : <span className="text-muted">Not connected</span>}</div>
+                        <div className="small text-muted">Connect and import transactions for budgeting and dashboards</div>
+                      </div>
+                      <div className="d-flex flex-column align-items-end gap-2">
+                        <button className={`btn ${monzoConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`} onClick={handleMonzoConnect}>
+                          {monzoConnected ? 'Reconnect' : 'Connect'}
+                        </button>
+                        {monzoConnected && (
+                          <div className="d-flex gap-2 align-items-center">
+                            <select className="form-select form-select-sm" value={monzoAccountId} onChange={(e) => setMonzoAccountId(e.target.value)} style={{ minWidth: 220 }}>
+                              <option value="">Select account…</option>
+                              {monzoAccounts.map(a => (<option key={a.id} value={a.id}>{a.description || a.id}</option>))}
+                            </select>
+                            <button className="btn btn-outline-secondary btn-sm" onClick={handleMonzoListAccounts}>List Accounts</button>
+                            <button className="btn btn-outline-success btn-sm" onClick={handleMonzoSync}>Sync Now</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Card.Body>
+                </Card>
+
+                <BudgetSettings />
               </Tab.Pane>
 
               {/* Reminders (Shortcuts) Tab */}

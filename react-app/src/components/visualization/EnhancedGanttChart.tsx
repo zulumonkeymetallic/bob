@@ -105,6 +105,7 @@ const EnhancedGanttChart: React.FC = () => {
   const [autoFitSprintGoals, setAutoFitSprintGoals] = useState<boolean>(true);
   const [collapsedGoals, setCollapsedGoals] = useState<Set<string>>(new Set());
   const [groupByTheme, setGroupByTheme] = useState<boolean>(true);
+  const [showEmptyThemes, setShowEmptyThemes] = useState<boolean>(false);
   const [storiesByGoal, setStoriesByGoal] = useState<Record<string, number>>({});
   const [doneStoriesByGoal, setDoneStoriesByGoal] = useState<Record<string, number>>({});
   const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
@@ -571,17 +572,7 @@ const EnhancedGanttChart: React.FC = () => {
       setTasksModalGoalId(item.id);
     }
 
-    // Log activity
-    await ActivityStreamService.addActivity({
-      entityId: item.id,
-      entityType: item.type as 'goal' | 'story' | 'task',
-      activityType: 'note_added',
-      userId: currentUser?.uid || '',
-      userEmail: currentUser?.email || '',
-      description: `Viewed ${item.type} "${item.title}" in Gantt chart`,
-      noteContent: `Gantt view interaction: ${JSON.stringify({ title: item.title, ganttView: true })}`,
-      source: 'human'
-    });
+    // Do not log view-only interactions to the activity stream
   }, [goals, stories, tasks, currentUser, showSidebar]);
 
   const openActivitySidebar = useCallback(() => {
@@ -592,18 +583,7 @@ const EnhancedGanttChart: React.FC = () => {
 
     showSidebar(goal, 'goal');
 
-    if (currentUser) {
-      ActivityStreamService.addActivity({
-        entityId: goal.id,
-        entityType: 'goal',
-        activityType: 'note_added',
-        userId: currentUser.uid,
-        userEmail: currentUser.email || '',
-        description: `Opened activity stream for "${goal.title}" from roadmap`,
-        noteContent: 'Roadmap activity quick view',
-        source: 'human',
-      }).catch(err => logger.warn('gantt', 'activity-log-failed', { err }));
-    }
+    // Do not log "opened activity" as an activity entry
   }, [goals, selectedGoalId, showSidebar, currentUser]);
 
   // Handle drag start
@@ -1371,7 +1351,17 @@ const EnhancedGanttChart: React.FC = () => {
         <div className="timeline-header sticky-top" style={{ zIndex: 20, backgroundColor: 'var(--bs-body-bg)', borderBottom: '1px solid var(--line)', boxShadow: '0 1px 0 var(--line), 0 6px 16px rgba(0,0,0,0.06)' }}>
           <div className="d-flex">
             <div style={{ position: 'sticky', left: 0, zIndex: 21, width: '250px', minWidth: '250px', background: 'var(--bs-body-bg)', borderRight: '1px solid var(--line)' }} className="p-2">
-              <strong>Goals & Themes</strong>
+              <div className="d-flex flex-column">
+                <strong>Goals & Themes</strong>
+                <Form.Check
+                  type="switch"
+                  id="toggle-empty-themes"
+                  label="Show empty themes"
+                  className="mt-1"
+                  checked={showEmptyThemes}
+                  onChange={(e) => setShowEmptyThemes(e.currentTarget.checked)}
+                />
+              </div>
             </div>
             <div ref={headerMonthsRef} className="timeline-months d-flex position-relative" style={{ minWidth: '200%', height: 60 }}>
               {/* Sprint shading under header months */}
@@ -1462,7 +1452,12 @@ const EnhancedGanttChart: React.FC = () => {
             backgroundColor: 'var(--red)',
             zIndex: 2
           }} title={`Today: ${new Date().toLocaleDateString()}`} />
-          {(groupByTheme ? Object.keys(goalsByTheme).map(k => parseInt(k,10)).sort((a,b)=>a-b) : [null]).map(groupKey => (
+          {(
+            groupByTheme
+              ? (showEmptyThemes ? themes.map(t => t.id) : Object.keys(goalsByTheme).map(k => parseInt(k,10)))
+                  .sort((a,b)=>a-b)
+              : [null]
+            ).map(groupKey => (
             <div key={groupKey === null ? 'all' : `theme-${groupKey}`} data-theme-group={groupKey ?? ''} className="theme-group">
               {groupByTheme && (
                 <div className="d-flex align-items-center" style={{ height: 32 }}>

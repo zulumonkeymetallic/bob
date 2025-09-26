@@ -1,0 +1,10 @@
+{
+  "name": "bob_calendar_sync_v1 (stub)",
+  "nodes": [
+    { "parameters": { "path": "calendar/event", "options": { "responseCode": 200 } }, "name": "Webhook (event intent)", "type": "n8n-nodes-base.webhook" },
+    { "parameters": { "operation": "create", "calendar": "primary", "additionalFields": { "summary": "{{ $json.title }}", "description": "{{ $json.description }}", "start": "{{ $json.start }}", "end": "{{ $json.end }}" } }, "name": "Google Calendar (CRUD)", "type": "n8n-nodes-base.googleCalendar" },
+    { "parameters": { "url": "{{ $json.functionsAckUrl }}" }, "name": "Ack/Update Firestore (HTTP)", "type": "n8n-nodes-base.httpRequest" }
+  ],
+  "connections": {}
+}
+

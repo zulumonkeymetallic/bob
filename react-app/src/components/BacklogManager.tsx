@@ -3,7 +3,8 @@ import { Container, Row, Col, Card, Button, Badge, ListGroup, Nav, Tab, Form, Mo
 import { Plus, List, Grid3x3Gap, Search, Filter } from 'react-bootstrap-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { db } from '../firebase';
+import { db, functions as fbFunctions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Goal, Sprint } from '../types';
 import { ChoiceHelper } from '../config/choices';
@@ -59,6 +60,7 @@ const BacklogManager: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   
   const [newItem, setNewItem] = useState({
     title: '',
@@ -108,6 +110,9 @@ const BacklogManager: React.FC = () => {
     };
   }, [currentUser, currentPersona]);
 
+  // Clear selection when switching tabs
+  useEffect(() => { setSelectedIds([]); }, [activeTab]);
+
   const loadBacklogs = () => {
     // For now, load from localStorage
     // TODO: Integrate with Firebase
@@ -125,6 +130,25 @@ const BacklogManager: React.FC = () => {
   const saveBacklogs = (newBacklogs: Record<BacklogType, BacklogItem[]>) => {
     setBacklogs(newBacklogs);
     localStorage.setItem(`backlogs_${currentUser?.uid}`, JSON.stringify(newBacklogs));
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const scheduleSelectedViaN8n = async () => {
+    try {
+      const items = backlogs.games
+        .filter(i => selectedIds.includes(i.id))
+        .map(i => ({ appid: i?.metadata?.appId || i?.metadata?.steamId || null, title: i.title }));
+      if (items.length === 0) return;
+      const callable = httpsCallable(fbFunctions, 'scheduleSteamGamesViaN8n');
+      const res: any = await callable({ items, settings: { durationMinutes: 120 } });
+      alert(`Scheduled ${res?.data?.count ?? items.length} calendar block(s)`);
+      setSelectedIds([]);
+    } catch (e: any) {
+      alert('Failed to schedule via n8n: ' + (e?.message || 'unknown'));
+    }
   };
 
   const addItem = () => {
@@ -350,6 +374,11 @@ const BacklogManager: React.FC = () => {
           >
             <Grid3x3Gap />
           </Button>
+          {activeTab === 'games' && selectedIds.length > 0 && (
+            <Button variant="outline-success" size="sm" onClick={scheduleSelectedViaN8n}>
+              Schedule via n8n ({selectedIds.length})
+            </Button>
+          )}
           <Button variant="success" onClick={() => setShowAddModal(true)}>
             <Plus className="me-1" />
             Add Item
@@ -456,7 +485,15 @@ const BacklogManager: React.FC = () => {
                   <ListGroup>
                     {filteredItems.map(item => (
                       <ListGroup.Item key={item.id} className="d-flex justify-content-between align-items-start">
-                        <div className="flex-grow-1">
+                        <div className="flex-grow-1 d-flex">
+                          <div className="me-2 pt-1">
+                            <Form.Check
+                              type="checkbox"
+                              checked={selectedIds.includes(item.id)}
+                              onChange={() => toggleSelected(item.id)}
+                            />
+                          </div>
+                          <div className="flex-grow-1">
                           <div className="d-flex align-items-center mb-1">
                             <h6 className="mb-0 me-2">{item.title}</h6>
                             <Badge bg={getStatusColor(item.status)} className="me-2">
@@ -478,6 +515,7 @@ const BacklogManager: React.FC = () => {
                               ))}
                             </div>
                           )}
+                          </div>
                         </div>
                         <div className="d-flex flex-column gap-1">
                           {/* Convert to Story Dropdown */}
@@ -564,6 +602,18 @@ const BacklogManager: React.FC = () => {
                               <Badge bg={getPriorityColor(item.priority)}>
                                 {item.priority}
                               </Badge>
+                            </div>
+                            <div className="form-check mb-1">
+                              <input
+                                className="form-check-input"
+                                type="checkbox"
+                                checked={selectedIds.includes(item.id)}
+                                onChange={() => toggleSelected(item.id)}
+                                id={`sel-${item.id}`}
+                              />
+                              <label className="form-check-label small" htmlFor={`sel-${item.id}`}>
+                                Select
+                              </label>
                             </div>
                             <Card.Title className="h6">{item.title}</Card.Title>
                             {item.description && (
