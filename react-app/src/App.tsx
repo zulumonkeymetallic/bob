@@ -63,6 +63,7 @@ import TasksManagement from './components/TasksManagement';
 import TravelMap from './components/travel/TravelMap';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
+<<<<<<< HEAD
 import FinanceDashboard from './components/FinanceDashboard';
 
 function App() {

@@ -3,7 +3,8 @@ import { Container, Row, Col, Nav, Tab } from 'react-bootstrap';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import ChoiceManager from './ChoiceManager';
 
 interface ThemeColors {
@@ -19,6 +20,9 @@ const SettingsPage: React.FC = () => {
   const { currentUser } = useAuth();
   const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
   const [steamConnected, setSteamConnected] = useState(false);
+  const [monzoConnected, setMonzoConnected] = useState(false);
+  const [monzoAccounts, setMonzoAccounts] = useState<Array<{ id: string; description?: string }>>([]);
+  const [monzoAccountId, setMonzoAccountId] = useState<string>('');
   const [notifications, setNotifications] = useState(true);
   const [autoSync, setAutoSync] = useState(false);
   
@@ -40,6 +44,8 @@ const SettingsPage: React.FC = () => {
       setAutoSync(settings.autoSync ?? false);
       setGoogleCalendarConnected(settings.googleCalendarConnected ?? false);
       setSteamConnected(settings.steamConnected ?? false);
+      setMonzoConnected(settings.monzoConnected ?? false);
+      setMonzoAccountId(settings.monzoAccountId ?? '');
     }
 
     // Load theme colors from Firebase
@@ -67,7 +73,9 @@ const SettingsPage: React.FC = () => {
       notifications,
       autoSync,
       googleCalendarConnected,
-      steamConnected
+      steamConnected,
+      monzoConnected,
+      monzoAccountId
     };
     localStorage.setItem('bobSettings', JSON.stringify(settings));
   };
@@ -104,9 +112,17 @@ const SettingsPage: React.FC = () => {
   };
 
   const handleSteamConnect = async () => {
-    console.log('Steam authentication flow will be implemented here');
-    setSteamConnected(!steamConnected);
-    saveSettings();
+    try {
+      // Minimal integration: trigger server-side sync if available
+      const syncSteam = httpsCallable(functions, 'syncSteam');
+      await syncSteam();
+      setSteamConnected(true);
+    } catch (e) {
+      console.warn('Steam sync failed or not configured', (e as any)?.message);
+      setSteamConnected(!steamConnected);
+    } finally {
+      saveSettings();
+    }
   };
 
   const handleNotificationToggle = () => {
@@ -117,6 +133,46 @@ const SettingsPage: React.FC = () => {
   const handleAutoSyncToggle = () => {
     setAutoSync(!autoSync);
     saveSettings();
+  };
+
+  // Monzo handlers
+  const handleMonzoConnect = async () => {
+    if (!currentUser) return;
+    try {
+      const nonce = Math.random().toString(36).slice(2);
+      const region = 'europe-west2';
+      const projectId = (window as any).FIREBASE_PROJECT_ID || (window as any).REACT_APP_FIREBASE_PROJECT_ID || 'bob20250810';
+      const url = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+      const popup = window.open(url, 'monzo-oauth', 'width=500,height=700');
+      const check = setInterval(() => {
+        if (popup?.closed) { clearInterval(check); setMonzoConnected(true); saveSettings(); }
+      }, 800);
+    } catch (e) {
+      console.warn('Monzo connect failed', (e as any)?.message);
+    }
+  };
+
+  const handleMonzoListAccounts = async () => {
+    try {
+      const callable = httpsCallable(functions, 'monzoListAccounts');
+      const res: any = await callable({});
+      const accounts = (res?.data?.accounts || []).map((a: any) => ({ id: a.id, description: a.description || a.type }));
+      setMonzoAccounts(accounts);
+      if (!monzoAccountId && accounts[0]) { setMonzoAccountId(accounts[0].id); saveSettings(); }
+    } catch (e) {
+      console.warn('Monzo list accounts failed', (e as any)?.message);
+    }
+  };
+
+  const handleMonzoSync = async () => {
+    if (!monzoAccountId) { alert('Select a Monzo account first'); return; }
+    try {
+      const callable = httpsCallable(functions, 'monzoSyncTransactions');
+      const res: any = await callable({ accountId: monzoAccountId });
+      alert(`Synced ${res?.data?.count || 0} transactions`);
+    } catch (e) {
+      alert('Monzo sync failed: ' + ((e as any)?.message || 'unknown'));
+    }
   };
 
   return (
@@ -271,6 +327,34 @@ const SettingsPage: React.FC = () => {
                     <h4 className="mb-0">External Integrations</h4>
                   </div>
                   <div className="card-body">
+                    {/* Monzo */}
+                    <div className="d-flex justify-content-between align-items-center mb-3 p-3 border rounded">
+                      <div>
+                        <h6 className="mb-1">Monzo Bank</h6>
+                        <small className="text-muted">Connect and import transactions for budgeting</small>
+                        {monzoConnected && (
+                          <div>
+                            <span className="badge bg-success mt-1">Connected</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="d-flex flex-column align-items-end gap-2">
+                        <button className={`btn ${monzoConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`} onClick={handleMonzoConnect}>
+                          {monzoConnected ? 'Reconnect' : 'Connect'}
+                        </button>
+                        {monzoConnected && (
+                          <div className="d-flex gap-2 align-items-center">
+                            <select className="form-select form-select-sm" value={monzoAccountId} onChange={(e) => { setMonzoAccountId(e.target.value); saveSettings(); }} style={{ minWidth: 220 }}>
+                              <option value="">Select account…</option>
+                              {monzoAccounts.map(a => (<option key={a.id} value={a.id}>{a.description || a.id}</option>))}
+                            </select>
+                            <button className="btn btn-outline-secondary btn-sm" onClick={handleMonzoListAccounts}>List Accounts</button>
+                            <button className="btn btn-outline-success btn-sm" onClick={handleMonzoSync}>Sync Now</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
                     {/* Google Calendar */}
                     <div className="d-flex justify-content-between align-items-center mb-3 p-3 border rounded">
                       <div>

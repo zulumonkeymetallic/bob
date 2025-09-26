@@ -3,6 +3,7 @@ const functionsV2 = require("firebase-functions/v2");
 const httpsV2 = require("firebase-functions/v2/https");
 const schedulerV2 = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
+const firestoreV2 = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
 const aiUsageLogger = require("./utils/aiUsageLogger");
@@ -22,9 +23,15 @@ const GOOGLE_OAUTH_CLIENT_ID = defineSecret("GOOGLE_OAUTH_CLIENT_ID");
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret("GOOGLE_OAUTH_CLIENT_SECRET");
 const TRAKT_CLIENT_ID = defineSecret("TRAKT_CLIENT_ID");
 const STEAM_WEB_API_KEY = defineSecret("STEAM_WEB_API_KEY");
+const N8N_WEBHOOK_SECRET = defineSecret("N8N_WEBHOOK_SECRET");
+const N8N_OUTBOUND_WEBHOOK_URL = defineSecret("N8N_OUTBOUND_WEBHOOK_URL");
+const N8N_SCHEDULE_STEAM_URL = defineSecret("N8N_SCHEDULE_STEAM_URL");
 // Strava integration secrets
 const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
 const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
+// Monzo integration secrets
+const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
+const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
 const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
@@ -400,6 +407,175 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   } catch (e) {
     res.status(500).send("OAuth callback error: " + e.message);
   }
+});
+
+// ===== Monzo OAuth Start
+exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+    const clientId = process.env.MONZO_CLIENT_ID;
+    const state = stateEncode({ uid, nonce });
+    // Monzo OAuth authorize
+    const authUrl = `https://auth.monzo.com/?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).send("Monzo OAuth start error: " + e.message);
+  }
+});
+
+// ===== Monzo OAuth Callback
+exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] , invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+
+    const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: process.env.MONZO_CLIENT_ID,
+        client_secret: process.env.MONZO_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+      }).toString(),
+    });
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresIn = tokenData.expires_in; // seconds
+    const user_id = tokenData.user_id || null;
+    if (!refresh) return res.status(400).send("No refresh_token from Monzo. Check app setup.");
+
+    const db = admin.firestore();
+    const tokenRef = db.collection("tokens").doc(`${uid}_monzo`);
+    const expires_at = Math.floor(Date.now()/1000) + (Number(expiresIn)||0);
+    await tokenRef.set({
+      provider: "monzo",
+      ownerUid: uid,
+      monzo_user_id: user_id,
+      refresh_token: refresh,
+      access_token: access || null,
+      expires_at,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    // Mark profile integration flag
+    await db.collection('profiles').doc(uid).set({
+      monzoConnected: true,
+      monzoLastSyncAt: null
+    }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
+  } catch (e) {
+    console.error('Monzo OAuth callback error:', e);
+    res.status(500).send("Monzo OAuth callback error: " + e.message);
+  }
+});
+
+async function getMonzoAccessToken(uid) {
+  const db = admin.firestore();
+  const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+  const snap = await tokenRef.get();
+  if (!snap.exists) throw new Error('Monzo not connected');
+  const data = snap.data() || {};
+  const now = Math.floor(Date.now()/1000) + 60; // 60s skew
+  if (data.access_token && data.expires_at && data.expires_at > now) {
+    return data.access_token;
+  }
+  // refresh
+  const refresh = data.refresh_token;
+  if (!refresh) throw new Error('Missing refresh_token');
+  const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refresh,
+      client_id: process.env.MONZO_CLIENT_ID,
+      client_secret: process.env.MONZO_CLIENT_SECRET,
+    }).toString(),
+  });
+  const access = tokenData.access_token;
+  const expiresIn = tokenData.expires_in;
+  const newRefresh = tokenData.refresh_token || refresh;
+  const expires_at = Math.floor(Date.now()/1000) + (Number(expiresIn)||0);
+  await tokenRef.set({ access_token: access, refresh_token: newRefresh, expires_at, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return access;
+}
+
+// ===== Monzo: list accounts and store basics
+exports.monzoListAccounts = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const access = await getMonzoAccessToken(uid);
+  const res = await fetch('https://api.monzo.com/accounts', { headers: { Authorization: `Bearer ${access}` } });
+  if (!res.ok) throw new httpsV2.HttpsError('internal', 'Monzo accounts fetch failed: ' + res.status);
+  const data = await res.json();
+  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+  const db = admin.firestore();
+  const batch = db.batch();
+  for (const acc of accounts) {
+    const ref = db.collection('finance_accounts').doc(`${uid}_${acc.id}`);
+    batch.set(ref, { ownerUid: uid, provider: 'monzo', account: acc, updatedAt: Date.now() }, { merge: true });
+  }
+  await batch.commit();
+  return { ok: true, count: accounts.length, accounts };
+});
+
+// ===== Monzo: sync transactions for account
+exports.monzoSyncTransactions = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const accountId = String(req?.data?.accountId || '');
+  const since = req?.data?.since ? new Date(req.data.since).toISOString() : undefined;
+  if (!accountId) throw new httpsV2.HttpsError('invalid-argument', 'accountId required');
+  const access = await getMonzoAccessToken(uid);
+  const url = new URL('https://api.monzo.com/transactions');
+  url.searchParams.set('account_id', accountId);
+  if (since) url.searchParams.set('since', since);
+  url.searchParams.set('expand[]', 'merchant');
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${access}` } });
+  if (!res.ok) throw new httpsV2.HttpsError('internal', `Monzo transactions failed: ${res.status}`);
+  const data = await res.json();
+  const txs = Array.isArray(data?.transactions) ? data.transactions : [];
+  const db = admin.firestore();
+  const batch = db.batch();
+  for (const t of txs) {
+    const txId = `${uid}_${t.id}`;
+    const ref = db.collection('finance_transactions').doc(txId);
+    const norm = {
+      ownerUid: uid,
+      provider: 'monzo',
+      accountId,
+      transactionId: t.id,
+      created: t.created ? new Date(t.created).getTime() : Date.now(),
+      amount: t.amount, // in minor units (pence)
+      currency: t.currency,
+      description: t.description,
+      category: t.category,
+      is_load: t.is_load || false,
+      settled: t.settled || null,
+      notes: t.notes || '',
+      merchant: t.merchant ? { id: t.merchant.id || null, name: t.merchant.name || null, category: t.merchant.category || null } : null,
+      raw: t,
+      updatedAt: Date.now(),
+    };
+    batch.set(ref, norm, { merge: true });
+  }
+  await batch.commit();
+  // update last sync
+  await db.collection('profiles').doc(uid).set({ monzoLastSyncAt: Date.now() }, { merge: true });
+  return { ok: true, count: txs.length };
 });
 
 // ===== Strava OAuth Start
@@ -1157,6 +1333,26 @@ exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MO
   const uid = req.auth.uid;
   const analytics = await computeMonzoAnalytics(uid);
   return { ok: true, analytics };
+});
+
+// Nightly analytics refresh for all users with Monzo connected
+exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider','==','monzo').get();
+  let ok = 0, fail = 0;
+  for (const t of tokens.docs) {
+    try {
+      const data = t.data() || {};
+      const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
+      if (!uid) continue;
+      await computeMonzoAnalytics(uid);
+      ok++;
+    } catch (e) {
+      fail++;
+      try { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) }); } catch {}
+    }
+  }
+  return { ok, fail, scanned: tokens.size };
 });
 
 // ===== AI Planning Function
@@ -3151,6 +3347,172 @@ exports.syncTrakt = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) =
 exports.syncSteam = httpsV2.onCall({ secrets: [STEAM_WEB_API_KEY] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   return await _syncSteam(req.auth.uid);
+});
+
+// ===== n8n: inbound webhook for Calendar Blocks
+exports.n8nCalendarWebhook = httpsV2.onRequest({ secrets: [N8N_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const provided = String(req.get('x-webhook-secret') || req.query.secret || '');
+    const expected = process.env.N8N_WEBHOOK_SECRET || '';
+    if (!expected || provided !== expected) {
+      return res.status(401).send('Invalid or missing secret');
+    }
+    const body = (typeof req.body === 'string') ? JSON.parse(req.body) : (req.body || {});
+    const action = String(body.action || '').toLowerCase();
+    const ownerUid = String(body.ownerUid || '');
+    const id = String(body.id || body.block?.id || '');
+    const block = body.block || {};
+    if (!ownerUid) return res.status(400).send('Missing ownerUid');
+    const db = admin.firestore();
+    if (action === 'create') {
+      const doc = { ...block, ownerUid, createdAt: Date.now(), updatedAt: Date.now() };
+      const ref = await db.collection('calendar_blocks').add(doc);
+      return res.json({ ok: true, id: ref.id });
+    } else if (action === 'update') {
+      if (!id) return res.status(400).send('Missing id');
+      await db.collection('calendar_blocks').doc(id).set({ ...block, ownerUid, updatedAt: Date.now() }, { merge: true });
+      return res.json({ ok: true, id });
+    } else if (action === 'delete') {
+      if (!id) return res.status(400).send('Missing id');
+      await db.collection('calendar_blocks').doc(id).delete();
+      return res.json({ ok: true, id });
+    } else {
+      return res.status(400).send('Invalid action');
+    }
+  } catch (e) {
+    try {
+      await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'in', ts: Date.now(), error: String(e?.message || e) });
+    } catch {}
+    return res.status(500).send('Webhook error');
+  }
+});
+
+// Outbound notifications to n8n on calendar_blocks writes (optional)
+exports.onCalendarBlockWritten = firestoreV2.onDocumentWritten('calendar_blocks/{id}', { secrets: [N8N_OUTBOUND_WEBHOOK_URL, N8N_WEBHOOK_SECRET] }, async (event) => {
+  const url = process.env.N8N_OUTBOUND_WEBHOOK_URL;
+  if (!url) return;
+  const before = event.data?.before?.data();
+  const after = event.data?.after?.data();
+  const id = event.params.id;
+  const action = !before && after ? 'created' : (before && !after ? 'deleted' : 'updated');
+  const ownerUid = (after?.ownerUid || before?.ownerUid || null);
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET || '' },
+      body: JSON.stringify({ id, action, ownerUid, before, after, ts: Date.now() }),
+    });
+  } catch (e) {
+    try { await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'out', ts: Date.now(), id, action, error: String(e?.message || e) }); } catch {}
+  }
+});
+
+// Callable: schedule Steam games via n8n to Calendar Blocks
+exports.scheduleSteamGamesViaN8n = httpsV2.onCall({ secrets: [N8N_SCHEDULE_STEAM_URL, N8N_WEBHOOK_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const items = Array.isArray(req?.data?.items) ? req.data.items : [];
+  const settings = req?.data?.settings || { durationMinutes: 120 };
+  if (!items.length) throw new httpsV2.HttpsError('invalid-argument', 'No items provided');
+  const url = process.env.N8N_SCHEDULE_STEAM_URL;
+  if (!url) throw new httpsV2.HttpsError('failed-precondition', 'N8N_SCHEDULE_STEAM_URL not configured');
+  let result;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET || '' },
+      body: JSON.stringify({ ownerUid: uid, items, settings })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    result = await res.json();
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', 'n8n scheduling failed: ' + (e?.message || e));
+  }
+  const blocks = Array.isArray(result?.blocks) ? result.blocks : [];
+  const db = admin.firestore();
+  const created = [];
+  for (const b of blocks) {
+    const doc = {
+      ownerUid: uid,
+      persona: 'personal',
+      theme: b.theme || 'Growth',
+      category: b.category || 'Gaming',
+      start: new Date(b.start).getTime(),
+      end: new Date(b.end).getTime(),
+      flexibility: 'soft',
+      status: 'applied',
+      createdBy: 'automation',
+      source: 'steam',
+      note: b.note || b.title || '',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const ref = await db.collection('calendar_blocks').add(doc);
+    created.push(ref.id);
+  }
+  return { ok: true, created, count: created.length };
+});
+
+// ===== Finance: compute monthly aggregates (last 18 months)
+// DEPRECATED: legacy monthly aggregates; use computeMonzoAnalytics + monzo_budget_summary instead.
+exports.financeComputeMonthlyAggregates = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - 17, 1); // 18 months window
+  const snap = await db.collection('finance_transactions')
+    .where('ownerUid', '==', uid)
+    .where('created', '>=', start.getTime())
+    .get();
+  const byMonth = new Map(); // yyyymm -> { spend, income, currency, cats: {cat: amount} }
+  function keyOf(dMs){ const d = new Date(dMs); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}`; }
+  for (const docSnap of snap.docs) {
+    const t = docSnap.data() || {};
+    const k = keyOf(t.created || Date.now());
+    if (!byMonth.has(k)) byMonth.set(k, { spend: 0, income: 0, cats: {}, currency: t.currency || 'GBP' });
+    const m = byMonth.get(k);
+    const amt = Number(t.amount || 0);
+    if (amt < 0) {
+      const spend = -amt; // store as positive spend
+      m.spend += spend;
+      const cat = t.category || 'uncategorised';
+      m.cats[cat] = (m.cats[cat] || 0) + spend;
+    } else {
+      m.income += amt;
+    }
+    if (!m.currency && t.currency) m.currency = t.currency;
+  }
+  // write per-month docs
+  const batch = db.batch();
+  for (const [yyyymm, v] of byMonth.entries()) {
+    const ref = db.collection('finance_monthly').doc(`${uid}_${yyyymm}`);
+    batch.set(ref, { ownerUid: uid, yyyymm, spend: Math.round(v.spend), income: Math.round(v.income), currency: v.currency || 'GBP', categories: v.cats, updatedAt: Date.now() }, { merge: true });
+  }
+  await batch.commit();
+  return { ok: true, months: Array.from(byMonth.keys()).sort() };
+});
+
+// Compute finance on-track status vs budgets for the last 30 days
+// DEPRECATED: budget status callable; dashboard & roadmap now derive from analytics + finance_budgets.
+exports.financeComputeStatus = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const budgetsSnap = await db.collection('finance_budgets').doc(uid).get();
+  const budgets = budgetsSnap.exists ? (budgetsSnap.data() || {}) : {};
+  const byCategory = budgets.byCategory || {};
+  const budgetTotal = Object.values(byCategory).reduce((a,b)=>a+(Number(b)||0), 0);
+  const since = Date.now() - 30*86400000;
+  const txSnap = await db.collection('finance_transactions')
+    .where('ownerUid','==', uid)
+    .where('created','>=', since)
+    .get();
+  let actual = 0;
+  for (const d of txSnap.docs) {
+    const amt = Number((d.data()||{}).amount||0);
+    if (amt < 0) actual += -amt;
+  }
+  const onTrack = budgetTotal > 0 ? actual <= budgetTotal : null;
+  await db.collection('finance_status').doc(uid).set({ ownerUid: uid, actualLast30: Math.round(actual), budgetTotal: Math.round(budgetTotal), onTrack, updatedAt: Date.now() }, { merge: true });
+  return { ok: true, actualLast30: Math.round(actual), budgetTotal: Math.round(budgetTotal), onTrack };
 });
 
 // ===== Scheduled Syncs
