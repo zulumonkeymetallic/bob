@@ -11,6 +11,7 @@ import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug
 import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
+import BudgetSettings from './finance/BudgetSettings';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 const SETTINGS_TABS = ['themes', 'database', 'integrations', 'reminders', 'ai', 'system'] as const;
@@ -23,7 +24,6 @@ const normalizeTab = (value: string | null): SettingsTab => {
   }
   return DEFAULT_TAB;
 };
-import BudgetSettings from './finance/BudgetSettings';
  
 
 interface GlobalThemeSettings {
