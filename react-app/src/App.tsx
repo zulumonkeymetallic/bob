@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { Button } from 'react-bootstrap';
 import { Routes, Route, BrowserRouter as Router, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
@@ -60,11 +60,12 @@ import ThemeRoadmap from './components/visualization/ThemeRoadmap';
 import GoalRoadmapV3 from './components/visualization/GoalRoadmapV3';
 import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
-import TravelMap from './components/travel/TravelMap';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
-<<<<<<< HEAD
 import FinanceDashboard from './components/FinanceDashboard';
+
+// Lazy-loaded heavy routes
+const TravelMap = React.lazy(() => import('./components/travel/TravelMap'));
 
 function App() {
   return (
@@ -238,7 +239,14 @@ function AppContent() {
             <Route path="/routes" element={<RoutesManagementView />} />
             <Route path="/routines" element={<RoutesManagementView />} />
             <Route path="/routes/optimization" element={<RoutesManagementView />} />
-            <Route path="/travel" element={<TravelMap />} />
+            <Route
+              path="/travel"
+              element={
+                <Suspense fallback={<div style={{padding: 16}}>Loading Travel Map…</div>}>
+                  <TravelMap />
+                </Suspense>
+              }
+            />
             
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />

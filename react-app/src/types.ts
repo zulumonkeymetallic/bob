@@ -51,6 +51,12 @@ export interface Story {
   dueDate?: number; // Legacy compatibility
   taskCount?: number;
   doneTaskCount?: number;
+  // Optional travel/location metadata
+  countryCode?: string; // ISO alpha-2
+  city?: string;
+  locationName?: string; // Full display name
+  locationLat?: number;
+  locationLon?: number;
 }
 
 export interface Sprint {

@@ -5,6 +5,11 @@ import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { Goal, Story } from '../../types';
 import { generateRef } from '../../utils/referenceGenerator';
+import { geocodePlace, GeocodeResult } from '../../utils/geocoding';
+import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from 'react-simple-maps';
+import { continentForIso2 } from '../../utils/geoUtils';
+import worldCountries from 'world-atlas/countries-50m.json';
+import isoCountries from 'i18n-iso-countries';
 
 interface TravelEntry {
   id: string;
@@ -15,9 +20,14 @@ interface TravelEntry {
   linked_story_id?: string;
   continent: string;
   ownerUid: string;
+  // optional geo metadata if known
+  lat?: number;
+  lon?: number;
+  locationName?: string;
 }
 
 const CONTINENTS = ['Africa', 'Asia', 'Europe', 'North America', 'South America', 'Oceania', 'Antarctica'];
+const GEO_DATA: any = worldCountries as any;
 
 const TravelMap: React.FC = () => {
   const { currentUser } = useAuth();
@@ -26,6 +36,13 @@ const TravelMap: React.FC = () => {
   const [newCity, setNewCity] = useState('');
   const [continent, setContinent] = useState('Europe');
   const [saving, setSaving] = useState(false);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
+  const [selectedTripId, setSelectedTripId] = useState<string>('');
+  const [colorMode, setColorMode] = useState<'visited' | 'trip' | 'both'>('both');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [result, setResult] = useState<GeocodeResult | null>(null);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -41,6 +58,28 @@ const TravelMap: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid]);
 
+  // Subscribe to user's goals (for Trip selection)
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const gq = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(gq, (snap) => {
+      const data = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[];
+      setGoals(data);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Subscribe to stories to compute Trip overlays
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const sq = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(sq, (snap) => {
+      const data = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+      setStories(data);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
   const totalsByContinent = useMemo(() => {
     const totals: Record<string, { visited: number; total: number }> = {};
     CONTINENTS.forEach(c => totals[c] = { visited: 0, total: 0 });
@@ -51,6 +90,25 @@ const TravelMap: React.FC = () => {
     });
     return totals;
   }, [entries]);
+
+  const visitedIso2 = useMemo(() => {
+    const set = new Set<string>();
+    entries.forEach(e => {
+      if (e.visited && e.country_code) set.add(e.country_code.toUpperCase());
+    });
+    return set;
+  }, [entries]);
+
+  const tripIso2 = useMemo(() => {
+    if (!selectedTripId) return new Set<string>();
+    const set = new Set<string>();
+    stories.forEach(s => {
+      if (s.goalId === selectedTripId && s.countryCode) {
+        set.add(s.countryCode.toUpperCase());
+      }
+    });
+    return set;
+  }, [stories, selectedTripId]);
 
   const addVisited = async () => {
     if (!currentUser?.uid || !newCountry.trim()) return;
@@ -86,24 +144,20 @@ const TravelMap: React.FC = () => {
   const convertToStory = async (e: TravelEntry) => {
     if (!currentUser?.uid) return;
     console.log('📖 TravelMap: converting location to Story', { id: e.id, country: e.country_code, city: e.city });
-    // Find a Travel goal; if absent, skip linking goal
-    let travelGoal: Goal | undefined;
-    try {
-      const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
-      const snap = await getDocs(q);
-      const goals = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[];
-      travelGoal = goals.find(g => g.title?.toLowerCase() === 'travel');
-      console.log('📖 TravelMap: resolved Travel goal', { found: !!travelGoal, goalId: travelGoal?.id });
-    } catch {}
+
+    // Use selected trip if provided, else fall back to a Travel goal if exists
+    let goalToUse: Goal | undefined = goals.find(g => g.id === selectedTripId);
+    if (!goalToUse) {
+      goalToUse = goals.find(g => (g.title || '').toLowerCase() === 'travel') || goals.find(g => g.theme === 7);
+    }
 
     const title = `Visit ${e.city ? e.city + ', ' : ''}${e.country_code}`;
-    const newStory: Omit<Story, 'id' | 'createdAt' | 'updatedAt' | 'ref'> = {
-      ref: '' as any,
-      persona: 'personal',
+    const storyPayload = {
+      persona: 'personal' as const,
       title,
       description: `Travel log for ${title}.`,
-      goalId: travelGoal?.id || '',
-      theme: travelGoal?.theme || 2,
+      goalId: goalToUse?.id || '',
+      theme: goalToUse?.theme || 7,
       status: 1,
       priority: 2,
       points: 1,
@@ -112,8 +166,12 @@ const TravelMap: React.FC = () => {
       sprintId: undefined,
       orderIndex: 0,
       ownerUid: currentUser.uid,
-      acceptanceCriteria: []
-    } as any;
+      acceptanceCriteria: [] as string[],
+      // location metadata
+      countryCode: e.country_code?.toUpperCase(),
+      city: e.city,
+      locationName: title,
+    } satisfies Omit<Story, 'id' | 'createdAt' | 'updatedAt' | 'ref'>;
 
     // Generate short story reference and persist
     const existing = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
@@ -121,7 +179,7 @@ const TravelMap: React.FC = () => {
     const shortRef = generateRef('story', existingRefs);
 
     const storyRef = await addDoc(collection(db, 'stories'), {
-      ...newStory,
+      ...storyPayload,
       ref: shortRef,
       referenceNumber: shortRef,
       createdAt: serverTimestamp(),
@@ -132,11 +190,146 @@ const TravelMap: React.FC = () => {
     console.log('🔗 TravelMap: linked story to travel entry', { travelId: e.id, storyId: storyRef.id });
   };
 
+  // Create a story directly from a geocode result (without a travel entry yet)
+  const createStoryFromGeocode = async (g: GeocodeResult) => {
+    if (!currentUser?.uid) return;
+    let goalToUse: Goal | undefined = goals.find(g0 => g0.id === selectedTripId) || goals.find(g0 => g0.theme === 7);
+    const title = `Visit ${g.city ? g.city + ', ' : ''}${g.countryCode || ''}`.trim() || g.displayName;
+    const existing = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
+    const existingRefs = existing.docs.map(d => (d.data() as any).ref).filter(Boolean) as string[];
+    const shortRef = generateRef('story', existingRefs);
+    const storyRef = await addDoc(collection(db, 'stories'), {
+      persona: 'personal',
+      title,
+      description: `Travel log for ${g.displayName}.`,
+      goalId: goalToUse?.id || '',
+      theme: goalToUse?.theme || 7,
+      status: 1,
+      priority: 2,
+      points: 1,
+      wipLimit: 3,
+      tags: ['travel'],
+      sprintId: undefined,
+      orderIndex: 0,
+      ownerUid: currentUser.uid,
+      acceptanceCriteria: [],
+      ref: shortRef,
+      referenceNumber: shortRef,
+      // location metadata
+      countryCode: g.countryCode,
+      city: g.city,
+      locationName: g.displayName,
+      locationLat: g.lat,
+      locationLon: g.lon,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+    console.log('✅ TravelMap: story created from geocode', { storyId: storyRef.id });
+  };
+
+  const runGeocode = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    const r = await geocodePlace(searchQuery.trim());
+    setResult(r);
+    setSearching(false);
+  };
+
+  const addGeocodeAsVisited = async () => {
+    if (!currentUser?.uid || !result) return;
+    setSaving(true);
+    try {
+      await addDoc(collection(db, 'travel'), {
+        country_code: (result.countryCode || '').toUpperCase(),
+        city: result.city || null,
+        visited: true,
+        visitedAt: serverTimestamp(),
+        linked_story_id: null,
+        continent: continentForIso2(result.countryCode) || continent,
+        lat: result.lat,
+        lon: result.lon,
+        locationName: result.displayName,
+        ownerUid: currentUser.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createTripGoal = async () => {
+    if (!currentUser?.uid) return;
+    const name = window.prompt('New Trip name (Goal title)');
+    if (!name) return;
+    const now = serverTimestamp();
+    const created = await addDoc(collection(db, 'goals'), {
+      persona: 'personal',
+      title: name,
+      description: 'Trip goal created from Travel Map',
+      theme: 7, // Travel & Adventure
+      size: 2,
+      timeToMasterHours: 0,
+      confidence: 2,
+      status: 0,
+      ownerUid: currentUser.uid,
+      createdAt: now,
+      updatedAt: now
+    });
+    setSelectedTripId(created.id);
+  };
+
+  const handleCountryClick = async (iso2: string) => {
+    if (!currentUser?.uid) return;
+    const existing = entries.find(e => e.country_code?.toUpperCase() === iso2.toUpperCase());
+    const now = serverTimestamp();
+    if (existing) {
+      await updateDoc(doc(db, 'travel', existing.id), { visited: !existing.visited, updatedAt: now });
+    } else {
+      await addDoc(collection(db, 'travel'), {
+        country_code: iso2.toUpperCase(),
+        visited: true,
+        visitedAt: now,
+        linked_story_id: null,
+        continent: continentForIso2(iso2),
+        ownerUid: currentUser.uid,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+  };
+
+  const geocodeEntry = async (e: TravelEntry) => {
+    if (!currentUser?.uid) return;
+    const q = `${e.city ? e.city + ', ' : ''}${e.country_code}`.trim();
+    const r = await geocodePlace(q);
+    if (!r) return;
+    await updateDoc(doc(db, 'travel', e.id), {
+      lat: r.lat,
+      lon: r.lon,
+      locationName: r.displayName,
+      continent: continentForIso2(r.countryCode) || e.continent,
+      updatedAt: serverTimestamp()
+    });
+  };
+
   return (
     <Card className="border-0 shadow-sm">
       <Card.Header className="bg-white d-flex align-items-center justify-content-between">
-        <strong>Travel Map (Beta)</strong>
+        <strong>Travel Map</strong>
         <div className="d-flex gap-2">
+          <Form.Select size="sm" value={selectedTripId} onChange={(e) => setSelectedTripId(e.target.value)} style={{ width: 200 }}>
+            <option value="">Trip (Goal) — optional</option>
+            {goals.map(g => (
+              <option key={g.id} value={g.id}>{g.title}</option>
+            ))}
+          </Form.Select>
+          <Button size="sm" variant="outline-secondary" onClick={createTripGoal}>New Trip</Button>
+          <Form.Select size="sm" value={colorMode} onChange={(e) => setColorMode(e.target.value as any)} style={{ width: 160 }}>
+            <option value="both">Color: Both</option>
+            <option value="visited">Color: Visited</option>
+            <option value="trip">Color: Trip</option>
+          </Form.Select>
           <Form.Select size="sm" value={continent} onChange={(ev) => setContinent(ev.target.value)} style={{ width: 180 }}>
             {CONTINENTS.map(c => (<option key={c} value={c}>{c}</option>))}
           </Form.Select>
@@ -146,9 +339,66 @@ const TravelMap: React.FC = () => {
         </div>
       </Card.Header>
       <Card.Body>
-        {/* Map placeholder (avoids extra deps); can be upgraded later */}
-        <div style={{ height: 420, marginBottom: 16, borderRadius: 8, border: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
-          Map view coming soon
+        {/* Search + Geocode */}
+        <div className="d-flex gap-2 mb-2">
+          <Form.Control size="sm" placeholder="Search a place (e.g., Paris, France)" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+          <Button size="sm" onClick={runGeocode} disabled={searching || !searchQuery.trim()}>{searching ? 'Searching…' : 'Search'}</Button>
+          <Button size="sm" variant="outline-success" onClick={addGeocodeAsVisited} disabled={!result || saving}>Add as Visited</Button>
+          <Button size="sm" variant="outline-primary" onClick={() => result && createStoryFromGeocode(result)} disabled={!result}>Create Story</Button>
+        </div>
+
+        {/* Map with country coloring and optional marker */}
+        <div style={{ height: 420, marginBottom: 16, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>
+          <ComposableMap projectionConfig={{ scale: 150 }} style={{ width: '100%', height: '100%' }}>
+            <ZoomableGroup zoom={1} center={[0, 20]}>
+              <Geographies geography={GEO_DATA}>
+                {({ geographies }) => geographies.map(geo => {
+                  // world-atlas uses numeric country codes as geo.id. Convert to ISO alpha-2.
+                  const numeric = (geo.id ?? '').toString().padStart(3, '0');
+                  const iso2 = (isoCountries.numericToAlpha2 ? isoCountries.numericToAlpha2(numeric) : '').toUpperCase();
+                  const inTrip = iso2 && tripIso2.has(iso2);
+                  const visited = iso2 && visitedIso2.has(iso2);
+                  const fill = (() => {
+                    if (colorMode === 'trip') return inTrip ? '#0ea5e9' : '#e5e7eb';
+                    if (colorMode === 'visited') return visited ? '#10b981' : '#e5e7eb';
+                    return inTrip ? '#0ea5e9' : (visited ? '#10b981' : '#e5e7eb');
+                  })();
+                  const hover = (() => {
+                    if (colorMode === 'trip') return inTrip ? '#0284c7' : '#d1d5db';
+                    if (colorMode === 'visited') return visited ? '#059669' : '#d1d5db';
+                    return inTrip ? '#0284c7' : (visited ? '#059669' : '#d1d5db');
+                  })();
+                  const pressed = (() => {
+                    if (colorMode === 'trip') return inTrip ? '#0369a1' : '#cbd5e1';
+                    if (colorMode === 'visited') return visited ? '#047857' : '#cbd5e1';
+                    return inTrip ? '#0369a1' : (visited ? '#047857' : '#cbd5e1');
+                  })();
+                  return (
+                    <Geography
+                      key={geo.rsmKey}
+                      geography={geo}
+                      style={{
+                        default: { fill, outline: 'none' },
+                        hover: { fill: hover, outline: 'none' },
+                        pressed: { fill: pressed, outline: 'none' }
+                      }}
+                      onClick={() => iso2 && handleCountryClick(iso2)}
+                    />
+                  );
+                })}
+              </Geographies>
+              {result && (
+                <Marker coordinates={[result.lon, result.lat]}>
+                  <circle r={4} fill="#ef4444" stroke="#fff" strokeWidth={1} />
+                </Marker>
+              )}
+              {entries.filter(e => e.lat && e.lon).map(e => (
+                <Marker key={e.id} coordinates={[e.lon as number, e.lat as number]}>
+                  <circle r={3} fill="#f59e0b" stroke="#fff" strokeWidth={1} />
+                </Marker>
+              ))}
+            </ZoomableGroup>
+          </ComposableMap>
         </div>
         <Row>
           <Col md={6}>
@@ -166,6 +416,7 @@ const TravelMap: React.FC = () => {
                     <Button size="sm" variant={e.visited ? 'success' : 'outline-secondary'} onClick={() => toggleVisited(e)}>
                       {e.visited ? 'Visited' : 'Not Visited'}
                     </Button>
+                    {!e.lat && <Button size="sm" variant="outline-secondary" onClick={() => geocodeEntry(e)}>Geocode</Button>}
                     <Button size="sm" variant="outline-primary" onClick={() => convertToStory(e)} disabled={!!e.linked_story_id}>To Story</Button>
                   </div>
                 </div>
