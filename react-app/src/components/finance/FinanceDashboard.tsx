@@ -84,8 +84,10 @@ const FinanceDashboard: React.FC = () => {
       const spend = Math.max(0, -(t.amount || 0));
       if (t.created >= d30) last30 += spend;
       else if (t.created >= d60 && t.created < d30) prev30 += spend;
-      const cat = t.category || 'uncategorised';
-      byCat[cat] = (byCat[cat] || 0) + spend;
+      if (t.created >= d60) {
+        const cat = t.category || 'uncategorised';
+        byCat[cat] = (byCat[cat] || 0) + spend;
+      }
     }
     const topCats = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).slice(0,8);
     const delta = last30 - prev30;
