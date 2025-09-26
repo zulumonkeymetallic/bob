@@ -241,8 +241,8 @@ const FinanceDashboard: React.FC = () => {
             {isRecomputing ? <Spinner animation="border" size="sm" className="me-2" /> : null}
             Refresh Analytics
           </Button>
-          <Button variant="primary" as="a" href="/admin">
-            Go to Admin (Monzo)
+          <Button variant="primary" as="a" href="/settings?tab=integrations">
+            Open Integrations Settings
           </Button>
         </Col>
       </Row>
@@ -318,7 +318,7 @@ const FinanceDashboard: React.FC = () => {
                       {transactions.length === 0 && (
                         <tr>
                           <td colSpan={6} className="text-center text-muted py-4">
-                            No transactions synced yet. Connect Monzo from Admin.
+                            No transactions synced yet. Connect Monzo from Settings → Integrations.
                           </td>
                         </tr>
                       )}
