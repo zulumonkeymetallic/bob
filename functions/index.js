@@ -1335,6 +1335,26 @@ exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MO
   return { ok: true, analytics };
 });
 
+// Nightly analytics refresh for all users with Monzo connected
+exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider','==','monzo').get();
+  let ok = 0, fail = 0;
+  for (const t of tokens.docs) {
+    try {
+      const data = t.data() || {};
+      const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
+      if (!uid) continue;
+      await computeMonzoAnalytics(uid);
+      ok++;
+    } catch (e) {
+      fail++;
+      try { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) }); } catch {}
+    }
+  }
+  return { ok, fail, scanned: tokens.size };
+});
+
 // ===== AI Planning Function
 exports.planCalendar = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const uid = request.auth?.uid;

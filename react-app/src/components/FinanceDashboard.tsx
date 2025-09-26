@@ -234,6 +234,20 @@ const FinanceDashboard: React.FC = () => {
       .map(([month, values]) => ({ month, values }));
   }, [summary?.monthly]);
 
+  // Projections based on average of available months
+  const projections = useMemo(() => {
+    const entries = monthlySeries;
+    if (!entries || entries.length === 0) return { spendAnnual: null as number | null, savingsAnnual: null as number | null };
+    const sums = entries.reduce((acc, e) => {
+      acc.spend += (e.values.mandatory || 0) + (e.values.optional || 0);
+      acc.savings += (e.values.savings || 0);
+      return acc;
+    }, { spend: 0, savings: 0 });
+    const avgSpend = sums.spend / entries.length;
+    const avgSavings = sums.savings / entries.length;
+    return { spendAnnual: avgSpend * 12, savingsAnnual: avgSavings * 12 };
+  }, [monthlySeries]);
+
   // Budgets vs Actuals (current window from summary.categories)
   const budgetsView = useMemo(() => {
     if (!summary || !Array.isArray(summary.categories) || Object.keys(budgets).length === 0) return [] as Array<{ key: string; actual: number; budget: number }>;
@@ -471,6 +485,29 @@ const FinanceDashboard: React.FC = () => {
                         );
                       })}
                     </div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col lg={4}>
+              <Card className="shadow-sm border-0 h-100">
+                <Card.Body>
+                  <Card.Title>Projections</Card.Title>
+                  {!projections.spendAnnual && !projections.savingsAnnual ? (
+                    <Alert variant="light" className="mb-0">Insufficient data for projections.</Alert>
+                  ) : (
+                    <Table size="sm" borderless className="mb-0">
+                      <tbody>
+                        <tr>
+                          <td className="text-muted">Projected Annual Spend</td>
+                          <td className="text-end fw-semibold">{formatCurrency(projections.spendAnnual || 0)}</td>
+                        </tr>
+                        <tr>
+                          <td className="text-muted">Projected Annual Savings</td>
+                          <td className="text-end fw-semibold">{formatCurrency(projections.savingsAnnual || 0)}</td>
+                        </tr>
+                      </tbody>
+                    </Table>
                   )}
                 </Card.Body>
               </Card>

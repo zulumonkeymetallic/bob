@@ -123,17 +123,30 @@ const GoalRoadmapV3: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid]);
 
-  // Finance on-track badge (read-only integration)
+  // Finance on-track badge derived from Monzo analytics + user budgets
   useEffect(() => {
     if (!currentUser?.uid) return;
-    const fetchStatus = async () => {
+    const load = async () => {
       try {
-        const ref = doc(db, 'finance_status', currentUser.uid);
-        const snap = await getDoc(ref);
-        if (snap.exists()) setFinanceOnTrack(((snap.data() as any)?.onTrack ?? null));
-      } catch {}
+        const budgetsSnap = await getDoc(doc(db, 'finance_budgets', currentUser.uid));
+        const summarySnap = await getDoc(doc(db, 'monzo_budget_summary', currentUser.uid));
+        if (!budgetsSnap.exists() || !summarySnap.exists()) { setFinanceOnTrack(null); return; }
+        const budgets: any = budgetsSnap.data();
+        const categories: Array<any> = Array.isArray((summarySnap.data() as any)?.categories) ? (summarySnap.data() as any).categories : [];
+        const byKey: Record<string, number> = {};
+        for (const [k, v] of Object.entries(budgets.byCategory || {})) { byKey[String(k).toLowerCase()] = Number(v || 0); }
+        const totalBudget = Object.values(byKey).reduce((a,b) => a + (Number(b)||0), 0);
+        let actual = 0;
+        for (const c of categories) {
+          const key = String(c.label || '').toLowerCase();
+          if (key && byKey[key] != null) { actual += Number(c.amount || 0); }
+        }
+        if (totalBudget > 0) setFinanceOnTrack(actual <= totalBudget); else setFinanceOnTrack(null);
+      } catch {
+        setFinanceOnTrack(null);
+      }
     };
-    fetchStatus();
+    load();
   }, [currentUser?.uid]);
 
   // Auto-fit on first load when goals arrive
