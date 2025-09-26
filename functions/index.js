@@ -571,6 +571,318 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
   }
 });
 
+async function ensureMonzoAccessToken(uid) {
+  const db = admin.firestore();
+  const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+  const snap = await tokenRef.get();
+  if (!snap.exists) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Monzo is not connected for this user');
+  }
+
+  const data = snap.data() || {};
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  let accessToken = data.access_token || null;
+  let expiresAt = Number(data.expires_at || 0);
+
+  const needsRefresh = !accessToken || !expiresAt || expiresAt <= nowSeconds + 90;
+  if (!needsRefresh) {
+    return { accessToken, tokenRef, tokenData: data };
+  }
+
+  const refreshToken = data.refresh_token;
+  if (!refreshToken) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Missing Monzo refresh token');
+  }
+  if (!process.env.MONZO_CLIENT_ID || !process.env.MONZO_CLIENT_SECRET) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Monzo API credentials not configured');
+  }
+
+  const refreshed = await fetchJson('https://api.monzo.com/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: process.env.MONZO_CLIENT_ID,
+      client_secret: process.env.MONZO_CLIENT_SECRET,
+      refresh_token: refreshToken,
+    }).toString(),
+  });
+
+  accessToken = refreshed.access_token;
+  const newRefresh = refreshed.refresh_token || refreshToken;
+  const expiresIn = Number(refreshed.expires_in || 0);
+  expiresAt = expiresIn ? nowSeconds + expiresIn : null;
+
+  await tokenRef.set({
+    access_token: accessToken,
+    refresh_token: newRefresh,
+    expires_at: expiresAt,
+    scope: refreshed.scope || data.scope || null,
+    token_type: refreshed.token_type || data.token_type || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { accessToken, tokenRef, tokenData: { ...data, access_token: accessToken, refresh_token: newRefresh, expires_at: expiresAt } };
+}
+
+async function monzoApi(accessToken, path, query = {}) {
+  const url = new URL(`https://api.monzo.com${path}`);
+  if (query instanceof URLSearchParams) {
+    for (const [key, value] of query.entries()) {
+      url.searchParams.append(key, value);
+    }
+  } else {
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === null || value === '') continue;
+      if (Array.isArray(value)) {
+        value.forEach((v) => url.searchParams.append(key, String(v)));
+      } else {
+        url.searchParams.append(key, String(value));
+      }
+    }
+  }
+
+  return fetchJson(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since }) {
+  const db = admin.firestore();
+  const transactionsCol = db.collection('monzo_transactions');
+  const limit = 200;
+  let cursor = since || null;
+  let prevCursor = cursor || null;
+  let total = 0;
+  let lastCreated = since || null;
+
+  while (true) {
+    const params = new URLSearchParams();
+    params.set('account_id', accountId);
+    params.set('limit', String(limit));
+    if (cursor) params.set('since', cursor);
+    params.append('expand[]', 'merchant');
+
+    const data = await monzoApi(accessToken, '/transactions', params);
+    const transactions = data.transactions || [];
+    if (!transactions.length) break;
+
+    const batch = db.batch();
+    for (const tx of transactions) {
+      const docRef = transactionsCol.doc(`${uid}_${tx.id}`);
+      const docData = {
+        ownerUid: uid,
+        accountId,
+        transactionId: tx.id,
+        amount: tx.amount,
+        currency: tx.currency,
+        description: tx.description || null,
+        category: tx.category || null,
+        notes: tx.notes || null,
+        isLoad: !!tx.is_load,
+        isSettled: !!tx.settled,
+        settledISO: tx.settled || null,
+        createdISO: tx.created || null,
+        scheme: tx.scheme || null,
+        declineReason: tx.decline_reason || null,
+        counterparty: tx.counterparty || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        raw: tx,
+      };
+      if (tx.created) {
+        docData.createdAt = admin.firestore.Timestamp.fromDate(new Date(tx.created));
+      }
+      if (tx.settled) {
+        docData.settledAt = admin.firestore.Timestamp.fromDate(new Date(tx.settled));
+      }
+      if (tx.merchant && typeof tx.merchant === 'object') {
+        docData.merchant = {
+          id: tx.merchant.id || null,
+          name: tx.merchant.name || null,
+          emoji: tx.merchant.emoji || null,
+          logo: tx.merchant.logo || null,
+          category: tx.merchant.category || null,
+        };
+        docData.merchantRaw = tx.merchant;
+      } else {
+        docData.merchant = null;
+      }
+
+      batch.set(docRef, docData, { merge: true });
+    }
+
+    await batch.commit();
+
+    total += transactions.length;
+    const lastTx = transactions[transactions.length - 1];
+    if (lastTx?.created) {
+      lastCreated = lastTx.created;
+      prevCursor = cursor;
+      const nextDate = new Date(lastTx.created);
+      cursor = new Date(nextDate.getTime() + 1).toISOString();
+      if (cursor === prevCursor) break;
+    } else {
+      break;
+    }
+
+    if (transactions.length < limit) break;
+  }
+
+  return { count: total, lastCreated };
+}
+
+async function syncMonzoDataForUser(uid, { since } = {}) {
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+  const db = admin.firestore();
+  const summary = { accounts: 0, pots: 0, transactions: 0, accountsSynced: [] };
+
+  const accountsResp = await monzoApi(accessToken, '/accounts', { account_type: 'uk_retail' });
+  const accounts = accountsResp.accounts || [];
+  summary.accounts = accounts.length;
+
+  if (accounts.length) {
+    const batch = db.batch();
+    for (const account of accounts) {
+      const docRef = db.collection('monzo_accounts').doc(`${uid}_${account.id}`);
+      const docData = {
+        ownerUid: uid,
+        accountId: account.id,
+        name: account.description || account.name || null,
+        type: account.type || null,
+        accountNumber: account.account_number || null,
+        sortCode: account.sort_code || null,
+        closed: !!account.closed,
+        raw: account,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (account.created) {
+        docData.accountCreatedAt = admin.firestore.Timestamp.fromDate(new Date(account.created));
+        docData.accountCreatedISO = account.created;
+      }
+      batch.set(docRef, docData, { merge: true });
+    }
+    await batch.commit();
+  }
+
+  const potsResp = await monzoApi(accessToken, '/pots');
+  const pots = potsResp.pots || [];
+  summary.pots = pots.length;
+  if (pots.length) {
+    const batch = db.batch();
+    for (const pot of pots) {
+      const docRef = db.collection('monzo_pots').doc(`${uid}_${pot.id}`);
+      const docData = {
+        ownerUid: uid,
+        potId: pot.id,
+        name: pot.name || null,
+        balance: pot.balance,
+        currency: pot.currency || null,
+        accountId: pot.current_account_id || null,
+        goalAmount: pot.goal_amount || null,
+        goalCurrency: pot.goal_currency || pot.currency || null,
+        roundUpEnabled: pot.round_up?.enabled || false,
+        deleted: !!pot.deleted,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        raw: pot,
+      };
+      if (pot.created) {
+        docData.potCreatedAt = admin.firestore.Timestamp.fromDate(new Date(pot.created));
+        docData.potCreatedISO = pot.created;
+      }
+      batch.set(docRef, docData, { merge: true });
+    }
+    await batch.commit();
+  }
+
+  for (const account of accounts) {
+    const accountId = account.id;
+    const syncStateRef = db.collection('monzo_sync_state').doc(`${uid}_${accountId}`);
+    const syncSnap = await syncStateRef.get();
+    const stateData = syncSnap.data() || {};
+    const sinceCursor = since || stateData.lastTransactionCreated || null;
+
+    const txSummary = await syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since: sinceCursor });
+    summary.transactions += txSummary.count;
+    summary.accountsSynced.push({ accountId, transactions: txSummary.count, lastCreated: txSummary.lastCreated || null });
+
+    const update = {
+      ownerUid: uid,
+      accountId,
+      lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastSyncCount: txSummary.count,
+      lastSyncSince: sinceCursor || null,
+    };
+    if (txSummary.lastCreated) {
+      update.lastTransactionCreated = txSummary.lastCreated;
+      update.lastTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.lastCreated));
+    }
+
+    await syncStateRef.set(update, { merge: true });
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    monzoLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return summary;
+}
+
+exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+
+  const sinceInput = req.data?.since || null;
+  let sinceIso = null;
+  if (sinceInput) {
+    const sinceDate = new Date(sinceInput);
+    if (isNaN(sinceDate.getTime())) {
+      throw new httpsV2.HttpsError('invalid-argument', 'since must be a valid date or ISO string');
+    }
+    sinceIso = sinceDate.toISOString();
+  }
+
+  const jobId = req.data?.jobId ? String(req.data.jobId) : null;
+  const db = admin.firestore();
+  let jobRef = null;
+  if (jobId) {
+    jobRef = db.collection('monzo_sync_jobs').doc(jobId);
+    const jobSnap = await jobRef.get();
+    if (!jobSnap.exists) {
+      throw new httpsV2.HttpsError('not-found', 'Monzo sync job not found');
+    }
+    const jobData = jobSnap.data() || {};
+    if (jobData.ownerUid && jobData.ownerUid !== uid) {
+      throw new httpsV2.HttpsError('permission-denied', 'Cannot run a Monzo sync job for another user');
+    }
+    await jobRef.set({
+      state: 'in-progress',
+      startedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  try {
+    const summary = await syncMonzoDataForUser(uid, { since: sinceIso });
+    if (jobRef) {
+      await jobRef.set({
+        state: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastResult: summary,
+      }, { merge: true });
+    }
+    return { ok: true, ...summary };
+  } catch (error) {
+    if (jobRef) {
+      await jobRef.set({
+        state: 'failed',
+        error: String(error?.message || error),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error.message || 'Monzo sync failed');
+  }
+});
+
 // ===== AI Planning Function
 exports.planCalendar = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const uid = request.auth?.uid;

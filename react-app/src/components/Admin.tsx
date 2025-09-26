@@ -188,6 +188,21 @@ const Admin = () => {
       });
   };
 
+  const handleSyncMonzo = () => {
+    const syncMonzo = httpsCallable(functions, 'syncMonzo');
+    logMessage('Syncing Monzo data...');
+    setMonzoStatus('Running Monzo sync...');
+    syncMonzo({})
+      .then(result => {
+        logMessage(`Monzo sync: ${JSON.stringify(result.data)}`);
+        setMonzoStatus('✅ Monzo sync complete');
+      })
+      .catch(error => {
+        logMessage(`Monzo sync failed: ${error.message}`);
+        setMonzoStatus('❌ Monzo sync failed: ' + error.message);
+      });
+  };
+
   const handleSyncParkrun = () => {
     if (!user) return;
     const syncParkrun = httpsCallable(functions, 'syncParkrun');
@@ -298,6 +313,7 @@ const Admin = () => {
           </div>
           <div className="mt-3 d-flex gap-2 align-items-center">
             <button className="btn btn-outline-primary" onClick={handleConnectMonzo}>Connect Monzo</button>
+            <button className="btn btn-primary" onClick={handleSyncMonzo}>Sync Monzo</button>
             {monzoStatus && <span className="ms-2 small text-muted">{monzoStatus}</span>}
           </div>
           <div className="mt-3 d-flex gap-2 align-items-center">
