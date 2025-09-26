@@ -43,6 +43,8 @@ const TravelMap: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [result, setResult] = useState<GeocodeResult | null>(null);
+  const [showVisitedMarkers, setShowVisitedMarkers] = useState(true);
+  const [showTripMarkers, setShowTripMarkers] = useState(true);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -108,6 +110,13 @@ const TravelMap: React.FC = () => {
       }
     });
     return set;
+  }, [stories, selectedTripId]);
+
+  const tripStoryMarkers = useMemo(() => {
+    if (!selectedTripId) return [] as Array<{ id: string; lon: number; lat: number }>;
+    return stories
+      .filter(s => s.goalId === selectedTripId && typeof s.locationLat === 'number' && typeof s.locationLon === 'number')
+      .map(s => ({ id: s.id, lon: s.locationLon as number, lat: s.locationLat as number }));
   }, [stories, selectedTripId]);
 
   const addVisited = async () => {
@@ -340,15 +349,31 @@ const TravelMap: React.FC = () => {
       </Card.Header>
       <Card.Body>
         {/* Search + Geocode */}
-        <div className="d-flex gap-2 mb-2">
+        <div className="d-flex gap-2 mb-2 align-items-center flex-wrap">
           <Form.Control size="sm" placeholder="Search a place (e.g., Paris, France)" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
           <Button size="sm" onClick={runGeocode} disabled={searching || !searchQuery.trim()}>{searching ? 'Searching…' : 'Search'}</Button>
           <Button size="sm" variant="outline-success" onClick={addGeocodeAsVisited} disabled={!result || saving}>Add as Visited</Button>
           <Button size="sm" variant="outline-primary" onClick={() => result && createStoryFromGeocode(result)} disabled={!result}>Create Story</Button>
+          <div className="ms-auto d-flex align-items-center gap-3">
+            <Form.Check
+              type="checkbox"
+              id="visited-markers-toggle"
+              label="Visited markers"
+              checked={showVisitedMarkers}
+              onChange={(e)=>setShowVisitedMarkers(e.target.checked)}
+            />
+            <Form.Check
+              type="checkbox"
+              id="trip-markers-toggle"
+              label="Trip markers"
+              checked={showTripMarkers}
+              onChange={(e)=>setShowTripMarkers(e.target.checked)}
+            />
+          </div>
         </div>
 
         {/* Map with country coloring and optional marker */}
-        <div style={{ height: 420, marginBottom: 16, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>
+        <div style={{ height: 420, marginBottom: 8, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff' }}>
           <ComposableMap projectionConfig={{ scale: 150 }} style={{ width: '100%', height: '100%' }}>
             <ZoomableGroup zoom={1} center={[0, 20]}>
               <Geographies geography={GEO_DATA}>
@@ -392,13 +417,36 @@ const TravelMap: React.FC = () => {
                   <circle r={4} fill="#ef4444" stroke="#fff" strokeWidth={1} />
                 </Marker>
               )}
-              {entries.filter(e => e.lat && e.lon).map(e => (
+              {showVisitedMarkers && entries.filter(e => e.lat && e.lon).map(e => (
                 <Marker key={e.id} coordinates={[e.lon as number, e.lat as number]}>
                   <circle r={3} fill="#f59e0b" stroke="#fff" strokeWidth={1} />
                 </Marker>
               ))}
+              {showTripMarkers && tripStoryMarkers.map(m => (
+                <Marker key={`trip-${m.id}`} coordinates={[m.lon, m.lat]}>
+                  <circle r={3} fill="#8b5cf6" stroke="#fff" strokeWidth={1} />
+                </Marker>
+              ))}
             </ZoomableGroup>
           </ComposableMap>
+        </div>
+        {/* Legend */}
+        <div className="d-flex align-items-center gap-3 mb-3 small" aria-label="Map legend">
+          <span className="d-inline-flex align-items-center gap-1">
+            <span style={{ width: 12, height: 12, background: '#0ea5e9', display: 'inline-block', border: '1px solid #cbd5e1' }} /> Trip countries
+          </span>
+          <span className="d-inline-flex align-items-center gap-1">
+            <span style={{ width: 12, height: 12, background: '#10b981', display: 'inline-block', border: '1px solid #cbd5e1' }} /> Visited countries
+          </span>
+          <span className="d-inline-flex align-items-center gap-1">
+            <span style={{ width: 10, height: 10, background: '#f59e0b', borderRadius: '50%', display: 'inline-block', border: '1px solid #fff' }} /> Visited marker
+          </span>
+          <span className="d-inline-flex align-items-center gap-1">
+            <span style={{ width: 10, height: 10, background: '#8b5cf6', borderRadius: '50%', display: 'inline-block', border: '1px solid #fff' }} /> Trip marker
+          </span>
+          <span className="d-inline-flex align-items-center gap-1">
+            <span style={{ width: 10, height: 10, background: '#ef4444', borderRadius: '50%', display: 'inline-block', border: '1px solid #fff' }} /> Search result
+          </span>
         </div>
         <Row>
           <Col md={6}>

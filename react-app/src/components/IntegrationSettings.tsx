@@ -64,6 +64,7 @@ const IntegrationSettings: React.FC = () => {
   const [monzoTransactions, setMonzoTransactions] = useState<MonzoTransactionPreview[]>([]);
   const [monzoMessage, setMonzoMessage] = useState<string | null>(null);
   const [monzoLoading, setMonzoLoading] = useState(false);
+  const [monzoWebhookAccountId, setMonzoWebhookAccountId] = useState('');
 
   const [stravaActivities, setStravaActivities] = useState<any[]>([]);
   const [stravaMessage, setStravaMessage] = useState<string | null>(null);
@@ -96,6 +97,8 @@ const IntegrationSettings: React.FC = () => {
   const monzoLastSync = profile?.monzoLastSyncAt;
   const steamLastSync = profile?.steamLastSyncAt;
   const traktLastSync = profile?.traktLastSyncAt;
+  const googleLastSync = profile?.googleCalendarLastSyncAt;
+  const stravaLastSync = profile?.stravaLastSyncAt;
 
   useEffect(() => {
     if (!currentUser) return;
@@ -274,6 +277,7 @@ const IntegrationSettings: React.FC = () => {
 
   const deleteFinance = async () => {
     if (!currentUser) return;
+    // eslint-disable-next-line no-restricted-globals
     if (!confirm('This will delete your synced finance data (accounts, pots, transactions, analytics). Proceed?')) return;
     setMonzoLoading(true);
     setMonzoMessage(null);
@@ -379,14 +383,6 @@ const IntegrationSettings: React.FC = () => {
     await updateDoc(doc(db, 'profiles', currentUser.uid), patch);
   };
 
-  const monzoConnected = profile?.monzoConnected;
-  const stravaConnected = profile?.stravaConnected;
-  const monzoLastSync = profile?.monzoLastSyncAt;
-
-  const googleLastSync = profile?.googleCalendarLastSyncAt;
-  const stravaLastSync = profile?.stravaLastSyncAt;
-  const steamLastSync = profile?.steamLastSyncAt;
-  const traktLastSync = profile?.traktLastSyncAt;
 
   return (
     <div className="d-flex flex-column gap-4">
