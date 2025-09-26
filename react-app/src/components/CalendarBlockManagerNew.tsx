@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { CalendarBlock, Story, Task, IHabit } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form, Alert } from 'react-bootstrap';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { httpsCallable } from 'firebase/functions';
 
 interface CalendarEvent {
     id: string;
@@ -27,6 +28,8 @@ const CalendarBlockManager: React.FC = () => {
     const [showBlockModal, setShowBlockModal] = useState(false);
     const [loading, setLoading] = useState(true);
     const [aiScheduling, setAiScheduling] = useState(false);
+    const [aiMessage, setAiMessage] = useState<string | null>(null);
+    const [aiVariant, setAiVariant] = useState<'info' | 'success' | 'warning' | 'danger'>('info');
     const [formError, setFormError] = useState<string | null>(null);
 
     const [newBlock, setNewBlock] = useState({
@@ -102,6 +105,15 @@ const CalendarBlockManager: React.FC = () => {
                 return;
             }
 
+            // Overlap detection: prevent conflicts with hard/applied blocks
+            const hasConflict = blocks
+              .filter(b => b.ownerUid === currentUser.uid)
+              .some(b => Math.max(b.start, startTime) < Math.min(b.end, endTime) && (b.flexibility === 'hard' || b.status === 'applied' || newBlock.flexibility === 'hard'));
+            if (hasConflict) {
+                setFormError('Time window conflicts with an existing applied/hard block. Adjust times or mark as Soft.');
+                return;
+            }
+
             await addDoc(collection(db, 'calendar_blocks'), {
                 googleEventId: null,
                 taskId: newBlock.taskId || null,
@@ -123,8 +135,8 @@ const CalendarBlockManager: React.FC = () => {
                 version: 1,
                 supersededBy: null,
                 ownerUid: currentUser.uid,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp()
+                createdAt: Date.now(),
+                updatedAt: Date.now()
             });
 
             setNewBlock({
@@ -160,14 +172,29 @@ const CalendarBlockManager: React.FC = () => {
     const triggerAiScheduling = async () => {
         setAiScheduling(true);
         try {
-            // This would trigger the AI scheduling function
-            // For now, just a placeholder
-            console.log('AI scheduling triggered');
-            // In real implementation, this would call a Cloud Function
-            setTimeout(() => setAiScheduling(false), 3000);
-        } catch (error) {
+            const planCalendar = httpsCallable(functions, 'planCalendar');
+            const startDate = new Date().toISOString().split('T')[0];
+            const endDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            setAiMessage('🤖 Planning your calendar for the next 7 days...');
+            setAiVariant('info');
+            const result = await planCalendar({ startDate, endDate, persona: 'personal' });
+            const data = result.data as any;
+            const created = Number((data && (data.blocksCreated ?? data.created ?? 0)) || 0);
+            if (created > 0) {
+                setAiMessage(`✅ Scheduled ${created} new time block${created===1?'':'s'}.`);
+                setAiVariant('success');
+            } else {
+                setAiMessage('⚠️ No open slots found to schedule.');
+                setAiVariant('warning');
+            }
+        } catch (error: any) {
             console.error('Error triggering AI scheduling:', error);
+            setAiMessage('❌ Failed to trigger AI scheduling: ' + (error?.message || 'unknown'));
+            setAiVariant('danger');
+        } finally {
             setAiScheduling(false);
+            // Auto-dismiss after a few seconds
+            setTimeout(() => setAiMessage(null), 5500);
         }
     };
 
@@ -199,6 +226,11 @@ const CalendarBlockManager: React.FC = () => {
                     <Card>
                         <Card.Header>Calendar Blocks</Card.Header>
                         <Card.Body>
+                            {aiMessage && (
+                                <Alert variant={aiVariant} className="mb-3" onClose={() => setAiMessage(null)} dismissible>
+                                    {aiMessage}
+                                </Alert>
+                            )}
                             {blocks.length === 0 ? (
                                 <div className="text-center text-muted py-4">
                                     <p>No calendar blocks created yet.</p>
@@ -212,7 +244,7 @@ const CalendarBlockManager: React.FC = () => {
                                         <Card key={block.id} className="mb-2">
                                             <Card.Body>
                                                 <div className="d-flex justify-content-between align-items-start">
-                                                    <div className="calendar-block" data-theme={block.theme}>
+                                                    <div className="calendar-block" data-theme={block.theme} style={{ border: '1px solid transparent', borderRadius: 8, padding: '6px 8px' }}>
                                                         <h6 className="mb-1">
                                                             {block.theme} - {block.category}
                                                             {block.subTheme && ` (${block.subTheme})`}
