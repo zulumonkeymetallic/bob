@@ -7,6 +7,10 @@ export interface Goal {
   size: number; // 1=Small, 2=Medium, 3=Large
   timeToMasterHours: number;
   estimatedCost?: number; // Optional cost estimate used for budgeting
+  costType?: 'one_off' | 'recurring';
+  recurrence?: 'monthly' | 'annual';
+  targetYear?: number;
+  potId?: string | null; // Optional explicit Monzo pot mapping
   targetDate?: string;
   startDate?: number; // Timestamp for goal start date
   endDate?: number; // Timestamp for goal end date

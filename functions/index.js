@@ -833,6 +833,103 @@ async function monzoApi(accessToken, path, query = {}) {
   });
 }
 
+// Register a Monzo webhook for an account (callable)
+exports.monzoRegisterWebhook = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const accountId = String(req.data?.accountId || '').trim();
+  const targetUrl = String(req.data?.url || '').trim();
+  if (!accountId || !targetUrl) throw new httpsV2.HttpsError('invalid-argument', 'accountId and url are required');
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+  const res = await fetch('https://api.monzo.com/webhooks', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, url: targetUrl })
+  });
+  if (!res.ok) throw new httpsV2.HttpsError('internal', `Webhook register failed: ${res.status}`);
+  const data = await res.json();
+  await admin.firestore().collection('monzo_webhooks').doc(`${uid}_${accountId}`).set({ ownerUid: uid, accountId, webhook: data, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { ok: true, webhook: data };
+});
+
+// Webhook receiver (hosting rewrite supported)
+exports.monzoWebhook = httpsV2.onRequest(async (req, res) => {
+  try {
+    if (req.method !== 'POST') return res.status(405).send('Method not allowed');
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+    const accountId = String(body?.data?.account_id || body?.account_id || '').trim();
+    if (!accountId) return res.status(400).send('Missing account_id');
+    const db = admin.firestore();
+    const snap = await db.collection('monzo_accounts').where('accountId','==',accountId).limit(1).get();
+    if (snap.empty) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'account not found', accountId }); return res.json({ ok: true }); }
+    const docRef = snap.docs[0];
+    const uid = (docRef.data() || {}).ownerUid;
+    if (!uid) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'ownerUid missing', accountId }); return res.json({ ok: true }); }
+    // Trigger incremental sync without since to fetch latest
+    try { await syncMonzoDataForUser(uid); } catch (e) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), error: String(e?.message||e) }); }
+    return res.json({ ok: true });
+  } catch (e) {
+    try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), error: String(e?.message||e) }); } catch {}
+    return res.status(500).send('error');
+  }
+});
+
+// Callable: revoke Monzo access (delete tokens, attempt token revocation)
+exports.revokeMonzoAccess = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  try {
+    await db.collection('tokens').doc(`${uid}_monzo`).delete();
+  } catch {}
+  await db.collection('profiles').doc(uid).set({ monzoConnected: false, monzoUserId: null }, { merge: true });
+  await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoked', uid });
+  return { ok: true };
+});
+
+// Callable: delete finance data (accounts, pots, transactions, analytics)
+exports.deleteFinanceData = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const cols = ['monzo_accounts', 'monzo_pots', 'monzo_transactions', 'monzo_budget_summary', 'monzo_goal_alignment'];
+  for (const col of cols) {
+    const snap = await db.collection(col).where('ownerUid','==', uid).get();
+    const batch = db.batch();
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  }
+  await db.collection('webhook_logs').add({ source: 'finance', direction: 'internal', ts: Date.now(), event: 'deleted_finance_data', uid });
+  return { ok: true };
+});
+
+// GDPR Export: return a JSON bundle of finance docs (small export)
+exports.exportFinanceData = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const result = {};
+  const cols = ['monzo_accounts', 'monzo_pots', 'monzo_transactions', 'monzo_budget_summary', 'monzo_goal_alignment'];
+  for (const col of cols) {
+    const snap = await db.collection(col).where('ownerUid','==', uid).get();
+    result[col] = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+  }
+  return { ok: true, data: result };
+});
+
+// 15-min backstop transaction sync
+exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider','==','monzo').get();
+  for (const t of tokens.docs) {
+    const data = t.data() || {};
+    const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
+    if (!uid) continue;
+    try { await syncMonzoDataForUser(uid); } catch (e) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) }); }
+  }
+  return { ok: true, users: tokens.size };
+});
+
 const MONZO_CATEGORY_TYPE_MAP = {
   bills: 'mandatory',
   entertainment: 'optional',
@@ -1186,11 +1283,19 @@ async function computeMonzoAnalytics(uid) {
     const normalizedTitle = title.toLowerCase();
     let matchedPot = null;
 
-    for (const pot of pots) {
-      const potName = String(pot.name || '').toLowerCase();
-      if (potName && (normalizedTitle.includes(potName) || potName.includes(normalizedTitle))) {
-        matchedPot = pot;
-        break;
+    // Prefer explicit pot mapping if provided
+    const explicitPotId = String(goal.potId || goal.pot_id || '').toLowerCase();
+    if (explicitPotId && potIndex.has(explicitPotId)) {
+      matchedPot = potIndex.get(explicitPotId);
+    }
+
+    if (!matchedPot) {
+      for (const pot of pots) {
+        const potName = String(pot.name || '').toLowerCase();
+        if (potName && (normalizedTitle.includes(potName) || potName.includes(normalizedTitle))) {
+          matchedPot = pot;
+          break;
+        }
       }
     }
 
@@ -3452,68 +3557,6 @@ exports.scheduleSteamGamesViaN8n = httpsV2.onCall({ secrets: [N8N_SCHEDULE_STEAM
   return { ok: true, created, count: created.length };
 });
 
-// ===== Finance: compute monthly aggregates (last 18 months)
-// DEPRECATED: legacy monthly aggregates; use computeMonzoAnalytics + monzo_budget_summary instead.
-exports.financeComputeMonthlyAggregates = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = admin.firestore();
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() - 17, 1); // 18 months window
-  const snap = await db.collection('finance_transactions')
-    .where('ownerUid', '==', uid)
-    .where('created', '>=', start.getTime())
-    .get();
-  const byMonth = new Map(); // yyyymm -> { spend, income, currency, cats: {cat: amount} }
-  function keyOf(dMs){ const d = new Date(dMs); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}`; }
-  for (const docSnap of snap.docs) {
-    const t = docSnap.data() || {};
-    const k = keyOf(t.created || Date.now());
-    if (!byMonth.has(k)) byMonth.set(k, { spend: 0, income: 0, cats: {}, currency: t.currency || 'GBP' });
-    const m = byMonth.get(k);
-    const amt = Number(t.amount || 0);
-    if (amt < 0) {
-      const spend = -amt; // store as positive spend
-      m.spend += spend;
-      const cat = t.category || 'uncategorised';
-      m.cats[cat] = (m.cats[cat] || 0) + spend;
-    } else {
-      m.income += amt;
-    }
-    if (!m.currency && t.currency) m.currency = t.currency;
-  }
-  // write per-month docs
-  const batch = db.batch();
-  for (const [yyyymm, v] of byMonth.entries()) {
-    const ref = db.collection('finance_monthly').doc(`${uid}_${yyyymm}`);
-    batch.set(ref, { ownerUid: uid, yyyymm, spend: Math.round(v.spend), income: Math.round(v.income), currency: v.currency || 'GBP', categories: v.cats, updatedAt: Date.now() }, { merge: true });
-  }
-  await batch.commit();
-  return { ok: true, months: Array.from(byMonth.keys()).sort() };
-});
-
-// Compute finance on-track status vs budgets for the last 30 days
-// DEPRECATED: budget status callable; dashboard & roadmap now derive from analytics + finance_budgets.
-exports.financeComputeStatus = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = admin.firestore();
-  const budgetsSnap = await db.collection('finance_budgets').doc(uid).get();
-  const budgets = budgetsSnap.exists ? (budgetsSnap.data() || {}) : {};
-  const byCategory = budgets.byCategory || {};
-  const budgetTotal = Object.values(byCategory).reduce((a,b)=>a+(Number(b)||0), 0);
-  const since = Date.now() - 30*86400000;
-  const txSnap = await db.collection('finance_transactions')
-    .where('ownerUid','==', uid)
-    .where('created','>=', since)
-    .get();
-  let actual = 0;
-  for (const d of txSnap.docs) {
-    const amt = Number((d.data()||{}).amount||0);
-    if (amt < 0) actual += -amt;
-  }
-  const onTrack = budgetTotal > 0 ? actual <= budgetTotal : null;
-  await db.collection('finance_status').doc(uid).set({ ownerUid: uid, actualLast30: Math.round(actual), budgetTotal: Math.round(budgetTotal), onTrack, updatedAt: Date.now() }, { merge: true });
-  return { ok: true, actualLast30: Math.round(actual), budgetTotal: Math.round(budgetTotal), onTrack };
-});
 
 // ===== Scheduled Syncs
 exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
