@@ -1,7 +1,7 @@
 {
-  "version": "3.9.0",
+  "version": "3.9.1",
   "buildTime": "",
-  "buildHash": "fab-bulk-create",
+  "buildHash": "main-3.9.1",
   "features": [
     "Clipboard bulk creation modal for FAB",
     "LLM-generated acceptance criteria",

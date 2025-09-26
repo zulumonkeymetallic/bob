@@ -1,14 +1,14 @@
 // Version tracking for cache busting
 // Align version with branch build
-export const VERSION = '3.9.0';
+export const VERSION = '3.9.1';
 export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'fab-bulk-create';
+export const BUILD_HASH = 'main-3.9.1';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Firebase Permission Fixes & React Error Resolution`);
-console.log(`🔧 Fixes: QuickActionsPanel permission error, Firebase index optimization, timestamp serialization`);
-console.log(`🎯 Features: Consistent field naming (ownerUid), zero permission errors, stable data loading`);
-console.log(`🚀 Architecture: Stable v3.8.9 baseline with Firebase security alignment`);
+console.log(`✅ Status: Bulk create FAB flow & sprint filters`);
+console.log(`🔧 Fixes: Clipboard modal polish, sprint filtering for unassigned work items`);
+console.log(`🎯 Features: Backlog capture docs, AI-assisted creation flows`);
+console.log(`🚀 Architecture: Cache bust via ${BUILD_HASH}`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
 // Force refresh if version mismatch detected
