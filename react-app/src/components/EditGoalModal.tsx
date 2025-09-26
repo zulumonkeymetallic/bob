@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Alert, InputGroup } from 'react-bootstrap';
 import { db } from '../firebase';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { Goal } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
@@ -34,6 +34,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const { themes } = useGlobalThemes();
   const [themeInput, setThemeInput] = useState('');
+  const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -84,6 +85,19 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     }
   }, [goal, show, themes]);
 
+  // Load user's Monzo pots for optional explicit mapping
+  useEffect(() => {
+    const loadPots = async () => {
+      try {
+        const q = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUserId));
+        const snap = await getDocs(q);
+        const list = snap.docs.map(d => ({ id: (d.data() as any).potId || d.id, name: (d.data() as any).name || 'Pot' }));
+        setMonzoPots(list);
+      } catch {}
+    };
+    if (show && currentUserId) loadPots();
+  }, [show, currentUserId]);
+
   // KPI Management functions
   const addKPI = () => {
     setFormData({
@@ -125,7 +139,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       
       const selectedSize = sizes.find(s => s.value === formData.size);
       
-      const goalUpdates = {
+      const goalUpdates: any = {
         title: formData.title.trim(),
         description: formData.description.trim(),
         theme: formData.theme, // Use theme ID directly
@@ -140,6 +154,18 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         estimatedCost: formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost),
         updatedAt: serverTimestamp()
       };
+
+      // Read optional cost metadata and pot mapping from form elements
+      const ct = (document.getElementById('goal-cost-type') as HTMLSelectElement | null)?.value || '';
+      const rec = (document.getElementById('goal-recurrence') as HTMLSelectElement | null)?.value || '';
+      const ty = (document.getElementById('goal-target-year') as HTMLInputElement | null)?.value || '';
+      const potSel = (document.getElementById('goal-pot-id') as HTMLSelectElement | null)?.value || '';
+      if (ct) goalUpdates.costType = ct;
+      else goalUpdates.costType = null;
+      if (rec) goalUpdates.recurrence = rec;
+      else goalUpdates.recurrence = null;
+      goalUpdates.targetYear = ty ? Number(ty) : null;
+      goalUpdates.potId = potSel ? potSel : null;
 
       console.log('💾 EditGoalModal: Updating GOAL in database', {
         action: 'goal_update_save',
@@ -215,9 +241,49 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
               />
             </InputGroup>
             <Form.Text className="text-muted">
-              Used for finance projections and Monzo pot alignment.
-            </Form.Text>
+          Used for finance projections and Monzo pot alignment.
+        </Form.Text>
+      </Form.Group>
+
+      <div className="row">
+        <div className="col-md-4">
+          <Form.Group className="mb-3">
+            <Form.Label>Cost Type</Form.Label>
+            <Form.Select id="goal-cost-type" defaultValue={(goal as any)?.costType || ''}>
+              <option value="">Not set</option>
+              <option value="one_off">One-off</option>
+              <option value="recurring">Recurring</option>
+            </Form.Select>
           </Form.Group>
+        </div>
+        <div className="col-md-4">
+          <Form.Group className="mb-3">
+            <Form.Label>Recurrence</Form.Label>
+            <Form.Select id="goal-recurrence" defaultValue={(goal as any)?.recurrence || ''}>
+              <option value="">Not set</option>
+              <option value="monthly">Monthly</option>
+              <option value="annual">Annual</option>
+            </Form.Select>
+          </Form.Group>
+        </div>
+        <div className="col-md-4">
+          <Form.Group className="mb-3">
+            <Form.Label>Target Year</Form.Label>
+            <Form.Control id="goal-target-year" type="number" min="2024" step="1" defaultValue={(goal as any)?.targetYear || ''} placeholder="e.g., 2026" />
+          </Form.Group>
+        </div>
+      </div>
+
+      <Form.Group className="mb-3">
+        <Form.Label>Link Monzo Pot (optional)</Form.Label>
+        <Form.Select id="goal-pot-id" defaultValue={(goal as any)?.potId || ''}>
+          <option value="">No pot linked</option>
+          {monzoPots.map(p => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </Form.Select>
+        <Form.Text className="text-muted">If set, analytics will use this pot rather than name matching.</Form.Text>
+      </Form.Group>
 
           <Form.Group className="mb-3">
             <Form.Label>Description</Form.Label>
