@@ -24,6 +24,7 @@ const normalizeTab = (value: string | null): SettingsTab => {
   return DEFAULT_TAB;
 };
 import BudgetSettings from './finance/BudgetSettings';
+ 
 
 interface GlobalThemeSettings {
   themes: GlobalTheme[];
@@ -94,6 +95,7 @@ const SettingsPage: React.FC = () => {
   const [monzoConnected, setMonzoConnected] = useState(false);
   const [monzoAccounts, setMonzoAccounts] = useState<Array<{ id: string; description?: string }>>([]);
   const [monzoAccountId, setMonzoAccountId] = useState<string>('');
+ 
 
   // Reminders (Shortcuts) helpers
   const [remindersSecret, setRemindersSecret] = useState<string>('');
