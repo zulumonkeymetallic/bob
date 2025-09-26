@@ -26,6 +26,7 @@ const CalendarBlockManager: React.FC = () => {
     const [tasks, setTasks] = useState<Task[]>([]);
     const [habits, setHabits] = useState<IHabit[]>([]);
     const [showBlockModal, setShowBlockModal] = useState(false);
+    const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [aiScheduling, setAiScheduling] = useState(false);
     const [aiMessage, setAiMessage] = useState<string | null>(null);
@@ -39,6 +40,7 @@ const CalendarBlockManager: React.FC = () => {
         start: '',
         end: '',
         flexibility: 'soft' as 'hard' | 'soft',
+        status: 'proposed' as 'proposed' | 'applied',
         storyId: '',
         taskId: '',
         habitId: ''
@@ -127,7 +129,7 @@ const CalendarBlockManager: React.FC = () => {
                 start: startTime,
                 end: endTime,
                 flexibility: newBlock.flexibility,
-                status: 'proposed',
+                status: newBlock.status,
                 colorId: null,
                 visibility: 'default',
                 createdBy: 'user',
@@ -146,6 +148,7 @@ const CalendarBlockManager: React.FC = () => {
                 start: '',
                 end: '',
                 flexibility: 'soft',
+                status: 'proposed',
                 storyId: '',
                 taskId: '',
                 habitId: ''
@@ -154,6 +157,56 @@ const CalendarBlockManager: React.FC = () => {
             setShowBlockModal(false);
         } catch (error) {
             console.error('Error creating calendar block:', error);
+        }
+    };
+
+    const openEditModal = (block: CalendarBlock) => {
+        setEditingBlockId(block.id);
+        setNewBlock({
+            theme: block.theme,
+            subTheme: block.subTheme || '',
+            category: block.category,
+            start: new Date(block.start).toISOString().slice(0,16),
+            end: new Date(block.end).toISOString().slice(0,16),
+            flexibility: block.flexibility,
+            status: (block.status === 'proposed' || block.status === 'applied') ? block.status : 'proposed',
+            storyId: block.storyId || '',
+            taskId: block.taskId || '',
+            habitId: block.habitId || ''
+        });
+        setFormError(null);
+        setShowBlockModal(true);
+    };
+
+    const handleUpdateBlock = async () => {
+        if (!currentUser || !editingBlockId || !newBlock.start || !newBlock.end) return;
+        try {
+            const startTime = new Date(newBlock.start).getTime();
+            const endTime = new Date(newBlock.end).getTime();
+            if (Number.isNaN(startTime) || Number.isNaN(endTime)) { setFormError('Please provide valid start and end times.'); return; }
+            if (endTime <= startTime) { setFormError('End time must be after start time.'); return; }
+            const hasConflict = blocks
+              .filter(b => b.ownerUid === currentUser.uid && b.id !== editingBlockId)
+              .some(b => Math.max(b.start, startTime) < Math.min(b.end, endTime) && (b.flexibility === 'hard' || b.status === 'applied' || newBlock.flexibility === 'hard'));
+            if (hasConflict) { setFormError('Time window conflicts with an existing applied/hard block.'); return; }
+
+            await updateDoc(doc(db, 'calendar_blocks', editingBlockId), {
+                theme: newBlock.theme,
+                subTheme: newBlock.subTheme || null,
+                category: newBlock.category,
+                start: startTime,
+                end: endTime,
+                flexibility: newBlock.flexibility,
+                status: newBlock.status,
+                storyId: newBlock.storyId || null,
+                habitId: newBlock.habitId || null,
+                updatedAt: Date.now()
+            });
+
+            setEditingBlockId(null);
+            setShowBlockModal(false);
+        } catch (e) {
+            console.error('Failed to update block', e);
         }
     };
 
@@ -273,6 +326,9 @@ const CalendarBlockManager: React.FC = () => {
                                                     </p>
                                                 )}
                                                 <div className="d-flex gap-2 mt-2">
+                                                    <Button size="sm" variant="outline-secondary" onClick={() => openEditModal(block)}>
+                                                        Edit
+                                                    </Button>
                                                     <Button size="sm" variant="outline-danger" onClick={() => handleDeleteBlock(block.id!)}>
                                                         Delete
                                                     </Button>
@@ -315,9 +371,9 @@ const CalendarBlockManager: React.FC = () => {
             </Row>
 
             {/* Create Block Modal */}
-            <Modal show={showBlockModal} onHide={() => setShowBlockModal(false)} size="lg">
+            <Modal show={showBlockModal} onHide={() => { setShowBlockModal(false); setEditingBlockId(null); }} size="lg">
                 <Modal.Header closeButton>
-                    <Modal.Title>Create Calendar Block</Modal.Title>
+                    <Modal.Title>{editingBlockId ? 'Edit Calendar Block' : 'Create Calendar Block'}</Modal.Title>
                 </Modal.Header>
                 <Modal.Body>
                     <Form>
@@ -400,6 +456,17 @@ const CalendarBlockManager: React.FC = () => {
                         </Form.Group>
 
                         <Form.Group className="mb-3">
+                            <Form.Label>Status</Form.Label>
+                            <Form.Select
+                                value={newBlock.status}
+                                onChange={(e) => setNewBlock({...newBlock, status: e.target.value as any})}
+                            >
+                                <option value="proposed">Proposed</option>
+                                <option value="applied">Applied</option>
+                            </Form.Select>
+                        </Form.Group>
+
+                        <Form.Group className="mb-3">
                             <Form.Label>Link to Story</Form.Label>
                             <Form.Select
                                 value={newBlock.storyId}
@@ -430,13 +497,23 @@ const CalendarBlockManager: React.FC = () => {
                     <Button variant="secondary" onClick={() => setShowBlockModal(false)}>
                         Cancel
                     </Button>
-                    <Button 
-                        variant="primary" 
-                        onClick={handleCreateBlock}
-                        disabled={!newBlock.start || !newBlock.end}
-                    >
-                        Create Block
-                    </Button>
+                    {editingBlockId ? (
+                        <Button 
+                            variant="primary" 
+                            onClick={handleUpdateBlock}
+                            disabled={!newBlock.start || !newBlock.end}
+                        >
+                            Save Changes
+                        </Button>
+                    ) : (
+                        <Button 
+                            variant="primary" 
+                            onClick={handleCreateBlock}
+                            disabled={!newBlock.start || !newBlock.end}
+                        >
+                            Create Block
+                        </Button>
+                    )}
                 </Modal.Footer>
             </Modal>
         </Container>
