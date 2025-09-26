@@ -108,12 +108,20 @@ const CalendarBlockManager: React.FC = () => {
             }
 
             // Overlap detection: prevent conflicts with hard/applied blocks
-            const hasConflict = blocks
+            const overlapAny = blocks
               .filter(b => b.ownerUid === currentUser.uid)
-              .some(b => Math.max(b.start, startTime) < Math.min(b.end, endTime) && (b.flexibility === 'hard' || b.status === 'applied' || newBlock.flexibility === 'hard'));
-            if (hasConflict) {
-                setFormError('Time window conflicts with an existing applied/hard block. Adjust times or mark as Soft.');
+              .some(b => Math.max(b.start, startTime) < Math.min(b.end, endTime));
+            const overlapHard = blocks
+              .filter(b => b.ownerUid === currentUser.uid)
+              .some(b => Math.max(b.start, startTime) < Math.min(b.end, endTime) && (b.flexibility === 'hard' || b.status === 'applied'));
+            if (overlapHard && (newBlock.flexibility === 'hard' || newBlock.status === 'applied')) {
+                setFormError('Time window conflicts with an existing applied/hard block. Switch to Soft/Proposed or adjust times.');
                 return;
+            }
+            if (overlapAny && !(newBlock.flexibility === 'hard' || newBlock.status === 'applied')) {
+                setAiMessage('⚠️ Overlaps existing block(s). Saved as proposed/soft.');
+                setAiVariant('warning');
+                setTimeout(() => setAiMessage(null), 4500);
             }
 
             await addDoc(collection(db, 'calendar_blocks'), {
@@ -185,10 +193,18 @@ const CalendarBlockManager: React.FC = () => {
             const endTime = new Date(newBlock.end).getTime();
             if (Number.isNaN(startTime) || Number.isNaN(endTime)) { setFormError('Please provide valid start and end times.'); return; }
             if (endTime <= startTime) { setFormError('End time must be after start time.'); return; }
-            const hasConflict = blocks
+            const overlapAny = blocks
               .filter(b => b.ownerUid === currentUser.uid && b.id !== editingBlockId)
-              .some(b => Math.max(b.start, startTime) < Math.min(b.end, endTime) && (b.flexibility === 'hard' || b.status === 'applied' || newBlock.flexibility === 'hard'));
-            if (hasConflict) { setFormError('Time window conflicts with an existing applied/hard block.'); return; }
+              .some(b => Math.max(b.start, startTime) < Math.min(b.end, endTime));
+            const overlapHard = blocks
+              .filter(b => b.ownerUid === currentUser.uid && b.id !== editingBlockId)
+              .some(b => Math.max(b.start, startTime) < Math.min(b.end, endTime) && (b.flexibility === 'hard' || b.status === 'applied'));
+            if (overlapHard && (newBlock.flexibility === 'hard' || newBlock.status === 'applied')) { setFormError('Time window conflicts with an existing applied/hard block.'); return; }
+            if (overlapAny && !(newBlock.flexibility === 'hard' || newBlock.status === 'applied')) {
+              setAiMessage('⚠️ Overlaps existing block(s). Saved as proposed/soft.');
+              setAiVariant('warning');
+              setTimeout(() => setAiMessage(null), 4500);
+            }
 
             await updateDoc(doc(db, 'calendar_blocks', editingBlockId), {
                 theme: newBlock.theme,

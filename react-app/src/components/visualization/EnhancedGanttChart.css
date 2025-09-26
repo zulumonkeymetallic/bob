@@ -218,6 +218,14 @@ body.gantt-full-active .rv2-container {
   color: var(--panel-text);
 }
 
+/* Print-friendly adjustments */
+@media print {
+  .timeline-container { border: 0 !important; height: auto !important; overflow: visible !important; }
+  .timeline-header { position: static !important; box-shadow: none !important; border: 0 !important; }
+  .goal-label { border: 0 !important; }
+  .navbar, .sidebar-desktop, .global-sidebar, .grv3-toolbar { display: none !important; }
+}
+
 .gantt-goal-card-meta {
   font-size: 11px;
   color: var(--panel-text);

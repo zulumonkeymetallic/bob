@@ -57,3 +57,10 @@
 
 /* Hide action buttons during active drag to prevent mis-clicks */
 .grv3-bar.dragging .grv3-actions { display: none; }
+
+/* Print mode */
+@media print {
+  .grv3-toolbar { display: none !important; }
+  .grv3-container { border: 0 !important; height: auto !important; overflow: visible !important; }
+  .grv3-header, .grv3-months { position: static !important; box-shadow: none !important; border: 0 !important; }
+}

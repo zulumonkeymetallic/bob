@@ -106,6 +106,7 @@ const EnhancedGanttChart: React.FC = () => {
   const [collapsedGoals, setCollapsedGoals] = useState<Set<string>>(new Set());
   const [groupByTheme, setGroupByTheme] = useState<boolean>(true);
   const [showEmptyThemes, setShowEmptyThemes] = useState<boolean>(false);
+  const [copied, setCopied] = useState(false);
   const [storiesByGoal, setStoriesByGoal] = useState<Record<string, number>>({});
   const [doneStoriesByGoal, setDoneStoriesByGoal] = useState<Record<string, number>>({});
   const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
@@ -1318,6 +1319,8 @@ const EnhancedGanttChart: React.FC = () => {
                 </Col>
                 <Col md={6}>
                   <div className="d-flex justify-content-end gap-2 flex-wrap">
+                    <Button size="sm" variant="outline-secondary" onClick={() => { try { window.print(); } catch {} }} aria-label="Print"><Printer size={14} /></Button>
+                    <Button size="sm" variant={copied ? 'success' : 'outline-secondary'} onClick={async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch {} }} aria-label="Copy Link"><Share2 size={14} /></Button>
                     {themes.map(theme => (
                       <Badge key={theme.id} bg={selectedThemes.includes(theme.id) ? 'primary' : 'outline-secondary'}
                         className="cursor-pointer"

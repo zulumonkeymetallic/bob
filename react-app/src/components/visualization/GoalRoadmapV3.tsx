@@ -10,7 +10,7 @@ import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, Printer, Share2 } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
@@ -91,6 +91,7 @@ const GoalRoadmapV3: React.FC = () => {
   const [financeOnTrack, setFinanceOnTrack] = useState<boolean|null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -591,6 +592,8 @@ const GoalRoadmapV3: React.FC = () => {
           setFilterInSelectedSprint(true);
           const el = containerRef.current; if (!el) return; const left = 260 + xFromDate(new Date()) - el.clientWidth * .35; el.scrollLeft = clamp(left, 0, el.scrollWidth);
         }} aria-label="Today (Month)"><Home size={14} /></Button>
+        <Button size="sm" variant="outline-secondary" onClick={() => { try { window.print(); } catch {} }} aria-label="Print"><Printer size={14} /></Button>
+        <Button size="sm" variant={copied ? 'success' : 'outline-secondary'} onClick={async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch {} }} aria-label="Copy Link"><Share2 size={14} /></Button>
         <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
         <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
         <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />
