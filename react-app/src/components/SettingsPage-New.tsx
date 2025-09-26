@@ -3,7 +3,8 @@ import { Container, Row, Col, Nav, Tab } from 'react-bootstrap';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import ChoiceManager from './ChoiceManager';
 
 interface ThemeColors {
@@ -104,9 +105,17 @@ const SettingsPage: React.FC = () => {
   };
 
   const handleSteamConnect = async () => {
-    console.log('Steam authentication flow will be implemented here');
-    setSteamConnected(!steamConnected);
-    saveSettings();
+    try {
+      // Minimal integration: trigger server-side sync if available
+      const syncSteam = httpsCallable(functions, 'syncSteam');
+      await syncSteam();
+      setSteamConnected(true);
+    } catch (e) {
+      console.warn('Steam sync failed or not configured', (e as any)?.message);
+      setSteamConnected(!steamConnected);
+    } finally {
+      saveSettings();
+    }
   };
 
   const handleNotificationToggle = () => {
