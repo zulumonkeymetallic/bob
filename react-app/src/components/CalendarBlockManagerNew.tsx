@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -34,6 +34,8 @@ const CalendarBlockManager: React.FC = () => {
     const [aiVariant, setAiVariant] = useState<'info' | 'success' | 'warning' | 'danger'>('info');
     const [calendarView, setCalendarView] = useState<'list' | 'week'>('week');
     const [selectedDate, setSelectedDate] = useState<Date>(() => { const d=new Date(); d.setHours(0,0,0,0); return d; });
+    const dragState = useRef<{ id: string|null; type: 'move'|'resize-start'|'resize-end'|null; startY: number; origStart: number; origEnd: number; dayStart: number; dayEnd: number } | null>(null);
+    const [dragPreview, setDragPreview] = useState<{ id: string; start: number; end: number } | null>(null);
     const [formError, setFormError] = useState<string | null>(null);
 
     const [newBlock, setNewBlock] = useState({
@@ -284,6 +286,7 @@ const CalendarBlockManager: React.FC = () => {
     const days: Date[] = Array.from({ length: 7 }, (_, i) => new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i));
     const minsFromStart = (ms: number) => { const d=new Date(ms); return d.getHours()*60 + d.getMinutes(); };
     const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
+    const isSameDay = (a: number, b: number) => { const da=new Date(a), db=new Date(b); return da.getFullYear()===db.getFullYear() && da.getMonth()===db.getMonth() && da.getDate()===db.getDate(); };
     const splitIntoDays = (b: CalendarBlock) => {
         const parts: Array<{ dayIndex: number; startMin: number; endMin: number; block: CalendarBlock }>=[];
         for (let i=0;i<7;i++) {
@@ -296,6 +299,76 @@ const CalendarBlockManager: React.FC = () => {
             }
         }
         return parts;
+    };
+
+    const beginDrag = (ev: React.PointerEvent, block: CalendarBlock, type: 'move'|'resize-start'|'resize-end', dayStart: number, dayEnd: number) => {
+        // Only allow direct drag for single-day blocks; others use modal
+        const singleDay = isSameDay(block.start, block.end);
+        if (!singleDay) { return; }
+        ev.preventDefault();
+        (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
+        dragState.current = { id: block.id, type, startY: ev.clientY, origStart: block.start, origEnd: block.end, dayStart, dayEnd };
+        setDragPreview({ id: block.id, start: block.start, end: block.end });
+        const onMove = (e: PointerEvent) => {
+            if (!dragState.current || dragState.current.id !== block.id) return;
+            const ds = dragState.current;
+            const deltaPx = e.clientY - ds.startY;
+            const deltaMinRaw = deltaPx / pxPerMin;
+            const deltaMin = Math.round(deltaMinRaw / 5) * 5; // snap 5m
+            let newStart = ds.origStart;
+            let newEnd = ds.origEnd;
+            if (ds.type === 'move') {
+                const dur = newEnd - newStart;
+                newStart = newStart + deltaMin * 60 * 1000;
+                newEnd = newStart + dur;
+                // Clamp within day
+                const minStart = ds.dayStart;
+                const maxStart = ds.dayEnd - dur;
+                newStart = clamp(newStart, minStart, maxStart);
+                newEnd = newStart + dur;
+            } else if (ds.type === 'resize-start') {
+                const minDur = 15 * 60 * 1000;
+                newStart = clamp(ds.origStart + deltaMin * 60 * 1000, ds.dayStart, ds.origEnd - minDur);
+            } else if (ds.type === 'resize-end') {
+                const minDur = 15 * 60 * 1000;
+                newEnd = clamp(ds.origEnd + deltaMin * 60 * 1000, ds.origStart + minDur, ds.dayEnd);
+            }
+            setDragPreview({ id: block.id, start: newStart, end: newEnd });
+        };
+        const onUp = async () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            const ds = dragState.current;
+            dragState.current = null;
+            if (!ds || !dragPreview || dragPreview.id !== (block.id || '')) { setDragPreview(null); return; }
+            const newStart = dragPreview.start;
+            const newEnd = dragPreview.end;
+            setDragPreview(null);
+            // Conflict checks similar to edit flow
+            const overlapAny = blocks
+              .filter(b => b.ownerUid === currentUser?.uid && b.id !== block.id)
+              .some(b => Math.max(b.start, newStart) < Math.min(b.end, newEnd));
+            const overlapHard = blocks
+              .filter(b => b.ownerUid === currentUser?.uid && b.id !== block.id)
+              .some(b => Math.max(b.start, newStart) < Math.min(b.end, newEnd) && (b.flexibility === 'hard' || b.status === 'applied'));
+            if (overlapHard && (block.flexibility === 'hard' || block.status === 'applied')) {
+                setFormError('Move conflicts with an existing applied/hard block.');
+                return;
+            }
+            if (overlapAny && !(block.flexibility === 'hard' || block.status === 'applied')) {
+                setAiMessage('⚠️ Overlaps existing block(s). Saved as proposed/soft.');
+                setAiVariant('warning');
+                setTimeout(() => setAiMessage(null), 4500);
+            }
+            try {
+                await updateDoc(doc(db, 'calendar_blocks', block.id), { start: newStart, end: newEnd, updatedAt: Date.now() });
+            } catch (e) {
+                console.error('Drag update failed', e);
+                setFormError('Failed to update block.');
+            }
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
     };
 
     return (
@@ -402,8 +475,10 @@ const CalendarBlockManager: React.FC = () => {
                                           ))}
                                           {/* blocks */}
                                           {dayBlocks.flatMap(b => splitIntoDays(b).filter(p=>p.dayIndex===di)).map((p, idx) => {
-                                            const top = p.startMin * pxPerMin;
-                                            const height = clamp((p.endMin - p.startMin) * pxPerMin, 14, 24*60*pxPerMin - top);
+                                            const pieceStartMin = dragPreview && dragPreview.id === p.block.id ? minsFromStart(dragPreview.start) : p.startMin;
+                                            const pieceEndMin = dragPreview && dragPreview.id === p.block.id ? minsFromStart(dragPreview.end) : p.endMin;
+                                            const top = pieceStartMin * pxPerMin;
+                                            const height = clamp((pieceEndMin - pieceStartMin) * pxPerMin, 14, 24*60*pxPerMin - top);
                                             const isHard = p.block.flexibility === 'hard' || p.block.status === 'applied';
                                             return (
                                               <div key={`${p.block.id}-${idx}`} className="calendar-block" data-theme={p.block.theme}
@@ -418,6 +493,17 @@ const CalendarBlockManager: React.FC = () => {
                                                 <div style={{ fontSize: 11 }} className="text-muted">
                                                   {new Date(p.block.start).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} – {new Date(p.block.end).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}
                                                 </div>
+                                                {/* Drag handles for single-day blocks */}
+                                                {isSameDay(p.block.start, p.block.end) && (
+                                                  <>
+                                                    <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 8, cursor: 'ns-resize' }}
+                                                         onPointerDown={(e) => beginDrag(e as any, p.block, 'resize-start', new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(), new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999).getTime())} />
+                                                    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 8, cursor: 'ns-resize' }}
+                                                         onPointerDown={(e) => beginDrag(e as any, p.block, 'resize-end', new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(), new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999).getTime())} />
+                                                    <div style={{ position: 'absolute', left: 0, right: 0, top: 10, bottom: 10, cursor: 'grab' }}
+                                                         onPointerDown={(e) => beginDrag(e as any, p.block, 'move', new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(), new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999).getTime())} />
+                                                  </>
+                                                )}
                                               </div>
                                             );
                                           })}
