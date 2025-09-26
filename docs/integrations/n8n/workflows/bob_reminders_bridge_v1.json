@@ -1,0 +1,10 @@
+{
+  "name": "bob_reminders_bridge_v1 (stub)",
+  "nodes": [
+    { "parameters": { "path": "reminders/hook", "options": { "responseCode": 200 } }, "name": "Webhook (Shortcuts)", "type": "n8n-nodes-base.webhook" },
+    { "parameters": { "url": "{{ $json.functionsVerifyUrl }}" }, "name": "Verify & Normalize (HTTP)", "type": "n8n-nodes-base.httpRequest" },
+    { "parameters": { "url": "{{ $json.functionsUpsertTaskUrl }}" }, "name": "Upsert Task (HTTP)", "type": "n8n-nodes-base.httpRequest" }
+  ],
+  "connections": {}
+}
+

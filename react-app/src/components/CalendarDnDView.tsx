@@ -82,6 +82,16 @@ const CalendarDnDView: React.FC = () => {
   const [googleEdit, setGoogleEdit] = useState<{ id: string; summary: string; start: string; end: string } | null>(null);
   const [showDelete, setShowDelete] = useState(false);
   const [deleteScope, setDeleteScope] = useState<'single'|'future'|'all'>('single');
+  // Optional n8n webhook integration (set REACT_APP_N8N_WEBHOOK_URL)
+  const notifyN8n = async (event: string, payload: any) => {
+    const url = (process.env as any).REACT_APP_N8N_WEBHOOK_URL as string | undefined;
+    if (!url) return;
+    try {
+      await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: 'bob', event, payload }) });
+    } catch (e) {
+      console.warn('n8n notify failed', (e as any)?.message);
+    }
+  };
 
   // Load user-defined global themes (for colors + labels)
   useEffect(() => {
@@ -245,6 +255,8 @@ const CalendarDnDView: React.FC = () => {
       });
     } catch {}
     setShowCreate(false);
+    // n8n integration: notify created IDs
+    try { await notifyN8n('calendar_block_created', { ids: refs, ownerUid: currentUser.uid }); } catch {}
   };
 
   const handleEventDrop = async ({ event, start, end }: any) => {
@@ -283,6 +295,8 @@ const CalendarDnDView: React.FC = () => {
             source: 'human'
           });
         }
+        // n8n integration: notify update
+        try { await notifyN8n('calendar_block_updated', { id: event.id, start: start.getTime(), end: end.getTime(), ownerUid: currentUser?.uid }); } catch {}
       } catch (e) {
         console.error('Failed to move block', e);
         alert('Failed to move block');
@@ -326,6 +340,8 @@ const CalendarDnDView: React.FC = () => {
             source: 'human'
           });
         }
+        // n8n integration: notify resize
+        try { await notifyN8n('calendar_block_resized', { id: event.id, start: start.getTime(), end: end.getTime(), ownerUid: currentUser?.uid }); } catch {}
       } catch (e) {
         console.error('Failed to resize block', e);
         alert('Failed to resize block');
@@ -449,6 +465,8 @@ const CalendarDnDView: React.FC = () => {
       });
 
       setEditBlock(null);
+      // n8n integration: batch update notification
+      try { await notifyN8n('calendar_block_series_updated', { ids: targets.map(t => t.id), ownerUid: currentUser.uid }); } catch {}
     } catch (e) {
       console.error('Failed to update block/series', e);
       alert('Failed to update block/series');
@@ -486,6 +504,7 @@ const CalendarDnDView: React.FC = () => {
         });
       }
       setEditBlock(null);
+      try { await notifyN8n('calendar_block_deleted', { id: editBlock.id, ownerUid: currentUser.uid }); } catch {}
     } catch (e) {
       console.error('Failed to delete block', e);
       alert('Failed to delete block');
@@ -527,6 +546,7 @@ const CalendarDnDView: React.FC = () => {
       });
       setShowDelete(false);
       setEditBlock(null);
+      try { await notifyN8n('calendar_block_series_deleted', { ids: targets.map(t => t.id), ownerUid: currentUser.uid }); } catch {}
     } catch (e) {
       console.error('Failed to delete series', e);
       alert('Failed to delete series');
