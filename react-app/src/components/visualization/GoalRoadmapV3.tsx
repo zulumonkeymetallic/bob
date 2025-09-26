@@ -4,7 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
-import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
@@ -56,6 +56,7 @@ const GoalRoadmapV3: React.FC = () => {
   // Viewport culling state
   const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [financeOnTrack, setFinanceOnTrack] = useState<boolean|null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
 
@@ -120,6 +121,19 @@ const GoalRoadmapV3: React.FC = () => {
       setLoading(false);
     });
     return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Finance on-track badge (read-only integration)
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const fetchStatus = async () => {
+      try {
+        const ref = doc(db, 'finance_status', currentUser.uid);
+        const snap = await getDoc(ref);
+        if (snap.exists()) setFinanceOnTrack(((snap.data() as any)?.onTrack ?? null));
+      } catch {}
+    };
+    fetchStatus();
   }, [currentUser?.uid]);
 
   // Auto-fit on first load when goals arrive
@@ -543,6 +557,9 @@ const GoalRoadmapV3: React.FC = () => {
         <div className="ms-2 d-flex align-items-center gap-2">
           <strong>Goals Roadmap</strong>
           {loading && <Badge bg="secondary">Loading…</Badge>}
+          {financeOnTrack !== null && (
+            <Badge bg={financeOnTrack ? 'success' : 'danger'}>{financeOnTrack ? 'Budget On Track' : 'Budget Over'}</Badge>
+          )}
         </div>
       </div>
 
