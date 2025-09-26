@@ -4,13 +4,13 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
-import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2 } from 'lucide-react';
+import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
@@ -48,6 +48,7 @@ const GoalRoadmapV3: React.FC = () => {
   const [globalActivityItems, setGlobalActivityItems] = useState<any[]>([]);
   const [showSprints, setShowSprints] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
+  const [showEmptyThemes, setShowEmptyThemes] = useState(false);
   const [filterHasStories, setFilterHasStories] = useState(false);
   const [filterInSelectedSprint, setFilterInSelectedSprint] = useState(false);
   const [filterOverlapSelectedSprint, setFilterOverlapSelectedSprint] = useState(false);
@@ -55,6 +56,9 @@ const GoalRoadmapV3: React.FC = () => {
   // Viewport culling state
   const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [financeOnTrack, setFinanceOnTrack] = useState<boolean|null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -74,22 +78,21 @@ const GoalRoadmapV3: React.FC = () => {
     const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
     let start = new Date(today); let end = new Date(today);
     if (zoom === 'weeks') {
-      start = startOfWeek(today); start.setDate(start.getDate() - 7*6);
-      end = new Date(start); end.setDate(start.getDate() + 7*12 - 1);
+      // Show 6 weeks forward from this week
+      start = startOfWeek(today);
+      end = new Date(start); end.setDate(start.getDate() + 7*6 - 1);
     } else if (zoom === 'months') {
-      const sm = startOfMonth(today); sm.setMonth(sm.getMonth() - 6); start = sm;
-      end = new Date(sm); end.setMonth(sm.getMonth() + 12); end.setDate(end.getDate() - 1);
+      // Show 6 months forward from current month
+      start = startOfMonth(today);
+      end = new Date(start); end.setMonth(start.getMonth() + 6); end.setDate(end.getDate() - 1);
     } else if (zoom === 'quarters') {
-      const sq = startOfQuarter(today); sq.setMonth(sq.getMonth() - 3*6); start = sq;
-      end = new Date(sq); end.setMonth(sq.getMonth() + 3*12); end.setDate(end.getDate() - 1);
+      // Show 6 quarters (18 months) forward from current quarter
+      start = startOfQuarter(today);
+      end = new Date(start); end.setMonth(start.getMonth() + 3*6); end.setDate(end.getDate() - 1);
     } else {
-      // Years view supports variable spans: 1y, 3y, 5y
-      const sy = startOfYear(today);
-      const offset = Math.floor(yearSpan / 2);
-      sy.setFullYear(sy.getFullYear() - offset);
-      start = sy;
-      end = new Date(sy.getFullYear() + yearSpan, 0, 1);
-      end.setDate(end.getDate() - 1);
+      // Years view supports variable spans: 1y, 3y, 5y — forward from current year
+      start = startOfYear(today);
+      end = new Date(start.getFullYear() + yearSpan, 0, 1); end.setDate(end.getDate() - 1);
     }
     start.setHours(0,0,0,0); end.setHours(0,0,0,0);
     return { start, end };
@@ -118,6 +121,19 @@ const GoalRoadmapV3: React.FC = () => {
       setLoading(false);
     });
     return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Finance on-track badge (read-only integration)
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const fetchStatus = async () => {
+      try {
+        const ref = doc(db, 'finance_status', currentUser.uid);
+        const snap = await getDoc(ref);
+        if (snap.exists()) setFinanceOnTrack(((snap.data() as any)?.onTrack ?? null));
+      } catch {}
+    };
+    fetchStatus();
   }, [currentUser?.uid]);
 
   // Auto-fit on first load when goals arrive
@@ -346,7 +362,7 @@ const GoalRoadmapV3: React.FC = () => {
         await ActivityStreamService.logFieldChange(s.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${s.origStart.toDateString()} – ${s.origEnd.toDateString()}`, `${newStart.toDateString()} – ${newEnd.toDateString()}`, 'personal', s.id, 'human');
       }
     } catch (e) { console.error('Failed to update goal dates', e); }
-    finally { const tip = tooltipRef.current; if (tip) tip.style.display='none'; setGuideXs([]); setActiveGuideX(null); dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() }; }
+    finally { const tip = tooltipRef.current; if (tip) tip.style.display='none'; setGuideXs([]); setActiveGuideX(null); dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() }; setDraggingId(null); }
   }, [dateFromX, pointerMove, currentUser?.uid]);
 
   const startDrag = useCallback((ev: React.PointerEvent, goal: Goal, type: 'move'|'start'|'end') => {
@@ -354,6 +370,7 @@ const GoalRoadmapV3: React.FC = () => {
     const startDate = goal.startDate ? new Date(goal.startDate) : new Date();
     const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now()+86400000*90));
     dragState.current = { id: goal.id, type, startX: ev.clientX, origStart: startDate, origEnd: endDate };
+    setDraggingId(goal.id);
     document.addEventListener('pointermove', pointerMove, { passive: false }); document.addEventListener('pointerup', pointerUp, { passive: false });
     // Build snap guides for current zoom
     const guides: number[] = [];
@@ -495,6 +512,11 @@ const GoalRoadmapV3: React.FC = () => {
           <Button variant={zoom==='years' && yearSpan===3 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(3); }}>3y</Button>
           <Button variant={zoom==='years' && yearSpan===5 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(5); }}>5y</Button>
         </ButtonGroup>
+        {/* Horizontal pan controls */}
+        <ButtonGroup size="sm" className="ms-2">
+          <Button variant="outline-secondary" aria-label="Scroll left" onClick={() => { const el = containerRef.current; if (el) el.scrollBy({ left: -Math.round(el.clientWidth*0.6), behavior: 'smooth' }); }}><ChevronLeft size={16} /></Button>
+          <Button variant="outline-secondary" aria-label="Scroll right" onClick={() => { const el = containerRef.current; if (el) el.scrollBy({ left: Math.round(el.clientWidth*0.6), behavior: 'smooth' }); }}><ChevronRight size={16} /></Button>
+        </ButtonGroup>
         <Button size="sm" variant={customRange ? 'primary' : 'outline-secondary'} onClick={() => {
           // Fit all goals into view
           const bounds: number[] = [];
@@ -527,6 +549,7 @@ const GoalRoadmapV3: React.FC = () => {
         <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
         <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
         <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />
+        <Form.Check type="switch" id="toggle-empty-themes" label="Empty themes" checked={showEmptyThemes} onChange={(e) => setShowEmptyThemes(e.currentTarget.checked)} className="ms-1" />
         {/* V2-like filters */}
         <Form.Check type="switch" id="toggle-has-stories" label="Has stories" checked={filterHasStories} onChange={(e) => setFilterHasStories(e.currentTarget.checked)} className="ms-2" />
         <Form.Check type="switch" id="toggle-in-sprint" label="In selected sprint" checked={filterInSelectedSprint} onChange={(e) => setFilterInSelectedSprint(e.currentTarget.checked)} className="ms-1" />
@@ -534,10 +557,31 @@ const GoalRoadmapV3: React.FC = () => {
         <div className="ms-2 d-flex align-items-center gap-2">
           <strong>Goals Roadmap</strong>
           {loading && <Badge bg="secondary">Loading…</Badge>}
+          {financeOnTrack !== null && (
+            <Badge bg={financeOnTrack ? 'success' : 'danger'}>{financeOnTrack ? 'Budget On Track' : 'Budget Over'}</Badge>
+          )}
         </div>
       </div>
 
-      <div ref={containerRef} className="grv3-container" style={{ height: '72vh' }}>
+      <div
+        ref={containerRef}
+        className={`grv3-container ${isPanning ? 'panning' : ''}`}
+        style={{ height: '72vh' }}
+        onMouseDown={(e) => {
+          // Enable background click-and-drag panning when not starting a bar drag
+          const target = e.target as HTMLElement;
+          const isBar = target.closest('.grv3-bar');
+          const isHandle = target.closest('.grv3-resize');
+          if (isBar || isHandle) return;
+          const el = containerRef.current; if (!el) return;
+          setIsPanning(true);
+          const startX = e.clientX; const startLeft = el.scrollLeft;
+          const onMove = (ev: MouseEvent) => { el.scrollLeft = startLeft - (ev.clientX - startX); };
+          const onUp = () => { setIsPanning(false); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        }}
+      >
         {/* Header months + sticky left label */}
         <div className="grv3-header">
           <div className="position-relative" style={{ height: 36 }}>
@@ -595,6 +639,7 @@ const GoalRoadmapV3: React.FC = () => {
                 s.setHours(0,0,0,0); e.setHours(0,0,0,0);
                 return { id: g.id, start: s.getTime(), end: e.getTime(), raw: g };
               });
+            if (!showEmptyThemes && tg.length === 0) return null;
             const laneAssign = computeLanes(tg);
             const laneCount = Math.max(0, ...Array.from(laneAssign.values()).map(v=>v)) + 1;
             const laneH = getLaneHeight();
@@ -622,7 +667,7 @@ const GoalRoadmapV3: React.FC = () => {
                   <div
                     key={g.id}
                     data-grv3-goal={g.id}
-                    className="grv3-bar"
+                    className={`grv3-bar ${draggingId===g.id ? 'dragging' : ''}`}
                     style={{ left, width, height: laneH, top: 12 + lane*(laneH + 8), zIndex: hoveredId===g.id ? 1000 : undefined, ...barStyle(g) }}
                     title={`${g.title} — ${g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} → ${g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}${total ? ` • ${pct}%` : ''}`}
                     onPointerDown={(e) => startDrag(e, g, 'move')}
@@ -636,12 +681,12 @@ const GoalRoadmapV3: React.FC = () => {
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
 
                     <div className="grv3-actions">
-                      <button className="grv3-action" title="Generate stories" aria-label="Generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}><Wand2 size={14} /></button>
+                      <button className="grv3-action" title="Generate stories" aria-label="Generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}><Wand2 size={16} /></button>
                       {/* Activity stream icon (matches V2 intent) */}
-                      <button className="grv3-action" title="Activity stream" aria-label="Activity stream" onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}><ListIcon size={14} /></button>
-                      <button className="grv3-action" title="Add note" aria-label="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}><MessageSquareText size={14} /></button>
-                      <button className="grv3-action" title="Edit goal" aria-label="Edit goal" onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}><Edit3 size={14} /></button>
-                      <button className="grv3-action" title="Delete goal" aria-label="Delete goal" onClick={async (e) => { e.stopPropagation(); const ok = window.confirm(`Delete goal \"${g.title}\"? This cannot be undone.`); if (ok) { try { await deleteDoc(doc(db, 'goals', g.id)); } catch (err) { window.alert('Failed to delete goal: ' + (err as any)?.message); } } }}><Trash2 size={14} /></button>
+                      <button className="grv3-action" title="Activity stream" aria-label="Activity stream" onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}><ListIcon size={16} /></button>
+                      <button className="grv3-action" title="Add note" aria-label="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}><MessageSquareText size={16} /></button>
+                      <button className="grv3-action" title="Edit goal" aria-label="Edit goal" onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}><Edit3 size={16} /></button>
+                      <button className="grv3-action" title="Delete goal" aria-label="Delete goal" onClick={async (e) => { e.stopPropagation(); const ok = window.confirm(`Delete goal \"${g.title}\"? This cannot be undone.`); if (ok) { try { await deleteDoc(doc(db, 'goals', g.id)); } catch (err) { window.alert('Failed to delete goal: ' + (err as any)?.message); } } }}><Trash2 size={16} /></button>
                     </div>
 
                     <div className="grv3-title">{g.title}</div>
