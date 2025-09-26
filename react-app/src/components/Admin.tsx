@@ -159,9 +159,8 @@ const Admin = () => {
     try {
       setMonzoStatus('Starting Monzo OAuth...');
       const nonce = Math.random().toString(36).slice(2);
-      const region = 'europe-west2';
-      const projectId = (window as any).FIREBASE_PROJECT_ID || firebaseConfig.projectId;
-      const url = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthStart?uid=${user.uid}&nonce=${nonce}`;
+      const origin = window.location.origin;
+      const url = `${origin}/api/monzo/start?uid=${user.uid}&nonce=${nonce}`;
       const popup = window.open(url, 'monzo-oauth', 'width=500,height=700');
       const check = setInterval(() => {
         if (popup?.closed) {

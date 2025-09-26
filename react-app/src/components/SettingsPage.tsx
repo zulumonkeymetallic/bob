@@ -7,10 +7,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
-import CalendarSyncManager from './CalendarSyncManager';
-import { Settings, Palette, Database, Calendar, Wand2, KeyRound, Clipboard, FileCode } from 'lucide-react';
+import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug } from 'lucide-react';
 import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
+import IntegrationSettings from './IntegrationSettings';
 
 interface GlobalThemeSettings {
   themes: GlobalTheme[];
@@ -337,12 +337,12 @@ const SettingsPage: React.FC = () => {
               </Nav.Item>
               <Nav.Item>
                 <Nav.Link 
-                  eventKey="calendar" 
+                  eventKey="integrations" 
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
                 >
-                  <Calendar size={20} className="me-2" />
-                  Calendar Integration
+                  <Plug size={20} className="me-2" />
+                  Integrations
                 </Nav.Link>
               </Nav.Item>
               <Nav.Item>
@@ -618,9 +618,8 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                 </Card>
               </Tab.Pane>
 
-              {/* Calendar Integration Tab */}
-              <Tab.Pane eventKey="calendar">
-                <CalendarSyncManager />
+              <Tab.Pane eventKey="integrations">
+                <IntegrationSettings />
               </Tab.Pane>
 
               {/* AI Story/KPI Settings */}

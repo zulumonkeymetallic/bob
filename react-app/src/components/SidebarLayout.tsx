@@ -34,7 +34,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   // const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards']);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance']);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
 
   const navigationGroups: NavigationGroup[] = [
@@ -62,6 +62,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'project-diagram' },
         { label: 'Goal Card View (Review)', path: '/goals/cards', icon: 'th-large' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
+      ]
+    },
+    {
+      label: 'Finance',
+      icon: 'piggy-bank',
+      items: [
+        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
+        { label: 'Monzo Admin', path: '/admin', icon: 'link' }
       ]
     },
     {

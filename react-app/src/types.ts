@@ -6,6 +6,7 @@ export interface Goal {
   theme: number; // 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
   size: number; // 1=Small, 2=Medium, 3=Large
   timeToMasterHours: number;
+  estimatedCost?: number; // Optional cost estimate used for budgeting
   targetDate?: string;
   startDate?: number; // Timestamp for goal start date
   endDate?: number; // Timestamp for goal end date

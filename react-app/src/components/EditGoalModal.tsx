@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Button, Form, Alert } from 'react-bootstrap';
+import { Modal, Button, Form, Alert, InputGroup } from 'react-bootstrap';
 import { db } from '../firebase';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Goal } from '../types';
@@ -27,6 +27,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     endDate: '',
     status: 'New',
     priority: 2,
+    estimatedCost: '',
     kpis: [] as Array<{name: string; target: number; unit: string}>
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -74,6 +75,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         endDate: endDateStr,
         status: statusMap[goal.status as keyof typeof statusMap] || 'New',
         priority: goal.priority || 2,
+        estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
         kpis: goal.kpis || []
       });
       const current = migrateThemeValue(goal.theme);
@@ -135,6 +137,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         status: statusMap[formData.status as keyof typeof statusMap] || 0,
         priority: formData.priority,
         kpis: formData.kpis,
+        estimatedCost: formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost),
         updatedAt: serverTimestamp()
       };
 
@@ -196,6 +199,24 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
               placeholder="Enter goal title..."
               autoFocus
             />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Estimated Cost (£)</Form.Label>
+            <InputGroup>
+              <InputGroup.Text>£</InputGroup.Text>
+              <Form.Control
+                type="number"
+                min="0"
+                step="0.01"
+                value={formData.estimatedCost}
+                onChange={(e) => setFormData({ ...formData, estimatedCost: e.target.value })}
+                placeholder="e.g. 1250"
+              />
+            </InputGroup>
+            <Form.Text className="text-muted">
+              Used for finance projections and Monzo pot alignment.
+            </Form.Text>
           </Form.Group>
 
           <Form.Group className="mb-3">

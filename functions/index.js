@@ -490,7 +490,12 @@ exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoke
 
     const projectId = process.env.GCLOUD_PROJECT;
     const region = "europe-west2";
-    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+    const forwardedHost = req.get('x-forwarded-host');
+    const forwardedProto = req.get('x-forwarded-proto') || 'https';
+    const isHostingRewrite = forwardedHost && !forwardedHost.includes(`${region}-${projectId}.cloudfunctions.net`);
+    const redirectUri = isHostingRewrite
+      ? `${forwardedProto}://${forwardedHost}/api/monzo/callback`
+      : `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
 
     const clientId = process.env.MONZO_CLIENT_ID;
     if (!clientId) return res.status(500).send("Monzo client ID not configured");
@@ -515,7 +520,12 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
 
     const projectId = process.env.GCLOUD_PROJECT;
     const region = "europe-west2";
-    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+    const forwardedHost = req.get('x-forwarded-host');
+    const forwardedProto = req.get('x-forwarded-proto') || 'https';
+    const isHostingRewrite = forwardedHost && !forwardedHost.includes(`${region}-${projectId}.cloudfunctions.net`);
+    const redirectUri = isHostingRewrite
+      ? `${forwardedProto}://${forwardedHost}/api/monzo/callback`
+      : `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
 
     const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
       method: "POST",
@@ -647,6 +657,53 @@ async function monzoApi(accessToken, path, query = {}) {
   });
 }
 
+const MONZO_CATEGORY_TYPE_MAP = {
+  bills: 'mandatory',
+  entertainment: 'optional',
+  expenses: 'mandatory',
+  family: 'mandatory',
+  transport: 'mandatory',
+  groceries: 'mandatory',
+  eating_out: 'optional',
+  holidays: 'optional',
+  shopping: 'optional',
+  personal_care: 'optional',
+  cash: 'optional',
+  general: 'optional',
+  investments: 'savings',
+  transfers: 'savings',
+  savings: 'savings',
+  charity: 'mandatory',
+  business: 'mandatory',
+};
+
+function inferDefaultCategoryType(tx) {
+  const cat = String(tx.category || '').toLowerCase();
+  if (MONZO_CATEGORY_TYPE_MAP[cat]) return MONZO_CATEGORY_TYPE_MAP[cat];
+  // Monzo uses negative for spend, positive for income/pot transfers
+  if (Number(tx.amount || 0) >= 0) return 'income';
+  return 'optional';
+}
+
+function inferDefaultCategoryLabel(tx) {
+  if (tx.merchant && tx.merchant.name) return tx.merchant.name;
+  if (tx.description) return tx.description;
+  if (tx.category) return tx.category;
+  return 'Uncategorised';
+}
+
+function toMonthKey(isoTs) {
+  try {
+    const date = new Date(isoTs);
+    if (Number.isNaN(date.getTime())) return null;
+    const yyyy = date.getUTCFullYear();
+    const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+    return `${yyyy}-${mm}`;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since }) {
   const db = admin.firestore();
   const transactionsCol = db.collection('monzo_transactions');
@@ -670,11 +727,28 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     const batch = db.batch();
     for (const tx of transactions) {
       const docRef = transactionsCol.doc(`${uid}_${tx.id}`);
+      const defaultCategoryType = inferDefaultCategoryType(tx);
+      const defaultCategoryLabel = inferDefaultCategoryLabel(tx);
+      const amountMinorRaw = typeof tx.amount === 'number' ? tx.amount : Number(tx.amount || 0);
+      if (!Number.isFinite(amountMinorRaw)) continue;
+      const amountMinor = Math.trunc(amountMinorRaw);
+      const amount = amountMinor / 100;
+      const metadataRaw = tx.metadata && typeof tx.metadata === 'object' ? tx.metadata : null;
+      const metadataSanitised = {};
+      if (metadataRaw) {
+        for (const [rawKey, rawValue] of Object.entries(metadataRaw)) {
+          const safeKey = rawKey.replace(/[.$\[\]]/g, '_');
+          metadataSanitised[safeKey] = typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean'
+            ? rawValue
+            : JSON.stringify(rawValue);
+        }
+      }
       const docData = {
         ownerUid: uid,
         accountId,
         transactionId: tx.id,
-        amount: tx.amount,
+        amountMinor,
+        amount,
         currency: tx.currency,
         description: tx.description || null,
         category: tx.category || null,
@@ -686,6 +760,10 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
         scheme: tx.scheme || null,
         declineReason: tx.decline_reason || null,
         counterparty: tx.counterparty || null,
+        metadata: Object.keys(metadataSanitised).length ? metadataSanitised : null,
+        defaultCategoryType,
+        defaultCategoryLabel,
+        monthKey: tx.created ? toMonthKey(tx.created) : null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         raw: tx,
       };
@@ -824,7 +902,169 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
     monzoLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
+  try {
+    const analytics = await computeMonzoAnalytics(uid);
+    summary.analytics = analytics.summarySnapshot || null;
+  } catch (error) {
+    console.error(`Failed to compute Monzo analytics for user ${uid}`, error);
+  }
+
   return summary;
+}
+
+const THEME_NAME_MAP = {
+  1: 'Health',
+  2: 'Growth',
+  3: 'Finance & Wealth',
+  4: 'Tribe',
+  5: 'Home',
+};
+
+async function computeMonzoAnalytics(uid) {
+  const db = admin.firestore();
+  const txSnap = await db.collection('monzo_transactions').where('ownerUid', '==', uid).get();
+  const potSnap = await db.collection('monzo_pots').where('ownerUid', '==', uid).get();
+  const goalsSnap = await db.collection('goals').where('ownerUid', '==', uid).get();
+
+  const totals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
+  const categoryTotals = new Map();
+  const monthly = {};
+  const pendingClassification = [];
+  let pendingCount = 0;
+
+  txSnap.forEach((doc) => {
+    const data = doc.data() || {};
+    const amount = Number(data.amount != null ? data.amount : (data.amountMinor || 0) / 100);
+    const catType = String(data.userCategoryType || data.categoryType || data.defaultCategoryType || inferDefaultCategoryType(data.raw || {}));
+    const canonType = ['mandatory', 'optional', 'savings', 'income'].includes(catType) ? catType : (amount >= 0 ? 'income' : 'optional');
+    const absAmount = amount < 0 ? Math.abs(amount) : amount;
+
+    totals[canonType] = (totals[canonType] || 0) + absAmount;
+
+    const categoryLabel = data.userCategoryLabel || data.userCategory || data.defaultCategoryLabel || data.merchant?.name || data.description || 'Uncategorised';
+    const current = categoryTotals.get(categoryLabel) || { amount: 0, count: 0, type: canonType };
+    current.amount += absAmount;
+    current.count += 1;
+    current.type = canonType;
+    categoryTotals.set(categoryLabel, current);
+
+    const monthKey = data.monthKey || (data.createdISO ? toMonthKey(data.createdISO) : null);
+    if (monthKey) {
+      if (!monthly[monthKey]) {
+        monthly[monthKey] = { mandatory: 0, optional: 0, savings: 0, income: 0 };
+      }
+      monthly[monthKey][canonType] += absAmount;
+    }
+
+    const hasUserCategory = !!data.userCategoryType;
+    if (!hasUserCategory && amount < 0) {
+      pendingCount += 1;
+      if (pendingClassification.length < 25) {
+        pendingClassification.push({
+          transactionId: data.transactionId,
+          description: data.description || categoryLabel,
+          amount: absAmount,
+          createdISO: data.createdISO || null,
+          defaultCategoryType: data.defaultCategoryType || null,
+          defaultCategoryLabel: data.defaultCategoryLabel || null,
+        });
+      }
+    }
+  });
+
+  const categories = Array.from(categoryTotals.entries())
+    .sort((a, b) => b[1].amount - a[1].amount)
+    .slice(0, 50)
+    .map(([label, stats]) => ({ label, amount: stats.amount, count: stats.count, type: stats.type }));
+
+  const summaryDoc = {
+    ownerUid: uid,
+    totals,
+    categories,
+    monthly,
+    pendingClassification,
+    pendingCount,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  await db.collection('monzo_budget_summary').doc(uid).set(summaryDoc, { merge: true });
+
+  // Goal alignment
+  const pots = potSnap.docs.map((p) => ({ id: p.id, ...(p.data() || {}) }));
+  const potIndex = new Map();
+  pots.forEach((potDoc) => {
+    const pot = potDoc || {};
+    const key = String(pot.potId || pot.id || '').toLowerCase();
+    if (key) potIndex.set(key, pot);
+    if (pot.name) potIndex.set(pot.name.toLowerCase(), pot);
+  });
+
+  const goals = goalsSnap.docs.map((g) => ({ id: g.id, ...(g.data() || {}) }));
+  const goalSummaries = [];
+  const themeTotals = {};
+
+  goals.forEach((goal) => {
+    const estimatedCost = Number(goal.estimatedCost || goal.targetValue || goal.target || 0);
+    const themeId = Number(goal.theme || 0);
+    const title = goal.title || 'Goal';
+    const normalizedTitle = title.toLowerCase();
+    let matchedPot = null;
+
+    for (const pot of pots) {
+      const potName = String(pot.name || '').toLowerCase();
+      if (potName && (normalizedTitle.includes(potName) || potName.includes(normalizedTitle))) {
+        matchedPot = pot;
+        break;
+      }
+    }
+
+    const potBalanceMinor = matchedPot?.balance != null ? Number(matchedPot.balance) : 0;
+    const potBalance = potBalanceMinor / 100;
+    const fundedAmount = estimatedCost ? Math.min(potBalance, estimatedCost) : potBalance;
+    const shortfall = estimatedCost ? Math.max(estimatedCost - potBalance, 0) : 0;
+    const fundedPercent = estimatedCost ? Math.min((potBalance / estimatedCost) * 100, 100) : null;
+
+    goalSummaries.push({
+      goalId: goal.id,
+      title,
+      themeId,
+      themeName: THEME_NAME_MAP[themeId] || 'General',
+      estimatedCost,
+      potId: matchedPot?.potId || matchedPot?.id || null,
+      potName: matchedPot?.name || null,
+      potBalance,
+      fundedAmount,
+      fundedPercent,
+      shortfall,
+    });
+
+    if (!themeTotals[themeId]) {
+      themeTotals[themeId] = {
+        themeId,
+        themeName: THEME_NAME_MAP[themeId] || 'General',
+        goalCount: 0,
+        totalEstimatedCost: 0,
+        totalPotBalance: 0,
+        totalShortfall: 0,
+      };
+    }
+    const agg = themeTotals[themeId];
+    agg.goalCount += 1;
+    agg.totalEstimatedCost += estimatedCost;
+    agg.totalPotBalance += potBalance;
+    agg.totalShortfall += shortfall;
+  });
+
+  const alignmentDoc = {
+    ownerUid: uid,
+    goals: goalSummaries,
+    themes: Object.values(themeTotals),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  await db.collection('monzo_goal_alignment').doc(uid).set(alignmentDoc, { merge: true });
+
+  return { summarySnapshot: summaryDoc, alignmentDoc };
 }
 
 exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
@@ -881,6 +1121,42 @@ exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SEC
     if (error instanceof httpsV2.HttpsError) throw error;
     throw new httpsV2.HttpsError('internal', error.message || 'Monzo sync failed');
   }
+});
+
+exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const transactionId = String(req.data?.transactionId || '').trim();
+  const categoryType = String(req.data?.categoryType || '').trim().toLowerCase();
+  const label = req.data?.label ? String(req.data.label).trim() : null;
+
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+  if (!transactionId) throw new httpsV2.HttpsError('invalid-argument', 'transactionId is required');
+  if (!allowed.has(categoryType)) throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+
+  const db = admin.firestore();
+  const docRef = db.collection('monzo_transactions').doc(`${uid}_${transactionId}`);
+  const snap = await docRef.get();
+  if (!snap.exists) {
+    throw new httpsV2.HttpsError('not-found', 'Transaction not found');
+  }
+
+  await docRef.set({
+    userCategoryType: categoryType,
+    userCategoryLabel: label,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await computeMonzoAnalytics(uid);
+
+  return { ok: true };
+});
+
+exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const analytics = await computeMonzoAnalytics(uid);
+  return { ok: true, analytics };
 });
 
 // ===== AI Planning Function
@@ -1554,6 +1830,94 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
   }
 }
 
+async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
+  const db = admin.firestore();
+
+  const events = await fetchGoogleCalendarEvents(uid, startDate, endDate);
+  const seenDocIds = new Set();
+  const seenEventIds = new Set();
+
+  for (const event of events) {
+    if (!event || !event.id) continue;
+    const eventId = String(event.id);
+    const docId = `${uid}_gcal_${Buffer.from(eventId).toString('base64url')}`;
+    const docRef = db.collection('calendar_blocks').doc(docId);
+
+    const startMs = event.start instanceof Date ? event.start.getTime() : null;
+    const endMs = event.end instanceof Date ? event.end.getTime() : startMs;
+    const startIso = startMs ? new Date(startMs).toISOString() : null;
+    const endIso = endMs ? new Date(endMs).toISOString() : null;
+
+    const payload = {
+      ownerUid: uid,
+      persona: 'personal',
+      title: event.summary || 'Calendar Event',
+      description: event.description || null,
+      theme: 'Growth',
+      category: 'Calendar',
+      source: 'gcal',
+      status: 'synced',
+      createdBy: 'google',
+      syncToGoogle: false,
+      googleEventId: eventId,
+      start: startMs,
+      end: endMs,
+      startISO: startIso,
+      endISO: endIso,
+      startTime: startIso,
+      endTime: endIso,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      isAiGenerated: false,
+      externalLink: event.htmlLink || null,
+    };
+
+    await docRef.set(payload, { merge: true });
+    seenDocIds.add(docId);
+    seenEventIds.add(eventId);
+
+    // Deduplicate any stray blocks pointing to the same Google event
+    try {
+      const dupSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('googleEventId', '==', eventId)
+        .get();
+
+      for (const dup of dupSnap.docs) {
+        if (dup.id !== docId) {
+          await dup.ref.delete();
+        }
+      }
+    } catch (error) {
+      console.warn(`[gcal-sync] failed duplicate cleanup for ${uid}/${eventId}`, error.message);
+    }
+  }
+
+  // Remove stale Google-synced blocks that were not returned this run
+  try {
+    const existingSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('source', '==', 'gcal')
+      .get();
+
+    const deletions = [];
+    existingSnap.forEach((doc) => {
+      if (!seenDocIds.has(doc.id)) {
+        deletions.push(doc.ref.delete());
+      }
+    });
+    if (deletions.length) await Promise.allSettled(deletions);
+  } catch (error) {
+    console.warn(`[gcal-sync] failed stale cleanup for ${uid}`, error.message);
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    googleCalendarLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    googleCalendarEventCount: seenDocIds.size,
+  }, { merge: true });
+
+  return { events: events.length, stored: seenDocIds.size };
+}
+
 // Scheduled: reconcile Google Calendar deletions for all users every 15 minutes
 exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
   const db = admin.firestore();
@@ -1583,6 +1947,25 @@ exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 min
     })());
   }
   await Promise.allSettled(work);
+});
+
+exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async () => {
+  const db = admin.firestore();
+  const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
+  if (!tokensSnap || tokensSnap.empty) return;
+
+  const startDate = new Date(Date.now() - 6 * 60 * 60 * 1000); // past 6 hours to pick updates
+  const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // next two weeks
+
+  for (const doc of tokensSnap.docs) {
+    const tokenId = doc.id;
+    const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
+    try {
+      await importGoogleCalendarEvents(uid, { startDate, endDate });
+    } catch (error) {
+      console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
+    }
+  }
 });
 
 // ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
@@ -2723,6 +3106,11 @@ async function _syncTrakt(uid) {
   }
   await batch.commit();
 
+  await db.collection('profiles').doc(uid).set({
+    traktLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    traktSyncCount: history.length,
+  }, { merge: true });
+
   return { ok: true, written: history.length };
 }
 
@@ -2746,6 +3134,11 @@ async function _syncSteam(uid) {
     batch.set(docRef, { ...item, ownerUid: uid }, { merge: true });
   }
   await batch.commit();
+
+  await db.collection('profiles').doc(uid).set({
+    steamLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    steamLibrarySize: games.length,
+  }, { merge: true });
 
   return { ok: true, written: games.length };
 }
