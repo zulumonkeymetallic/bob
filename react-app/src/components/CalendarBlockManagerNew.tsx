@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { CalendarBlock, Story, Task, IHabit } from '../types';
@@ -27,6 +27,7 @@ const CalendarBlockManager: React.FC = () => {
     const [showBlockModal, setShowBlockModal] = useState(false);
     const [loading, setLoading] = useState(true);
     const [aiScheduling, setAiScheduling] = useState(false);
+    const [formError, setFormError] = useState<string | null>(null);
 
     const [newBlock, setNewBlock] = useState({
         theme: 'Health' as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
@@ -92,6 +93,15 @@ const CalendarBlockManager: React.FC = () => {
             const startTime = new Date(newBlock.start).getTime();
             const endTime = new Date(newBlock.end).getTime();
 
+            if (Number.isNaN(startTime) || Number.isNaN(endTime)) {
+                setFormError('Please provide valid start and end times.');
+                return;
+            }
+            if (endTime <= startTime) {
+                setFormError('End time must be after start time.');
+                return;
+            }
+
             await addDoc(collection(db, 'calendar_blocks'), {
                 googleEventId: null,
                 taskId: newBlock.taskId || null,
@@ -113,8 +123,8 @@ const CalendarBlockManager: React.FC = () => {
                 version: 1,
                 supersededBy: null,
                 ownerUid: currentUser.uid,
-                createdAt: startTime,
-                updatedAt: startTime
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
             });
 
             setNewBlock({
@@ -128,9 +138,22 @@ const CalendarBlockManager: React.FC = () => {
                 taskId: '',
                 habitId: ''
             });
+            setFormError(null);
             setShowBlockModal(false);
         } catch (error) {
             console.error('Error creating calendar block:', error);
+        }
+    };
+
+    const handleDeleteBlock = async (blockId: string) => {
+        if (!blockId) return;
+        const ok = window.confirm('Delete this time block? This cannot be undone.');
+        if (!ok) return;
+        try {
+            await deleteDoc(doc(db, 'calendar_blocks', blockId));
+        } catch (e) {
+            console.error('Failed to delete block', e);
+            alert('Failed to delete block.');
         }
     };
 
@@ -189,7 +212,7 @@ const CalendarBlockManager: React.FC = () => {
                                         <Card key={block.id} className="mb-2">
                                             <Card.Body>
                                                 <div className="d-flex justify-content-between align-items-start">
-                                                    <div>
+                                                    <div className="calendar-block" data-theme={block.theme}>
                                                         <h6 className="mb-1">
                                                             {block.theme} - {block.category}
                                                             {block.subTheme && ` (${block.subTheme})`}
@@ -217,6 +240,11 @@ const CalendarBlockManager: React.FC = () => {
                                                         {block.rationale}
                                                     </p>
                                                 )}
+                                                <div className="d-flex gap-2 mt-2">
+                                                    <Button size="sm" variant="outline-danger" onClick={() => handleDeleteBlock(block.id!)}>
+                                                        Delete
+                                                    </Button>
+                                                </div>
                                             </Card.Body>
                                         </Card>
                                     ))}
@@ -261,6 +289,7 @@ const CalendarBlockManager: React.FC = () => {
                 </Modal.Header>
                 <Modal.Body>
                     <Form>
+                        {formError && <Alert variant="danger">{formError}</Alert>}
                         <Row>
                             <Col md={6}>
                                 <Form.Group className="mb-3">

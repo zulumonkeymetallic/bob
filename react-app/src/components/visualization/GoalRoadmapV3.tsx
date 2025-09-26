@@ -53,6 +53,38 @@ const GoalRoadmapV3: React.FC = () => {
   const [filterInSelectedSprint, setFilterInSelectedSprint] = useState(false);
   const [filterOverlapSelectedSprint, setFilterOverlapSelectedSprint] = useState(false);
 
+  // Persist UI state (lightweight localStorage)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('grv3.settings');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.zoom) setZoom(s.zoom);
+        if (s.yearSpan) setYearSpan(s.yearSpan);
+        if (typeof s.showSprints === 'boolean') setShowSprints(s.showSprints);
+        if (typeof s.snapEnabled === 'boolean') setSnapEnabled(s.snapEnabled);
+        if (typeof s.showEmptyThemes === 'boolean') setShowEmptyThemes(s.showEmptyThemes);
+        if (typeof s.filterHasStories === 'boolean') setFilterHasStories(s.filterHasStories);
+        if (typeof s.filterInSelectedSprint === 'boolean') setFilterInSelectedSprint(s.filterInSelectedSprint);
+        if (typeof s.filterOverlapSelectedSprint === 'boolean') setFilterOverlapSelectedSprint(s.filterOverlapSelectedSprint);
+      }
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem('grv3.settings', JSON.stringify({
+        zoom,
+        yearSpan,
+        showSprints,
+        snapEnabled,
+        showEmptyThemes,
+        filterHasStories,
+        filterInSelectedSprint,
+        filterOverlapSelectedSprint,
+      }));
+    } catch {}
+  }, [zoom, yearSpan, showSprints, snapEnabled, showEmptyThemes, filterHasStories, filterInSelectedSprint, filterOverlapSelectedSprint]);
+
   // Viewport culling state
   const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
