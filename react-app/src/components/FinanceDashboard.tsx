@@ -248,6 +248,30 @@ const FinanceDashboard: React.FC = () => {
     return { spendAnnual: avgSpend * 12, savingsAnnual: avgSavings * 12 };
   }, [monthlySeries]);
 
+  // Short-window deltas (last 3 vs previous 3 months)
+  const deltas = useMemo(() => {
+    const n = monthlySeries.length;
+    const window = n >= 6 ? 3 : n >= 4 ? 2 : 0;
+    if (window === 0) return null as null | Record<string, number>;
+    const last = monthlySeries.slice(n - window);
+    const prev = monthlySeries.slice(n - 2*window, n - window);
+    const sumType = (arr: typeof monthlySeries, key: keyof BudgetTotals) => arr.reduce((acc, e) => acc + (e.values[key] || 0), 0);
+    const pct = (a: number, b: number) => (b > 0 ? ((a - b) / b) * 100 : null);
+    return {
+      mandatory: pct(sumType(last, 'mandatory'), sumType(prev, 'mandatory')),
+      optional: pct(sumType(last, 'optional'), sumType(prev, 'optional')),
+      savings: pct(sumType(last, 'savings'), sumType(prev, 'savings')),
+      income: pct(sumType(last, 'income'), sumType(prev, 'income')),
+    } as Record<string, number | null> as any;
+  }, [monthlySeries]);
+
+  const renderDelta = (v: number | null | undefined) => {
+    if (v == null || Number.isNaN(v)) return null;
+    const up = v > 0;
+    const fmt = `${up ? '▲' : '▼'} ${Math.abs(v).toFixed(1)}%`;
+    return <Badge bg={up ? 'danger' : 'success'} className="ms-2">{fmt}</Badge>;
+  };
+
   // Budgets vs Actuals (current window from summary.categories)
   const budgetsView = useMemo(() => {
     if (!summary || !Array.isArray(summary.categories) || Object.keys(budgets).length === 0) return [] as Array<{ key: string; actual: number; budget: number }>;
@@ -324,7 +348,7 @@ const FinanceDashboard: React.FC = () => {
             <Col lg={3} md={6}>
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
-                  <Card.Title>Mandatory Spend</Card.Title>
+                  <Card.Title>Mandatory Spend {renderDelta(deltas?.mandatory as any)}</Card.Title>
                   <Card.Text className="display-6">{formatCurrency(totals.mandatory)}</Card.Text>
                   <span className="text-muted">Bills, groceries, commuting</span>
                 </Card.Body>
@@ -333,7 +357,7 @@ const FinanceDashboard: React.FC = () => {
             <Col lg={3} md={6}>
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
-                  <Card.Title>Optional Spend</Card.Title>
+                  <Card.Title>Optional Spend {renderDelta(deltas?.optional as any)}</Card.Title>
                   <Card.Text className="display-6">{formatCurrency(totals.optional)}</Card.Text>
                   <span className="text-muted">Dining, entertainment, discretionary</span>
                 </Card.Body>
@@ -342,7 +366,7 @@ const FinanceDashboard: React.FC = () => {
             <Col lg={3} md={6}>
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
-                  <Card.Title>Savings & Pots</Card.Title>
+                  <Card.Title>Savings & Pots {renderDelta(deltas?.savings as any)}</Card.Title>
                   <Card.Text className="display-6">{formatCurrency(totals.savings)}</Card.Text>
                   <span className="text-muted">Transfers earmarked for goals</span>
                 </Card.Body>
@@ -351,7 +375,7 @@ const FinanceDashboard: React.FC = () => {
             <Col lg={3} md={6}>
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
-                  <Card.Title>Income Recorded</Card.Title>
+                  <Card.Title>Income Recorded {renderDelta(deltas?.income as any)}</Card.Title>
                   <Card.Text className="display-6">{formatCurrency(totals.income)}</Card.Text>
                   <span className="text-muted">Paydays and reimbursements</span>
                 </Card.Body>

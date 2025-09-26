@@ -3453,6 +3453,7 @@ exports.scheduleSteamGamesViaN8n = httpsV2.onCall({ secrets: [N8N_SCHEDULE_STEAM
 });
 
 // ===== Finance: compute monthly aggregates (last 18 months)
+// DEPRECATED: legacy monthly aggregates; use computeMonzoAnalytics + monzo_budget_summary instead.
 exports.financeComputeMonthlyAggregates = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = admin.firestore();
@@ -3491,6 +3492,7 @@ exports.financeComputeMonthlyAggregates = httpsV2.onCall(async (req) => {
 });
 
 // Compute finance on-track status vs budgets for the last 30 days
+// DEPRECATED: budget status callable; dashboard & roadmap now derive from analytics + finance_budgets.
 exports.financeComputeStatus = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = admin.firestore();
