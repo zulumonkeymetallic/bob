@@ -20,6 +20,11 @@ jobs:
 
       - name: Generate Firebase client config
         run: node scripts/generate-firebase-config.js
+      - name: Verify generated Firebase config
+        run: |
+          ls -la react-app/src | sed -n '1,200p'
+          echo '---'
+          sed -n '1,60p' react-app/src/firebase.ts
 
       - name: Install and build React app
         working-directory: react-app

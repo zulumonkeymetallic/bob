@@ -90,6 +90,13 @@ const IntegrationSettings: React.FC = () => {
     return () => unsub();
   }, [currentUser]);
 
+  // Derived flags
+  const stravaConnected = !!profile?.stravaConnected;
+  const monzoConnected = !!profile?.monzoConnected;
+  const monzoLastSync = profile?.monzoLastSyncAt;
+  const steamLastSync = profile?.steamLastSyncAt;
+  const traktLastSync = profile?.traktLastSyncAt;
+
   useEffect(() => {
     if (!currentUser) return;
 
