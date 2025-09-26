@@ -26,6 +26,8 @@ const STEAM_WEB_API_KEY = defineSecret("STEAM_WEB_API_KEY");
 const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
 const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
+const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
+const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 
@@ -476,6 +478,96 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
   } catch (e) {
     console.error('Strava OAuth callback error:', e);
     res.status(500).send("Strava OAuth callback error: " + e.message);
+  }
+});
+
+// ===== Monzo OAuth Start
+exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+
+    const clientId = process.env.MONZO_CLIENT_ID;
+    if (!clientId) return res.status(500).send("Monzo client ID not configured");
+
+    const state = stateEncode({ uid, nonce });
+    const scope = encodeURIComponent("openid profile accounts:read balance:read transactions:read pots:read");
+    const authUrl = `https://auth.monzo.com/?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    console.error('Monzo OAuth start error:', e);
+    res.status(500).send("Monzo OAuth start error: " + e.message);
+  }
+});
+
+// ===== Monzo OAuth Callback
+exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+
+    const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: process.env.MONZO_CLIENT_ID,
+        client_secret: process.env.MONZO_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+        grant_type: "authorization_code",
+      }).toString(),
+    });
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresIn = Number(tokenData.expires_in || 0);
+    const expiresAt = expiresIn ? Math.floor(Date.now() / 1000) + expiresIn : null;
+    const monzoUserId = tokenData.user_id || null;
+    if (!refresh || !access) {
+      return res.status(400).send("Monzo tokens missing from response");
+    }
+
+    const db = admin.firestore();
+    await db.collection('tokens').doc(`${uid}_monzo`).set({
+      provider: 'monzo',
+      ownerUid: uid,
+      monzoUserId,
+      refresh_token: refresh,
+      access_token: access,
+      expires_at: expiresAt,
+      scope: tokenData.scope || null,
+      token_type: tokenData.token_type || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await db.collection('profiles').doc(uid).set({
+      monzoConnected: true,
+      monzoUserId,
+      monzoLastSyncAt: null,
+    }, { merge: true });
+
+    await db.collection('monzo_sync_jobs').add({
+      ownerUid: uid,
+      type: 'initial-sync',
+      state: 'pending',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
+  } catch (e) {
+    console.error('Monzo OAuth callback error:', e);
+    res.status(500).send("Monzo OAuth callback error: " + e.message);
   }
 });
 

@@ -11,6 +11,7 @@ const Admin = () => {
   const [steamId, setSteamId] = useState('');
   const [parkrunAthleteId, setParkrunAthleteId] = useState('');
   const [stravaStatus, setStravaStatus] = useState<string>('');
+  const [monzoStatus, setMonzoStatus] = useState<string>('');
   const [fitnessOverview, setFitnessOverview] = useState<any>(null);
   const [runAnalysis, setRunAnalysis] = useState<any>(null);
   const [eventSlug, setEventSlug] = useState('ormeau');
@@ -153,6 +154,26 @@ const Admin = () => {
     }
   };
 
+  const handleConnectMonzo = async () => {
+    if (!user) return;
+    try {
+      setMonzoStatus('Starting Monzo OAuth...');
+      const nonce = Math.random().toString(36).slice(2);
+      const region = 'europe-west2';
+      const projectId = (window as any).FIREBASE_PROJECT_ID || firebaseConfig.projectId;
+      const url = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthStart?uid=${user.uid}&nonce=${nonce}`;
+      const popup = window.open(url, 'monzo-oauth', 'width=500,height=700');
+      const check = setInterval(() => {
+        if (popup?.closed) {
+          clearInterval(check);
+          setTimeout(() => setMonzoStatus('Monzo connected (if you completed the flow).'), 1500);
+        }
+      }, 800);
+    } catch (e: any) {
+      setMonzoStatus('Failed to start Monzo OAuth: ' + e.message);
+    }
+  };
+
   const handleSyncStrava = () => {
     const syncStrava = httpsCallable(functions, 'syncStrava');
     logMessage('Syncing Strava activities...');
@@ -274,6 +295,10 @@ const Admin = () => {
             <button className="btn btn-outline-primary" onClick={handleConnectStrava}>Connect Strava</button>
             <button className="btn btn-primary" onClick={handleSyncStrava}>Sync Strava</button>
             {stravaStatus && <span className="ms-2 small text-muted">{stravaStatus}</span>}
+          </div>
+          <div className="mt-3 d-flex gap-2 align-items-center">
+            <button className="btn btn-outline-primary" onClick={handleConnectMonzo}>Connect Monzo</button>
+            {monzoStatus && <span className="ms-2 small text-muted">{monzoStatus}</span>}
           </div>
           <div className="mt-3 d-flex gap-2 align-items-center">
             <button className="btn btn-primary" onClick={handleSyncParkrun}>Sync Parkrun</button>

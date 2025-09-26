@@ -40,6 +40,20 @@
         }
       },
       {
+        "source": "/api/monzo/start",
+        "function": {
+          "functionId": "monzoOAuthStart",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/monzo/callback",
+        "function": {
+          "functionId": "monzoOAuthCallback",
+          "region": "europe-west2"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
