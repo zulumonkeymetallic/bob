@@ -69,7 +69,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'piggy-bank',
       items: [
         { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
-        { label: 'Monzo Admin', path: '/admin', icon: 'link' }
+        { label: 'Integrations', path: '/settings?tab=integrations', icon: 'plug' }
       ]
     },
     {

@@ -11,6 +11,18 @@ import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug
 import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
+import { useLocation, useNavigate } from 'react-router-dom';
+
+const SETTINGS_TABS = ['themes', 'database', 'integrations', 'reminders', 'ai', 'system'] as const;
+type SettingsTab = typeof SETTINGS_TABS[number];
+const DEFAULT_TAB: SettingsTab = 'themes';
+
+const normalizeTab = (value: string | null): SettingsTab => {
+  if (value && SETTINGS_TABS.includes(value as SettingsTab)) {
+    return value as SettingsTab;
+  }
+  return DEFAULT_TAB;
+};
 
 interface GlobalThemeSettings {
   themes: GlobalTheme[];
@@ -19,6 +31,8 @@ interface GlobalThemeSettings {
 }
 
 const SettingsPage: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
@@ -52,6 +66,29 @@ const SettingsPage: React.FC = () => {
   const [saveProfileMsg, setSaveProfileMsg] = useState<string>('');
   const [saveProfileError, setSaveProfileError] = useState<string>('');
   const [savingProfile, setSavingProfile] = useState<boolean>(false);
+
+  const [activeTab, setActiveTab] = useState<SettingsTab>(normalizeTab(new URLSearchParams(location.search).get('tab')));
+
+  useEffect(() => {
+    const nextTab = normalizeTab(new URLSearchParams(location.search).get('tab'));
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    }
+  }, [location.search, activeTab]);
+
+  const handleTabSelect = (key: string | null) => {
+    if (!key) return;
+    const tab = normalizeTab(key);
+    if (tab !== activeTab) {
+      setActiveTab(tab);
+    }
+
+    const params = new URLSearchParams(location.search);
+    if (params.get('tab') === tab) return;
+    params.set('tab', tab);
+    const searchString = params.toString();
+    navigate(`${location.pathname}?${searchString}`, { replace: true });
+  };
 
   // Reminders (Shortcuts) helpers
   const [remindersSecret, setRemindersSecret] = useState<string>('');
@@ -308,7 +345,7 @@ const SettingsPage: React.FC = () => {
         </Col>
       </Row>
 
-      <Tab.Container defaultActiveKey="themes">
+      <Tab.Container activeKey={activeTab} onSelect={handleTabSelect}>
         <Row>
           <Col sm={3}>
             <Nav variant="pills" className="flex-column">

@@ -4,7 +4,6 @@ import { Routes, Route, BrowserRouter as Router, Navigate, useLocation, useNavig
 import Dashboard from './components/Dashboard';
 import TaskListView from './components/TaskListView';
 import GoalsManagement from './components/GoalsManagement';
-import Admin from './components/Admin';
 import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import TasksList from './components/TasksList';
@@ -248,7 +247,7 @@ function AppContent() {
             <Route path="/finance" element={<FinanceDashboard />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
-            <Route path="/admin" element={<Admin />} />
+            <Route path="/admin" element={<Navigate to="/settings?tab=integrations" replace />} />
             {/* Removed by request: Test Suite and Changelog routes */}
             <Route path="/test" element={<Navigate to="/dashboard" replace />} />
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
