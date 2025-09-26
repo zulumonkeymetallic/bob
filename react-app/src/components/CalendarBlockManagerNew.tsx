@@ -3,7 +3,8 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { CalendarBlock, Story, Task, IHabit } from '../types';
-import { Container, Row, Col, Card, Button, Modal, Form, Alert } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Modal, Form, Alert, ButtonGroup, ToggleButton } from 'react-bootstrap';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock } from 'lucide-react';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { httpsCallable } from 'firebase/functions';
 
@@ -31,6 +32,8 @@ const CalendarBlockManager: React.FC = () => {
     const [aiScheduling, setAiScheduling] = useState(false);
     const [aiMessage, setAiMessage] = useState<string | null>(null);
     const [aiVariant, setAiVariant] = useState<'info' | 'success' | 'warning' | 'danger'>('info');
+    const [calendarView, setCalendarView] = useState<'list' | 'week'>('week');
+    const [selectedDate, setSelectedDate] = useState<Date>(() => { const d=new Date(); d.setHours(0,0,0,0); return d; });
     const [formError, setFormError] = useState<string | null>(null);
 
     const [newBlock, setNewBlock] = useState({
@@ -271,6 +274,30 @@ const CalendarBlockManager: React.FC = () => {
         return <div className="d-flex justify-content-center p-5"><div className="spinner-border" role="status"></div></div>;
     }
 
+    // Week grid helpers
+    const startOfWeek = (d: Date) => { const c=new Date(d); const day=(c.getDay()+6)%7; c.setDate(c.getDate()-day); c.setHours(0,0,0,0); return c; };
+    const endOfWeek = (d: Date) => { const s=startOfWeek(d); const e=new Date(s); e.setDate(s.getDate()+7); return e; };
+    const weekStart = startOfWeek(selectedDate);
+    const weekEnd = endOfWeek(selectedDate);
+    const pxPerMin = 0.6; // 60 minutes = 36px; 24h ~ 864px
+    const hourMarks = Array.from({ length: 24 }, (_, i) => i);
+    const days: Date[] = Array.from({ length: 7 }, (_, i) => new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i));
+    const minsFromStart = (ms: number) => { const d=new Date(ms); return d.getHours()*60 + d.getMinutes(); };
+    const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
+    const splitIntoDays = (b: CalendarBlock) => {
+        const parts: Array<{ dayIndex: number; startMin: number; endMin: number; block: CalendarBlock }>=[];
+        for (let i=0;i<7;i++) {
+            const d0 = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate()+i, 0,0,0,0).getTime();
+            const d1 = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate()+i, 23,59,59,999).getTime();
+            const s = Math.max(b.start, d0);
+            const e = Math.min(b.end, d1);
+            if (s < e) {
+                parts.push({ dayIndex: i, startMin: minsFromStart(s), endMin: Math.max(minsFromStart(e), minsFromStart(s)+15), block: b });
+            }
+        }
+        return parts;
+    };
+
     return (
         <Container fluid className="p-3">
             <div className="d-flex justify-content-between align-items-center mb-4">
@@ -293,14 +320,114 @@ const CalendarBlockManager: React.FC = () => {
             <Row>
                 <Col md={8}>
                     <Card>
-                        <Card.Header>Calendar Blocks</Card.Header>
+                        <Card.Header className="d-flex justify-content-between align-items-center">
+                          <div>Calendar Blocks</div>
+                          <div className="d-flex align-items-center gap-2">
+                            <ButtonGroup>
+                              <ToggleButton
+                                id="cb-view-week"
+                                type="radio"
+                                variant={calendarView==='week'?'primary':'outline-primary'}
+                                name="view"
+                                value="week"
+                                checked={calendarView==='week'}
+                                onChange={()=>setCalendarView('week')}
+                                size="sm"
+                              >Week</ToggleButton>
+                              <ToggleButton
+                                id="cb-view-list"
+                                type="radio"
+                                variant={calendarView==='list'?'primary':'outline-primary'}
+                                name="view"
+                                value="list"
+                                checked={calendarView==='list'}
+                                onChange={()=>setCalendarView('list')}
+                                size="sm"
+                              >List</ToggleButton>
+                            </ButtonGroup>
+                            {calendarView==='week' && (
+                              <div className="d-flex align-items-center gap-2">
+                                <Button size="sm" variant="outline-secondary" onClick={()=> setSelectedDate(new Date())}><CalendarIcon size={14}/></Button>
+                                <Button size="sm" variant="outline-secondary" onClick={()=> { const d=new Date(weekStart); d.setDate(d.getDate()-7); setSelectedDate(d); }}><ChevronLeft size={14}/></Button>
+                                <div className="small text-muted" style={{minWidth: 180, textAlign: 'center'}}>
+                                  {weekStart.toLocaleDateString()} – {new Date(weekEnd.getTime()-1).toLocaleDateString()}
+                                </div>
+                                <Button size="sm" variant="outline-secondary" onClick={()=> { const d=new Date(weekStart); d.setDate(d.getDate()+7); setSelectedDate(d); }}><ChevronRight size={14}/></Button>
+                              </div>
+                            )}
+                          </div>
+                        </Card.Header>
                         <Card.Body>
                             {aiMessage && (
                                 <Alert variant={aiVariant} className="mb-3" onClose={() => setAiMessage(null)} dismissible>
                                     {aiMessage}
                                 </Alert>
                             )}
-                            {blocks.length === 0 ? (
+                            {calendarView==='week' ? (
+                              <div>
+                                {/* Week Grid */}
+                                <div className="mb-2 d-flex align-items-center gap-2 text-muted">
+                                  <Clock size={14}/> <span style={{fontSize:12}}>All times local</span>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '70px repeat(7, 1fr)', border: '1px solid var(--bs-border-color)', borderRadius: 8, overflow: 'hidden' }}>
+                                  {/* Header row */}
+                                  <div style={{ background: 'var(--bs-body-bg)', borderRight: '1px solid var(--bs-border-color)' }} />
+                                  {days.map((d, i) => (
+                                    <div key={i} style={{ background: 'var(--bs-body-bg)', borderRight: i<6?'1px solid var(--bs-border-color)':'none', textAlign: 'center', fontWeight: 600, padding: '6px 0' }}>
+                                      {d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                                    </div>
+                                  ))}
+                                  {/* Body rows */}
+                                  {/* Hours column */}
+                                  <div style={{ position: 'relative', borderTop: '1px solid var(--bs-border-color)', borderRight: '1px solid var(--bs-border-color)' }}>
+                                    <div style={{ position: 'relative', height: `${24*60*pxPerMin}px` }}>
+                                      {hourMarks.map(h => (
+                                        <div key={h} style={{ position: 'absolute', top: `${h*60*pxPerMin}px`, left: 0, right: 0, height: 1 }}>
+                                          <div style={{ position: 'absolute', top: -8, right: 4, fontSize: 10, color: 'var(--bs-secondary-color)' }}>{String(h).padStart(2,'0')}:00</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  {/* Day columns */}
+                                  {days.map((d, di) => {
+                                    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+                                    const dayEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23,59,59,999).getTime();
+                                    const dayBlocks = blocks.filter(b => (b.start < dayEnd && b.end > dayStart));
+                                    return (
+                                      <div key={di} style={{ position: 'relative', borderTop: '1px solid var(--bs-border-color)', borderRight: di<6?'1px solid var(--bs-border-color)':'none', background: 'var(--bs-body-bg)' }}>
+                                        <div style={{ position: 'relative', height: `${24*60*pxPerMin}px` }}>
+                                          {/* hour lines */}
+                                          {hourMarks.map(h => (
+                                            <div key={h} style={{ position: 'absolute', top: `${h*60*pxPerMin}px`, left: 0, right: 0, height: 1, borderTop: '1px dashed rgba(0,0,0,0.06)' }} />
+                                          ))}
+                                          {/* blocks */}
+                                          {dayBlocks.flatMap(b => splitIntoDays(b).filter(p=>p.dayIndex===di)).map((p, idx) => {
+                                            const top = p.startMin * pxPerMin;
+                                            const height = clamp((p.endMin - p.startMin) * pxPerMin, 14, 24*60*pxPerMin - top);
+                                            const isHard = p.block.flexibility === 'hard' || p.block.status === 'applied';
+                                            return (
+                                              <div key={`${p.block.id}-${idx}`} className="calendar-block" data-theme={p.block.theme}
+                                                   style={{ position: 'absolute', left: 6, right: 6, top, height, border: '1px solid', borderStyle: isHard ? 'solid' : 'dashed', borderRadius: 8, padding: '6px 8px', overflow: 'hidden', boxShadow: '0 2px 10px rgba(0,0,0,0.06)' }}
+                                                   title={`${p.block.theme} - ${p.block.category}\n${new Date(p.block.start).toLocaleString()} – ${new Date(p.block.end).toLocaleString()}`}
+                                                   onDoubleClick={() => openEditModal(p.block)}
+                                              >
+                                                <div className="d-flex justify-content-between align-items-start" style={{ fontSize: 12, fontWeight: 700 }}>
+                                                  <div>{p.block.category}{p.block.subTheme ? ` · ${p.block.subTheme}` : ''}</div>
+                                                  <span className="badge" style={{ background: 'rgba(0,0,0,0.35)' }}>{isHard ? 'Hard' : 'Soft'}</span>
+                                                </div>
+                                                <div style={{ fontSize: 11 }} className="text-muted">
+                                                  {new Date(p.block.start).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} – {new Date(p.block.end).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : blocks.length === 0 ? (
                                 <div className="text-center text-muted py-4">
                                     <p>No calendar blocks created yet.</p>
                                     <Button variant="primary" onClick={() => setShowBlockModal(true)}>
