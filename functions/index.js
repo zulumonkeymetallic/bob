@@ -29,6 +29,9 @@ const N8N_SCHEDULE_STEAM_URL = defineSecret("N8N_SCHEDULE_STEAM_URL");
 // Strava integration secrets
 const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
 const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
+// Monzo integration secrets
+const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
+const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
@@ -402,6 +405,175 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   } catch (e) {
     res.status(500).send("OAuth callback error: " + e.message);
   }
+});
+
+// ===== Monzo OAuth Start
+exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+    const clientId = process.env.MONZO_CLIENT_ID;
+    const state = stateEncode({ uid, nonce });
+    // Monzo OAuth authorize
+    const authUrl = `https://auth.monzo.com/?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).send("Monzo OAuth start error: " + e.message);
+  }
+});
+
+// ===== Monzo OAuth Callback
+exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] , invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+
+    const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: process.env.MONZO_CLIENT_ID,
+        client_secret: process.env.MONZO_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+      }).toString(),
+    });
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresIn = tokenData.expires_in; // seconds
+    const user_id = tokenData.user_id || null;
+    if (!refresh) return res.status(400).send("No refresh_token from Monzo. Check app setup.");
+
+    const db = admin.firestore();
+    const tokenRef = db.collection("tokens").doc(`${uid}_monzo`);
+    const expires_at = Math.floor(Date.now()/1000) + (Number(expiresIn)||0);
+    await tokenRef.set({
+      provider: "monzo",
+      ownerUid: uid,
+      monzo_user_id: user_id,
+      refresh_token: refresh,
+      access_token: access || null,
+      expires_at,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    // Mark profile integration flag
+    await db.collection('profiles').doc(uid).set({
+      monzoConnected: true,
+      monzoLastSyncAt: null
+    }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
+  } catch (e) {
+    console.error('Monzo OAuth callback error:', e);
+    res.status(500).send("Monzo OAuth callback error: " + e.message);
+  }
+});
+
+async function getMonzoAccessToken(uid) {
+  const db = admin.firestore();
+  const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+  const snap = await tokenRef.get();
+  if (!snap.exists) throw new Error('Monzo not connected');
+  const data = snap.data() || {};
+  const now = Math.floor(Date.now()/1000) + 60; // 60s skew
+  if (data.access_token && data.expires_at && data.expires_at > now) {
+    return data.access_token;
+  }
+  // refresh
+  const refresh = data.refresh_token;
+  if (!refresh) throw new Error('Missing refresh_token');
+  const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refresh,
+      client_id: process.env.MONZO_CLIENT_ID,
+      client_secret: process.env.MONZO_CLIENT_SECRET,
+    }).toString(),
+  });
+  const access = tokenData.access_token;
+  const expiresIn = tokenData.expires_in;
+  const newRefresh = tokenData.refresh_token || refresh;
+  const expires_at = Math.floor(Date.now()/1000) + (Number(expiresIn)||0);
+  await tokenRef.set({ access_token: access, refresh_token: newRefresh, expires_at, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return access;
+}
+
+// ===== Monzo: list accounts and store basics
+exports.monzoListAccounts = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const access = await getMonzoAccessToken(uid);
+  const res = await fetch('https://api.monzo.com/accounts', { headers: { Authorization: `Bearer ${access}` } });
+  if (!res.ok) throw new httpsV2.HttpsError('internal', 'Monzo accounts fetch failed: ' + res.status);
+  const data = await res.json();
+  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+  const db = admin.firestore();
+  const batch = db.batch();
+  for (const acc of accounts) {
+    const ref = db.collection('finance_accounts').doc(`${uid}_${acc.id}`);
+    batch.set(ref, { ownerUid: uid, provider: 'monzo', account: acc, updatedAt: Date.now() }, { merge: true });
+  }
+  await batch.commit();
+  return { ok: true, count: accounts.length, accounts };
+});
+
+// ===== Monzo: sync transactions for account
+exports.monzoSyncTransactions = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const accountId = String(req?.data?.accountId || '');
+  const since = req?.data?.since ? new Date(req.data.since).toISOString() : undefined;
+  if (!accountId) throw new httpsV2.HttpsError('invalid-argument', 'accountId required');
+  const access = await getMonzoAccessToken(uid);
+  const url = new URL('https://api.monzo.com/transactions');
+  url.searchParams.set('account_id', accountId);
+  if (since) url.searchParams.set('since', since);
+  url.searchParams.set('expand[]', 'merchant');
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${access}` } });
+  if (!res.ok) throw new httpsV2.HttpsError('internal', `Monzo transactions failed: ${res.status}`);
+  const data = await res.json();
+  const txs = Array.isArray(data?.transactions) ? data.transactions : [];
+  const db = admin.firestore();
+  const batch = db.batch();
+  for (const t of txs) {
+    const txId = `${uid}_${t.id}`;
+    const ref = db.collection('finance_transactions').doc(txId);
+    const norm = {
+      ownerUid: uid,
+      provider: 'monzo',
+      accountId,
+      transactionId: t.id,
+      created: t.created ? new Date(t.created).getTime() : Date.now(),
+      amount: t.amount, // in minor units (pence)
+      currency: t.currency,
+      description: t.description,
+      category: t.category,
+      is_load: t.is_load || false,
+      settled: t.settled || null,
+      notes: t.notes || '',
+      merchant: t.merchant ? { id: t.merchant.id || null, name: t.merchant.name || null, category: t.merchant.category || null } : null,
+      raw: t,
+      updatedAt: Date.now(),
+    };
+    batch.set(ref, norm, { merge: true });
+  }
+  await batch.commit();
+  // update last sync
+  await db.collection('profiles').doc(uid).set({ monzoLastSyncAt: Date.now() }, { merge: true });
+  return { ok: true, count: txs.length };
 });
 
 // ===== Strava OAuth Start
