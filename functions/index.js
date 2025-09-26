@@ -2548,6 +2548,29 @@ exports.financeComputeMonthlyAggregates = httpsV2.onCall(async (req) => {
   return { ok: true, months: Array.from(byMonth.keys()).sort() };
 });
 
+// Compute finance on-track status vs budgets for the last 30 days
+exports.financeComputeStatus = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const budgetsSnap = await db.collection('finance_budgets').doc(uid).get();
+  const budgets = budgetsSnap.exists ? (budgetsSnap.data() || {}) : {};
+  const byCategory = budgets.byCategory || {};
+  const budgetTotal = Object.values(byCategory).reduce((a,b)=>a+(Number(b)||0), 0);
+  const since = Date.now() - 30*86400000;
+  const txSnap = await db.collection('finance_transactions')
+    .where('ownerUid','==', uid)
+    .where('created','>=', since)
+    .get();
+  let actual = 0;
+  for (const d of txSnap.docs) {
+    const amt = Number((d.data()||{}).amount||0);
+    if (amt < 0) actual += -amt;
+  }
+  const onTrack = budgetTotal > 0 ? actual <= budgetTotal : null;
+  await db.collection('finance_status').doc(uid).set({ ownerUid: uid, actualLast30: Math.round(actual), budgetTotal: Math.round(budgetTotal), onTrack, updatedAt: Date.now() }, { merge: true });
+  return { ok: true, actualLast30: Math.round(actual), budgetTotal: Math.round(budgetTotal), onTrack };
+});
+
 // ===== Scheduled Syncs
 exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
   const db = admin.firestore();

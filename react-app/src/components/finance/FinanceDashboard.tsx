@@ -34,6 +34,7 @@ const FinanceDashboard: React.FC = () => {
   const [monthly, setMonthly] = useState<Array<{ yyyymm: string; spend: number; income: number; categories: Record<string, number> }>>([]);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [budgetCurrency, setBudgetCurrency] = useState('GBP');
+  const [onTrack, setOnTrack] = useState<boolean|null>(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -65,6 +66,15 @@ const FinanceDashboard: React.FC = () => {
     }
     Promise.all(ops).then(()=> setMonthly(results));
   }, [currentUser]);
+
+  // Compute and show on-track status
+  useEffect(() => {
+    if (!currentUser) return;
+    const compute = async () => {
+      try { const callable = httpsCallable(functions, 'financeComputeStatus'); const res:any = await callable({}); setOnTrack(res?.data?.onTrack ?? null); } catch {}
+    };
+    compute();
+  }, [currentUser, budgets]);
 
   // Load budgets (if configured)
   useEffect(() => {
@@ -113,6 +123,11 @@ const FinanceDashboard: React.FC = () => {
               <div className="text-muted">Spend (last 30 days)</div>
               <div className="fs-3 fw-bold">{formatMoney(metrics.last30, currency)}</div>
               <div className="small">Prev 30d: {formatMoney(metrics.prev30, currency)} {metrics.delta>=0 ? <Badge bg="danger" className="ms-1">+{formatMoney(metrics.delta, currency)}</Badge> : <Badge bg="success" className="ms-1">{formatMoney(metrics.delta, currency)}</Badge>}</div>
+              {onTrack !== null && (
+                <div className="mt-2">
+                  {onTrack ? <Badge bg="success">On Track</Badge> : <Badge bg="danger">Over Budget</Badge>}
+                </div>
+              )}
               <div className="mt-3">
                 <Button size="sm" variant="outline-secondary" onClick={recomputeMonthly}>Recompute Monthly</Button>
               </div>
