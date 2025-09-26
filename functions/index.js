@@ -3,6 +3,7 @@ const functionsV2 = require("firebase-functions/v2");
 const httpsV2 = require("firebase-functions/v2/https");
 const schedulerV2 = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
+const firestoreV2 = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
 const aiUsageLogger = require("./utils/aiUsageLogger");
@@ -22,6 +23,9 @@ const GOOGLE_OAUTH_CLIENT_ID = defineSecret("GOOGLE_OAUTH_CLIENT_ID");
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret("GOOGLE_OAUTH_CLIENT_SECRET");
 const TRAKT_CLIENT_ID = defineSecret("TRAKT_CLIENT_ID");
 const STEAM_WEB_API_KEY = defineSecret("STEAM_WEB_API_KEY");
+const N8N_WEBHOOK_SECRET = defineSecret("N8N_WEBHOOK_SECRET");
+const N8N_OUTBOUND_WEBHOOK_URL = defineSecret("N8N_OUTBOUND_WEBHOOK_URL");
+const N8N_SCHEDULE_STEAM_URL = defineSecret("N8N_SCHEDULE_STEAM_URL");
 // Strava integration secrets
 const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
 const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
@@ -2229,6 +2233,109 @@ exports.syncTrakt = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) =
 exports.syncSteam = httpsV2.onCall({ secrets: [STEAM_WEB_API_KEY] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   return await _syncSteam(req.auth.uid);
+});
+
+// ===== n8n: inbound webhook for Calendar Blocks
+exports.n8nCalendarWebhook = httpsV2.onRequest({ secrets: [N8N_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const provided = String(req.get('x-webhook-secret') || req.query.secret || '');
+    const expected = process.env.N8N_WEBHOOK_SECRET || '';
+    if (!expected || provided !== expected) {
+      return res.status(401).send('Invalid or missing secret');
+    }
+    const body = (typeof req.body === 'string') ? JSON.parse(req.body) : (req.body || {});
+    const action = String(body.action || '').toLowerCase();
+    const ownerUid = String(body.ownerUid || '');
+    const id = String(body.id || body.block?.id || '');
+    const block = body.block || {};
+    if (!ownerUid) return res.status(400).send('Missing ownerUid');
+    const db = admin.firestore();
+    if (action === 'create') {
+      const doc = { ...block, ownerUid, createdAt: Date.now(), updatedAt: Date.now() };
+      const ref = await db.collection('calendar_blocks').add(doc);
+      return res.json({ ok: true, id: ref.id });
+    } else if (action === 'update') {
+      if (!id) return res.status(400).send('Missing id');
+      await db.collection('calendar_blocks').doc(id).set({ ...block, ownerUid, updatedAt: Date.now() }, { merge: true });
+      return res.json({ ok: true, id });
+    } else if (action === 'delete') {
+      if (!id) return res.status(400).send('Missing id');
+      await db.collection('calendar_blocks').doc(id).delete();
+      return res.json({ ok: true, id });
+    } else {
+      return res.status(400).send('Invalid action');
+    }
+  } catch (e) {
+    try {
+      await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'in', ts: Date.now(), error: String(e?.message || e) });
+    } catch {}
+    return res.status(500).send('Webhook error');
+  }
+});
+
+// Outbound notifications to n8n on calendar_blocks writes (optional)
+exports.onCalendarBlockWritten = firestoreV2.onDocumentWritten('calendar_blocks/{id}', { secrets: [N8N_OUTBOUND_WEBHOOK_URL, N8N_WEBHOOK_SECRET] }, async (event) => {
+  const url = process.env.N8N_OUTBOUND_WEBHOOK_URL;
+  if (!url) return;
+  const before = event.data?.before?.data();
+  const after = event.data?.after?.data();
+  const id = event.params.id;
+  const action = !before && after ? 'created' : (before && !after ? 'deleted' : 'updated');
+  const ownerUid = (after?.ownerUid || before?.ownerUid || null);
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET || '' },
+      body: JSON.stringify({ id, action, ownerUid, before, after, ts: Date.now() }),
+    });
+  } catch (e) {
+    try { await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'out', ts: Date.now(), id, action, error: String(e?.message || e) }); } catch {}
+  }
+});
+
+// Callable: schedule Steam games via n8n to Calendar Blocks
+exports.scheduleSteamGamesViaN8n = httpsV2.onCall({ secrets: [N8N_SCHEDULE_STEAM_URL, N8N_WEBHOOK_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const items = Array.isArray(req?.data?.items) ? req.data.items : [];
+  const settings = req?.data?.settings || { durationMinutes: 120 };
+  if (!items.length) throw new httpsV2.HttpsError('invalid-argument', 'No items provided');
+  const url = process.env.N8N_SCHEDULE_STEAM_URL;
+  if (!url) throw new httpsV2.HttpsError('failed-precondition', 'N8N_SCHEDULE_STEAM_URL not configured');
+  let result;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET || '' },
+      body: JSON.stringify({ ownerUid: uid, items, settings })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    result = await res.json();
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', 'n8n scheduling failed: ' + (e?.message || e));
+  }
+  const blocks = Array.isArray(result?.blocks) ? result.blocks : [];
+  const db = admin.firestore();
+  const created = [];
+  for (const b of blocks) {
+    const doc = {
+      ownerUid: uid,
+      persona: 'personal',
+      theme: b.theme || 'Growth',
+      category: b.category || 'Gaming',
+      start: new Date(b.start).getTime(),
+      end: new Date(b.end).getTime(),
+      flexibility: 'soft',
+      status: 'applied',
+      createdBy: 'automation',
+      source: 'steam',
+      note: b.note || b.title || '',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const ref = await db.collection('calendar_blocks').add(doc);
+    created.push(ref.id);
+  }
+  return { ok: true, created, count: created.length };
 });
 
 // ===== Scheduled Syncs
