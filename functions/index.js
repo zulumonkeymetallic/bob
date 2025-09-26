@@ -2510,6 +2510,44 @@ exports.scheduleSteamGamesViaN8n = httpsV2.onCall({ secrets: [N8N_SCHEDULE_STEAM
   return { ok: true, created, count: created.length };
 });
 
+// ===== Finance: compute monthly aggregates (last 18 months)
+exports.financeComputeMonthlyAggregates = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - 17, 1); // 18 months window
+  const snap = await db.collection('finance_transactions')
+    .where('ownerUid', '==', uid)
+    .where('created', '>=', start.getTime())
+    .get();
+  const byMonth = new Map(); // yyyymm -> { spend, income, currency, cats: {cat: amount} }
+  function keyOf(dMs){ const d = new Date(dMs); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}`; }
+  for (const docSnap of snap.docs) {
+    const t = docSnap.data() || {};
+    const k = keyOf(t.created || Date.now());
+    if (!byMonth.has(k)) byMonth.set(k, { spend: 0, income: 0, cats: {}, currency: t.currency || 'GBP' });
+    const m = byMonth.get(k);
+    const amt = Number(t.amount || 0);
+    if (amt < 0) {
+      const spend = -amt; // store as positive spend
+      m.spend += spend;
+      const cat = t.category || 'uncategorised';
+      m.cats[cat] = (m.cats[cat] || 0) + spend;
+    } else {
+      m.income += amt;
+    }
+    if (!m.currency && t.currency) m.currency = t.currency;
+  }
+  // write per-month docs
+  const batch = db.batch();
+  for (const [yyyymm, v] of byMonth.entries()) {
+    const ref = db.collection('finance_monthly').doc(`${uid}_${yyyymm}`);
+    batch.set(ref, { ownerUid: uid, yyyymm, spend: Math.round(v.spend), income: Math.round(v.income), currency: v.currency || 'GBP', categories: v.cats, updatedAt: Date.now() }, { merge: true });
+  }
+  await batch.commit();
+  return { ok: true, months: Array.from(byMonth.keys()).sort() };
+});
+
 // ===== Scheduled Syncs
 exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
   const db = admin.firestore();

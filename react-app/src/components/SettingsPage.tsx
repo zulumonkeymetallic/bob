@@ -11,6 +11,7 @@ import CalendarSyncManager from './CalendarSyncManager';
 import { Settings, Palette, Database, Calendar, Wand2, KeyRound, Clipboard, FileCode } from 'lucide-react';
 import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
+import BudgetSettings from './finance/BudgetSettings';
 
 interface GlobalThemeSettings {
   themes: GlobalTheme[];
@@ -541,6 +542,8 @@ const SettingsPage: React.FC = () => {
                     </div>
                   </Card.Body>
                 </Card>
+
+                <BudgetSettings />
               </Tab.Pane>
 
               {/* Reminders (Shortcuts) Tab */}
