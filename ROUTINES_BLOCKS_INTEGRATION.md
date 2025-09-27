@@ -33,3 +33,15 @@ This note summarizes how Habits and Chores flow into Today’s plan and Calendar
 
 Tip: If you want a 06:00 auto build per user timezone, add a scheduled function keyed by user prefs (see Notes in deployment brief).
 
+## Example Day Flow
+
+1. Configure a weekly Habit (e.g., "Gym") with days Mon/Wed/Fri at 07:00 and link it to a Goal.
+2. Create a Chore (e.g., "Take bins out") with `RRULE:FREQ=WEEKLY;BYDAY=TH;INTERVAL=1` and set `DTSTART` to last Thursday 19:00. The UI shows the computed Next Due.
+3. In the morning, open the app; the plan build collects today’s Habits/Chores and Tasks due today.
+4. If a Calendar Block exists around 07:00, the Gym habit is nested under that block; otherwise it creates a child event at 07:00.
+5. Mark the Chore as Done in Chores → the app immediately advances `nextDueAt` to the next Thursday 19:00.
+6. Run “Sync Plan to Google Calendar” (manual or scheduled) to push child events; any deletions are reconciled on the next reconciliation pass.
+
+Notes
+- Habits list shows weekday chips for weekly frequency and allows inline time and active toggle updates.
+- Chores list supports a quick “Mark Done” to advance `nextDueAt`; RRULE builder inputs help with FREQ, INTERVAL, and BYDAY.

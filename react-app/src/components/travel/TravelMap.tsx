@@ -417,7 +417,9 @@ const TravelMap: React.FC = () => {
                 {({ geographies }) => geographies.map(geo => {
                   // world-atlas uses numeric country codes as geo.id. Convert to ISO alpha-2.
                   const numeric = (geo.id ?? '').toString().padStart(3, '0');
-                  const iso2 = (isoCountries.numericToAlpha2 ? isoCountries.numericToAlpha2(numeric) : '').toUpperCase();
+                  // numericToAlpha2 can return undefined for non-country ids; guard before toUpperCase
+                  const iso2Raw = isoCountries.numericToAlpha2 ? isoCountries.numericToAlpha2(numeric) : '';
+                  const iso2 = (iso2Raw || '').toUpperCase();
                   const inTrip = iso2 && tripIso2.has(iso2);
                   const visited = iso2 && visitedIso2.has(iso2);
                   const fill = (() => {

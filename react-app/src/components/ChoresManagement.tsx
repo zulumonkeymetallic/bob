@@ -20,6 +20,8 @@ const ChoresManagement: React.FC = () => {
   const [chores, setChores] = useState<any[]>([]);
   const [goals, setGoals] = useState<any[]>([]);
   const [form, setForm] = useState<ChoreForm>({ title: '', rrule: 'RRULE:FREQ=WEEKLY;INTERVAL=1', dtstart: '', estimatedMinutes: 15, priority: 2, theme: 2, goalId: '' });
+  const [rrulePreview, setRrulePreview] = useState<string>('RRULE:FREQ=WEEKLY;INTERVAL=1');
+  const [nextPreview, setNextPreview] = useState<number | null>(null);
   const todayKey = useMemo(() => {
     const d = new Date();
     const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
@@ -39,6 +41,13 @@ const ChoresManagement: React.FC = () => {
     };
     load();
   }, [currentUser]);
+
+  // Live next due preview when editing RRULE/DTSTART
+  useEffect(() => {
+    const dtstartMs = form.dtstart ? new Date(form.dtstart).getTime() : undefined;
+    const n = nextDueAt(form.rrule, dtstartMs, Date.now());
+    setNextPreview(n);
+  }, [form.rrule, form.dtstart]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,6 +78,13 @@ const ChoresManagement: React.FC = () => {
     setChores(chores.filter(c => c.id !== id));
   };
 
+  const markDone = async (c: any) => {
+    const from = Math.max(Date.now(), (c.nextDueAt || Date.now()) + 1);
+    const next = nextDueAt(c.rrule, c.dtstart, from);
+    await updateDoc(doc(db, 'chores', c.id), { nextDueAt: next || null, lastDoneAt: Date.now(), updatedAt: Date.now() });
+    setChores(prev => prev.map(x => x.id === c.id ? { ...x, nextDueAt: next || null, lastDoneAt: Date.now(), updatedAt: Date.now() } : x));
+  };
+
   const formatTime = (ms?: number) => (ms ? new Date(ms).toLocaleString() : '—');
 
   return (
@@ -85,11 +101,83 @@ const ChoresManagement: React.FC = () => {
               <Col md={4}>
                 <Form.Label>RRULE</Form.Label>
                 <Form.Control value={form.rrule} onChange={e=>setForm({ ...form, rrule: e.target.value })} placeholder="RRULE:FREQ=DAILY;INTERVAL=1" />
+                <div className="form-text">Next due: {nextPreview ? new Date(nextPreview).toLocaleString() : '—'}</div>
               </Col>
               <Col md={4}>
                 <Form.Label>DTSTART</Form.Label>
                 <Form.Control type="datetime-local" value={form.dtstart} onChange={e=>setForm({ ...form, dtstart: e.target.value })} />
               </Col>
+            </Row>
+            <Row className="g-3 mt-1">
+              <Col md={4}>
+                <Form.Label>Frequency</Form.Label>
+                <Form.Select
+                  value={/FREQ=([^;]+)/.exec(form.rrule)?.[1] || 'WEEKLY'}
+                  onChange={(e)=>{
+                    const freq = e.target.value.toUpperCase();
+                    const replaced = form.rrule.replace(/FREQ=([^;]+)/, `FREQ=${freq}`);
+                    const next = /FREQ=/.test(replaced) ? replaced : `RRULE:FREQ=${freq};INTERVAL=1`;
+                    setForm({ ...form, rrule: next });
+                  }}
+                >
+                  <option value="DAILY">Daily</option>
+                  <option value="WEEKLY">Weekly</option>
+                  <option value="MONTHLY">Monthly</option>
+                </Form.Select>
+              </Col>
+              <Col md={4}>
+                <Form.Label>Interval</Form.Label>
+                <Form.Control
+                  type="number"
+                  min={1}
+                  value={Number(/INTERVAL=([0-9]+)/.exec(form.rrule)?.[1] || 1)}
+                  onChange={(e)=>{
+                    const val = Math.max(1, Number(e.target.value)||1);
+                    if (/INTERVAL=/.test(form.rrule)) {
+                      setForm({ ...form, rrule: form.rrule.replace(/INTERVAL=([0-9]+)/, `INTERVAL=${val}`) });
+                    } else {
+                      setForm({ ...form, rrule: `${form.rrule};INTERVAL=${val}` });
+                    }
+                  }}
+                />
+              </Col>
+              {(/FREQ=WEEKLY/.test(form.rrule)) && (
+                <Col md={4}>
+                  <Form.Label>By weekday</Form.Label>
+                  <div className="d-flex flex-wrap gap-2">
+                    {[
+                      { label: 'MO', token: 'MO' },
+                      { label: 'TU', token: 'TU' },
+                      { label: 'WE', token: 'WE' },
+                      { label: 'TH', token: 'TH' },
+                      { label: 'FR', token: 'FR' },
+                      { label: 'SA', token: 'SA' },
+                      { label: 'SU', token: 'SU' },
+                    ].map(d => {
+                      const bym = /BYDAY=([^;]+)/.exec(form.rrule)?.[1] || '';
+                      const parts = bym ? bym.split(',') : [];
+                      const active = parts.includes(d.token);
+                      return (
+                        <Button
+                          key={d.token}
+                          size="sm"
+                          variant={active ? 'primary' : 'outline-secondary'}
+                          onClick={() => {
+                            const next = active ? parts.filter(p => p!==d.token) : [...parts, d.token];
+                            const nextStr = next.join(',');
+                            if (/BYDAY=/.test(form.rrule)) {
+                              const replaced = form.rrule.replace(/BYDAY=([^;]+)/, `BYDAY=${nextStr}`);
+                              setForm({ ...form, rrule: replaced });
+                            } else {
+                              setForm({ ...form, rrule: `${form.rrule};BYDAY=${nextStr}` });
+                            }
+                          }}
+                        >{d.label}</Button>
+                      );
+                    })}
+                  </div>
+                </Col>
+              )}
             </Row>
             <Row className="g-3 mt-1">
               <Col md={3}>
@@ -152,7 +240,10 @@ const ChoresManagement: React.FC = () => {
                   <td>{c.estimatedMinutes} min</td>
                   <td><Badge bg={c.priority>=3?'danger':c.priority===2?'warning':'secondary'}>{c.priority}</Badge></td>
                   <td><Badge bg="light" text="dark">{c.theme}</Badge></td>
-                  <td className="text-end"><Button size="sm" variant="outline-danger" onClick={()=>handleDelete(c.id)}>Delete</Button></td>
+                  <td className="text-end">
+                    <Button size="sm" className="me-2" variant="outline-success" onClick={()=>markDone(c)}>Mark Done</Button>
+                    <Button size="sm" variant="outline-danger" onClick={()=>handleDelete(c.id)}>Delete</Button>
+                  </td>
                 </tr>
               ))}
               {chores.length===0 && (
@@ -167,4 +258,3 @@ const ChoresManagement: React.FC = () => {
 };
 
 export default ChoresManagement;
-
