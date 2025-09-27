@@ -405,6 +405,29 @@ const CalendarDnDView: React.FC = () => {
     });
   };
 
+  // Support deep-link open by blockId param
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const blockId = params.get('blockId');
+    if (!blockId || !blocks.length) return;
+    const b = blocks.find(x => x.id === blockId);
+    if (b) {
+      // Open modal pre-filled
+      setEditBlock(b);
+      setEditScope('single');
+      setEditForm({
+        title: `${b.category || 'Block'} (${b.theme})`,
+        theme: b.theme,
+        category: b.category || '',
+        flexibility: b.flexibility,
+        rationale: b.rationale || '',
+        start: new Date(b.start).toISOString().slice(0, 16),
+        end: new Date(b.end).toISOString().slice(0, 16),
+        syncToGoogle: (b as any).syncToGoogle || false
+      });
+    }
+  }, [blocks]);
+
   const saveEditBlock = async () => {
     if (!editBlock || !currentUser) return;
     try {

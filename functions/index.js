@@ -433,7 +433,7 @@ exports.planRoutines = httpsV2.onCall(async (req) => {
         start: p.start,
         end: p.end,
         flexibility: 'soft',
-        status: 'proposed',
+        status: 'applied',
         colorId: null,
         visibility: 'default',
         createdBy: 'ai',
@@ -443,6 +443,36 @@ exports.planRoutines = httpsV2.onCall(async (req) => {
         createdAt: Date.now(),
         updatedAt: Date.now()
       });
+
+      // Link scheduled item for habits/chores with deep link
+      if (p.type === 'habit') {
+        const schedRef = db.collection('scheduled_items').doc();
+        batch.set(schedRef, {
+          id: schedRef.id,
+          ownerUid: uid,
+          blockId: ref.id,
+          type: 'habit',
+          refId: String(p.habitId),
+          title: p.title || 'Habit',
+          linkUrl: `/habits?habitId=${p.habitId}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      }
+      if (p.type === 'chore') {
+        const schedRef = db.collection('scheduled_items').doc();
+        batch.set(schedRef, {
+          id: schedRef.id,
+          ownerUid: uid,
+          blockId: ref.id,
+          type: 'routine',
+          refId: String(p.id),
+          title: p.title || 'Chore',
+          linkUrl: `/chores?choreId=${p.id}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      }
       created++;
     }
     await batch.commit();
@@ -2256,6 +2286,9 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     if (enriched.taskId) { linkType = 'task'; refId = enriched.taskId; }
     else if (enriched.storyId) { linkType = 'story'; refId = enriched.storyId; }
     else if (enriched.habitId) { linkType = 'habit'; refId = enriched.habitId; }
+    else if (enriched.goalId) { linkType = 'goal'; refId = enriched.goalId; }
+
+    if (linkType === 'goal' && !linkUrl) linkUrl = `/goals?goalId=${refId}`;
 
     if (linkType && refId) {
       linkTitle = enriched.title || null;
