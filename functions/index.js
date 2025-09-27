@@ -1357,12 +1357,24 @@ const THEME_NAME_MAP = {
 
 async function computeMonzoAnalytics(uid) {
   const db = admin.firestore();
+  // Load optional finance mapping: merchant→category and category→bucket
+  let merchantToCategory = {};
+  let categoryToBucket = {};
+  try {
+    const mapSnap = await db.collection('finance_mapping').doc(uid).get();
+    if (mapSnap.exists) {
+      const d = mapSnap.data() || {};
+      merchantToCategory = d.merchantToCategory || {};
+      categoryToBucket = d.categoryToBucket || {};
+    }
+  } catch {}
   const txSnap = await db.collection('monzo_transactions').where('ownerUid', '==', uid).get();
   const potSnap = await db.collection('monzo_pots').where('ownerUid', '==', uid).get();
   const goalsSnap = await db.collection('goals').where('ownerUid', '==', uid).get();
 
   const totals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
   const categoryTotals = new Map();
+  const bucketTotals = new Map();
   const monthly = {};
   const pendingClassification = [];
   let pendingCount = 0;
@@ -1370,18 +1382,37 @@ async function computeMonzoAnalytics(uid) {
   txSnap.forEach((doc) => {
     const data = doc.data() || {};
     const amount = Number(data.amount != null ? data.amount : (data.amountMinor || 0) / 100);
-    const catType = String(data.userCategoryType || data.categoryType || data.defaultCategoryType || inferDefaultCategoryType(data.raw || {}));
+    // Merchant/category mapping
+    const merchantName = String((data.merchant && (data.merchant.name || data.merchant.merchant || data.merchant.id)) || data.description || '').toLowerCase();
+    let mapped = null;
+    if (merchantName && merchantToCategory && merchantToCategory[merchantName]) {
+      mapped = merchantToCategory[merchantName]; // { type, label }
+    }
+    const catType = String(
+      data.userCategoryType ||
+      (mapped && mapped.type) ||
+      data.categoryType ||
+      data.defaultCategoryType ||
+      inferDefaultCategoryType(data.raw || {})
+    );
     const canonType = ['mandatory', 'optional', 'savings', 'income'].includes(catType) ? catType : (amount >= 0 ? 'income' : 'optional');
     const absAmount = amount < 0 ? Math.abs(amount) : amount;
 
     totals[canonType] = (totals[canonType] || 0) + absAmount;
 
-    const categoryLabel = data.userCategoryLabel || data.userCategory || data.defaultCategoryLabel || data.merchant?.name || data.description || 'Uncategorised';
+    const categoryLabel = data.userCategoryLabel || data.userCategory || (mapped && mapped.label) || data.defaultCategoryLabel || data.merchant?.name || data.description || 'Uncategorised';
     const current = categoryTotals.get(categoryLabel) || { amount: 0, count: 0, type: canonType };
     current.amount += absAmount;
     current.count += 1;
     current.type = canonType;
     categoryTotals.set(categoryLabel, current);
+
+    // Bucket mapping from category
+    const bucket = categoryToBucket[categoryLabel] || 'Unassigned';
+    const bcur = bucketTotals.get(bucket) || { amount: 0, count: 0 };
+    bcur.amount += absAmount;
+    bcur.count += 1;
+    bucketTotals.set(bucket, bcur);
 
     const monthKey = data.monthKey || (data.createdISO ? toMonthKey(data.createdISO) : null);
     if (monthKey) {
@@ -1412,10 +1443,15 @@ async function computeMonzoAnalytics(uid) {
     .slice(0, 50)
     .map(([label, stats]) => ({ label, amount: stats.amount, count: stats.count, type: stats.type }));
 
+  const buckets = Array.from(bucketTotals.entries())
+    .sort((a, b) => b[1].amount - a[1].amount)
+    .map(([label, stats]) => ({ label, amount: stats.amount, count: stats.count }));
+
   const summaryDoc = {
     ownerUid: uid,
     totals,
     categories,
+    buckets,
     monthly,
     pendingClassification,
     pendingCount,

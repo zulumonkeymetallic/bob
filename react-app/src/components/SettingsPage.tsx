@@ -12,6 +12,7 @@ import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
 import BudgetSettings from './finance/BudgetSettings';
+import FinanceMapping from './finance/FinanceMapping';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 const SETTINGS_TABS = ['themes', 'database', 'integrations', 'reminders', 'ai', 'system'] as const;
@@ -581,7 +582,8 @@ const SettingsPage: React.FC = () => {
                   </Card.Body>
                 </Card>
 
-                <BudgetSettings />
+                        <BudgetSettings />
+                        <FinanceMapping />
               </Tab.Pane>
 
               {/* Reminders (Shortcuts) Tab */}

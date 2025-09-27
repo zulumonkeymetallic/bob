@@ -17,6 +17,7 @@ interface BudgetSummaryDoc {
   ownerUid: string;
   totals: BudgetTotals;
   categories?: Array<{ label: string; amount: number; count: number; type: string }>;
+  buckets?: Array<{ label: string; amount: number; count: number }>;
   monthly?: Record<string, BudgetTotals>;
   pendingClassification?: PendingClassificationItem[];
   pendingCount?: number;
@@ -98,6 +99,7 @@ const FinanceDashboard: React.FC = () => {
   const [savingTx, setSavingTx] = useState<string | null>(null);
   const [isRecomputing, setIsRecomputing] = useState(false);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
+  const [bucketBudgets, setBucketBudgets] = useState<Record<string, number>>({});
   const [budgetCurrency, setBudgetCurrency] = useState('GBP');
 
   useEffect(() => {
@@ -157,6 +159,7 @@ const FinanceDashboard: React.FC = () => {
       if (snap.exists()) {
         const d: any = snap.data();
         setBudgets(d.byCategory || {});
+        setBucketBudgets(d.byBucket || {});
         setBudgetCurrency(d.currency || 'GBP');
       }
     }).catch(() => {});
@@ -586,6 +589,29 @@ const FinanceDashboard: React.FC = () => {
                     <Alert variant="info" className="mb-0">
                       No goals found yet. Add estimated costs in Goals to unlock funding forecasts.
                     </Alert>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col lg={4}>
+              <Card className="shadow-sm border-0 h-100">
+                <Card.Body>
+                  <Card.Title>Buckets</Card.Title>
+                  {!summary?.buckets || summary.buckets.length === 0 ? (
+                    <Alert variant="light" className="mb-0">No buckets yet.</Alert>
+                  ) : (
+                    <Table size="sm" hover responsive>
+                      <thead><tr><th>Bucket</th><th className="text-end">Amount</th><th className="text-end">Budget</th></tr></thead>
+                      <tbody>
+                        {summary.buckets.slice(0, 10).map((b, idx) => (
+                          <tr key={idx}>
+                            <td>{b.label}</td>
+                            <td className="text-end">{formatCurrency(b.amount)}</td>
+                            <td className="text-end">{bucketBudgets[b.label] != null ? formatCurrency((bucketBudgets[b.label] || 0)/100) : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
                   )}
                 </Card.Body>
               </Card>
