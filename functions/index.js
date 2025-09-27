@@ -301,6 +301,170 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   return { planId, dayKey, assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })) };
 });
 
+// ===== Routines → Calendar Blocks Planner (Habits + Chores)
+// Focused planner to integrate routines directly into calendar_blocks with AI-style metadata
+exports.planRoutines = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const day = req?.data?.day || new Date().toISOString().slice(0,10); // YYYY-MM-DD
+  const includeHabits = req?.data?.includeHabits !== false; // default true
+  const includeChores = req?.data?.includeChores !== false; // default true
+  const apply = !!req?.data?.apply; // if false, dry-run
+  const persona = req?.data?.persona || 'personal';
+
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+
+  const db = admin.firestore();
+  const sod = new Date(date); sod.setHours(0,0,0,0);
+  const eod = new Date(date); eod.setHours(23,59,59,999);
+
+  // Helpers
+  function toTimeMs(hhmm) {
+    const [hh, mm] = String(hhmm || '07:00').split(':').map(x=>Number(x));
+    const t = new Date(sod);
+    t.setHours(hh||7, mm||0, 0, 0);
+    return t.getTime();
+  }
+  function mapTheme(num) {
+    const m = { 1: 'Health', 2: 'Growth', 3: 'Wealth', 4: 'Tribe', 5: 'Home' };
+    return m[String(num)] || m[num] || 'Growth';
+  }
+  function overlaps(aStart, aEnd, bStart, bEnd) {
+    return Math.max(aStart, bStart) < Math.min(aEnd, bEnd);
+  }
+  function nextDue(rruleText, dtstartMs, fromMs) {
+    try {
+      const hasDt = /DTSTART/i.test(String(rruleText||''));
+      const text = !hasDt && dtstartMs
+        ? `DTSTART:${new Date(dtstartMs).toISOString().replace(/[-:]/g,'').split('.')[0]}Z\n${rruleText}`
+        : rruleText;
+      const rule = rrulestr(text);
+      const next = rule.after(new Date(fromMs), true);
+      return next ? next.getTime() : null;
+    } catch { return null; }
+  }
+
+  // Load existing blocks for conflict checks
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('start', '>=', sod.getTime())
+    .where('start', '<=', eod.getTime())
+    .get();
+  const existingBlocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+  // Load routines
+  const proposals = [];
+  if (includeHabits) {
+    const habitsSnap = await db.collection('habits')
+      .where('userId', '==', uid)
+      .where('isActive', '==', true)
+      .get();
+    const dow = new Date(sod).getDay(); // 0=Sun..6=Sat
+    for (const d of habitsSnap.docs) {
+      const h = { id: d.id, ...(d.data()||{}) };
+      const freq = String(h.frequency || 'daily');
+      const weeklyOk = freq === 'weekly' ? (Array.isArray(h.daysOfWeek) && h.daysOfWeek.includes(dow)) : true;
+      if (!weeklyOk && freq !== 'daily') continue;
+      const start = toTimeMs(h.scheduleTime || '07:00');
+      const minutes = 15;
+      const end = start + minutes*60000;
+      let s = start, e = end;
+      // simple conflict-avoidance: nudge by 15m if overlaps
+      let nudges = 0;
+      while (existingBlocks.some(b => overlaps(s,e,b.start,b.end)) && nudges < 8) {
+        s += 15*60000; e += 15*60000; nudges++;
+      }
+      proposals.push({
+        type: 'habit', id: h.id, title: h.name || 'Habit',
+        start: s, end: e,
+        theme: mapTheme(h.theme || (h.linkedGoalTheme || 2)),
+        category: 'Wellbeing',
+        rationale: `Habit at preferred time${nudges?` (+${nudges*15}m)`:''}`,
+        habitId: h.id
+      });
+    }
+  }
+  if (includeChores) {
+    const choresSnap = await db.collection('chores')
+      .where('ownerUid', '==', uid)
+      .get();
+    for (const d of choresSnap.docs) {
+      const c = { id: d.id, ...(d.data()||{}) };
+      const due = nextDue(c.rrule, c.dtstart || c.createdAt || undefined, sod.getTime() - 1);
+      if (!due || due < sod.getTime() || due > eod.getTime()) continue;
+      const minutes = Number(c.estimatedMinutes) || 15;
+      let s = due, e = due + minutes*60000;
+      let nudges = 0;
+      while (existingBlocks.some(b => overlaps(s,e,b.start,b.end)) && nudges < 8) {
+        s += 15*60000; e += 15*60000; nudges++;
+      }
+      proposals.push({
+        type: 'chore', id: c.id, title: c.title || 'Chore',
+        start: s, end: e,
+        theme: mapTheme(c.theme || 5),
+        category: 'Chores',
+        rationale: `Chore scheduled at due time${nudges?` (+${nudges*15}m)`:''}; choreId=${c.id}`
+      });
+    }
+  }
+
+  // Sort by time and apply if requested
+  proposals.sort((a,b)=>a.start-b.start);
+  let created = 0;
+  if (apply) {
+    const batch = db.batch();
+    for (const p of proposals) {
+      const ref = db.collection('calendar_blocks').doc();
+      batch.set(ref, {
+        id: ref.id,
+        googleEventId: null,
+        syncToGoogle: false,
+        taskId: null,
+        goalId: null,
+        storyId: null,
+        habitId: p.type === 'habit' ? p.habitId : null,
+        seriesId: null,
+        subTheme: null,
+        persona,
+        theme: p.theme,
+        category: p.category,
+        start: p.start,
+        end: p.end,
+        flexibility: 'soft',
+        status: 'proposed',
+        colorId: null,
+        visibility: 'default',
+        createdBy: 'ai',
+        rationale: p.rationale,
+        version: 1,
+        ownerUid: uid,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      });
+      created++;
+    }
+    await batch.commit();
+  }
+
+  // Audit
+  try {
+    await db.collection('activity_stream').add({
+      entityId: uid,
+      entityType: 'plan',
+      activityType: 'routines_planned',
+      userId: uid,
+      description: `Planned ${proposals.length} routine blocks for ${day}`,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  } catch {}
+
+  return { day, count: proposals.length, created: apply ? created : 0, applied: !!apply, proposals };
+});
+
 // Reconcile assignments with Google Calendar: if child events were deleted externally,
 // mark assignments as deferred and clear the external.googleEventId
 exports.reconcilePlanFromGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {

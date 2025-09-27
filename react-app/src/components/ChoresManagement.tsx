@@ -3,6 +3,8 @@ import { Card, Form, Button, Row, Col, Table, Badge } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, getDocs, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { nextDueAt } from '../utils/recurrence';
 
 interface ChoreForm {
@@ -22,6 +24,8 @@ const ChoresManagement: React.FC = () => {
   const [form, setForm] = useState<ChoreForm>({ title: '', rrule: 'RRULE:FREQ=WEEKLY;INTERVAL=1', dtstart: '', estimatedMinutes: 15, priority: 2, theme: 2, goalId: '' });
   const [rrulePreview, setRrulePreview] = useState<string>('RRULE:FREQ=WEEKLY;INTERVAL=1');
   const [nextPreview, setNextPreview] = useState<number | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [planMsg, setPlanMsg] = useState<string>('');
   const todayKey = useMemo(() => {
     const d = new Date();
     const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
@@ -87,9 +91,38 @@ const ChoresManagement: React.FC = () => {
 
   const formatTime = (ms?: number) => (ms ? new Date(ms).toLocaleString() : '—');
 
+  const runRoutinesPlanner = async () => {
+    if (!currentUser) return;
+    try {
+      setPlanning(true);
+      setPlanMsg('');
+      const callable = httpsCallable(functions, 'planRoutines');
+      const today = new Date();
+      const day = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+      const res: any = await callable({ day, includeHabits: true, includeChores: true, apply: true, persona: 'personal' });
+      setPlanMsg(`Planned ${res?.data?.created || 0} routine blocks for ${res?.data?.day}.`);
+    } catch (e:any) {
+      setPlanMsg(`Planner failed: ${e?.message || 'unknown error'}`);
+    } finally {
+      setPlanning(false);
+      setTimeout(()=>setPlanMsg(''), 5000);
+    }
+  };
+
   return (
     <div className="container py-3" style={{ maxWidth: 980 }}>
       <h4 className="mb-3">Chores</h4>
+      <Card className="mb-3">
+        <Card.Header>AI Routine Planner</Card.Header>
+        <Card.Body>
+          <div className="d-flex align-items-center gap-2">
+            <Button onClick={runRoutinesPlanner} disabled={planning}>{planning ? 'Planning…' : 'Plan Today\'s Routines'}</Button>
+            {planMsg && <span className="text-muted">{planMsg}</span>}
+          </div>
+          <small className="text-muted d-block mt-2">Creates proposed calendar blocks for today\'s due chores and scheduled habits.</small>
+        </Card.Body>
+      </Card>
+
       <Card className="mb-3">
         <Card.Body>
           <Form onSubmit={handleAdd}>

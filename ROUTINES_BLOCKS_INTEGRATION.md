@@ -45,3 +45,15 @@ Tip: If you want a 06:00 auto build per user timezone, add a scheduled function 
 Notes
 - Habits list shows weekday chips for weekly frequency and allows inline time and active toggle updates.
 - Chores list supports a quick “Mark Done” to advance `nextDueAt`; RRULE builder inputs help with FREQ, INTERVAL, and BYDAY.
+
+## AI Routine Planner (Calendar Blocks)
+
+- Frontend (Chores page) includes an “AI Routine Planner” action that invokes a Cloud Function `planRoutines`.
+- The function reads:
+  - Today’s active Habits (daily or weekly where `daysOfWeek` includes today)
+  - Today’s due Chores (RRULE-based `nextDueAt`)
+  - Existing `calendar_blocks` for conflicts
+- It proposes short “soft” blocks and, when applied, writes `calendar_blocks` with:
+  - `createdBy: 'ai'`, `status: 'proposed'`, `habitId` (for habits), `category: 'Chores'` (for chores)
+  - A succinct `rationale` and conflict-avoidance nudges in 15-minute steps
+- Use this as a deterministic base; the broader `planCalendar` function continues to schedule tasks/goals via LLM with validation.
