@@ -3884,6 +3884,25 @@ exports.monzoStatus = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_S
   return { connected: has, profile: profile.exists ? profile.data().monzoConnected : null, tokenDoc: has ? t.data() : null, canUse, needsRefresh };
 });
 
+// Debug Strava status and token health
+exports.stravaStatus = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const t = await db.collection('tokens').doc(`${uid}_strava`).get();
+  const profile = await db.collection('profiles').doc(uid).get();
+  const has = t.exists;
+  let canUse = null;
+  let refreshed = false;
+  try {
+    await getStravaAccessToken(uid);
+    canUse = true;
+  } catch (e) {
+    canUse = false;
+  }
+  return { connected: has, profile: profile.exists ? profile.data().stravaConnected : null, tokenDoc: has ? t.data() : null, canUse, refreshed };
+});
+
 // Sync plan assignments for a day to Google Calendar as child events under parent block events
 exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
