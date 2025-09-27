@@ -32,7 +32,7 @@ interface ScheduledItem {
   id: string;
   ownerUid: string;
   blockId: string;
-  type: 'story' | 'task' | 'habit' | 'routine';
+  type: 'story' | 'task' | 'habit' | 'routine' | 'goal';
   refId: string;
   title?: string;
   linkUrl?: string;
@@ -830,6 +830,20 @@ const CalendarDnDView: React.FC = () => {
                   start: new Date(googleEdit.start).toISOString(),
                   end: new Date(googleEdit.end).toISOString()
                 });
+                // Log to activity if a block is open with a googleEventId matching
+                try {
+                  if (editBlock && (editBlock as any).googleEventId === googleEdit.id && currentUser) {
+                    await ActivityStreamService.addActivity({
+                      entityId: editBlock.id,
+                      entityType: 'calendar_block',
+                      activityType: 'updated',
+                      userId: currentUser.uid,
+                      userEmail: currentUser.email || undefined,
+                      description: 'Updated Google event via editor',
+                      source: 'human'
+                    });
+                  }
+                } catch {}
                 setGoogleEdit(null);
                 window.setTimeout(()=>window.location.reload(), 300);
               } catch (e: any) {
@@ -931,10 +945,33 @@ const CalendarDnDView: React.FC = () => {
               <Form.Control as="textarea" rows={3} value={editForm.rationale} onChange={(e)=>setEditForm({...editForm, rationale: e.target.value})} />
             </Form.Group>
           </Form>
-          {/* Linked items */}
-          <div className="mt-3">
-            <div className="d-flex justify-content-between align-items-center mb-2">
-              <strong>Linked Items</strong>
+            {/* Quick open primary linked item */}
+            <div className="mt-3 mb-2">
+              {(() => {
+                const priorityOrder = ['routine','habit','task','story','goal'];
+                const byType: Record<string, ScheduledItem[]> = {} as any;
+                blockItems.forEach(i => { byType[i.type] = byType[i.type] || []; byType[i.type].push(i); });
+                let primary: ScheduledItem | null = null;
+                for (const t of priorityOrder) {
+                  if (byType[t] && byType[t].length) { primary = byType[t][0]; break; }
+                }
+                return (
+                  <Button
+                    size="sm"
+                    variant="outline-success"
+                    disabled={!primary || !primary.linkUrl}
+                    onClick={() => { if (primary?.linkUrl) window.location.href = primary.linkUrl; }}
+                  >
+                    {primary ? `Open ${primary.type}` : 'No linked items'}
+                  </Button>
+                );
+              })()}
+            </div>
+
+            {/* Linked items */}
+            <div className="mt-3">
+              <div className="d-flex justify-content-between align-items-center mb-2">
+                <strong>Linked Items</strong>
               <div className="d-flex gap-2">
                 <Form.Select size="sm" style={{ width: '140px' }} value={linkForm.type} onChange={(e)=>setLinkForm({ ...linkForm, type: e.target.value as any })}>
                   <option value="story">Story</option>

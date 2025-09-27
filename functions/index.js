@@ -413,6 +413,7 @@ exports.planRoutines = httpsV2.onCall(async (req) => {
   // Sort by time and apply if requested
   proposals.sort((a,b)=>a.start-b.start);
   let created = 0;
+  const createdIds = [];
   if (apply) {
     const batch = db.batch();
     for (const p of proposals) {
@@ -443,6 +444,7 @@ exports.planRoutines = httpsV2.onCall(async (req) => {
         createdAt: Date.now(),
         updatedAt: Date.now()
       });
+      createdIds.push(ref.id);
 
       // Link scheduled item for habits/chores with deep link
       if (p.type === 'habit') {
@@ -476,6 +478,38 @@ exports.planRoutines = httpsV2.onCall(async (req) => {
       created++;
     }
     await batch.commit();
+  }
+
+  // Auto-sync routines to Google if enabled
+  if (apply && createdIds.length) {
+    try {
+      const prof = await db.collection('profiles').doc(uid).get();
+      const auto = prof.exists && !!prof.data().autoSyncPlannerToGoogle;
+      if (auto) {
+        const access = await getAccessToken(uid);
+        for (const bid of createdIds) {
+          try {
+            const snap = await db.collection('calendar_blocks').doc(bid).get();
+            if (!snap.exists) continue;
+            const b = snap.data() || {};
+            const summary = b.title || `${b.category || 'Block'} (${b.theme || 'Growth'})`;
+            const desc = `Theme: ${b.theme || 'Growth'}\nBy: AI\nBOB BlockId: ${bid}\nCategory: ${b.category || ''}\nSource: Routines`;
+            const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+              method: "POST",
+              headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+              body: JSON.stringify({ summary, description: desc, start: { dateTime: new Date(b.start).toISOString() }, end: { dateTime: new Date(b.end).toISOString() }, extendedProperties: { private: { bobId: bid } } })
+            });
+            const evId = ev?.id;
+            if (evId) {
+              await db.collection('calendar_blocks').doc(bid).set({ googleEventId: evId, syncToGoogle: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+              try { await logIntegration({ uid, source: 'google', level: 'info', step: 'routines_auto_sync', message: 'Auto-synced routine block to Google', meta: { blockId: bid, eventId: evId } }); } catch {}
+            }
+          } catch (e) {
+            try { await logIntegration({ uid, source: 'google', level: 'error', step: 'routines_auto_sync_error', message: 'Failed to auto-sync routine block', meta: { blockId: bid, error: String(e?.message||e) } }); } catch {}
+          }
+        }
+      }
+    } catch {}
   }
 
   // Audit
@@ -2180,6 +2214,7 @@ function themeLabelFromNumber(n) {
 async function applyCalendarBlocks(uid, persona, blocks) {
   const db = admin.firestore();
   const batch = db.batch();
+  const createdBlockIds = [];
 
   // Helper: derive title, theme, goal link for a proposed block
   async function enrichBlock(proposed) {
@@ -2263,7 +2298,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     const enriched = await enrichBlock(proposed);
     const blockRef = db.collection('calendar_blocks').doc();
 
-    batch.set(blockRef, {
+    const toSet = {
       ...proposed,
       id: blockRef.id,
       persona,
@@ -2279,7 +2314,9 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       habitId: enriched.habitId || proposed.habitId || null,
       updatedAt: now,
       createdAt: now
-    });
+    };
+    batch.set(blockRef, toSet);
+    createdBlockIds.push(blockRef.id);
 
     // Create scheduled_items doc if a linked entity exists
     let linkType = null, refId = null, linkTitle = null, linkUrl = enriched.linkUrl || null;
@@ -2336,6 +2373,35 @@ async function applyCalendarBlocks(uid, persona, blocks) {
   });
 
   await batch.commit();
+  // Auto-sync to Google if enabled
+  try {
+    const prof = await db.collection('profiles').doc(uid).get();
+    const auto = prof.exists && !!prof.data().autoSyncPlannerToGoogle;
+    if (auto && createdBlockIds.length) {
+      const access = await getAccessToken(uid);
+      for (const bid of createdBlockIds) {
+        try {
+          const snap = await db.collection('calendar_blocks').doc(bid).get();
+          if (!snap.exists) continue;
+          const b = snap.data() || {};
+          const summary = b.title || `${b.category || 'Block'} (${b.theme || 'Growth'})`;
+          const desc = `Theme: ${b.theme || 'Growth'}\nBy: AI\nBOB BlockId: ${bid}\nCategory: ${b.category || ''}\nSource: Planner`;
+          const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+            body: JSON.stringify({ summary, description: desc, start: { dateTime: new Date(b.start).toISOString() }, end: { dateTime: new Date(b.end).toISOString() }, extendedProperties: { private: { bobId: bid } } })
+          });
+          const evId = ev?.id;
+          if (evId) {
+            await db.collection('calendar_blocks').doc(bid).set({ googleEventId: evId, syncToGoogle: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            try { await logIntegration({ uid, source: 'google', level: 'info', step: 'planner_auto_sync', message: 'Auto-synced planner block to Google', meta: { blockId: bid, eventId: evId } }); } catch {}
+          }
+        } catch (e) {
+          try { await logIntegration({ uid, source: 'google', level: 'error', step: 'planner_auto_sync_error', message: 'Failed to auto-sync block', meta: { blockId: bid, error: String(e?.message||e) } }); } catch {}
+        }
+      }
+    }
+  } catch {}
   return createdCount;
 }
 
