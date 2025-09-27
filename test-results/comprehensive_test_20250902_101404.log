@@ -1,7 +1,0 @@
-2025-09-02 10:14:04 [INFO] BOB v3.5.5 - Comprehensive Goals CRUD Testing
-2025-09-02 10:14:04 [INFO] Command: quick
-2025-09-02 10:14:04 [INFO] Timestamp: 20250902_101404
-2025-09-02 10:14:04 [INFO] Log file: ./test-results/comprehensive_test_20250902_101404.log
-2025-09-02 10:14:04 [INFO] Setting up test environment...
-2025-09-02 10:14:04 [SUCCESS] Test environment setup complete
-2025-09-02 10:14:04 [ERROR] Unknown command: quick

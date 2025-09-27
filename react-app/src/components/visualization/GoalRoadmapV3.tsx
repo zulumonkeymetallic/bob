@@ -10,7 +10,7 @@ import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, Printer, Share2 } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
@@ -53,12 +53,45 @@ const GoalRoadmapV3: React.FC = () => {
   const [filterInSelectedSprint, setFilterInSelectedSprint] = useState(false);
   const [filterOverlapSelectedSprint, setFilterOverlapSelectedSprint] = useState(false);
 
+  // Persist UI state (lightweight localStorage)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('grv3.settings');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.zoom) setZoom(s.zoom);
+        if (s.yearSpan) setYearSpan(s.yearSpan);
+        if (typeof s.showSprints === 'boolean') setShowSprints(s.showSprints);
+        if (typeof s.snapEnabled === 'boolean') setSnapEnabled(s.snapEnabled);
+        if (typeof s.showEmptyThemes === 'boolean') setShowEmptyThemes(s.showEmptyThemes);
+        if (typeof s.filterHasStories === 'boolean') setFilterHasStories(s.filterHasStories);
+        if (typeof s.filterInSelectedSprint === 'boolean') setFilterInSelectedSprint(s.filterInSelectedSprint);
+        if (typeof s.filterOverlapSelectedSprint === 'boolean') setFilterOverlapSelectedSprint(s.filterOverlapSelectedSprint);
+      }
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem('grv3.settings', JSON.stringify({
+        zoom,
+        yearSpan,
+        showSprints,
+        snapEnabled,
+        showEmptyThemes,
+        filterHasStories,
+        filterInSelectedSprint,
+        filterOverlapSelectedSprint,
+      }));
+    } catch {}
+  }, [zoom, yearSpan, showSprints, snapEnabled, showEmptyThemes, filterHasStories, filterInSelectedSprint, filterOverlapSelectedSprint]);
+
   // Viewport culling state
   const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [financeOnTrack, setFinanceOnTrack] = useState<boolean|null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -559,6 +592,8 @@ const GoalRoadmapV3: React.FC = () => {
           setFilterInSelectedSprint(true);
           const el = containerRef.current; if (!el) return; const left = 260 + xFromDate(new Date()) - el.clientWidth * .35; el.scrollLeft = clamp(left, 0, el.scrollWidth);
         }} aria-label="Today (Month)"><Home size={14} /></Button>
+        <Button size="sm" variant="outline-secondary" onClick={() => { try { window.print(); } catch {} }} aria-label="Print"><Printer size={14} /></Button>
+        <Button size="sm" variant={copied ? 'success' : 'outline-secondary'} onClick={async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch {} }} aria-label="Copy Link"><Share2 size={14} /></Button>
         <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
         <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
         <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />

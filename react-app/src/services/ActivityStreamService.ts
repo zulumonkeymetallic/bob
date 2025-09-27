@@ -33,6 +33,7 @@ export interface ActivityEntry {
   // Metadata
   persona?: string;
   referenceNumber?: string;
+  linkUrl?: string;
   
   // Source tracking (Human, Function, AI)
   source: 'human' | 'function' | 'ai';

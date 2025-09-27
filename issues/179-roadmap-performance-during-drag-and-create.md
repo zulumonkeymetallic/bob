@@ -1,5 +1,7 @@
 # 179 – Reduce latency during roadmap drag and entity creation
 
+Note: Related epic – see 193 (UI: Merge Card-Based Views & Preserve Terministic Calendar Blocks).
+
 - Type: performance
 - Priority: P2 (minor)
 - Areas: Roadmap, Creation flows

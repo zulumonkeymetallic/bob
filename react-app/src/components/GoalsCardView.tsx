@@ -24,6 +24,7 @@ interface GoalsCardViewProps {
   onGoalPriorityChange: (goalId: string, newPriority: number) => void;
   onGoalSelect?: (goalId: string) => void; // New prop for goal selection
   selectedGoalId?: string | null; // New prop for highlighting selected goal
+  density?: 'normal' | 'compact' | 'mini';
 }
 
 const GoalsCardView: React.FC<GoalsCardViewProps> = ({
@@ -32,7 +33,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   onGoalDelete,
   onGoalPriorityChange,
   onGoalSelect,
-  selectedGoalId
+  selectedGoalId,
+  density = 'normal'
 }) => {
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
@@ -45,6 +47,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [isSchedulingGoal, setIsSchedulingGoal] = useState<string | null>(null);
   const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
   const [generatingForGoal, setGeneratingForGoal] = useState<string | null>(null);
+
+  const isMini = density === 'mini';
+  const isCompact = density === 'compact' || isMini;
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
   const themeColors = {
@@ -295,20 +300,28 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   }
 
   return (
-    <div style={{ padding: '20px' }}>
-      <Row className="g-4">
+    <div style={{ padding: isMini ? '8px' : '12px' }}>
+      <div
+        className={isMini ? 'd-grid' : 'd-flex flex-column gap-3'}
+        style={{
+          maxHeight: 620,
+          overflow: 'auto',
+          gridTemplateColumns: isMini ? 'repeat(auto-fill, minmax(220px, 1fr))' : undefined,
+          gap: isMini ? 8 : 12
+        }}
+      >
         {goals.map((goal) => (
-          <Col key={goal.id} xl={4} lg={6} md={6} sm={12}>
+          <div key={goal.id}>
             <Card 
               style={{ 
-                height: '100%',
+                height: 'auto',
                 border: selectedGoalId === goal.id 
                   ? `3px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--brand)'}` 
                   : '1px solid var(--line)',
                 boxShadow: selectedGoalId === goal.id 
                   ? '0 0 0 0 transparent' 
                   : '0 4px 6px var(--glass-shadow-color)',
-                borderRadius: '12px',
+                borderRadius: isMini ? '8px' : '12px',
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
                 cursor: 'pointer',
@@ -337,13 +350,13 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 }} 
               />
 
-              <Card.Body style={{ padding: '20px' }}>
+              <Card.Body style={{ padding: isMini ? '8px' : isCompact ? '12px' : '14px' }}>
                 {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: isMini ? '6px' : '12px' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <h5 style={{ 
-                      margin: '0 0 8px 0', 
-                      fontSize: '18px', 
+                      margin: '0 0 6px 0', 
+                      fontSize: isMini ? '14px' : isCompact ? '15px' : '16px', 
                       fontWeight: '600',
                       lineHeight: '1.4',
                       wordBreak: 'break-word'
@@ -355,7 +368,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         style={{ 
                           backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)',
                           color: 'var(--on-accent)',
-                          fontSize: '12px'
+                          fontSize: isMini ? '10px' : '12px'
                         }}
                       >
                         {getThemeName(goal.theme)}
@@ -364,7 +377,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         style={{ 
                           backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || 'var(--muted)',
                           color: 'var(--on-accent)',
-                          fontSize: '12px'
+                          fontSize: isMini ? '10px' : '12px'
                         }}
                       >
                         {getStatusName(goal.status)}
@@ -376,7 +389,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     <Dropdown.Toggle 
                       variant="outline-secondary" 
                       size="sm"
-                      style={{ border: 'none', padding: '4px 8px' }}
+                      style={{ border: 'none', padding: '2px 6px' }}
                     >
                       <ChevronDown size={16} />
                     </Dropdown.Toggle>
@@ -454,14 +467,14 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 </div>
 
                 {/* Description */}
-                {goal.description && (
+                {goal.description && !isMini && (
                   <p style={{ 
-                    margin: '0 0 16px 0', 
+                    margin: isCompact ? '0 0 8px 0' : '0 0 12px 0', 
                     color: themeVars.muted as string, 
-                    fontSize: '14px',
+                    fontSize: isCompact ? '12px' : '13px',
                     lineHeight: '1.5',
                     display: '-webkit-box',
-                    WebkitLineClamp: 3,
+                    WebkitLineClamp: isCompact ? 2 : 3,
                     WebkitBoxOrient: 'vertical',
                     overflow: 'hidden'
                   }}>
@@ -470,7 +483,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 )}
 
                 {/* Latest Status/Comment */}
-                {latestActivities[goal.id] && (
+                {latestActivities[goal.id] && !isMini && (
                   <div style={{ 
                     marginBottom: '16px',
                     padding: '12px',
@@ -522,7 +535,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 )}
 
                 {/* Goal Details */}
-                <div style={{ marginBottom: '16px' }}>
+                {!isMini && (
+                <div style={{ marginBottom: isCompact ? '8px' : '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
                     <Target size={14} style={{ marginRight: '8px' }} />
                     <span style={{ fontWeight: '500', marginRight: '8px' }}>Size:</span>
@@ -548,13 +562,15 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* Footer */}
-                <div style={{ 
-                  display: 'flex', 
-                  justifyContent: 'space-between', 
-                  alignItems: 'center',
-                  paddingTop: '16px',
+                {!isMini && (
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center',
+                  paddingTop: '12px',
                   borderTop: `1px solid ${themeVars.border}`,
                   fontSize: '12px',
                   color: themeVars.muted as string
@@ -602,19 +618,20 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     </Button>
                   </div>
                 </div>
+                )}
               </Card.Body>
             </Card>
 
             {/* Calendar Sync Status */}
-            {calendarSyncStatus[goal.id] && (
+            {calendarSyncStatus[goal.id] && !isMini && (
               <Alert 
                 variant={calendarSyncStatus[goal.id].startsWith('✅') ? 'success' : 
                         calendarSyncStatus[goal.id].startsWith('❌') ? 'danger' : 
                         calendarSyncStatus[goal.id].startsWith('⚠️') ? 'warning' : 'info'}
                 style={{ 
-                  marginTop: '8px',
+                  marginTop: '6px',
                   fontSize: '12px',
-                  padding: '8px 12px',
+                  padding: '6px 10px',
                   marginBottom: 0
                 }}
                 dismissible
@@ -628,9 +645,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               </Alert>
             )}
 
-          </Col>
+          </div>
         ))}
-      </Row>
+      </div>
 
       {/* Delete Confirmation Modal */}
       <Modal show={!!showDeleteModal} onHide={() => setShowDeleteModal(null)}>

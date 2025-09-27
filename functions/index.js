@@ -8,6 +8,7 @@ const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
 const aiUsageLogger = require("./utils/aiUsageLogger");
 const { rrulestr } = require('rrule');
+const { logIntegration } = require('./utils/integrationLogger');
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -33,8 +34,6 @@ const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
 const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
 const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
-const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
-const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 
@@ -299,6 +298,234 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   });
 
   return { planId, dayKey, assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })) };
+});
+
+// ===== Routines → Calendar Blocks Planner (Habits + Chores)
+// Focused planner to integrate routines directly into calendar_blocks with AI-style metadata
+exports.planRoutines = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const day = req?.data?.day || new Date().toISOString().slice(0,10); // YYYY-MM-DD
+  const includeHabits = req?.data?.includeHabits !== false; // default true
+  const includeChores = req?.data?.includeChores !== false; // default true
+  const apply = !!req?.data?.apply; // if false, dry-run
+  const persona = req?.data?.persona || 'personal';
+
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+
+  const db = admin.firestore();
+  const sod = new Date(date); sod.setHours(0,0,0,0);
+  const eod = new Date(date); eod.setHours(23,59,59,999);
+
+  // Helpers
+  function toTimeMs(hhmm) {
+    const [hh, mm] = String(hhmm || '07:00').split(':').map(x=>Number(x));
+    const t = new Date(sod);
+    t.setHours(hh||7, mm||0, 0, 0);
+    return t.getTime();
+  }
+  function mapTheme(num) {
+    const m = { 1: 'Health', 2: 'Growth', 3: 'Wealth', 4: 'Tribe', 5: 'Home' };
+    return m[String(num)] || m[num] || 'Growth';
+  }
+  function overlaps(aStart, aEnd, bStart, bEnd) {
+    return Math.max(aStart, bStart) < Math.min(aEnd, bEnd);
+  }
+  function nextDue(rruleText, dtstartMs, fromMs) {
+    try {
+      const hasDt = /DTSTART/i.test(String(rruleText||''));
+      const text = !hasDt && dtstartMs
+        ? `DTSTART:${new Date(dtstartMs).toISOString().replace(/[-:]/g,'').split('.')[0]}Z\n${rruleText}`
+        : rruleText;
+      const rule = rrulestr(text);
+      const next = rule.after(new Date(fromMs), true);
+      return next ? next.getTime() : null;
+    } catch { return null; }
+  }
+
+  // Load existing blocks for conflict checks
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('start', '>=', sod.getTime())
+    .where('start', '<=', eod.getTime())
+    .get();
+  const existingBlocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+  // Load routines
+  const proposals = [];
+  if (includeHabits) {
+    const habitsSnap = await db.collection('habits')
+      .where('userId', '==', uid)
+      .where('isActive', '==', true)
+      .get();
+    const dow = new Date(sod).getDay(); // 0=Sun..6=Sat
+    for (const d of habitsSnap.docs) {
+      const h = { id: d.id, ...(d.data()||{}) };
+      const freq = String(h.frequency || 'daily');
+      const weeklyOk = freq === 'weekly' ? (Array.isArray(h.daysOfWeek) && h.daysOfWeek.includes(dow)) : true;
+      if (!weeklyOk && freq !== 'daily') continue;
+      const start = toTimeMs(h.scheduleTime || '07:00');
+      const minutes = 15;
+      const end = start + minutes*60000;
+      let s = start, e = end;
+      // simple conflict-avoidance: nudge by 15m if overlaps
+      let nudges = 0;
+      while (existingBlocks.some(b => overlaps(s,e,b.start,b.end)) && nudges < 8) {
+        s += 15*60000; e += 15*60000; nudges++;
+      }
+      proposals.push({
+        type: 'habit', id: h.id, title: h.name || 'Habit',
+        start: s, end: e,
+        theme: mapTheme(h.theme || (h.linkedGoalTheme || 2)),
+        category: 'Wellbeing',
+        rationale: `Habit at preferred time${nudges?` (+${nudges*15}m)`:''}`,
+        habitId: h.id
+      });
+    }
+  }
+  if (includeChores) {
+    const choresSnap = await db.collection('chores')
+      .where('ownerUid', '==', uid)
+      .get();
+    for (const d of choresSnap.docs) {
+      const c = { id: d.id, ...(d.data()||{}) };
+      const due = nextDue(c.rrule, c.dtstart || c.createdAt || undefined, sod.getTime() - 1);
+      if (!due || due < sod.getTime() || due > eod.getTime()) continue;
+      const minutes = Number(c.estimatedMinutes) || 15;
+      let s = due, e = due + minutes*60000;
+      let nudges = 0;
+      while (existingBlocks.some(b => overlaps(s,e,b.start,b.end)) && nudges < 8) {
+        s += 15*60000; e += 15*60000; nudges++;
+      }
+      proposals.push({
+        type: 'chore', id: c.id, title: c.title || 'Chore',
+        start: s, end: e,
+        theme: mapTheme(c.theme || 5),
+        category: 'Chores',
+        rationale: `Chore scheduled at due time${nudges?` (+${nudges*15}m)`:''}; choreId=${c.id}`
+      });
+    }
+  }
+
+  // Sort by time and apply if requested
+  proposals.sort((a,b)=>a.start-b.start);
+  let created = 0;
+  const createdIds = [];
+  if (apply) {
+    const batch = db.batch();
+    for (const p of proposals) {
+      const ref = db.collection('calendar_blocks').doc();
+      batch.set(ref, {
+        id: ref.id,
+        googleEventId: null,
+        syncToGoogle: false,
+        taskId: null,
+        goalId: null,
+        storyId: null,
+        habitId: p.type === 'habit' ? p.habitId : null,
+        seriesId: null,
+        subTheme: null,
+        persona,
+        theme: p.theme,
+        category: p.category,
+        start: p.start,
+        end: p.end,
+        flexibility: 'soft',
+        status: 'applied',
+        colorId: null,
+        visibility: 'default',
+        createdBy: 'ai',
+        rationale: p.rationale,
+        version: 1,
+        ownerUid: uid,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      });
+      createdIds.push(ref.id);
+
+      // Link scheduled item for habits/chores with deep link
+      if (p.type === 'habit') {
+        const schedRef = db.collection('scheduled_items').doc();
+        batch.set(schedRef, {
+          id: schedRef.id,
+          ownerUid: uid,
+          blockId: ref.id,
+          type: 'habit',
+          refId: String(p.habitId),
+          title: p.title || 'Habit',
+          linkUrl: `/habits?habitId=${p.habitId}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      }
+      if (p.type === 'chore') {
+        const schedRef = db.collection('scheduled_items').doc();
+        batch.set(schedRef, {
+          id: schedRef.id,
+          ownerUid: uid,
+          blockId: ref.id,
+          type: 'routine',
+          refId: String(p.id),
+          title: p.title || 'Chore',
+          linkUrl: `/chores?choreId=${p.id}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      }
+      created++;
+    }
+    await batch.commit();
+  }
+
+  // Auto-sync routines to Google if enabled
+  if (apply && createdIds.length) {
+    try {
+      const prof = await db.collection('profiles').doc(uid).get();
+      const auto = prof.exists && !!prof.data().autoSyncPlannerToGoogle;
+      if (auto) {
+        const access = await getAccessToken(uid);
+        for (const bid of createdIds) {
+          try {
+            const snap = await db.collection('calendar_blocks').doc(bid).get();
+            if (!snap.exists) continue;
+            const b = snap.data() || {};
+            const summary = b.title || `${b.category || 'Block'} (${b.theme || 'Growth'})`;
+            const desc = `Theme: ${b.theme || 'Growth'}\nBy: AI\nBOB BlockId: ${bid}\nCategory: ${b.category || ''}\nSource: Routines`;
+            const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+              method: "POST",
+              headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+              body: JSON.stringify({ summary, description: desc, start: { dateTime: new Date(b.start).toISOString() }, end: { dateTime: new Date(b.end).toISOString() }, extendedProperties: { private: { bobId: bid } } })
+            });
+            const evId = ev?.id;
+            if (evId) {
+              await db.collection('calendar_blocks').doc(bid).set({ googleEventId: evId, syncToGoogle: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+              try { await logIntegration({ uid, source: 'google', level: 'info', step: 'routines_auto_sync', message: 'Auto-synced routine block to Google', meta: { blockId: bid, eventId: evId } }); } catch {}
+            }
+          } catch (e) {
+            try { await logIntegration({ uid, source: 'google', level: 'error', step: 'routines_auto_sync_error', message: 'Failed to auto-sync routine block', meta: { blockId: bid, error: String(e?.message||e) } }); } catch {}
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Audit
+  try {
+    await db.collection('activity_stream').add({
+      entityId: uid,
+      entityType: 'plan',
+      activityType: 'routines_planned',
+      userId: uid,
+      description: `Planned ${proposals.length} routine blocks for ${day}`,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  } catch {}
+
+  return { day, count: proposals.length, created: apply ? created : 0, applied: !!apply, proposals };
 });
 
 // Reconcile assignments with Google Calendar: if child events were deleted externally,
@@ -650,8 +877,10 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
       stravaLastSyncAt: null
     }, { merge: true });
 
+    await logIntegration({ uid, source: 'strava', level: 'info', step: 'oauth_callback', message: 'Strava connected', meta: { athleteId: athlete.id || null } });
     res.status(200).send("<script>window.close();</script>Strava connected. You can close this window.");
   } catch (e) {
+    try { await logIntegration({ uid: null, source: 'strava', level: 'error', step: 'oauth_callback', message: 'Strava OAuth callback error', meta: { error: String(e?.message||e) } }); } catch {}
     console.error('Strava OAuth callback error:', e);
     res.status(500).send("Strava OAuth callback error: " + e.message);
   }
@@ -750,8 +979,10 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    try { await logIntegration({ uid, source: 'monzo', level: 'info', step: 'oauth_callback', message: 'Monzo connected', meta: { monzoUserId } }); } catch {}
     res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
   } catch (e) {
+    try { await logIntegration({ uid: null, source: 'monzo', level: 'error', step: 'oauth_callback', message: 'Monzo OAuth callback error', meta: { error: String(e?.message||e) } }); } catch {}
     console.error('Monzo OAuth callback error:', e);
     res.status(500).send("Monzo OAuth callback error: " + e.message);
   }
@@ -884,6 +1115,7 @@ exports.revokeMonzoAccess = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CL
   } catch {}
   await db.collection('profiles').doc(uid).set({ monzoConnected: false, monzoUserId: null }, { merge: true });
   await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoked', uid });
+  try { await logIntegration({ uid, source: 'monzo', level: 'info', step: 'revoke', message: 'Monzo access revoked' }); } catch {}
   return { ok: true };
 });
 
@@ -1195,12 +1427,24 @@ const THEME_NAME_MAP = {
 
 async function computeMonzoAnalytics(uid) {
   const db = admin.firestore();
+  // Load optional finance mapping: merchant→category and category→bucket
+  let merchantToCategory = {};
+  let categoryToBucket = {};
+  try {
+    const mapSnap = await db.collection('finance_mapping').doc(uid).get();
+    if (mapSnap.exists) {
+      const d = mapSnap.data() || {};
+      merchantToCategory = d.merchantToCategory || {};
+      categoryToBucket = d.categoryToBucket || {};
+    }
+  } catch {}
   const txSnap = await db.collection('monzo_transactions').where('ownerUid', '==', uid).get();
   const potSnap = await db.collection('monzo_pots').where('ownerUid', '==', uid).get();
   const goalsSnap = await db.collection('goals').where('ownerUid', '==', uid).get();
 
   const totals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
   const categoryTotals = new Map();
+  const bucketTotals = new Map();
   const monthly = {};
   const pendingClassification = [];
   let pendingCount = 0;
@@ -1208,18 +1452,37 @@ async function computeMonzoAnalytics(uid) {
   txSnap.forEach((doc) => {
     const data = doc.data() || {};
     const amount = Number(data.amount != null ? data.amount : (data.amountMinor || 0) / 100);
-    const catType = String(data.userCategoryType || data.categoryType || data.defaultCategoryType || inferDefaultCategoryType(data.raw || {}));
+    // Merchant/category mapping
+    const merchantName = String((data.merchant && (data.merchant.name || data.merchant.merchant || data.merchant.id)) || data.description || '').toLowerCase();
+    let mapped = null;
+    if (merchantName && merchantToCategory && merchantToCategory[merchantName]) {
+      mapped = merchantToCategory[merchantName]; // { type, label }
+    }
+    const catType = String(
+      data.userCategoryType ||
+      (mapped && mapped.type) ||
+      data.categoryType ||
+      data.defaultCategoryType ||
+      inferDefaultCategoryType(data.raw || {})
+    );
     const canonType = ['mandatory', 'optional', 'savings', 'income'].includes(catType) ? catType : (amount >= 0 ? 'income' : 'optional');
     const absAmount = amount < 0 ? Math.abs(amount) : amount;
 
     totals[canonType] = (totals[canonType] || 0) + absAmount;
 
-    const categoryLabel = data.userCategoryLabel || data.userCategory || data.defaultCategoryLabel || data.merchant?.name || data.description || 'Uncategorised';
+    const categoryLabel = data.userCategoryLabel || data.userCategory || (mapped && mapped.label) || data.defaultCategoryLabel || data.merchant?.name || data.description || 'Uncategorised';
     const current = categoryTotals.get(categoryLabel) || { amount: 0, count: 0, type: canonType };
     current.amount += absAmount;
     current.count += 1;
     current.type = canonType;
     categoryTotals.set(categoryLabel, current);
+
+    // Bucket mapping from category
+    const bucket = categoryToBucket[categoryLabel] || 'Unassigned';
+    const bcur = bucketTotals.get(bucket) || { amount: 0, count: 0 };
+    bcur.amount += absAmount;
+    bcur.count += 1;
+    bucketTotals.set(bucket, bcur);
 
     const monthKey = data.monthKey || (data.createdISO ? toMonthKey(data.createdISO) : null);
     if (monthKey) {
@@ -1250,10 +1513,15 @@ async function computeMonzoAnalytics(uid) {
     .slice(0, 50)
     .map(([label, stats]) => ({ label, amount: stats.amount, count: stats.count, type: stats.type }));
 
+  const buckets = Array.from(bucketTotals.entries())
+    .sort((a, b) => b[1].amount - a[1].amount)
+    .map(([label, stats]) => ({ label, amount: stats.amount, count: stats.count }));
+
   const summaryDoc = {
     ownerUid: uid,
     totals,
     categories,
+    buckets,
     monthly,
     pendingClassification,
     pendingCount,
@@ -1946,6 +2214,7 @@ function themeLabelFromNumber(n) {
 async function applyCalendarBlocks(uid, persona, blocks) {
   const db = admin.firestore();
   const batch = db.batch();
+  const createdBlockIds = [];
 
   // Helper: derive title, theme, goal link for a proposed block
   async function enrichBlock(proposed) {
@@ -2029,7 +2298,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     const enriched = await enrichBlock(proposed);
     const blockRef = db.collection('calendar_blocks').doc();
 
-    batch.set(blockRef, {
+    const toSet = {
       ...proposed,
       id: blockRef.id,
       persona,
@@ -2045,13 +2314,18 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       habitId: enriched.habitId || proposed.habitId || null,
       updatedAt: now,
       createdAt: now
-    });
+    };
+    batch.set(blockRef, toSet);
+    createdBlockIds.push(blockRef.id);
 
     // Create scheduled_items doc if a linked entity exists
     let linkType = null, refId = null, linkTitle = null, linkUrl = enriched.linkUrl || null;
     if (enriched.taskId) { linkType = 'task'; refId = enriched.taskId; }
     else if (enriched.storyId) { linkType = 'story'; refId = enriched.storyId; }
     else if (enriched.habitId) { linkType = 'habit'; refId = enriched.habitId; }
+    else if (enriched.goalId) { linkType = 'goal'; refId = enriched.goalId; }
+
+    if (linkType === 'goal' && !linkUrl) linkUrl = `/goals?goalId=${refId}`;
 
     if (linkType && refId) {
       linkTitle = enriched.title || null;
@@ -2069,6 +2343,21 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       });
     }
     createdCount += 1;
+
+    // Per-block activity entry (AI-created)
+    const aiActRef = db.collection('activity_stream').doc();
+    batch.set(aiActRef, {
+      id: aiActRef.id,
+      entityId: blockRef.id,
+      entityType: 'calendar_block',
+      activityType: 'created',
+      userId: uid,
+      description: `AI created block: ${enriched.title || proposed.category} (${enriched.theme})`,
+      linkUrl: `/calendar?blockId=${blockRef.id}`,
+      source: 'ai',
+      createdAt: now,
+      updatedAt: now
+    });
   }
 
   // Activity summary entry for this AI application
@@ -2085,6 +2374,35 @@ async function applyCalendarBlocks(uid, persona, blocks) {
   });
 
   await batch.commit();
+  // Auto-sync to Google if enabled
+  try {
+    const prof = await db.collection('profiles').doc(uid).get();
+    const auto = prof.exists && !!prof.data().autoSyncPlannerToGoogle;
+    if (auto && createdBlockIds.length) {
+      const access = await getAccessToken(uid);
+      for (const bid of createdBlockIds) {
+        try {
+          const snap = await db.collection('calendar_blocks').doc(bid).get();
+          if (!snap.exists) continue;
+          const b = snap.data() || {};
+          const summary = b.title || `${b.category || 'Block'} (${b.theme || 'Growth'})`;
+          const desc = `Theme: ${b.theme || 'Growth'}\nBy: AI\nBOB BlockId: ${bid}\nCategory: ${b.category || ''}\nSource: Planner`;
+          const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+            body: JSON.stringify({ summary, description: desc, start: { dateTime: new Date(b.start).toISOString() }, end: { dateTime: new Date(b.end).toISOString() }, extendedProperties: { private: { bobId: bid } } })
+          });
+          const evId = ev?.id;
+          if (evId) {
+            await db.collection('calendar_blocks').doc(bid).set({ googleEventId: evId, syncToGoogle: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            try { await logIntegration({ uid, source: 'google', level: 'info', step: 'planner_auto_sync', message: 'Auto-synced planner block to Google', meta: { blockId: bid, eventId: evId } }); } catch {}
+          }
+        } catch (e) {
+          try { await logIntegration({ uid, source: 'google', level: 'error', step: 'planner_auto_sync_error', message: 'Failed to auto-sync block', meta: { blockId: bid, error: String(e?.message||e) } }); } catch {}
+        }
+      }
+    }
+  } catch {}
   return createdCount;
 }
 
@@ -2123,6 +2441,7 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
     return eventsResponse.items.map(event => ({
       id: event.id,
       summary: event.summary || 'Untitled Event',
+      description: event.description || null,
       start: new Date(event.start.dateTime || event.start.date),
       end: new Date(event.end.dateTime || event.end.date)
     }));
@@ -2149,12 +2468,22 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
     const startIso = startMs ? new Date(startMs).toISOString() : null;
     const endIso = endMs ? new Date(endMs).toISOString() : null;
 
+    // Attempt to derive theme from description (e.g., "Theme: Health")
+    let derivedTheme = 'Growth';
+    if (event.description && typeof event.description === 'string') {
+      const m = event.description.match(/Theme:\s*(Health|Growth|Wealth|Tribe|Home)/i);
+      if (m && m[1]) {
+        const t = m[1];
+        derivedTheme = t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+      }
+    }
+
     const payload = {
       ownerUid: uid,
       persona: 'personal',
       title: event.summary || 'Calendar Event',
       description: event.description || null,
-      theme: 'Growth',
+      theme: derivedTheme,
       category: 'Calendar',
       source: 'gcal',
       status: 'synced',
@@ -2255,16 +2584,20 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
   const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
   if (!tokensSnap || tokensSnap.empty) return;
 
-  const startDate = new Date(Date.now() - 6 * 60 * 60 * 1000); // past 6 hours to pick updates
-  const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // next two weeks
+  // Broaden import window so week views always fill across all days
+  const startDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000); // past 14 days
+  const endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // next 30 days
 
   for (const doc of tokensSnap.docs) {
     const tokenId = doc.id;
     const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
     try {
+      await logIntegration({ uid, source: 'google', level: 'info', step: 'sync_start', message: 'Google Calendar hourly sync started', meta: { rangeHours: 6 } });
       await importGoogleCalendarEvents(uid, { startDate, endDate });
+      await logIntegration({ uid, source: 'google', level: 'info', step: 'sync_complete', message: 'Google Calendar hourly sync complete' });
     } catch (error) {
       console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
+      try { await logIntegration({ uid, source: 'google', level: 'error', step: 'sync_error', message: 'Google Calendar hourly sync failed', meta: { error: String(error?.message||error) } }); } catch {}
     }
   }
 });
@@ -2410,6 +2743,7 @@ async function getStravaAccessToken(uid) {
     expires_at: refreshed.expires_at,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'token_refresh', message: 'Strava token refreshed' });
   return refreshed.access_token;
 }
 
@@ -2453,6 +2787,7 @@ async function upsertWorkout(uid, activity) {
 
 async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxPages = 3 } = {}) {
   const accessToken = await getStravaAccessToken(uid);
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'sync_start', message: 'Strava sync started', meta: { afterSec, perPage, maxPages } });
   let page = 1;
   let total = 0;
   let lastDocId = null;
@@ -2474,6 +2809,7 @@ async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxP
   }
   const db = admin.firestore();
   await db.collection('profiles').doc(uid).set({ stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'sync_complete', message: 'Strava sync complete', meta: { imported: total, lastDocId } });
   return { ok: true, imported: total, lastDocId };
 }
 
@@ -2486,6 +2822,7 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
     afterSec = (String(after).length > 10) ? Math.floor(Number(after) / 1000) : Number(after);
   }
   console.log('[syncStrava] uid', req.auth.uid, 'after', after, 'afterSec', afterSec);
+  await logIntegration({ uid: req.auth.uid, source: 'strava', level: 'info', step: 'sync_trigger', message: 'Manual Strava sync requested', meta: { after, afterSec } });
   return await fetchStravaActivities(req.auth.uid, { afterSec });
 });
 
@@ -2649,6 +2986,7 @@ exports.calendarStatus = httpsV2.onCall(async (req) => {
 
 async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
   const base = countryBaseUrl || 'https://www.parkrun.org.uk';
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_start', message: 'Parkrun sync started', meta: { base, athleteId } });
   const url = `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteId)}&eventNumber=0`;
   const html = await (await fetch(url)).text();
   const cheerio = require('cheerio');
@@ -2740,6 +3078,7 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
     imported += 1;
   }
   await db.collection('profiles').doc(uid).set({ parkrunAthleteId: athleteId, parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_complete', message: 'Parkrun sync complete', meta: { imported } });
   return { ok: true, imported };
 }
 
@@ -2749,6 +3088,7 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
   const uid = req.auth.uid;
   let { athleteId, profileUrl, countryBaseUrl } = req.data || {};
   console.log('[syncParkrun] uid', uid, 'athleteId', athleteId, 'profileUrl?', !!profileUrl, 'base?', countryBaseUrl);
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_trigger', message: 'Manual Parkrun sync requested', meta: { hasProfileUrl: !!profileUrl, countryBaseUrl: countryBaseUrl || null } });
   athleteId = (athleteId || '').toString().trim();
   profileUrl = (profileUrl || '').toString().trim();
   countryBaseUrl = (countryBaseUrl || '').toString().trim();
@@ -2760,7 +3100,12 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
   if (!athleteId) {
     throw new httpsV2.HttpsError('invalid-argument', 'Provide Parkrun athleteId or profileUrl containing athleteNumber.');
   }
-  return await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+  try {
+    return await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+  } catch (e) {
+    await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'sync_error', message: 'Parkrun sync failed', meta: { error: String(e?.message||e) } });
+    throw e;
+  }
 });
 
 // Fitness Overview aggregator
@@ -3043,13 +3388,16 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
 
 exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const { summary, start, end } = req.data || {};
+  const { summary, start, end, description, bobId } = req.data || {};
   if (!summary || !start || !end) throw new httpsV2.HttpsError("invalid-argument", "summary/start/end required");
   const access = await getAccessToken(req.auth.uid);
+  const body = { summary, start: { dateTime: start }, end: { dateTime: end } };
+  if (description) body['description'] = description;
+  if (bobId) body['extendedProperties'] = { private: { bobId } };
   const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
     method: "POST",
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
-    body: JSON.stringify({ summary, start: { dateTime: start }, end: { dateTime: end } }),
+    body: JSON.stringify(body),
   });
   return { ok: true, event: ev };
 });
@@ -3057,13 +3405,15 @@ exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 // Update an existing Google Calendar event (summary/start/end minimal patch)
 exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const { eventId, summary, start, end } = req.data || {};
+  const { eventId, summary, start, end, description, bobId } = req.data || {};
   if (!eventId) throw new httpsV2.HttpsError("invalid-argument", "eventId required");
   const access = await getAccessToken(req.auth.uid);
   const body = {};
   if (summary) body.summary = summary;
   if (start) body.start = { dateTime: start };
   if (end) body.end = { dateTime: end };
+  if (description) body['description'] = description;
+  if (bobId) body['extendedProperties'] = { private: { bobId } };
   const ev = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
     method: "PATCH",
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
@@ -3074,10 +3424,14 @@ exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 
 exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const maxResults = Math.min(Number(req.data?.maxResults || 20), 100);
+  const maxResults = Math.min(Number(req.data?.maxResults || 200), 500);
   const access = await getAccessToken(req.auth.uid);
-  const now = new Date().toISOString();
-  const data = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(now)}&maxResults=${maxResults}`, {
+  const daysBack = Math.max(Number(req.data?.daysBack || 14), 0);
+  const daysForward = Math.max(Number(req.data?.daysForward || 30), 1);
+  const start = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+  const end = new Date(Date.now() + daysForward * 24 * 60 * 60 * 1000).toISOString();
+  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(start)}&timeMax=${encodeURIComponent(end)}&maxResults=${maxResults}`;
+  const data = await fetchJson(url, {
     headers: { "Authorization": "Bearer " + access },
   });
   return { ok: true, items: data.items || [] };
@@ -3383,6 +3737,7 @@ exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
 
 // ===== Trakt and Steam Sync
 async function _syncTrakt(uid) {
+  await logIntegration({ uid, source: 'trakt', level: 'info', step: 'sync_start', message: 'Trakt sync started' });
   const db = admin.firestore();
   const profile = await db.collection('profiles').doc(uid).get();
   const traktUser = profile.data()?.traktUser;
@@ -3411,11 +3766,12 @@ async function _syncTrakt(uid) {
     traktLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
     traktSyncCount: history.length,
   }, { merge: true });
-
+  await logIntegration({ uid, source: 'trakt', level: 'info', step: 'sync_complete', message: 'Trakt sync complete', meta: { written: history.length } });
   return { ok: true, written: history.length };
 }
 
 async function _syncSteam(uid) {
+  await logIntegration({ uid, source: 'steam', level: 'info', step: 'sync_start', message: 'Steam sync started' });
   const db = admin.firestore();
   const profile = await db.collection('profiles').doc(uid).get();
   const steamId = profile.data()?.steamId;
@@ -3440,7 +3796,7 @@ async function _syncSteam(uid) {
     steamLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
     steamLibrarySize: games.length,
   }, { merge: true });
-
+  await logIntegration({ uid, source: 'steam', level: 'info', step: 'sync_complete', message: 'Steam sync complete', meta: { written: games.length } });
   return { ok: true, written: games.length };
 }
 
@@ -3569,33 +3925,45 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 
     if (data.traktUser) {
       try {
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'daily_sync_start', message: 'Daily Trakt sync started' });
         await _syncTrakt(uid);
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'daily_sync_complete', message: 'Daily Trakt sync complete' });
       } catch (error) {
         console.error(`Failed to sync Trakt for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'trakt', level: 'error', step: 'daily_sync_error', message: 'Daily Trakt sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.steamId) {
       try {
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'daily_sync_start', message: 'Daily Steam sync started' });
         await _syncSteam(uid);
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'daily_sync_complete', message: 'Daily Steam sync complete' });
       } catch (error) {
         console.error(`Failed to sync Steam for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'steam', level: 'error', step: 'daily_sync_error', message: 'Daily Steam sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.stravaConnected && data.stravaAutoSync) {
       try {
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'daily_sync_start', message: 'Daily Strava sync started' });
         await fetchStravaActivities(uid, { maxPages: 2 });
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'daily_sync_complete', message: 'Daily Strava sync complete' });
       } catch (error) {
         console.error(`Failed to sync Strava for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'strava', level: 'error', step: 'daily_sync_error', message: 'Daily Strava sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.parkrunAthleteId && data.parkrunAutoSync) {
       try {
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'daily_sync_start', message: 'Daily Parkrun sync started' });
         await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'daily_sync_complete', message: 'Daily Parkrun sync complete' });
       } catch (error) {
         console.error(`Failed to sync Parkrun for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'daily_sync_error', message: 'Daily Parkrun sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
@@ -3637,9 +4005,88 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 
     if (data.monzoConnected) {
       try {
+        await logIntegration({ uid, source: 'monzo', level: 'info', step: 'daily_sync_start', message: 'Daily Monzo sync started' });
         await syncMonzoDataForUser(uid);
+        await logIntegration({ uid, source: 'monzo', level: 'info', step: 'daily_sync_complete', message: 'Daily Monzo sync complete' });
       } catch (error) {
         console.error(`Failed to sync Monzo for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'monzo', level: 'error', step: 'daily_sync_error', message: 'Daily Monzo sync failed', meta: { error: String(error?.message||error) } }); } catch {}
+      }
+    }
+  }
+});
+
+// Hourly integrations sync (Strava, Parkrun, Steam, Trakt). Monzo and Google have their own schedules.
+exports.hourlyIntegrations = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+  for (const profile of profiles.docs) {
+    const uid = profile.id;
+    const data = profile.data() || {};
+
+    // Strava
+    if (data.stravaConnected && data.stravaAutoSync) {
+      try {
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'hourly_sync_start', message: 'Hourly Strava sync started' });
+        await fetchStravaActivities(uid, { maxPages: 1, afterSec: Math.floor((Date.now() - 24*3600*1000)/1000) });
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Strava sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'strava', level: 'error', step: 'hourly_sync_error', message: 'Hourly Strava sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Parkrun (usually weekly cadence; safe hourly for idempotent writes)
+    if (data.parkrunAthleteId && data.parkrunAutoSync) {
+      try {
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'hourly_sync_start', message: 'Hourly Parkrun sync started' });
+        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Parkrun sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'hourly_sync_error', message: 'Hourly Parkrun sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Steam
+    if (data.steamId && data.steamAutoSync !== false) { // default on if steamId present
+      try {
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'hourly_sync_start', message: 'Hourly Steam sync started' });
+        await _syncSteam(uid);
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Steam sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'steam', level: 'error', step: 'hourly_sync_error', message: 'Hourly Steam sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Trakt
+    if (data.traktUser && data.traktAutoSync !== false) { // default on if configured
+      try {
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'hourly_sync_start', message: 'Hourly Trakt sync started' });
+        await _syncTrakt(uid);
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Trakt sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'trakt', level: 'error', step: 'hourly_sync_error', message: 'Hourly Trakt sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+  }
+});
+
+// Hourly planner: integrate routines (chores/habits) into today's calendar blocks deterministically
+exports.hourlyPlanner = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+  const day = new Date().toISOString().slice(0,10);
+  for (const p of profiles.docs) {
+    const uid = p.id;
+    const data = p.data() || {};
+    if (data.autoPlanHourly) {
+      try {
+        await logIntegration({ uid, source: 'planner', level: 'info', step: 'hourly_plan_start', message: 'Hourly routines planner started', meta: { day } });
+        // planRoutines callable inline: include habits and chores, apply=true
+        // Reuse internal logic by writing a small inline call
+        await exports.planRoutines.run({ auth: { uid }, data: { day, includeHabits: true, includeChores: true, apply: true, persona: 'personal' } });
+        await logIntegration({ uid, source: 'planner', level: 'info', step: 'hourly_plan_complete', message: 'Hourly routines planner complete', meta: { day } });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'planner', level: 'error', step: 'hourly_plan_error', message: 'Hourly routines planner failed', meta: { error: String(e?.message||e), day } }); } catch {}
       }
     }
   }

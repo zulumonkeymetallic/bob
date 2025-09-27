@@ -45,6 +45,7 @@ import VirtualThemeLane from './VirtualThemeLane';
 // RoadmapV2 fully removed; timeline uses native implementation below
 import { useSidebar } from '../../contexts/SidebarContext';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
+import { scaleTime } from '@visx/scale';
 import {
   DndContext,
   DragStartEvent,
@@ -106,6 +107,7 @@ const EnhancedGanttChart: React.FC = () => {
   const [collapsedGoals, setCollapsedGoals] = useState<Set<string>>(new Set());
   const [groupByTheme, setGroupByTheme] = useState<boolean>(true);
   const [showEmptyThemes, setShowEmptyThemes] = useState<boolean>(false);
+  const [copied, setCopied] = useState(false);
   const [storiesByGoal, setStoriesByGoal] = useState<Record<string, number>>({});
   const [doneStoriesByGoal, setDoneStoriesByGoal] = useState<Record<string, number>>({});
   const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
@@ -159,6 +161,7 @@ const EnhancedGanttChart: React.FC = () => {
   const timelineRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const headerMonthsRef = useRef<HTMLDivElement>(null);
+  const [visibleRangeText, setVisibleRangeText] = useState<string>('');
   
   // Theme definitions adopt V2 global theme system
   const themes = useMemo(() => GLOBAL_THEMES.map(t => ({ id: t.id, name: t.name || t.label, color: t.color })), []);
@@ -180,6 +183,8 @@ const EnhancedGanttChart: React.FC = () => {
     const updateWidth = () => {
       const w = canvasRef.current?.scrollWidth || containerRef.current?.clientWidth || 1200;
       setWidth(w);
+      // Also refresh visible range indicator
+      updateVisibleRange();
     };
     updateWidth();
     window.addEventListener('resize', updateWidth);
@@ -272,6 +277,7 @@ const EnhancedGanttChart: React.FC = () => {
     if (el) {
       const left = 250 + scale(today) - el.clientWidth * 0.3;
       el.scrollLeft = Math.max(0, left);
+      updateVisibleRange();
     }
   }, [zoomLevel]);
 
@@ -295,6 +301,7 @@ const EnhancedGanttChart: React.FC = () => {
     if (el) {
       const left = 250 + scale(start) - el.clientWidth * 0.2;
       el.scrollLeft = Math.max(0, left);
+      updateVisibleRange();
     }
   }, [selectedSprintId, sprints, setZoomLevel, scale]);
 
@@ -393,7 +400,31 @@ const EnhancedGanttChart: React.FC = () => {
     const left = 250 + getDatePosition(today) - el.clientWidth * 0.3;
     el.scrollLeft = Math.max(0, left);
     logger.debug('gantt', 'Auto-scroll to today', { left: el.scrollLeft, width: el.clientWidth });
+    updateVisibleRange();
   }, [zoomLevel, goals.length, sprints.length]);
+
+  // Visible range indicator (left/right of viewport)
+  const updateVisibleRange = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const s = useRoadmapStore.getState();
+    const sc: any = scaleTime<number>({ domain: [s.start, s.end], range: [0, Math.max(1, s.width)] });
+    const invert = sc.invert ? (x: number) => sc.invert(x) as Date : (x: number) => new Date(s.start.getTime() + (x / Math.max(1, s.width)) * (s.end.getTime() - s.start.getTime()));
+    const leftX = Math.max(0, el.scrollLeft - 250);
+    const rightX = Math.max(0, leftX + Math.max(0, el.clientWidth - 250));
+    const sd = invert(leftX);
+    const ed = invert(rightX);
+    const fmt = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    setVisibleRangeText(`${fmt(sd)} – ${fmt(ed)}`);
+  }, []);
+
+  useEffect(() => {
+    const onScroll = () => updateVisibleRange();
+    const el = containerRef.current;
+    if (el) el.addEventListener('scroll', onScroll);
+    updateVisibleRange();
+    return () => { if (el) el.removeEventListener('scroll', onScroll); };
+  }, [updateVisibleRange]);
 
   // Map stories per goal for quick indicators
   useEffect(() => {
@@ -1318,6 +1349,8 @@ const EnhancedGanttChart: React.FC = () => {
                 </Col>
                 <Col md={6}>
                   <div className="d-flex justify-content-end gap-2 flex-wrap">
+                    <Button size="sm" variant="outline-secondary" onClick={() => { try { window.print(); } catch {} }} aria-label="Print"><Printer size={14} /></Button>
+                    <Button size="sm" variant={copied ? 'success' : 'outline-secondary'} onClick={async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(()=>setCopied(false), 1800); } catch {} }} aria-label="Copy Link"><Share2 size={14} /></Button>
                     {themes.map(theme => (
                       <Badge key={theme.id} bg={selectedThemes.includes(theme.id) ? 'primary' : 'outline-secondary'}
                         className="cursor-pointer"
@@ -1348,7 +1381,7 @@ const EnhancedGanttChart: React.FC = () => {
         {/* Live region for a11y announcements */}
         <div aria-live="polite" className="visually-hidden">{liveAnnouncement}</div>
         {/* Timeline Header */}
-        <div className="timeline-header sticky-top" style={{ zIndex: 20, backgroundColor: 'var(--bs-body-bg)', borderBottom: '1px solid var(--line)', boxShadow: '0 1px 0 var(--line), 0 6px 16px rgba(0,0,0,0.06)' }}>
+        <div className="timeline-header sticky-top" style={{ zIndex: 30, backgroundColor: 'var(--bs-body-bg)', borderBottom: '1px solid var(--line)', boxShadow: '0 1px 0 var(--line), 0 6px 16px rgba(0,0,0,0.06)', position: 'sticky', top: 0 }}>
           <div className="d-flex">
             <div style={{ position: 'sticky', left: 0, zIndex: 21, width: '250px', minWidth: '250px', background: 'var(--bs-body-bg)', borderRight: '1px solid var(--line)' }} className="p-2">
               <div className="d-flex flex-column">
@@ -1364,6 +1397,15 @@ const EnhancedGanttChart: React.FC = () => {
               </div>
             </div>
             <div ref={headerMonthsRef} className="timeline-months d-flex position-relative" style={{ minWidth: '200%', height: 60 }}>
+              {/* Navigation arrows */}
+              <div className="position-absolute d-flex align-items-center" style={{ left: 8, top: 12, zIndex: 22, gap: 6 }}>
+                <Button size="sm" variant="outline-secondary" aria-label="Scroll left" onClick={() => { const el = containerRef.current; if (el) { el.scrollBy({ left: -Math.floor(el.clientWidth * 0.6), behavior: 'smooth' }); } }}>&lsaquo;</Button>
+                <Button size="sm" variant="outline-secondary" aria-label="Scroll right" onClick={() => { const el = containerRef.current; if (el) { el.scrollBy({ left: Math.floor(el.clientWidth * 0.6), behavior: 'smooth' }); } }}>&rsaquo;</Button>
+              </div>
+              {/* Visible range chip */}
+              <div className="position-absolute" style={{ right: 8, top: 12, zIndex: 22, background: 'rgba(0,0,0,0.06)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px', fontSize: 12, color: 'var(--bs-body-color)' }}>
+                {visibleRangeText}
+              </div>
               {/* Sprint shading under header months */}
               <div className="position-absolute" style={{ left: 0, right: 0, top: 0, bottom: 0, pointerEvents: 'none', zIndex: 0 }}>
                 {sprints.map(sprint => (
