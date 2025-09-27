@@ -2466,9 +2466,12 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
     const tokenId = doc.id;
     const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
     try {
+      await logIntegration({ uid, source: 'google', level: 'info', step: 'sync_start', message: 'Google Calendar hourly sync started', meta: { rangeHours: 6 } });
       await importGoogleCalendarEvents(uid, { startDate, endDate });
+      await logIntegration({ uid, source: 'google', level: 'info', step: 'sync_complete', message: 'Google Calendar hourly sync complete' });
     } catch (error) {
       console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
+      try { await logIntegration({ uid, source: 'google', level: 'error', step: 'sync_error', message: 'Google Calendar hourly sync failed', meta: { error: String(error?.message||error) } }); } catch {}
     }
   }
 });
@@ -3599,6 +3602,7 @@ exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
 
 // ===== Trakt and Steam Sync
 async function _syncTrakt(uid) {
+  await logIntegration({ uid, source: 'trakt', level: 'info', step: 'sync_start', message: 'Trakt sync started' });
   const db = admin.firestore();
   const profile = await db.collection('profiles').doc(uid).get();
   const traktUser = profile.data()?.traktUser;
@@ -3627,11 +3631,12 @@ async function _syncTrakt(uid) {
     traktLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
     traktSyncCount: history.length,
   }, { merge: true });
-
+  await logIntegration({ uid, source: 'trakt', level: 'info', step: 'sync_complete', message: 'Trakt sync complete', meta: { written: history.length } });
   return { ok: true, written: history.length };
 }
 
 async function _syncSteam(uid) {
+  await logIntegration({ uid, source: 'steam', level: 'info', step: 'sync_start', message: 'Steam sync started' });
   const db = admin.firestore();
   const profile = await db.collection('profiles').doc(uid).get();
   const steamId = profile.data()?.steamId;
@@ -3656,7 +3661,7 @@ async function _syncSteam(uid) {
     steamLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
     steamLibrarySize: games.length,
   }, { merge: true });
-
+  await logIntegration({ uid, source: 'steam', level: 'info', step: 'sync_complete', message: 'Steam sync complete', meta: { written: games.length } });
   return { ok: true, written: games.length };
 }
 
@@ -3785,33 +3790,45 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 
     if (data.traktUser) {
       try {
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'daily_sync_start', message: 'Daily Trakt sync started' });
         await _syncTrakt(uid);
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'daily_sync_complete', message: 'Daily Trakt sync complete' });
       } catch (error) {
         console.error(`Failed to sync Trakt for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'trakt', level: 'error', step: 'daily_sync_error', message: 'Daily Trakt sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.steamId) {
       try {
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'daily_sync_start', message: 'Daily Steam sync started' });
         await _syncSteam(uid);
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'daily_sync_complete', message: 'Daily Steam sync complete' });
       } catch (error) {
         console.error(`Failed to sync Steam for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'steam', level: 'error', step: 'daily_sync_error', message: 'Daily Steam sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.stravaConnected && data.stravaAutoSync) {
       try {
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'daily_sync_start', message: 'Daily Strava sync started' });
         await fetchStravaActivities(uid, { maxPages: 2 });
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'daily_sync_complete', message: 'Daily Strava sync complete' });
       } catch (error) {
         console.error(`Failed to sync Strava for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'strava', level: 'error', step: 'daily_sync_error', message: 'Daily Strava sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.parkrunAthleteId && data.parkrunAutoSync) {
       try {
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'daily_sync_start', message: 'Daily Parkrun sync started' });
         await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'daily_sync_complete', message: 'Daily Parkrun sync complete' });
       } catch (error) {
         console.error(`Failed to sync Parkrun for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'daily_sync_error', message: 'Daily Parkrun sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
@@ -3853,9 +3870,88 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 
     if (data.monzoConnected) {
       try {
+        await logIntegration({ uid, source: 'monzo', level: 'info', step: 'daily_sync_start', message: 'Daily Monzo sync started' });
         await syncMonzoDataForUser(uid);
+        await logIntegration({ uid, source: 'monzo', level: 'info', step: 'daily_sync_complete', message: 'Daily Monzo sync complete' });
       } catch (error) {
         console.error(`Failed to sync Monzo for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'monzo', level: 'error', step: 'daily_sync_error', message: 'Daily Monzo sync failed', meta: { error: String(error?.message||error) } }); } catch {}
+      }
+    }
+  }
+});
+
+// Hourly integrations sync (Strava, Parkrun, Steam, Trakt). Monzo and Google have their own schedules.
+exports.hourlyIntegrations = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+  for (const profile of profiles.docs) {
+    const uid = profile.id;
+    const data = profile.data() || {};
+
+    // Strava
+    if (data.stravaConnected && data.stravaAutoSync) {
+      try {
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'hourly_sync_start', message: 'Hourly Strava sync started' });
+        await fetchStravaActivities(uid, { maxPages: 1, afterSec: Math.floor((Date.now() - 24*3600*1000)/1000) });
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Strava sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'strava', level: 'error', step: 'hourly_sync_error', message: 'Hourly Strava sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Parkrun (usually weekly cadence; safe hourly for idempotent writes)
+    if (data.parkrunAthleteId && data.parkrunAutoSync) {
+      try {
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'hourly_sync_start', message: 'Hourly Parkrun sync started' });
+        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Parkrun sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'hourly_sync_error', message: 'Hourly Parkrun sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Steam
+    if (data.steamId && data.steamAutoSync !== false) { // default on if steamId present
+      try {
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'hourly_sync_start', message: 'Hourly Steam sync started' });
+        await _syncSteam(uid);
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Steam sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'steam', level: 'error', step: 'hourly_sync_error', message: 'Hourly Steam sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Trakt
+    if (data.traktUser && data.traktAutoSync !== false) { // default on if configured
+      try {
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'hourly_sync_start', message: 'Hourly Trakt sync started' });
+        await _syncTrakt(uid);
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Trakt sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'trakt', level: 'error', step: 'hourly_sync_error', message: 'Hourly Trakt sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+  }
+});
+
+// Hourly planner: integrate routines (chores/habits) into today's calendar blocks deterministically
+exports.hourlyPlanner = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+  const day = new Date().toISOString().slice(0,10);
+  for (const p of profiles.docs) {
+    const uid = p.id;
+    const data = p.data() || {};
+    if (data.autoPlanHourly) {
+      try {
+        await logIntegration({ uid, source: 'planner', level: 'info', step: 'hourly_plan_start', message: 'Hourly routines planner started', meta: { day } });
+        // planRoutines callable inline: include habits and chores, apply=true
+        // Reuse internal logic by writing a small inline call
+        await exports.planRoutines.run({ auth: { uid }, data: { day, includeHabits: true, includeChores: true, apply: true, persona: 'personal' } });
+        await logIntegration({ uid, source: 'planner', level: 'info', step: 'hourly_plan_complete', message: 'Hourly routines planner complete', meta: { day } });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'planner', level: 'error', step: 'hourly_plan_error', message: 'Hourly routines planner failed', meta: { error: String(e?.message||e), day } }); } catch {}
       }
     }
   }
