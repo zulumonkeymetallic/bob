@@ -81,6 +81,41 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     status: 'planned'
   });
 
+  // Helpers to handle local date inputs without timezone off-by-one
+  const parseDateInput = (d: string): number => {
+    if (!d) return Date.now();
+    const [y, m, day] = d.split('-').map(n => Number(n));
+    const dt = new Date(y, (m || 1) - 1, day || 1);
+    dt.setHours(0, 0, 0, 0);
+    return dt.getTime();
+  };
+  const toInputDate = (ts: number | undefined): string => {
+    if (!ts) return '';
+    const d = new Date(Number(ts));
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  const toStatusNumber = (s: string): number => {
+    switch (s) {
+      case 'active': return 1;
+      case 'completed': return 2;
+      case 'cancelled': return 3;
+      case 'planned':
+      default: return 0;
+    }
+  };
+  const fromStatusNumber = (n: number | undefined): string => {
+    switch (n) {
+      case 1: return 'active';
+      case 2: return 'completed';
+      case 3: return 'cancelled';
+      case 0:
+      default: return 'planned';
+    }
+  };
+
   // Load sprints
   useEffect(() => {
     if (!currentUser) return;
@@ -149,7 +184,13 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     try {
       const existingRefs = sprints.map(s => s.ref);
       const sprintData = {
-        ...formData,
+        name: formData.name.trim(),
+        objective: formData.objective?.trim() || '',
+        startDate: parseDateInput(formData.startDate),
+        endDate: parseDateInput(formData.endDate),
+        planningDate: parseDateInput(formData.startDate),
+        retroDate: parseDateInput(formData.endDate),
+        status: toStatusNumber(formData.status),
         ref: generateRef('sprint', existingRefs),
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
@@ -172,7 +213,13 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
 
     try {
       await updateDoc(doc(db, 'sprints', editingSprint.id), {
-        ...formData,
+        name: formData.name.trim(),
+        objective: formData.objective?.trim() || '',
+        startDate: parseDateInput(formData.startDate),
+        endDate: parseDateInput(formData.endDate),
+        planningDate: parseDateInput(formData.startDate),
+        retroDate: parseDateInput(formData.endDate),
+        status: toStatusNumber(formData.status),
         updatedAt: serverTimestamp(),
         updatedBy: currentUser.email
       });
@@ -229,9 +276,9 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     setFormData({
       name: sprint.name,
       objective: sprint.objective || '',
-      startDate: new Date(sprint.startDate).toISOString().split('T')[0],
-      endDate: new Date(sprint.endDate).toISOString().split('T')[0],
-      status: (sprint.status !== undefined ? sprint.status : 0).toString()
+      startDate: toInputDate(sprint.startDate),
+      endDate: toInputDate(sprint.endDate),
+      status: fromStatusNumber(sprint.status)
     });
     setShowModal(true);
   };
