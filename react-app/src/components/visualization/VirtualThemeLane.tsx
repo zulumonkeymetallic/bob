@@ -129,11 +129,11 @@ const VirtualThemeLane: React.FC<Props> = ({
                   <strong>{goal.title}</strong>
                   {typeof goal.priority !== 'undefined' && (<span className="ms-2">P{goal.priority}</span>)}
                 </div>
-                <div className="d-flex align-items-center gap-1">
-                  <button style={{ background: 'transparent', border: 'none', color: 'inherit', padding: '2px 4px', cursor: 'pointer' }} title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal as any); }}>✨</button>
-                  <button style={{ background: 'transparent', border: 'none', color: 'inherit', padding: '2px 4px', cursor: 'pointer' }} title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); }}>📝</button>
-                  <button style={{ background: 'transparent', border: 'none', color: 'inherit', padding: '2px 4px', cursor: 'pointer' }} title="View stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}>📖</button>
-                  <button style={{ background: 'transparent', border: 'none', color: 'inherit', padding: '2px 4px', cursor: 'pointer' }} title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(goal.id); setNoteDraft(''); }}>💬</button>
+                <div className="d-flex align-items-center gap-2">
+                  <button aria-label="Generate stories with AI" style={{ background: 'transparent', border: 'none', color: 'inherit', padding: 6, width: 28, height: 28, cursor: 'pointer', borderRadius: 6 }} title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal as any); }}>✨</button>
+                  <button aria-label="View activity" style={{ background: 'transparent', border: 'none', color: 'inherit', padding: 6, width: 28, height: 28, cursor: 'pointer', borderRadius: 6 }} title="View activity" onClick={(e) => { e.stopPropagation(); setActivityGoalId(goal.id); }}>📝</button>
+                  <button aria-label="View stories" style={{ background: 'transparent', border: 'none', color: 'inherit', padding: 6, width: 28, height: 28, cursor: 'pointer', borderRadius: 6 }} title="View stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}>📖</button>
+                  <button aria-label="Add note" style={{ background: 'transparent', border: 'none', color: 'inherit', padding: 6, width: 28, height: 28, cursor: 'pointer', borderRadius: 6 }} title="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(goal.id); setNoteDraft(''); }}>💬</button>
                 </div>
               </div>
               <div className="small">{total === 0 ? 'No linked stories' : `${total} stories`}</div>
