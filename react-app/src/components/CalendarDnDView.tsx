@@ -10,7 +10,7 @@ import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, orderBy, getDoc, getDocs } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { CalendarBlock } from '../types';
+import { CalendarBlock, Block } from '../types';
 import { GlobalTheme, GLOBAL_THEMES } from '../constants/globalThemes';
 import { getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { ActivityStreamService } from '../services/ActivityStreamService';
@@ -48,10 +48,24 @@ const DEFAULT_THEME_COLORS: Record<string, string> = {
   Home: '#f97316'
 };
 
+const themeToColorId = (theme?: string) => {
+  switch ((theme||'').toString()) {
+    case 'Health': return '11';
+    case 'Growth': return '9';
+    case 'Wealth': return '5';
+    case 'Tribe': return '3';
+    case 'Home': return '6';
+    default: return undefined;
+  }
+};
+
 const CalendarDnDView: React.FC = () => {
   const { currentUser } = useAuth();
   const [blocks, setBlocks] = useState<CalendarBlock[]>([]);
   const [googleEvents, setGoogleEvents] = useState<RbcEvent[]>([]);
+  const [blockDefs, setBlockDefs] = useState<Block[]>([]);
+  const [overlayEvents, setOverlayEvents] = useState<RbcEvent[]>([]);
+  const [showOverlay, setShowOverlay] = useState(true);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [createRange, setCreateRange] = useState<{ start: Date; end: Date } | null>(null);
@@ -154,6 +168,17 @@ const CalendarDnDView: React.FC = () => {
     return unsub;
   }, [currentUser]);
 
+  // Load block definitions for overlay
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(collection(db, 'blocks'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(q, (snap) => {
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Block[];
+      setBlockDefs(rows);
+    });
+    return unsub;
+  }, [currentUser]);
+
   useEffect(() => {
     const load = async () => {
       if (!currentUser) return;
@@ -193,8 +218,37 @@ const CalendarDnDView: React.FC = () => {
       source: 'block',
       block: b
     }));
-    return [...googleEvents, ...blockEvents];
-  }, [blocks, googleEvents]);
+    const merged = [...googleEvents, ...blockEvents];
+    return showOverlay ? [...merged, ...overlayEvents] : merged;
+  }, [blocks, googleEvents, overlayEvents, showOverlay]);
+
+  // Compute overlay events for next 30 days based on block windows
+  useEffect(() => {
+    if (!blockDefs.length) { setOverlayEvents([]); return; }
+    const today = new Date(); today.setHours(0,0,0,0);
+    const start = new Date(today.getTime() - 1*24*60*60*1000);
+    const end = new Date(today.getTime() + 30*24*60*60*1000);
+    const days: Date[] = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+    const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const toTime = (d: Date, hhmm: string) => { const [h,m] = String(hhmm||'00:00').split(':').map(Number); const t = new Date(d); t.setHours(h||0, m||0, 0, 0); return t; };
+    const out: RbcEvent[] = [];
+    for (const b of blockDefs) {
+      for (const d of days) {
+        const key = dayKey(d);
+        if (Array.isArray(b.disabledDates) && b.disabledDates.includes(key)) continue;
+        const dow = d.getDay();
+        for (const w of b.windows || []) {
+          const daysFilter = w.days && w.days.length ? w.days : undefined;
+          if (daysFilter && !daysFilter.includes(dow)) continue;
+          const s = toTime(d, w.start), e = toTime(d, w.end);
+          if (e <= s) continue;
+          out.push({ id: `overlay-${b.id}-${key}-${w.start}`, title: b.name, start: s, end: e, source: 'block', block: { theme: b.name } as any, overlayColor: b.color || undefined } as any);
+        }
+      }
+    }
+    setOverlayEvents(out);
+  }, [blockDefs]);
 
   const handleSelectSlot = ({ start, end }: { start: Date; end: Date }) => {
     setCreateRange({ start, end });
@@ -252,7 +306,8 @@ const CalendarDnDView: React.FC = () => {
           const data: any = snap.data();
           const summary = (data?.title) || `${data?.category || 'Block'} (${data?.theme || 'Growth'})`;
           const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${id}\nCategory: ${data?.category || ''}\nSource: BOB`;
-          const res: any = await callable({ summary, start: new Date(data.start).toISOString(), end: new Date(data.end).toISOString(), description, bobId: id });
+          const colorId = themeToColorId(data?.theme);
+          const res: any = await callable({ summary, start: new Date(data.start).toISOString(), end: new Date(data.end).toISOString(), description, bobId: id, colorId });
           const evId = res?.data?.event?.id || res?.data?.id || res?.event?.id;
           if (evId) {
             await updateDoc(doc(db, 'calendar_blocks', id), { googleEventId: evId, syncToGoogle: true, updatedAt: Date.now() });
@@ -296,11 +351,13 @@ const CalendarDnDView: React.FC = () => {
             const callable = httpsCallable(functions, data?.googleEventId ? 'updateCalendarEvent' : 'createCalendarEvent');
             if (data?.googleEventId) {
               const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
-              await (callable as any)({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id });
+              const colorId = themeToColorId(data?.theme);
+              await (callable as any)({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id, colorId });
             } else {
               const summary = (data?.title) || `${data?.category || 'Block'} (${data?.theme || 'Growth'})`;
               const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
-              const res: any = await (callable as any)({ summary, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id });
+              const colorId = themeToColorId(data?.theme);
+              const res: any = await (callable as any)({ summary, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id, colorId });
               const evId = res?.data?.event?.id || res?.data?.id || res?.event?.id;
               if (evId) await updateDoc(doc(db, 'calendar_blocks', event.id), { googleEventId: evId });
             }
@@ -349,7 +406,8 @@ const CalendarDnDView: React.FC = () => {
           if (data?.syncToGoogle && data?.googleEventId) {
             const callable = httpsCallable(functions, 'updateCalendarEvent');
             const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
-            await callable({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id });
+            const colorId = themeToColorId(data?.theme);
+            await callable({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id, colorId });
           }
         } catch {}
         if (currentUser) {
@@ -481,11 +539,12 @@ const CalendarDnDView: React.FC = () => {
           const d: any = t.data;
           if (editForm.syncToGoogle) {
             const callable = httpsCallable(functions, d?.googleEventId ? 'updateCalendarEvent' : 'createCalendarEvent');
+            const colorId = themeToColorId(editForm.theme || d?.theme);
             if (d?.googleEventId) {
-              await (callable as any)({ eventId: d.googleEventId, summary: editForm.category, start: new Date(upd.start).toISOString(), end: new Date(upd.end).toISOString() });
+              await (callable as any)({ eventId: d.googleEventId, summary: editForm.category, start: new Date(upd.start).toISOString(), end: new Date(upd.end).toISOString(), colorId });
             } else {
               const summary = (d?.title) || `${editForm.category || d?.category || 'Block'} (${editForm.theme || d?.theme || 'Growth'})`;
-              const res: any = await (callable as any)({ summary, start: new Date(upd.start).toISOString(), end: new Date(upd.end).toISOString() });
+              const res: any = await (callable as any)({ summary, start: new Date(upd.start).toISOString(), end: new Date(upd.end).toISOString(), colorId });
               const evId = res?.data?.event?.id || res?.data?.id || res?.event?.id;
               if (evId) await updateDoc(doc(db, 'calendar_blocks', t.id), { googleEventId: evId });
             }
@@ -671,9 +730,10 @@ const CalendarDnDView: React.FC = () => {
     }
     const themeLabel = evt.block?.theme || 'Health';
     const themeMatch = globalThemes.find(t => t.label === themeLabel || t.name === themeLabel);
-    const bg = themeMatch?.color || DEFAULT_THEME_COLORS[themeLabel] || '#64748b';
+    const isOverlay = String(evt.id).startsWith('overlay-');
+    const bg = (isOverlay && (evt as any).overlayColor) || themeMatch?.color || DEFAULT_THEME_COLORS[themeLabel] || '#64748b';
     const tx = getContrastTextColor(bg);
-    return { style: { backgroundColor: bg, color: tx, border: 'none' } };
+    return { style: { backgroundColor: bg, color: tx, border: 'none', opacity: isOverlay ? 0.18 : 1, pointerEvents: isOverlay ? 'none' : 'auto' } };
   };
 
   if (!currentUser) {
@@ -685,6 +745,10 @@ const CalendarDnDView: React.FC = () => {
       <div className="d-flex justify-content-between align-items-center mb-2">
         <h2 className="mb-0">Calendar</h2>
         <div className="d-flex gap-2">
+          <div className="form-check form-switch d-flex align-items-center">
+            <input id="blocksOverlaySwitch" className="form-check-input" type="checkbox" checked={showOverlay} onChange={(e)=>setShowOverlay(e.target.checked)} />
+            <label htmlFor="blocksOverlaySwitch" className="form-check-label ms-2">Blocks Overlay</label>
+          </div>
           <Button variant="outline-secondary" size="sm" onClick={() => window.location.reload()} disabled={loadingGoogle}>
             {loadingGoogle ? 'Loading Google…' : 'Reload Google Events'}
           </Button>

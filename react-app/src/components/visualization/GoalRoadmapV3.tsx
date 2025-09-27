@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, ButtonGroup, Modal, Form, Badge } from 'react-bootstrap';
+import { Button, ButtonGroup, Modal, Form, Badge, Dropdown } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
@@ -10,7 +10,7 @@ import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, Printer, Share2 } from 'lucide-react';
+import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, Printer, Share2, MoreVertical } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
@@ -728,13 +728,36 @@ const GoalRoadmapV3: React.FC = () => {
                     <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
 
-                    <div className="grv3-actions">
-                      <button className="grv3-action" title="Generate stories" aria-label="Generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}><Wand2 size={16} /></button>
-                      {/* Activity stream icon (matches V2 intent) */}
-                      <button className="grv3-action" title="Activity stream" aria-label="Activity stream" onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}><ListIcon size={16} /></button>
-                      <button className="grv3-action" title="Add note" aria-label="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}><MessageSquareText size={16} /></button>
-                      <button className="grv3-action" title="Edit goal" aria-label="Edit goal" onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}><Edit3 size={16} /></button>
-                      <button className="grv3-action" title="Delete goal" aria-label="Delete goal" onClick={async (e) => { e.stopPropagation(); const ok = window.confirm(`Delete goal \"${g.title}\"? This cannot be undone.`); if (ok) { try { await deleteDoc(doc(db, 'goals', g.id)); } catch (err) { window.alert('Failed to delete goal: ' + (err as any)?.message); } } }}><Trash2 size={16} /></button>
+                    <div className="grv3-actions" onPointerDown={(e)=>e.stopPropagation()}>
+                      <Dropdown onClick={(e)=>e.stopPropagation()}>
+                        <Dropdown.Toggle
+                          variant="light"
+                          size="sm"
+                          className="p-0"
+                          style={{ width: 28, height: 28, borderRadius: 6, border: 'none', background: 'rgba(255,255,255,0.25)' }}
+                          onPointerDown={(e)=>e.stopPropagation()}
+                        >
+                          <MoreVertical size={16} />
+                        </Dropdown.Toggle>
+                        <Dropdown.Menu align="end" onPointerDown={(e)=>e.stopPropagation()}>
+                          <Dropdown.Item onClick={(e)=>{ e.stopPropagation(); handleGenerateStories(g.id); }}>
+                            <Wand2 size={14} className="me-2" /> Generate stories
+                          </Dropdown.Item>
+                          <Dropdown.Item onClick={(e)=>{ e.stopPropagation(); showSidebar(g as any, 'goal'); }}>
+                            <ListIcon size={14} className="me-2" /> Activity stream
+                          </Dropdown.Item>
+                          <Dropdown.Item onClick={(e)=>{ e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}>
+                            <MessageSquareText size={14} className="me-2" /> Add note
+                          </Dropdown.Item>
+                          <Dropdown.Item onClick={(e)=>{ e.stopPropagation(); setEditGoal(g); }}>
+                            <Edit3 size={14} className="me-2" /> Edit goal
+                          </Dropdown.Item>
+                          <Dropdown.Divider />
+                          <Dropdown.Item className="text-danger" onClick={async (e) => { e.stopPropagation(); const ok = window.confirm(`Delete goal \"${g.title}\"? This cannot be undone.`); if (ok) { try { await deleteDoc(doc(db, 'goals', g.id)); } catch (err) { window.alert('Failed to delete goal: ' + (err as any)?.message); } } }}>
+                            <Trash2 size={14} className="me-2" /> Delete goal
+                          </Dropdown.Item>
+                        </Dropdown.Menu>
+                      </Dropdown>
                     </div>
 
                     <div className="grv3-title">{g.title}</div>

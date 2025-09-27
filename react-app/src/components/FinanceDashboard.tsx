@@ -5,6 +5,10 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { getThemeName } from '../utils/statusHelpers';
+import { Line } from 'react-chartjs-2';
+import { Chart as ChartJS, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend } from 'chart.js';
+
+ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
 
 interface BudgetTotals {
   mandatory: number;
@@ -101,6 +105,11 @@ const FinanceDashboard: React.FC = () => {
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [bucketBudgets, setBucketBudgets] = useState<Record<string, number>>({});
   const [budgetCurrency, setBudgetCurrency] = useState('GBP');
+  // Goal docs for target dates and additional fields
+  const [goalsMap, setGoalsMap] = useState<Record<string, any>>({});
+  // Daily spend series for burn‑down
+  const [dailySpend, setDailySpend] = useState<number[]>([]);
+  const [pots, setPots] = useState<any[]>([]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -149,6 +158,63 @@ const FinanceDashboard: React.FC = () => {
       unsubAlignment();
       unsubTx();
     };
+  }, [currentUser]);
+
+  // Pots for theme pot progress (client fallback if alignment missing balances)
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(query(collection(db, 'monzo_pots'), where('ownerUid','==', currentUser.uid)), (snap) => {
+      setPots(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    });
+    return unsub;
+  }, [currentUser]);
+
+  // Load goals map for targetDate information
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(query(collection(db, 'goals'), where('ownerUid','==', currentUser.uid)), (snap) => {
+      const map: Record<string, any> = {};
+      snap.forEach(d => map[d.id] = d.data());
+      setGoalsMap(map);
+    });
+    return unsub;
+  }, [currentUser]);
+
+  // Build daily spend series for the current month
+  useEffect(() => {
+    const run = async () => {
+      if (!currentUser) return;
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = now.getMonth();
+      const start = new Date(y, m, 1, 0,0,0,0);
+      const end = new Date(y, m + 1, 1, 0,0,0,0);
+      try {
+        const q = query(
+          collection(db, 'monzo_transactions'),
+          where('ownerUid','==', currentUser.uid),
+          where('createdAt','>=', start),
+          where('createdAt','<', end),
+          orderBy('createdAt','asc')
+        ) as any;
+        const snap = await (await import('firebase/firestore')).getDocs(q);
+        const daysInMonth = new Date(y, m + 1, 0).getDate();
+        const daily: number[] = Array.from({ length: daysInMonth }, () => 0);
+        snap.forEach(d => {
+          const data: any = d.data() || {};
+          const ts = data.createdAt?.toDate ? data.createdAt.toDate() : (data.createdAt ? new Date(data.createdAt) : null);
+          if (!ts) return;
+          const day = ts.getDate();
+          const amt = Number(data.amount);
+          if (Number.isFinite(amt) && amt < 0) daily[day - 1] += Math.abs(amt);
+        });
+        for (let i = 1; i < daily.length; i++) daily[i] += daily[i-1];
+        setDailySpend(daily);
+      } catch (e) {
+        setDailySpend([]);
+      }
+    };
+    run();
   }, [currentUser]);
 
   // Load budgets (optional; defined via Settings → Finance)
@@ -236,6 +302,64 @@ const FinanceDashboard: React.FC = () => {
       .sort(([a], [b]) => (a > b ? 1 : -1))
       .map(([month, values]) => ({ month, values }));
   }, [summary?.monthly]);
+
+  // Budget burn-down (pace vs day of month)
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
+  const today = new Date();
+  const day = today.getDate();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const currentMonth = (summary?.monthly && summary.monthly[currentMonthKey]) || null;
+  const monthSpend = (currentMonth?.mandatory || 0) + (currentMonth?.optional || 0);
+  const totalCategoryBudget = useMemo(() => Object.values(budgets || {}).reduce((s,v)=> s + (Number(v)||0), 0), [budgets]);
+  const expectedSpend = totalCategoryBudget > 0 ? (totalCategoryBudget * (day / Math.max(1, daysInMonth))) : 0;
+  const paceDelta = monthSpend - expectedSpend; // >0 means over pace
+  const paceStatus: 'ahead'|'behind'|'on' = totalCategoryBudget === 0 ? 'on' : (paceDelta > totalCategoryBudget*0.03 ? 'behind' : (paceDelta < -totalCategoryBudget*0.03 ? 'ahead' : 'on'));
+
+  const burnDownChartData = useMemo(() => {
+    if (!dailySpend.length || totalCategoryBudget <= 0) return null as any;
+    const labels = Array.from({ length: dailySpend.length }, (_, i) => String(i + 1));
+    const pacePerDay = totalCategoryBudget / dailySpend.length;
+    const expected = labels.map((_, idx) => pacePerDay * (idx + 1));
+    return {
+      labels,
+      datasets: [
+        { label: 'Expected', data: expected, borderColor: '#94a3b8', backgroundColor: 'transparent', tension: 0.2 },
+        { label: 'Actual', data: dailySpend, borderColor: '#0ea5e9', backgroundColor: 'transparent', tension: 0.2 },
+      ]
+    };
+  }, [dailySpend, totalCategoryBudget]);
+
+  const spendSpikes = useMemo(() => {
+    if (!dailySpend.length) return [] as Array<{ day: number; amount: number }>;
+    const diffs: number[] = dailySpend.map((v, i) => i === 0 ? v : (v - dailySpend[i-1]));
+    const avg = diffs.reduce((a,b)=>a+b,0) / diffs.length;
+    const variance = diffs.reduce((a,b)=> a + Math.pow(b - avg, 2), 0) / diffs.length;
+    const std = Math.sqrt(variance);
+    const out: Array<{ day: number; amount: number }> = [];
+    diffs.forEach((amt, idx) => {
+      if (amt > (avg + 1.5*std) && amt > 0) out.push({ day: idx + 1, amount: amt });
+    });
+    return out.sort((a,b)=> b.amount - a.amount).slice(0,5);
+  }, [dailySpend]);
+
+  // Anomalies from recent transactions (outliers by amount)
+  const anomalies = useMemo(() => {
+    if (!transactions.length) return [] as Array<{ desc: string; amount: number; date: string; link: string }>;
+    const spends = transactions.filter(t => t.amount < 0).map(t => Math.abs(t.amount));
+    if (spends.length < 5) return [] as any[];
+    const avg = spends.reduce((a,b)=>a+b,0) / spends.length;
+    const variance = spends.reduce((a,b)=> a + Math.pow(b - avg, 2), 0) / spends.length;
+    const std = Math.sqrt(variance);
+    const out: Array<{ desc: string; amount: number; date: string; link: string }> = [];
+    transactions.forEach(t => {
+      if (t.amount < 0 && Math.abs(t.amount) > (avg + 1.5*std)) {
+        const desc = t.userCategoryLabel || t.defaultCategoryLabel || t.description || 'Transaction';
+        const link = `/finance/transactions?q=${encodeURIComponent(desc.split(' ')[0])}`;
+        out.push({ desc, amount: Math.abs(t.amount), date: t.createdISO ? new Date(t.createdISO).toLocaleDateString() : '—', link });
+      }
+    });
+    return out.sort((a,b)=> b.amount - a.amount).slice(0,6);
+  }, [transactions]);
 
   // Projections based on average of available months
   const projections = useMemo(() => {
@@ -387,6 +511,36 @@ const FinanceDashboard: React.FC = () => {
           </Row>
 
           <Row className="gy-4 mt-1">
+            {/* Budget Pace (Burn-down) */}
+            <Col lg={4}>
+              <Card className="shadow-sm border-0 h-100">
+                <Card.Body>
+                  <Card.Title>Budget Pace</Card.Title>
+                  {totalCategoryBudget === 0 ? (
+                    <Alert variant="light" className="mb-0">Set category budgets in Finance Settings.</Alert>
+                  ) : (
+                    <>
+                      <div className="d-flex justify-content-between small mb-1">
+                        <span>Expected by today</span>
+                        <span>{formatCurrency(expectedSpend)}</span>
+                      </div>
+                      <div className="d-flex justify-content-between small mb-2">
+                        <span>Actual</span>
+                        <span>{formatCurrency(monthSpend)}</span>
+                      </div>
+                      <div className="d-flex justify-content-between align-items-center">
+                        <div>
+                          <Badge bg={paceStatus==='behind'?'danger': paceStatus==='ahead'?'success':'secondary'}>
+                            {paceStatus === 'behind' ? 'Over pace' : paceStatus === 'ahead' ? 'Under pace' : 'On pace'}
+                          </Badge>
+                        </div>
+                        <div className="small text-muted">Day {day}/{daysInMonth}</div>
+                      </div>
+                    </>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
             <Col lg={8}>
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
@@ -607,7 +761,7 @@ const FinanceDashboard: React.FC = () => {
                           <tr key={idx}>
                             <td>{b.label}</td>
                             <td className="text-end">{formatCurrency(b.amount)}</td>
-                            <td className="text-end">{bucketBudgets[b.label] != null ? formatCurrency((bucketBudgets[b.label] || 0)/100) : '—'}</td>
+                            <td className="text-end">{bucketBudgets[b.label] != null ? formatCurrency(bucketBudgets[b.label] || 0) : '—'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -616,14 +770,14 @@ const FinanceDashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col lg={6}>
-              <Card className="shadow-sm border-0 h-100">
-                <Card.Body>
-                  <Card.Title>Monthly Spend Trends</Card.Title>
-                  {monthlySeries.length === 0 ? (
-                    <Alert variant="light" className="mb-0">Sync transactions to populate monthly trends.</Alert>
-                  ) : (
-                    <Table size="sm" responsive className="align-middle">
+          <Col lg={6}>
+            <Card className="shadow-sm border-0 h-100">
+              <Card.Body>
+                <Card.Title>Monthly Spend Trends</Card.Title>
+                {monthlySeries.length === 0 ? (
+                  <Alert variant="light" className="mb-0">Sync transactions to populate monthly trends.</Alert>
+                ) : (
+                  <Table size="sm" responsive className="align-middle">
                       <thead>
                         <tr>
                           <th>Month</th>
@@ -644,8 +798,118 @@ const FinanceDashboard: React.FC = () => {
                           </tr>
                         ))}
                       </tbody>
-                    </Table>
-                  )}
+                  </Table>
+                )}
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={6}>
+            <Card className="shadow-sm border-0 h-100">
+              <Card.Body>
+                <Card.Title>Anomalies (Recent)</Card.Title>
+                {anomalies.length === 0 ? (
+                  <Alert variant="light" className="mb-0">No anomalies detected in recent transactions.</Alert>
+                ) : (
+                  <Table size="sm" responsive>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Description</th>
+                        <th className="text-end">Amount</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {anomalies.map((a, idx) => (
+                        <tr key={idx}>
+                          <td>{a.date}</td>
+                          <td>{a.desc}</td>
+                          <td className="text-end">{formatCurrency(a.amount)}</td>
+                          <td className="text-end"><a className="btn btn-sm btn-outline-secondary" href={a.link}>View</a></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                )}
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={6}>
+            <Card className="shadow-sm border-0 h-100">
+              <Card.Body>
+                <Card.Title>Theme Pot Progress</Card.Title>
+                {!alignment?.themes || alignment.themes.length === 0 ? (
+                  <Alert variant="light" className="mb-0">No theme alignment found yet.</Alert>
+                ) : (
+                  <Table size="sm" responsive>
+                    <thead>
+                      <tr>
+                        <th>Theme</th>
+                        <th className="text-end">Estimated</th>
+                        <th className="text-end">Pot Balance</th>
+                        <th className="text-end">Progress</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {alignment.themes.map((t) => {
+                        const est = t.totalEstimatedCost || 0;
+                        // Fallback: compute theme pot balance by matching pot names
+                        let bal = t.totalPotBalance || 0;
+                        if (!bal && pots.length) {
+                          const name = String(t.themeName || getThemeName(t.themeId)).toLowerCase();
+                          const synonyms: Record<number, string[]> = { 1:['health','fitness'], 2:['growth','spiritual'], 3:['finance','wealth','money'], 4:['tribe','family','relationships'], 5:['home','living','house'] };
+                          const words = synonyms[t.themeId as 1|2|3|4|5] || [name];
+                          bal = pots.filter(p => {
+                            const n = String(p.name||'').toLowerCase();
+                            return words.some(w => n.includes(w));
+                          }).reduce((s,p)=> s + Number(p.balance||0)/100, 0);
+                        }
+                        const pct = est > 0 ? Math.min(100, Math.round((bal / est) * 100)) : 0;
+                        return (
+                          <tr key={t.themeId}>
+                            <td>{t.themeName || getThemeName(t.themeId)}</td>
+                            <td className="text-end">{formatCurrency(est)}</td>
+                            <td className="text-end">{formatCurrency(bal)}</td>
+                            <td className="text-end" style={{ minWidth: 140 }}>
+                              <div className="d-flex align-items-center gap-2">
+                                <div style={{ flex: 1 }}>
+                                  <ProgressBar now={pct} style={{ height: 8 }} />
+                                </div>
+                                <small className="text-muted" style={{ width: 36, textAlign: 'right' }}>{pct}%</small>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </Table>
+                )}
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={6}>
+            <Card className="shadow-sm border-0 h-100">
+              <Card.Body>
+                <Card.Title>Budget Burn‑down</Card.Title>
+                {!burnDownChartData ? (
+                  <Alert variant="light" className="mb-0">Not enough data for this month.</Alert>
+                ) : (
+                  <div style={{ height: 240 }}>
+                    <Line data={burnDownChartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, scales: { y: { ticks: { callback: (v:any)=> (Number(v)||0).toLocaleString('en-GB',{ style:'currency', currency: budgetCurrency }) } } } }} />
+                  </div>
+                )}
+                {spendSpikes.length > 0 && (
+                  <div className="mt-3">
+                    <h6 className="mb-2">Spend Spikes</h6>
+                    <ul className="mb-0" style={{ paddingLeft: 18 }}>
+                      {spendSpikes.map(s => (
+                        <li key={s.day} className="small">
+                          Day {s.day}: {formatCurrency(s.amount)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </Card.Body>
             </Card>
           </Col>

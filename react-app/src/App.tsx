@@ -48,6 +48,7 @@ import SprintTablePage from './components/sprints/SprintTablePage';
 import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
+import BlocksManager from './components/BlocksManager';
 import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
 import ChoresManagement from './components/ChoresManagement';
@@ -63,6 +64,11 @@ import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboard from './components/FinanceDashboard';
+import FinanceTransactions from './components/FinanceTransactions';
+import IntegrationSettings from './components/IntegrationSettings';
+import FinanceSettings from './components/FinanceSettings';
+import BudgetSettings from './components/BudgetSettings';
+import FinanceMerchantMapping from './components/FinanceMerchantMapping';
 
 // Lazy-loaded heavy routes
 const TravelMap = React.lazy(() => import('./components/travel/TravelMap'));
@@ -221,14 +227,16 @@ function AppContent() {
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />
+            <Route path="/blocks" element={<BlocksManager />} />
             <Route path="/stories" element={<StoriesManagement />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
             <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
+            {/* Roadmap timeline (V3) */}
             <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
-            {/* Keep V2 accessible for the time being */}
+            {/* Theme grid (V2) retained for reference */}
             <Route path="/goals/roadmap-v2" element={<ThemeRoadmap />} />
             <Route path="/goals/cards" element={<Navigate to="/goals?view=cards" replace />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
@@ -255,6 +263,11 @@ function AppContent() {
             <Route path="/running-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/finance" element={<FinanceDashboard />} />
+            <Route path="/finance/settings" element={<FinanceSettings />} />
+            <Route path="/finance/transactions" element={<FinanceTransactions />} />
+            <Route path="/finance/integrations" element={<IntegrationSettings />} />
+            <Route path="/finance/budgets" element={<BudgetSettings />} />
+            <Route path="/finance/merchant-mapping" element={<FinanceMerchantMapping />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
             <Route path="/admin" element={<Navigate to="/settings?tab=integrations" replace />} />

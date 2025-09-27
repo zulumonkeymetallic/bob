@@ -282,3 +282,67 @@ export interface Taxonomy {
     name: string;
     parent?: string;
 }
+
+// EPIC A — Block Model & Scheduling Engine
+// Canonical block definition used for auto-scheduling windows
+export interface BlockWindow {
+  // Days of week 0=Sunday..6=Saturday; omit or empty to mean all days matched by rrule
+  days?: number[];
+  // HH:mm local time boundaries for a single day window
+  start: string; // e.g. "09:00"
+  end: string;   // e.g. "12:00"
+}
+
+export interface BlockConstraints {
+  location?: 'home' | 'office' | 'any';
+  quietHours?: Array<{ start: string; end: string }>; // excluded times daily HH:mm
+  deviceNeeded?: string[]; // e.g., ['mac','sauna','gym']
+}
+
+export interface BlockBuffers {
+  beforeMin?: number; // buffer before each instance in minutes
+  afterMin?: number;  // buffer after each instance in minutes
+}
+
+export interface Block {
+  id: string;
+  ownerUid: string;
+  name: string;               // e.g., Chores, Reflection, Gaming
+  color?: string;             // hex or CSS color
+  description?: string;
+  rrule?: string;             // RRULE string (optionally with DTSTART handled server-side)
+  windows: BlockWindow[];     // daily time windows within eligible days
+  minDuration?: number;       // min minutes per scheduled item
+  maxDuration?: number;       // max minutes per scheduled item
+  dailyCapacity?: number;     // total minutes capacity per local day
+  priority?: number;          // higher first
+  buffers?: BlockBuffers;     // per-instance buffers
+  enabled: boolean;           // global on/off
+  constraints?: BlockConstraints;
+  // Optional per-date overrides: disable particular YYYY-MM-DD days
+  disabledDates?: string[];
+  createdAt?: number;         // timestamp ms
+  updatedAt?: number;         // timestamp ms
+}
+
+export type ScheduledInstanceStatus = 'PLANNED' | 'COMPLETED' | 'MISSED' | 'ROLLED' | 'SKIPPED' | 'UNSCHEDULED';
+
+export interface ScheduledInstance {
+  id: string;
+  ownerUid: string;
+  sourceType: 'chore' | 'routine' | 'habit' | 'task';
+  sourceId: string;
+  title?: string;
+  blockId?: string | null; // null when unscheduled
+  plannedStart?: number;   // ms epoch
+  plannedEnd?: number;     // ms epoch
+  occurrenceDateTime?: number; // alias for plannedStart
+  status: ScheduledInstanceStatus;
+  gcalEventId?: string | null;
+  remindersId?: string | null;
+  notesMetaHash?: string | null;
+  metadata?: any;
+  policy?: 'roll_forward' | 'skip' | 'escalate_to_next_priority_block';
+  createdAt?: number;
+  updatedAt?: number;
+}

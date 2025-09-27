@@ -14,6 +14,7 @@ import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import { themeVars, domainThemePrimaryVar } from '../utils/themeVars';
+import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { toDate, formatDate } from '../utils/firestoreAdapters';
 
@@ -52,13 +53,25 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const isCompact = density === 'compact' || isMini;
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
-  const themeColors = {
-    Health: domainThemePrimaryVar('Health'),
-    Growth: domainThemePrimaryVar('Growth'),
-    Wealth: domainThemePrimaryVar('Wealth'),
-    Tribe: domainThemePrimaryVar('Tribe'),
-    Home: domainThemePrimaryVar('Home')
-  } as const;
+  // Resolve theme color using the global theme system (supports new themes)
+  const getThemeColor = (themeValue: any): string => {
+    try {
+      const id = migrateThemeValue(themeValue);
+      return getThemeById(id).color || 'var(--brand)';
+    } catch {
+      return 'var(--brand)';
+    }
+  };
+
+  const hexToRgba = (hex: string, alpha: number): string => {
+    try {
+      const v = hex.replace('#','');
+      const r = parseInt(v.substring(0,2),16);
+      const g = parseInt(v.substring(2,4),16);
+      const b = parseInt(v.substring(4,6),16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    } catch { return 'rgba(0,0,0,0.06)'; }
+  };
 
   // Status colors via tokens
   const statusColors = {
@@ -302,11 +315,14 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   return (
     <div style={{ padding: isMini ? '8px' : '12px' }}>
       <div
-        className={isMini ? 'd-grid' : 'd-flex flex-column gap-3'}
         style={{
+          display: 'grid',
           maxHeight: 620,
           overflow: 'auto',
-          gridTemplateColumns: isMini ? 'repeat(auto-fill, minmax(220px, 1fr))' : undefined,
+          // Default to 4 columns grid like the old version
+          gridTemplateColumns: isMini
+            ? 'repeat(auto-fill, minmax(220px, 1fr))'
+            : 'repeat(4, minmax(0, 1fr))',
           gap: isMini ? 8 : 12
         }}
       >
@@ -316,8 +332,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               style={{ 
                 height: 'auto',
                 border: selectedGoalId === goal.id 
-                  ? `3px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--brand)'}` 
-                  : '1px solid var(--line)',
+                  ? `3px solid ${getThemeColor(goal.theme)}` 
+                  : `1px solid var(--line)`,
                 boxShadow: selectedGoalId === goal.id 
                   ? '0 0 0 0 transparent' 
                   : '0 4px 6px var(--glass-shadow-color)',
@@ -325,7 +341,12 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
                 cursor: 'pointer',
-                backgroundColor: selectedGoalId === goal.id ? (themeVars.card as string) : (themeVars.panel as string)
+                background: (() => {
+                  const c = getThemeColor(goal.theme);
+                  const a = isMini ? 0.10 : 0.12;
+                  const b = isMini ? 0.04 : 0.06;
+                  return `linear-gradient(180deg, ${hexToRgba(String(c), a)}, ${hexToRgba(String(c), b)})`;
+                })()
               }}
               className="h-100"
               onClick={() => onGoalSelect?.(goal.id)}
@@ -346,7 +367,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               <div 
                 style={{ 
                   height: '6px', 
-                  backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)'
+                  backgroundColor: getThemeColor(goal.theme)
                 }} 
               />
 
@@ -366,7 +387,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <Badge 
                         style={{ 
-                          backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)',
+                          backgroundColor: getThemeColor(goal.theme),
                           color: 'var(--on-accent)',
                           fontSize: isMini ? '10px' : '12px'
                         }}
@@ -484,17 +505,17 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
                 {/* Latest Status/Comment */}
                 {latestActivities[goal.id] && !isMini && (
-                  <div style={{ 
+                    <div style={{ 
                     marginBottom: '16px',
                     padding: '12px',
                     backgroundColor: themeVars.card as string,
-                    border: `1px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || themeVars.border}`,
+                    border: `1px solid ${getThemeColor(goal.theme)}`,
                     borderRadius: '6px'
                   }}>
-                    <div style={{ 
+                      <div style={{ 
                       fontSize: '11px', 
                       fontWeight: '600', 
-                      color: (themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || themeVars.brand) as string, 
+                      color: getThemeColor(goal.theme), 
                       marginBottom: '6px',
                       textTransform: 'uppercase',
                       letterSpacing: '0.5px'

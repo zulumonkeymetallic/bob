@@ -300,6 +300,316 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   return { planId, dayKey, assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })) };
 });
 
+// EPIC A2/A3/A4 — Constraint-Aware Auto-Scheduling into Blocks with non-negotiables and roll-forward policy
+exports.scheduleIntoBlocks = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const startDate = String(req?.data?.startDate || new Date().toISOString().slice(0,10)); // YYYY-MM-DD
+  const endDate = String(req?.data?.endDate || startDate);
+  const apply = !!req?.data?.apply;
+  const tz = 'Europe/London'; // TODO: user setting
+  const db = admin.firestore();
+
+  // Helpers
+  const toDay = (s) => new Date(s + 'T00:00:00');
+  const sod = toDay(startDate);
+  const eod = new Date(toDay(endDate)); eod.setDate(eod.getDate() + 1); // exclusive end
+  const days = [];
+  for (let d = new Date(sod); d < eod; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+
+  function hhmmToMs(day, hhmm) {
+    const [h, m] = String(hhmm||'00:00').split(':').map(Number);
+    const t = new Date(day);
+    t.setHours(h||0, m||0, 0, 0);
+    return t.getTime();
+  }
+  function subtractIntervals(base, cuts) {
+    // base: array of [s,e), cuts: array of [s,e)
+    let res = [...base];
+    for (const [cs, ce] of cuts) {
+      const next = [];
+      for (const [s,e] of res) {
+        if (ce <= s || cs >= e) { next.push([s,e]); continue; }
+        if (cs > s) next.push([s, Math.min(cs, e)]);
+        if (ce < e) next.push([Math.max(ce, s), e]);
+      }
+      res = next.filter(([s,e]) => e - s >= 5*60000); // keep >= 5m
+    }
+    return res;
+  }
+  function rruleMatchesDay(rruleText, day) {
+    try {
+      if (!rruleText) return true;
+      const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
+      const dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
+      const hasDt = /DTSTART/i.test(String(rruleText||''));
+      const text = hasDt ? rruleText : `DTSTART:${dayStart.toISOString().replace(/[-:]/g,'').split('.')[0]}Z\n${rruleText}`;
+      const rule = rrulestr(text);
+      const occ = rule.between(dayStart, dayEnd, true);
+      return occ && occ.length > 0;
+    } catch { return true; }
+  }
+  function makeInstanceId({ userId, srcType, srcId, startMs }) {
+    const raw = `${userId}:${srcType}:${srcId}:${new Date(startMs).toISOString().slice(0,10)}`;
+    let h = 0; for (let i=0;i<raw.length;i++) h = (h*33 + raw.charCodeAt(i))>>>0; return h.toString(36);
+  }
+
+  // Load blocks
+  const blocksSnap = await db.collection('blocks').where('ownerUid','==',uid).where('enabled','==',true).get();
+  const blocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+  function mapBlockToColorId(b) {
+    try {
+      if (!b) return undefined;
+      // Prefer explicit theme name mapping if present on block name
+      const name = String(b.name || '').toLowerCase();
+      if (name.includes('chores')) return '6'; // orange
+      if (name.includes('reflection') || name.includes('journal')) return '9'; // blue
+      if (name.includes('gaming')) return '7'; // graphite
+      if (name.includes('fitness') || name.includes('workout')) return '11'; // green
+      // If color hex is provided, hash to 1..11 range
+      const hex = String(b.color || '').replace('#','');
+      if (hex) {
+        let h=0; for (let i=0;i<hex.length;i++) h = (h*33 + hex.charCodeAt(i))>>>0;
+        const id = (h % 11) + 1; return String(id);
+      }
+    } catch {}
+    return undefined;
+  }
+
+  // Load chores and habits (as routines)
+  const choresSnap = await db.collection('chores').where('ownerUid','==',uid).get();
+  const chores = choresSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+  const habitsSnap = await db.collection('habits').where('userId','==',uid).where('isActive','==',true).get();
+  const habits = habitsSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+  // Build day → free intervals per block with capacity tracking
+  const dayPlans = {};
+  for (const day of days) {
+    const dayKey = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
+    const dow = day.getDay();
+    dayPlans[dayKey] = [];
+    for (const b of blocks) {
+      if (Array.isArray(b.disabledDates) && b.disabledDates.includes(dayKey)) continue;
+      if (!rruleMatchesDay(b.rrule || '', day)) continue;
+      // Windows → intervals (subtract quiet hours)
+      let intervals = [];
+      for (const w of (b.windows||[])) {
+        const daysFilter = w.days && w.days.length ? w.days : undefined;
+        if (daysFilter && !daysFilter.includes(dow)) continue;
+        const s = hhmmToMs(day, w.start);
+        const e = hhmmToMs(day, w.end);
+        if (!isFinite(s) || !isFinite(e) || e <= s) continue;
+        intervals.push([s,e]);
+      }
+      // Quiet hours exclude
+      const qhCuts = (b?.constraints?.quietHours || []).map(q => [hhmmToMs(day, q.start), hhmmToMs(day, q.end)]);
+      if (qhCuts.length) intervals = subtractIntervals(intervals, qhCuts);
+      // Buffer pre/post are applied during placement; keep raw intervals now
+      const cap = Math.max(0, Number(b.dailyCapacity || 0));
+      const usableMinutes = Math.floor(intervals.reduce((sum,[s,e]) => sum + (e-s), 0)/60000);
+      const maxAlloc = cap > 0 ? Math.min(cap, usableMinutes) : usableMinutes;
+      dayPlans[dayKey].push({ block: b, intervals, remainingMin: maxAlloc });
+    }
+    // Order by priority desc then earliest
+    dayPlans[dayKey].sort((a,b)=> (Number(b.block.priority||0) - Number(a.block.priority||0)) || ((a.intervals[0]?.[0]||0) - (b.intervals[0]?.[0]||0)) );
+  }
+
+  // Fetch Google Calendar busy and subtract
+  async function fetchBusy(dayStart, dayEnd) {
+    try {
+      const access = await getAccessToken(uid);
+      const res = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+        method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timeMin: new Date(dayStart).toISOString(), timeMax: new Date(dayEnd).toISOString(), items: [{ id: 'primary' }] })
+      });
+      const data = await res.json();
+      const cal = (data?.calendars && data.calendars.primary) || {}; // {busy:[{start,end}]}
+      const busy = Array.isArray(cal.busy) ? cal.busy.map(x => [Date.parse(x.start), Date.parse(x.end)]) : [];
+      return busy;
+    } catch { return []; }
+  }
+  for (const day of days) {
+    const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
+    const dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
+    const busy = await fetchBusy(dayStart.getTime(), dayEnd.getTime());
+    const key = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
+    for (const plan of dayPlans[key]) {
+      if (busy.length) plan.intervals = subtractIntervals(plan.intervals, busy);
+    }
+  }
+
+  // Build items occurrences for window
+  function expandChoreOccurrences(chore) {
+    try {
+      const r = rrulestr(String(chore.rrule || ''));
+      const occ = r.between(sod, new Date(eod.getTime()-1), true);
+      return occ.map(dt => ({
+        type: 'chore',
+        id: chore.id,
+        title: chore.title || 'Chore',
+        requiredBlock: (chore.requiredBlock || chore.block || '').toString(),
+        durationMin: Number(chore.estimatedMinutes || chore.duration || 30),
+        policy: chore.policy || 'roll_forward',
+        occurrenceMs: dt.getTime(),
+        meta: { choreId: chore.id }
+      }));
+    } catch {
+      return [];
+    }
+  }
+  function expandHabitDaily(habit) {
+    // naive daily habit within window
+    const out = [];
+    for (const day of days) {
+      out.push({
+        type: 'habit',
+        id: habit.id,
+        title: habit.name || 'Habit',
+        requiredBlock: (habit.requiredBlock || '').toString(),
+        durationMin: Number(habit.targetValue ? Math.max(5, Math.min(120, habit.targetValue)) : 15),
+        policy: habit.policy || 'roll_forward',
+        occurrenceMs: new Date(day).setHours(9,0,0,0), // preference 09:00
+        meta: { habitId: habit.id }
+      });
+    }
+    return out;
+  }
+  const items = [
+    ...chores.flatMap(expandChoreOccurrences),
+    ...habits.flatMap(expandHabitDaily)
+  ];
+
+  // Place items greedily according to block priority > earliest feasible > least fragmentation
+  function placeInDay(dayKey, item) {
+    const plans = dayPlans[dayKey] || [];
+    const candidates = [];
+    for (const p of plans) {
+      const b = p.block;
+      if (item.requiredBlock && String(item.requiredBlock).trim()) {
+        if (String(b.name).toLowerCase() !== String(item.requiredBlock).toLowerCase()) continue;
+      }
+      // Location constraints: items requiring home only fit blocks with location=home/any
+      const loc = (b?.constraints?.location || 'any');
+      if ((item.requires_home || item.meta?.requires_home) && !(loc === 'home' || loc === 'any')) continue;
+      const minD = Number(b.minDuration || 0);
+      const maxD = Number(b.maxDuration || 0);
+      const dur = item.durationMin;
+      if (minD && dur < minD) continue;
+      if (maxD && dur > maxD) continue;
+      const before = Number(b.buffers?.beforeMin || 0) * 60000;
+      const after = Number(b.buffers?.afterMin || 0) * 60000;
+      for (const [s,e] of p.intervals) {
+        const start = Math.max(s + before, item.occurrenceMs || s);
+        const end = start + dur*60000 + after;
+        if (end <= e && p.remainingMin >= dur) {
+          const fragmentation = (e - s) - (end - s);
+          candidates.push({ p, b, start, end: start + dur*60000, fragmentation });
+        }
+      }
+    }
+    candidates.sort((a,b)=> (Number(b.b.priority||0) - Number(a.b.priority||0)) || (a.start - b.start) || (a.fragmentation - b.fragmentation));
+    if (!candidates.length) return null;
+    const chosen = candidates[0];
+    // commit reservation: advance interval and capacity
+    chosen.p.remainingMin -= Math.ceil((chosen.end - chosen.start)/60000);
+    // shrink chosen interval
+    const updated = [];
+    for (const [s,e] of chosen.p.intervals) {
+      if (chosen.start >= e || chosen.end <= s) { updated.push([s,e]); continue; }
+      if (chosen.start > s) updated.push([s, chosen.start]);
+      if (chosen.end < e) updated.push([chosen.end, e]);
+    }
+    chosen.p.intervals = updated;
+    return { blockId: chosen.b.id, start: chosen.start, end: chosen.end };
+  }
+
+  const preview = [];
+  for (const it of items) {
+    const d = new Date(it.occurrenceMs || Date.now());
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const placed = placeInDay(key, it);
+    if (placed) {
+      preview.push({ srcType: it.type, srcId: it.id, title: it.title, blockId: placed.blockId, start: placed.start, end: placed.end, status: 'PLANNED' });
+    } else {
+      preview.push({ srcType: it.type, srcId: it.id, title: it.title, blockId: null, start: null, end: null, status: 'UNSCHEDULED' });
+    }
+  }
+
+  if (!apply) return { ok: true, count: preview.length, scheduled: preview.filter(p=>p.status==='PLANNED').length, preview };
+
+  // Apply: upsert scheduled_instances and create GCal events when placed
+  const batch = db.batch();
+  const created = [];
+  for (const p of preview) {
+    const id = makeInstanceId({ userId: uid, srcType: p.srcType, srcId: p.srcId, startMs: p.start || p.occurrenceMs || Date.now() });
+    const ref = db.collection('scheduled_instances').doc(id);
+    const payload = {
+      id,
+      ownerUid: uid,
+      sourceType: p.srcType,
+      sourceId: p.srcId,
+      title: p.title || null,
+      blockId: p.blockId || null,
+      plannedStart: p.start || null,
+      plannedEnd: p.end || null,
+      occurrenceDateTime: p.start || null,
+      status: p.status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    batch.set(ref, payload, { merge: true });
+    created.push({ id, ...payload });
+  }
+  await batch.commit();
+
+  // Create Google Calendar events for placed ones (idempotent: extendedProperties.private.instanceId)
+  try {
+    const access = await getAccessToken(uid);
+    for (const p of created.filter(x=>x.status==='PLANNED' && x.blockId)) {
+      try {
+        const b = blocks.find(b=>b.id===p.blockId);
+        const summary = `[${p.sourceType==='habit'?'Routine':'Chore'}] ${p.title || 'Item'}`;
+        const colorId = mapBlockToColorId(b);
+        const body = { summary, start: { dateTime: new Date(p.plannedStart).toISOString() }, end: { dateTime: new Date(p.plannedEnd).toISOString() }, extendedProperties: { private: { instanceId: p.id, blockId: p.blockId } } };
+        if (colorId) body['colorId'] = colorId;
+        const res = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', { method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const evId = res?.id || null;
+        if (evId) await db.collection('scheduled_instances').doc(p.id).set({ gcalEventId: evId }, { merge: true });
+      } catch {}
+    }
+  } catch {}
+
+  return { ok: true, count: preview.length, created: created.length };
+});
+
+// A4 — Overdue & Reschedule Policy (roll_forward within grace window)
+exports.replanOverdue = schedulerV2.onSchedule('every 60 minutes', async (event) => {
+  const db = admin.firestore();
+  const now = Date.now();
+  const staleSnap = await db.collection('scheduled_instances').where('status','==','PLANNED').where('plannedEnd','<=', now).get();
+  const updates = [];
+  for (const d of staleSnap.docs) {
+    const s = { id: d.id, ...(d.data()||{}) };
+    const policy = s.policy || 'roll_forward';
+    if (policy === 'skip') {
+      updates.push(db.collection('scheduled_instances').doc(d.id).set({ status: 'SKIPPED', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+      continue;
+    }
+    if (policy === 'roll_forward') {
+      // simple: mark MISSED and let user re-run planner; optional: attempt immediate reschedule by bumping occurrence to next day 09:00
+      updates.push(db.collection('scheduled_instances').doc(d.id).set({ status: 'MISSED', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+      continue;
+    }
+    if (policy === 'escalate_to_next_priority_block') {
+      updates.push(db.collection('scheduled_instances').doc(d.id).set({ status: 'ROLLED', updatedAt: admin.firestore.FieldValue.serverTimestamp(), metadata: { escalated: true } }, { merge: true }));
+      continue;
+    }
+  }
+  await Promise.allSettled(updates);
+  return { ok: true, checked: staleSnap.size };
+});
+
 // ===== Routines → Calendar Blocks Planner (Habits + Chores)
 // Focused planner to integrate routines directly into calendar_blocks with AI-style metadata
 exports.planRoutines = httpsV2.onCall(async (req) => {
@@ -1544,6 +1854,38 @@ async function computeMonzoAnalytics(uid) {
   const goalSummaries = [];
   const themeTotals = {};
 
+  // Compute theme-level pot balances (match pots by theme name/synonyms)
+  const THEME_SYNONYMS = {
+    1: ['health', 'fitness'],
+    2: ['growth', 'spiritual'],
+    3: ['finance', 'wealth', 'money'],
+    4: ['tribe', 'family', 'relationships'],
+    5: ['home', 'living', 'house']
+  };
+  const themePotBalance = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  potSnap.forEach((p) => {
+    const pot = p.data() || {};
+    const name = String(pot.name || '').toLowerCase();
+    const balMinor = Number(pot.balance || 0);
+    const bal = balMinor / 100;
+    let matchedTheme = null;
+    // Prefer explicit theme words in pot name
+    for (const [tidStr, words] of Object.entries(THEME_SYNONYMS)) {
+      const tid = Number(tidStr);
+      if (words.some(w => name.includes(w))) { matchedTheme = tid; break; }
+    }
+    // Fallback: try the canonical theme names
+    if (!matchedTheme) {
+      for (const [tidStr, tname] of Object.entries(THEME_NAME_MAP)) {
+        const tid = Number(tidStr);
+        if (name.includes(String(tname || '').toLowerCase().split('&')[0].trim())) { matchedTheme = tid; break; }
+      }
+    }
+    if (matchedTheme && themePotBalance.hasOwnProperty(matchedTheme)) {
+      themePotBalance[matchedTheme] += bal;
+    }
+  });
+
   goals.forEach((goal) => {
     const estimatedCost = Number(goal.estimatedCost || goal.targetValue || goal.target || 0);
     const themeId = Number(goal.theme || 0);
@@ -1600,9 +1942,17 @@ async function computeMonzoAnalytics(uid) {
     const agg = themeTotals[themeId];
     agg.goalCount += 1;
     agg.totalEstimatedCost += estimatedCost;
-    agg.totalPotBalance += potBalance;
-    agg.totalShortfall += shortfall;
+    // Do NOT sum pot balance here per-goal to avoid double counting shared theme pots
+    // agg.totalPotBalance will be assigned from themePotBalance after processing all goals
   });
+
+  // Finalise theme totals with theme-level pot balances to avoid double counting
+  for (const [tidStr, t] of Object.entries(themeTotals)) {
+    const tid = Number(tidStr);
+    const potBal = themePotBalance[tid] || 0;
+    t.totalPotBalance = potBal;
+    t.totalShortfall = Math.max((t.totalEstimatedCost || 0) - potBal, 0);
+  }
 
   const alignmentDoc = {
     ownerUid: uid,
@@ -3388,12 +3738,13 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
 
 exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const { summary, start, end, description, bobId } = req.data || {};
+  const { summary, start, end, description, bobId, colorId } = req.data || {};
   if (!summary || !start || !end) throw new httpsV2.HttpsError("invalid-argument", "summary/start/end required");
   const access = await getAccessToken(req.auth.uid);
   const body = { summary, start: { dateTime: start }, end: { dateTime: end } };
   if (description) body['description'] = description;
   if (bobId) body['extendedProperties'] = { private: { bobId } };
+  if (colorId) body['colorId'] = String(colorId);
   const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
     method: "POST",
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
@@ -3405,7 +3756,7 @@ exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 // Update an existing Google Calendar event (summary/start/end minimal patch)
 exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const { eventId, summary, start, end, description, bobId } = req.data || {};
+  const { eventId, summary, start, end, description, bobId, colorId } = req.data || {};
   if (!eventId) throw new httpsV2.HttpsError("invalid-argument", "eventId required");
   const access = await getAccessToken(req.auth.uid);
   const body = {};
@@ -3414,6 +3765,7 @@ exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
   if (end) body.end = { dateTime: end };
   if (description) body['description'] = description;
   if (bobId) body['extendedProperties'] = { private: { bobId } };
+  if (colorId) body['colorId'] = String(colorId);
   const ev = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
     method: "PATCH",
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
@@ -3448,6 +3800,88 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
     headers: { 'Authorization': 'Bearer ' + access }
   });
   return { ok: true };
+});
+
+// ===== Finance: Import merchant/category/bucket mappings from CSV
+// Input: { csvText?: string, budgets?: { byCategory?: Record<string, number>, byBucket?: Record<string, number>, currency?: string, monthlyIncome?: number } }
+exports.importFinanceMappings = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const csvText = String(req?.data?.csvText || '').trim();
+  const budgets = req?.data?.budgets || null;
+  if (!csvText) throw new httpsV2.HttpsError('invalid-argument', 'csvText is required');
+
+  function parseCsv(text) {
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(Boolean);
+    if (!lines.length) return [];
+    const header = lines[0].split(',').map(s=>s.trim().replace(/^\uFEFF/, ''));
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      // naive CSV parse (no quoted commas support) – sample data is simple
+      const cols = line.split(',');
+      const row = {};
+      header.forEach((h, idx) => row[h] = (cols[idx] || '').trim());
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  // Derive type from bucket name heuristics
+  function toType(bucket) {
+    const b = String(bucket || '').toLowerCase();
+    if (!b) return 'optional';
+    if (b.includes('mandatory')) return 'mandatory';
+    if (b.includes('discretionary') || b.includes('optional')) return 'optional';
+    if (b.includes('income') || b.includes('salary') || b.includes('wage')) return 'income';
+    if (b.includes('saving') || b.includes('pot')) return 'savings';
+    return 'optional';
+  }
+
+  const rows = parseCsv(csvText);
+  const merchantToCategory = {};
+  const categoryToBucket = {};
+  for (const r of rows) {
+    const merchant = String(r.Merchant || r.Entity || r.Vendor || r.merchant || r.vendor || '').trim();
+    const label = String(r.Category || r.category || r.Label || '').trim();
+    const bucket = String(r['Category Bucket'] || r.Bucket || r.bucket || r.Group || '').trim();
+    if (label && bucket) categoryToBucket[label] = bucket;
+    if (merchant) {
+      merchantToCategory[merchant.toLowerCase()] = { type: toType(bucket), label: label || 'Uncategorised' };
+    }
+  }
+
+  const db = admin.firestore();
+  await db.collection('finance_mapping').doc(uid).set({ merchantToCategory, categoryToBucket }, { merge: true });
+  if (budgets && typeof budgets === 'object') {
+    const allowed = ['byCategory','byBucket','currency','monthlyIncome'];
+    const patch = {};
+    for (const k of allowed) if (budgets[k] != null) patch[k] = budgets[k];
+    if (Object.keys(patch).length) await db.collection('finance_budgets').doc(uid).set(patch, { merge: true });
+  }
+  try { await logIntegration({ uid, source: 'finance', level: 'info', step: 'import_mapping', message: 'Imported finance mapping from CSV', meta: { rows: rows.length } }); } catch {}
+  return { ok: true, importedRows: rows.length, merchants: Object.keys(merchantToCategory).length, categories: Object.keys(categoryToBucket).length };
+});
+
+// Debug Monzo status and token health
+exports.monzoStatus = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const t = await db.collection('tokens').doc(`${uid}_monzo`).get();
+  const profile = await db.collection('profiles').doc(uid).get();
+  const has = t.exists;
+  let needsRefresh = null;
+  let canUse = null;
+  try {
+    const check = await ensureMonzoAccessToken(uid);
+    needsRefresh = false;
+    canUse = !!check.accessToken;
+  } catch (e) {
+    needsRefresh = true;
+    canUse = false;
+  }
+  return { connected: has, profile: profile.exists ? profile.data().monzoConnected : null, tokenDoc: has ? t.data() : null, canUse, needsRefresh };
 });
 
 // Sync plan assignments for a day to Google Calendar as child events under parent block events

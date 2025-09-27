@@ -15,18 +15,20 @@ interface ChoreForm {
   priority: number;
   theme?: number;
   goalId?: string;
+  requiredBlock?: string;
 }
 
 const ChoresManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const [chores, setChores] = useState<any[]>([]);
   const [goals, setGoals] = useState<any[]>([]);
+  const [blocks, setBlocks] = useState<any[]>([]);
   // Filters & search
   const [search, setSearch] = useState('');
   const [filterPriority, setFilterPriority] = useState<'all'|1|2|3>('all');
   const [filterTheme, setFilterTheme] = useState<'all'|1|2|3|4|5>('all');
   const [filterDue, setFilterDue] = useState<'today'|'week'|'all'>('all');
-  const [form, setForm] = useState<ChoreForm>({ title: '', rrule: 'RRULE:FREQ=WEEKLY;INTERVAL=1', dtstart: '', estimatedMinutes: 15, priority: 2, theme: 2, goalId: '' });
+  const [form, setForm] = useState<ChoreForm>({ title: '', rrule: 'RRULE:FREQ=WEEKLY;INTERVAL=1', dtstart: '', estimatedMinutes: 60, priority: 2, theme: 2, goalId: '', requiredBlock: '' });
   const [rrulePreview, setRrulePreview] = useState<string>('RRULE:FREQ=WEEKLY;INTERVAL=1');
   const [nextPreview, setNextPreview] = useState<number | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -47,6 +49,9 @@ const ChoresManagement: React.FC = () => {
       const cq = query(collection(db, 'chores'), where('ownerUid','==', currentUser.uid));
       const cs = await getDocs(cq);
       setChores(cs.docs.map(d => ({ id: d.id, ...(d.data()||{}) })));
+      const bq = query(collection(db, 'blocks'), where('ownerUid','==', currentUser.uid));
+      const bs = await getDocs(bq);
+      setBlocks(bs.docs.map(d => ({ id: d.id, ...(d.data()||{}) })));
     };
     load();
   }, [currentUser]);
@@ -71,6 +76,7 @@ const ChoresManagement: React.FC = () => {
       priority: Number(form.priority) || 2,
       theme: form.theme || 2,
       goalId: form.goalId || null,
+      requiredBlock: (form.requiredBlock || '').trim() || null,
       nextDueAt: computed || null,
       ownerUid: currentUser.uid,
       createdAt: Date.now(),
@@ -78,7 +84,7 @@ const ChoresManagement: React.FC = () => {
     };
     const ref = await addDoc(collection(db, 'chores'), payload);
     setChores([{ id: ref.id, ...payload }, ...chores]);
-    setForm({ title: '', rrule: form.rrule, dtstart: '', estimatedMinutes: 15, priority: 2, theme: form.theme, goalId: '' });
+    setForm({ title: '', rrule: form.rrule, dtstart: '', estimatedMinutes: 60, priority: 2, theme: form.theme, goalId: '', requiredBlock: form.requiredBlock });
   };
 
   const handleDelete = async (id: string) => {
@@ -235,6 +241,19 @@ const ChoresManagement: React.FC = () => {
             </Row>
             <Row className="g-3 mt-1">
               <Col md={4}>
+                <Form.Label>Required Block</Form.Label>
+                <Form.Select value={form.requiredBlock || ''} onChange={e=>setForm({ ...form, requiredBlock: e.target.value })}>
+                  <option value="">Any eligible block</option>
+                  {blocks.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                </Form.Select>
+              </Col>
+              <Col md={4}>
+                <Form.Label>Duration (min)</Form.Label>
+                <Form.Control type="number" value={form.estimatedMinutes} onChange={e=>setForm({ ...form, estimatedMinutes: Number(e.target.value)||60 })} />
+              </Col>
+            </Row>
+            <Row className="g-3 mt-1">
+              <Col md={4}>
                 <Form.Label>Frequency</Form.Label>
                 <Form.Select
                   value={/FREQ=([^;]+)/.exec(form.rrule)?.[1] || 'WEEKLY'}
@@ -351,6 +370,7 @@ const ChoresManagement: React.FC = () => {
                 <th>RRULE</th>
                 <th>Next Due</th>
                 <th>Estimate</th>
+                <th>Block</th>
                 <th>Priority</th>
                 <th>Theme</th>
                 <th></th>
@@ -363,6 +383,7 @@ const ChoresManagement: React.FC = () => {
                   <td className="text-muted small" style={{maxWidth:320, overflow:'hidden', textOverflow:'ellipsis'}}>{c.rrule}</td>
                   <td>{formatTime(c.nextDueAt)}</td>
                   <td>{c.estimatedMinutes} min</td>
+                  <td className="text-muted">{c.requiredBlock || '—'}</td>
                   <td><Badge bg={c.priority>=3?'danger':c.priority===2?'warning':'secondary'}>{c.priority}</Badge></td>
                   <td><Badge bg="light" text="dark">{c.theme}</Badge></td>
                   <td className="text-end">
