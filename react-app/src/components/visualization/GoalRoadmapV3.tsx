@@ -743,8 +743,8 @@ const GoalRoadmapV3: React.FC = () => {
                           <Dropdown.Item onClick={(e)=>{ e.stopPropagation(); handleGenerateStories(g.id); }}>
                             <Wand2 size={14} className="me-2" /> Generate stories
                           </Dropdown.Item>
-                          <Dropdown.Item onClick={(e)=>{ e.stopPropagation(); showSidebar(g as any, 'goal'); }}>
-                            <ListIcon size={14} className="me-2" /> Activity stream
+                          <Dropdown.Item onClick={(e)=>{ e.stopPropagation(); setShowGlobalActivity(true); }}>
+                            <ListIcon size={14} className="me-2" /> Activity stream (Global)
                           </Dropdown.Item>
                           <Dropdown.Item onClick={(e)=>{ e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}>
                             <MessageSquareText size={14} className="me-2" /> Add note

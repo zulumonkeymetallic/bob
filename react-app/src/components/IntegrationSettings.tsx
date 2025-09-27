@@ -65,6 +65,7 @@ const IntegrationSettings: React.FC = () => {
   const [monzoMessage, setMonzoMessage] = useState<string | null>(null);
   const [monzoLoading, setMonzoLoading] = useState(false);
   const [monzoWebhookAccountId, setMonzoWebhookAccountId] = useState('');
+  const [monzoStatusInfo, setMonzoStatusInfo] = useState<any>(null);
 
   const [stravaActivities, setStravaActivities] = useState<any[]>([]);
   const [stravaMessage, setStravaMessage] = useState<string | null>(null);
@@ -317,6 +318,22 @@ const IntegrationSettings: React.FC = () => {
       setMonzoMessage('Monzo access revoked.');
     } catch (err:any) {
       setMonzoMessage(err?.message || 'Failed to revoke access');
+    } finally {
+      setMonzoLoading(false);
+    }
+  };
+
+  const checkMonzoStatus = async () => {
+    if (!currentUser) return;
+    setMonzoLoading(true);
+    setMonzoMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'monzoStatus');
+      const res: any = await fn({});
+      setMonzoStatusInfo(res?.data || {});
+      setMonzoMessage('Monzo status checked.');
+    } catch (err:any) {
+      setMonzoMessage(err?.message || 'Monzo status check failed');
     } finally {
       setMonzoLoading(false);
     }
@@ -659,10 +676,19 @@ const IntegrationSettings: React.FC = () => {
                 {monzoLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                 Sync Now
               </Button>
+              <Button variant="outline-secondary" className="ms-2" onClick={checkMonzoStatus} disabled={monzoLoading}>
+                Check Status
+              </Button>
             </Col>
           </Row>
 
-          {monzoMessage && <Alert variant="info">{monzoMessage}</Alert>}
+          {monzoMessage && <Alert variant="info" className="mb-2">{monzoMessage}</Alert>}
+          {monzoStatusInfo && (
+            <Alert variant="light">
+              <div className="small text-muted">Monzo Status</div>
+              <pre className="mb-0" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(monzoStatusInfo, null, 2)}</pre>
+            </Alert>
+          )}
 
           <h6>Recent Transactions</h6>
           {monzoTransactions.length === 0 ? (
