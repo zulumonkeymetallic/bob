@@ -33,8 +33,6 @@ const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
 const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
 const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
-const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
-const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 
