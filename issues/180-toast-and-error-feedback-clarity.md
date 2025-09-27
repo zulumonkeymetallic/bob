@@ -1,5 +1,7 @@
 # 180 – Improve toast/error feedback consistency
 
+Note: Related epic – see 193 (UI: Merge Card-Based Views & Preserve Terministic Calendar Blocks).
+
 - Type: UX
 - Priority: P2 (minor)
 - Areas: Notifications, Error handling

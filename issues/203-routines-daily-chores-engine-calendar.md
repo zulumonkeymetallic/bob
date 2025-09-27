@@ -17,3 +17,5 @@ Model recurring chores as first‑class tasks with priorities, durations, and th
 ## Testing & QA
 - RRULE parsing tests; edge cases for holidays and travel days.
 
+## Related
+- 166 – Routines UI improvements (UI and docs). This issue covers the engine + calendar integration.

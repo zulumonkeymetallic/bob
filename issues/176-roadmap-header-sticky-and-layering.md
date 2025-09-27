@@ -1,5 +1,7 @@
 # 176 – Roadmap date header not sticky; cards slip behind grid
 
+Note: Related epic – see 193 (UI: Merge Card-Based Views & Preserve Terministic Calendar Blocks).
+
 - Type: bug / UX
 - Priority: P1 (major)
 - Areas: Goals Roadmap, Scrolling

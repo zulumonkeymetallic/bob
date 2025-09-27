@@ -19,3 +19,5 @@ Generate and send a morning digest summarising today’s priorities, events, ove
 ## Testing & QA
 - Snapshot tests for templates; integration tests for Telegram and email APIs.
 
+## Related
+- 191 – Scheduler automation (covers scheduling/infrastructure for the digest job). This issue focuses on content, rendering, Telegram/email delivery, and UX.

@@ -17,3 +17,13 @@ Consolidate the two existing card UIs into a single, consistent implementation t
 - Refactor date bar to `position: sticky` with intersection observers to avoid overlap.
 - Remove deprecated components; add storybook docs.
 
+## Scope and Related Issues
+- Supersedes/aggregates roadmap card UX items:
+  - 172 – Roadmap card layout and text scaling
+  - 173 – Roadmap drag-and-drop duplication
+  - 174 – Action icons too small; misclicks
+  - 175 – Horizontal navigation cues
+  - 176 – Header sticky + layering
+  - 179 – Drag/create performance
+  - 180 – Toast and error feedback consistency
+- Keep specific bugs (above) open for targeted fixes; close/merge into this epic when resolved.

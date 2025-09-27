@@ -1,5 +1,7 @@
 # 175 – Roadmap horizontal navigation lacks visible cues
 
+Note: Related epic – see 193 (UI: Merge Card-Based Views & Preserve Terministic Calendar Blocks).
+
 - Type: UX
 - Priority: P1 (major)
 - Areas: Goals Roadmap, Scrolling

@@ -1,5 +1,7 @@
 # 173 – Goals Roadmap drag-and-drop duplicates items and triggers unrelated actions
 
+Note: Related epic – see 193 (UI: Merge Card-Based Views & Preserve Terministic Calendar Blocks).
+
 - Type: bug
 - Priority: P1 (major)
 - Areas: Goals Roadmap, Drag-and-drop

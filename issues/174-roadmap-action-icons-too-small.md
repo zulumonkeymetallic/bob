@@ -1,5 +1,7 @@
 # 174 – Goal card action icons too small; easy to misclick destructive actions
 
+Note: Related epic – see 193 (UI: Merge Card-Based Views & Preserve Terministic Calendar Blocks).
+
 - Type: UX
 - Priority: P1 (major)
 - Areas: Goals Roadmap
