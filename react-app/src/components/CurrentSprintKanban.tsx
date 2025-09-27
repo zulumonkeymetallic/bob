@@ -66,26 +66,48 @@ const CurrentSprintKanban: React.FC = () => {
 
         setLoading(true);
         const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid), where('sprintId', '==', activeSprint.id));
+        // Track task unsubscribers across story list changes
+        let taskUnsubs: Array<() => void> = [];
         const unsubscribeStories = onSnapshot(storiesQuery, snapshot => {
             const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
             setStories(storiesData);
 
+            // Clear previous task listeners
+            taskUnsubs.forEach(fn => fn());
+            taskUnsubs = [];
+
             if (storiesData.length > 0) {
                 const storyIds = storiesData.map(s => s.id);
-                const tasksQuery = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), where('parentId', 'in', storyIds));
-                const unsubscribeTasks = onSnapshot(tasksQuery, taskSnapshot => {
-                    const tasksData = taskSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
-                    setTasks(tasksData);
-                    setLoading(false);
+                // Firestore 'in' operator supports max 10 values -> chunk accordingly
+                const chunks: string[][] = [];
+                for (let i = 0; i < storyIds.length; i += 10) chunks.push(storyIds.slice(i, i + 10));
+
+                // Accumulate tasks from all listeners
+                const tasksMap = new Map<string, Task>();
+                chunks.forEach(ids => {
+                    const tq = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), where('parentId', 'in', ids));
+                    const unsub = onSnapshot(tq, taskSnapshot => {
+                        taskSnapshot.docs.forEach(doc => {
+                            const t = { id: doc.id, ...(doc.data() as any) } as Task;
+                            tasksMap.set(t.id, t);
+                        });
+                        // Filter to only tasks whose parentId is still in current stories (avoid stale)
+                        const filtered = Array.from(tasksMap.values()).filter(t => storyIds.includes(t.parentId));
+                        setTasks(filtered);
+                        setLoading(false);
+                    });
+                    taskUnsubs.push(unsub);
                 });
-                return () => unsubscribeTasks();
             } else {
                 setTasks([]);
                 setLoading(false);
             }
         });
 
-        return () => unsubscribeStories();
+        return () => {
+            unsubscribeStories();
+            taskUnsubs.forEach(fn => fn());
+        };
     }, [currentUser, activeSprint]);
 
     // Load latest activity for visible stories
