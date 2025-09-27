@@ -1039,7 +1039,7 @@ const CalendarDnDView: React.FC = () => {
                 }
                 await deleteDoc(doc(db, 'calendar_blocks', editBlock.id));
                 if (currentUser) {
-                  await ActivityStreamService.addActivity({ entityId: editBlock.id, entityType: 'calendar_block', activityType: 'deleted', userId: currentUser.uid, userEmail: currentUser.email || undefined, description: 'Deleted block', source: 'human' });
+                  await ActivityStreamService.addActivity({ entityId: editBlock.id, entityType: 'calendar_block', activityType: 'deleted', userId: currentUser.uid, userEmail: currentUser.email || undefined, description: 'Deleted block', linkUrl: `/calendar?blockId=${editBlock.id}`, source: 'human' });
                 }
                 setEditBlock(null);
               } catch (e) { console.error(e); alert('Failed to delete block'); }

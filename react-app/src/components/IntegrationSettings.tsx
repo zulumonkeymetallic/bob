@@ -468,6 +468,14 @@ const IntegrationSettings: React.FC = () => {
             <Col md={6}>
               <div><strong>Last sync:</strong> {formatTimestamp(googleLastSync)} ({relativeTime(googleLastSync)})</div>
               <div><strong>Stored events:</strong> {profile?.googleCalendarEventCount ?? 0}</div>
+              <Form.Check
+                className="mt-2"
+                type="switch"
+                id="auto-sync-planner-google"
+                label="Auto-sync AI Planner & Routines to Google"
+                checked={!!(profile as any)?.autoSyncPlannerToGoogle}
+                onChange={(e)=>updateProfile({ autoSyncPlannerToGoogle: e.currentTarget.checked })}
+              />
             </Col>
             <Col md={6} className="text-md-end mt-3 mt-md-0">
               <Button variant="outline-primary" className="me-2" onClick={connectGoogle}>

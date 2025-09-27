@@ -2353,6 +2353,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       activityType: 'created',
       userId: uid,
       description: `AI created block: ${enriched.title || proposed.category} (${enriched.theme})`,
+      linkUrl: `/calendar?blockId=${blockRef.id}`,
       source: 'ai',
       createdAt: now,
       updatedAt: now
