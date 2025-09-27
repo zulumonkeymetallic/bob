@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { Goal } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import EditGoalModal from './EditGoalModal';
+import AddGoalModal from './AddGoalModal';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -17,6 +18,7 @@ const GoalsManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -85,8 +87,14 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    if (filterStatus !== 'all' && goal.status !== parseInt(filterStatus)) return false;
-    if (filterTheme !== 'all' && goal.theme !== parseInt(filterTheme)) return false;
+    if (filterStatus !== 'all') {
+      const statusMap: Record<string, number> = { all: -1, '0': 0, '1': 1, '2': 2, '3': 3, '4': 4 };
+      if (goal.status !== statusMap[filterStatus]) return false;
+    }
+    if (filterTheme !== 'all') {
+      const themeId = Number(filterTheme);
+      if (goal.theme !== themeId) return false;
+    }
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -107,7 +115,7 @@ const GoalsManagement: React.FC = () => {
           <h2 className="mb-1">Goals Management</h2>
           <p className="text-muted mb-0">Manage your life goals across different themes</p>
         </div>
-        <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
+        <Button variant="primary" onClick={() => setShowAdd(true)}>
           Add Goal
         </Button>
       </div>
@@ -168,32 +176,26 @@ const GoalsManagement: React.FC = () => {
             <Col md={4}>
               <Form.Group>
                 <Form.Label>Status</Form.Label>
-                <Form.Select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                >
+                <Form.Select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
                   <option value="all">All Status</option>
-                  <option value="new">New</option>
-                  <option value="active">Active</option>
-                  <option value="done">Done</option>
-                  <option value="paused">Paused</option>
-                  <option value="dropped">Dropped</option>
+                  <option value="0">New</option>
+                  <option value="1">Work in Progress</option>
+                  <option value="2">Complete</option>
+                  <option value="3">Blocked</option>
+                  <option value="4">Deferred</option>
                 </Form.Select>
               </Form.Group>
             </Col>
             <Col md={4}>
               <Form.Group>
                 <Form.Label>Theme</Form.Label>
-                <Form.Select
-                  value={filterTheme}
-                  onChange={(e) => setFilterTheme(e.target.value)}
-                >
+                <Form.Select value={filterTheme} onChange={(e) => setFilterTheme(e.target.value)}>
                   <option value="all">All Themes</option>
-                  <option value="Health">Health</option>
-                  <option value="Growth">Growth</option>
-                  <option value="Wealth">Wealth</option>
-                  <option value="Tribe">Tribe</option>
-                  <option value="Home">Home</option>
+                  <option value="1">Health</option>
+                  <option value="2">Growth</option>
+                  <option value="3">Wealth</option>
+                  <option value="4">Tribe</option>
+                  <option value="5">Home</option>
                 </Form.Select>
               </Form.Group>
             </Col>
@@ -245,6 +247,7 @@ const GoalsManagement: React.FC = () => {
       onClose={() => setEditGoal(null)}
       currentUserId={currentUser?.uid || ''}
     />
+    <AddGoalModal show={showAdd} onClose={() => setShowAdd(false)} />
     </>
   );
 };

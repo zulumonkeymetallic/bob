@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Form, Button, Row, Col, Table, Badge } from 'react-bootstrap';
+import { Card, Form, Button, Row, Col, Table, Badge, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, getDocs, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
@@ -21,6 +21,11 @@ const ChoresManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const [chores, setChores] = useState<any[]>([]);
   const [goals, setGoals] = useState<any[]>([]);
+  // Filters & search
+  const [search, setSearch] = useState('');
+  const [filterPriority, setFilterPriority] = useState<'all'|1|2|3>('all');
+  const [filterTheme, setFilterTheme] = useState<'all'|1|2|3|4|5>('all');
+  const [filterDue, setFilterDue] = useState<'today'|'week'|'all'>('all');
   const [form, setForm] = useState<ChoreForm>({ title: '', rrule: 'RRULE:FREQ=WEEKLY;INTERVAL=1', dtstart: '', estimatedMinutes: 15, priority: 2, theme: 2, goalId: '' });
   const [rrulePreview, setRrulePreview] = useState<string>('RRULE:FREQ=WEEKLY;INTERVAL=1');
   const [nextPreview, setNextPreview] = useState<number | null>(null);
@@ -90,6 +95,34 @@ const ChoresManagement: React.FC = () => {
   };
 
   const formatTime = (ms?: number) => (ms ? new Date(ms).toLocaleString() : '—');
+  // Compute filtered view with due window
+  const sod = useMemo(()=>{ const d=new Date(); d.setHours(0,0,0,0); return d.getTime(); },[]);
+  const eod = useMemo(()=>{ const d=new Date(); d.setHours(23,59,59,999); return d.getTime(); },[]);
+  const sow = useMemo(()=>{ const d=new Date(); const day=d.getDay(); const diff=d.getDate()-day+(day===0?-6:1); d.setDate(diff); d.setHours(0,0,0,0); return d.getTime(); },[]);
+  const eow = useMemo(()=> sow + 7*24*60*60*1000 - 1, [sow]);
+  const filtered = useMemo(()=>{
+    const now = Date.now();
+    return chores.filter(c => {
+      if (search && !(c.title||'').toLowerCase().includes(search.toLowerCase())) return false;
+      if (filterPriority !== 'all' && Number(c.priority)!==Number(filterPriority)) return false;
+      if (filterTheme !== 'all' && Number(c.theme)!==Number(filterTheme)) return false;
+      if (filterDue !== 'all') {
+        const due = nextDueAt(c.rrule, c.dtstart, now);
+        if (!due) return false;
+        if (filterDue==='today' && !(due>=sod && due<=eod)) return false;
+        if (filterDue==='week' && !(due>=sow && due<=eow)) return false;
+      }
+      return true;
+    });
+  }, [chores, search, filterPriority, filterTheme, filterDue, sod, eod, sow, eow]);
+
+  // Counts
+  const counts = useMemo(()=>{
+   const total = chores.length;
+   const dueToday = chores.filter(c => { const due = nextDueAt(c.rrule, c.dtstart, Date.now()); return !!due && due>=sod && due<=eod; }).length;
+   const high = chores.filter(c => Number(c.priority)===3).length;
+   return { total, dueToday, high };
+  }, [chores, sod, eod]);
 
   const runRoutinesPlanner = async () => {
     if (!currentUser) return;
@@ -110,8 +143,66 @@ const ChoresManagement: React.FC = () => {
   };
 
   return (
-    <div className="container py-3" style={{ maxWidth: 980 }}>
-      <h4 className="mb-3">Chores</h4>
+    <div className="container py-3" style={{ maxWidth: 1100 }}>
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h2 className="mb-1">Chores</h2>
+          <p className="text-muted mb-0">Recurring routines with RRULE scheduling and calendar integration</p>
+        </div>
+        <div className="d-flex gap-2">
+          <Button variant="outline-secondary" onClick={runRoutinesPlanner} disabled={planning}>{planning ? 'Planning…' : "Plan Today's Routines"}</Button>
+        </div>
+      </div>
+
+      {/* Dashboard Cards */}
+      <Row className="mb-3">
+        <Col lg={4} md={6} className="mb-3"><Card className="h-100"><Card.Body className="text-center"><h3 className="mb-0">{counts.total}</h3><div className="text-muted">Total Chores</div></Card.Body></Card></Col>
+        <Col lg={4} md={6} className="mb-3"><Card className="h-100"><Card.Body className="text-center"><h3 className="mb-0">{counts.dueToday}</h3><div className="text-muted">Due Today</div></Card.Body></Card></Col>
+        <Col lg={4} md={6} className="mb-3"><Card className="h-100"><Card.Body className="text-center"><h3 className="mb-0">{counts.high}</h3><div className="text-muted">High Priority</div></Card.Body></Card></Col>
+      </Row>
+
+      {/* Filters */}
+      <Card className="mb-3">
+        <Card.Body>
+          <Row className="g-3">
+            <Col md={4}>
+              <Form.Label>Search</Form.Label>
+              <InputGroup>
+                <Form.Control value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Search chores by title" />
+                {search && <Button variant="outline-secondary" onClick={()=>setSearch('')}>Clear</Button>}
+              </InputGroup>
+            </Col>
+            <Col md={3}>
+              <Form.Label>Due</Form.Label>
+              <Form.Select value={filterDue} onChange={(e)=>setFilterDue(e.target.value as any)}>
+                <option value="all">All</option>
+                <option value="today">Today</option>
+                <option value="week">This Week</option>
+              </Form.Select>
+            </Col>
+            <Col md={3}>
+              <Form.Label>Priority</Form.Label>
+              <Form.Select value={String(filterPriority)} onChange={(e)=> setFilterPriority((e.target.value==='all'?'all': Number(e.target.value)) as any)}>
+                <option value="all">All</option>
+                <option value="3">High (3)</option>
+                <option value="2">Medium (2)</option>
+                <option value="1">Low (1)</option>
+              </Form.Select>
+            </Col>
+            <Col md={2}>
+              <Form.Label>Theme</Form.Label>
+              <Form.Select value={String(filterTheme)} onChange={(e)=> setFilterTheme((e.target.value==='all'?'all': Number(e.target.value)) as any)}>
+                <option value="all">All</option>
+                <option value="1">Health</option>
+                <option value="2">Growth</option>
+                <option value="3">Wealth</option>
+                <option value="4">Tribe</option>
+                <option value="5">Home</option>
+              </Form.Select>
+            </Col>
+          </Row>
+        </Card.Body>
+      </Card>
       <Card className="mb-3">
         <Card.Header>AI Routine Planner</Card.Header>
         <Card.Body>
@@ -124,6 +215,7 @@ const ChoresManagement: React.FC = () => {
       </Card>
 
       <Card className="mb-3">
+        <Card.Header><strong>Add Chore</strong></Card.Header>
         <Card.Body>
           <Form onSubmit={handleAdd}>
             <Row className="g-3">
@@ -265,7 +357,7 @@ const ChoresManagement: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {chores.map(c => (
+              {filtered.map(c => (
                 <tr key={c.id}>
                   <td>{c.title}</td>
                   <td className="text-muted small" style={{maxWidth:320, overflow:'hidden', textOverflow:'ellipsis'}}>{c.rrule}</td>
@@ -279,7 +371,7 @@ const ChoresManagement: React.FC = () => {
                   </td>
                 </tr>
               ))}
-              {chores.length===0 && (
+              {filtered.length===0 && (
                 <tr><td colSpan={7} className="text-muted">No chores yet</td></tr>
               )}
             </tbody>
