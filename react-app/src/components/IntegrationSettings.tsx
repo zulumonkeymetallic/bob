@@ -80,6 +80,19 @@ const IntegrationSettings: React.FC = () => {
   const [traktLoading, setTraktLoading] = useState(false);
   const [traktUserInput, setTraktUserInput] = useState('');
 
+  // Parkrun
+  const [parkrunAthleteId, setParkrunAthleteId] = useState('');
+  const [parkrunBaseUrl, setParkrunBaseUrl] = useState('https://www.parkrun.org.uk');
+  const [parkrunLastSync, setParkrunLastSync] = useState<any>(null);
+  const [parkrunLoading, setParkrunLoading] = useState(false);
+  const [parkrunMessage, setParkrunMessage] = useState<string | null>(null);
+  const [parkrunActivities, setParkrunActivities] = useState<any[]>([]);
+
+  // Integration Logs
+  const [logs, setLogs] = useState<any[]>([]);
+  const [logSourceFilter, setLogSourceFilter] = useState<string>('all');
+  const [logLevelFilter, setLogLevelFilter] = useState<string>('all');
+
   useEffect(() => {
     if (!currentUser) return;
     const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
@@ -87,6 +100,9 @@ const IntegrationSettings: React.FC = () => {
       setProfile(data || null);
       if (data?.steamId) setSteamIdInput(data.steamId);
       if (data?.traktUser) setTraktUserInput(data.traktUser);
+      if ((data as any)?.parkrunAthleteId) setParkrunAthleteId(String((data as any).parkrunAthleteId));
+      if ((data as any)?.parkrunBaseUrl) setParkrunBaseUrl(String((data as any).parkrunBaseUrl));
+      if ((data as any)?.parkrunLastSyncAt) setParkrunLastSync((data as any).parkrunLastSyncAt);
     });
     return () => unsub();
   }, [currentUser]);
@@ -157,6 +173,35 @@ const IntegrationSettings: React.FC = () => {
       setSteamGames(rows.slice(0, 5));
     });
 
+    // Parkrun recent activities
+    const parkrunQuery = query(
+      collection(db, 'metrics_workouts'),
+      where('ownerUid', '==', currentUser.uid),
+      where('provider', '==', 'parkrun'),
+      limit(5)
+    );
+    const unsubscribeParkrun = onSnapshot(parkrunQuery, (snap) => {
+      const rows = snap.docs.map((docSnap) => docSnap.data());
+      rows.sort((a, b) => (b.startDate || 0) - (a.startDate || 0));
+      setParkrunActivities(rows.slice(0, 5));
+    });
+
+    // Integration logs (latest 50)
+    const logsQuery = query(
+      collection(db, 'integration_logs'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(50)
+    );
+    const unsubscribeLogs = onSnapshot(logsQuery, (snap) => {
+      const rows = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      rows.sort((a: any, b: any) => {
+        const at = a.ts?.toMillis ? a.ts.toMillis() : (a.ts || 0);
+        const bt = b.ts?.toMillis ? b.ts.toMillis() : (b.ts || 0);
+        return bt - at;
+      });
+      setLogs(rows);
+    });
+
     const traktQuery = query(
       collection(db, 'trakt'),
       where('ownerUid', '==', currentUser.uid),
@@ -178,6 +223,8 @@ const IntegrationSettings: React.FC = () => {
       unsubscribeStrava();
       unsubscribeSteam();
       unsubscribeTrakt();
+      unsubscribeParkrun();
+      unsubscribeLogs();
     };
   }, [currentUser]);
 
@@ -378,6 +425,26 @@ const IntegrationSettings: React.FC = () => {
     }
   };
 
+  const saveParkrun = async () => {
+    if (!currentUser) return;
+    await updateProfile({ parkrunAthleteId: parkrunAthleteId || null, parkrunBaseUrl: parkrunBaseUrl || null });
+  };
+
+  const syncParkrun = async () => {
+    if (!currentUser) return;
+    setParkrunLoading(true);
+    setParkrunMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'syncParkrun');
+      const res: any = await fn({ athleteId: parkrunAthleteId, countryBaseUrl: parkrunBaseUrl });
+      setParkrunMessage(`Imported ${res?.data?.imported ?? 0} parkruns.`);
+    } catch (e: any) {
+      setParkrunMessage(e?.message || 'Parkrun sync failed');
+    } finally {
+      setParkrunLoading(false);
+    }
+  };
+
   const updateProfile = async (patch: Record<string, any>) => {
     if (!currentUser) return;
     await updateDoc(doc(db, 'profiles', currentUser.uid), patch);
@@ -440,10 +507,126 @@ const IntegrationSettings: React.FC = () => {
               <CalendarSyncManager />
             </div>
           </Collapse>
-        </Card.Body>
-      </Card>
+      </Card.Body>
+    </Card>
 
-      <Card>
+    <Card>
+      <Card.Header className="d-flex justify-content-between align-items-center">
+        <div>
+          <h4 className="mb-0">Parkrun</h4>
+          <small>Fetch results from parkrun results pages</small>
+        </div>
+        <Badge bg={parkrunAthleteId ? 'success' : 'secondary'}>
+          {parkrunAthleteId ? 'Configured' : 'Not Configured'}
+        </Badge>
+      </Card.Header>
+      <Card.Body>
+        <Row className="mb-3">
+          <Col md={6}>
+            <Form.Label>Athlete ID</Form.Label>
+            <Form.Control value={parkrunAthleteId} onChange={(e)=>setParkrunAthleteId(e.target.value)} placeholder="e.g. 1234567" />
+            <Form.Label className="mt-2">Base URL</Form.Label>
+            <Form.Control value={parkrunBaseUrl} onChange={(e)=>setParkrunBaseUrl(e.target.value)} placeholder="https://www.parkrun.org.uk" />
+            <div className="d-flex gap-2 mt-2">
+              <Button variant="outline-secondary" size="sm" onClick={saveParkrun}>Save</Button>
+              <Button variant="primary" size="sm" onClick={syncParkrun} disabled={parkrunLoading || !parkrunAthleteId}>
+                {parkrunLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Sync Now
+              </Button>
+            </div>
+          </Col>
+          <Col md={6} className="text-md-end mt-3 mt-md-0">
+            <div><strong>Last sync:</strong> {formatTimestamp(parkrunLastSync)} ({relativeTime(parkrunLastSync)})</div>
+          </Col>
+        </Row>
+
+        {parkrunMessage && <Alert variant="info">{parkrunMessage}</Alert>}
+
+        <h6>Recent Parkruns</h6>
+        {parkrunActivities.length === 0 ? (
+          <Alert variant="light">No Parkrun results found.</Alert>
+        ) : (
+          <Table size="sm" responsive>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Event</th>
+                <th>Time</th>
+                <th>Position</th>
+              </tr>
+            </thead>
+            <tbody>
+              {parkrunActivities.map((pr: any) => (
+                <tr key={pr.id}>
+                  <td>{pr.utcStartDate ? new Date(pr.utcStartDate).toLocaleDateString() : '—'}</td>
+                  <td>{pr.event || pr.name || 'parkrun'}</td>
+                  <td>{typeof pr.elapsedTime_s === 'number' ? `${Math.floor(pr.elapsedTime_s/60)}:${String(pr.elapsedTime_s%60).padStart(2,'0')}` : '—'}</td>
+                  <td>{pr.position ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </Card.Body>
+    </Card>
+
+    <Card>
+      <Card.Header className="d-flex justify-content-between align-items-center">
+        <div>
+          <h4 className="mb-0">Integration Logs</h4>
+          <small>Authentication, sync, and error events</small>
+        </div>
+      </Card.Header>
+      <Card.Body>
+        <div className="d-flex gap-2 align-items-center mb-2">
+          <Form.Select size="sm" style={{ maxWidth: 200 }} value={logSourceFilter} onChange={(e)=>setLogSourceFilter(e.target.value)}>
+            <option value="all">All Sources</option>
+            <option value="strava">Strava</option>
+            <option value="parkrun">Parkrun</option>
+            <option value="monzo">Monzo</option>
+            <option value="google">Google</option>
+            <option value="finance">Finance</option>
+          </Form.Select>
+          <Form.Select size="sm" style={{ maxWidth: 160 }} value={logLevelFilter} onChange={(e)=>setLogLevelFilter(e.target.value)}>
+            <option value="all">All Levels</option>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="error">Error</option>
+          </Form.Select>
+        </div>
+        <Table size="sm" responsive>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Source</th>
+              <th>Level</th>
+              <th>Step</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs
+              .filter((l: any) => logSourceFilter==='all' || String(l.source).toLowerCase()===logSourceFilter)
+              .filter((l: any) => logLevelFilter==='all' || String(l.level).toLowerCase()===logLevelFilter)
+              .map((l: any) => (
+              <tr key={l.id}>
+                <td>{l.ts?.toDate ? l.ts.toDate().toLocaleString() : (l.ts ? new Date(l.ts).toLocaleString() : '—')}</td>
+                <td><Badge bg="light" text="dark">{l.source}</Badge></td>
+                <td>{l.level}</td>
+                <td>{l.step || '—'}</td>
+                <td>
+                  <div>{l.message || '—'}</div>
+                  {l.meta ? (
+                    <pre className="mt-1 mb-0 bg-light p-2" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(l.meta, null, 2)}</pre>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </Card.Body>
+    </Card>
+    <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
             <h4 className="mb-0">Monzo</h4>

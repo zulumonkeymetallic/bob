@@ -8,6 +8,7 @@ const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
 const aiUsageLogger = require("./utils/aiUsageLogger");
 const { rrulestr } = require('rrule');
+const { logIntegration } = require('./utils/integrationLogger');
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -812,8 +813,10 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
       stravaLastSyncAt: null
     }, { merge: true });
 
+    await logIntegration({ uid, source: 'strava', level: 'info', step: 'oauth_callback', message: 'Strava connected', meta: { athleteId: athlete.id || null } });
     res.status(200).send("<script>window.close();</script>Strava connected. You can close this window.");
   } catch (e) {
+    try { await logIntegration({ uid: null, source: 'strava', level: 'error', step: 'oauth_callback', message: 'Strava OAuth callback error', meta: { error: String(e?.message||e) } }); } catch {}
     console.error('Strava OAuth callback error:', e);
     res.status(500).send("Strava OAuth callback error: " + e.message);
   }
@@ -912,8 +915,10 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    try { await logIntegration({ uid, source: 'monzo', level: 'info', step: 'oauth_callback', message: 'Monzo connected', meta: { monzoUserId } }); } catch {}
     res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
   } catch (e) {
+    try { await logIntegration({ uid: null, source: 'monzo', level: 'error', step: 'oauth_callback', message: 'Monzo OAuth callback error', meta: { error: String(e?.message||e) } }); } catch {}
     console.error('Monzo OAuth callback error:', e);
     res.status(500).send("Monzo OAuth callback error: " + e.message);
   }
@@ -1046,6 +1051,7 @@ exports.revokeMonzoAccess = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CL
   } catch {}
   await db.collection('profiles').doc(uid).set({ monzoConnected: false, monzoUserId: null }, { merge: true });
   await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoked', uid });
+  try { await logIntegration({ uid, source: 'monzo', level: 'info', step: 'revoke', message: 'Monzo access revoked' }); } catch {}
   return { ok: true };
 });
 
@@ -2608,6 +2614,7 @@ async function getStravaAccessToken(uid) {
     expires_at: refreshed.expires_at,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'token_refresh', message: 'Strava token refreshed' });
   return refreshed.access_token;
 }
 
@@ -2651,6 +2658,7 @@ async function upsertWorkout(uid, activity) {
 
 async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxPages = 3 } = {}) {
   const accessToken = await getStravaAccessToken(uid);
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'sync_start', message: 'Strava sync started', meta: { afterSec, perPage, maxPages } });
   let page = 1;
   let total = 0;
   let lastDocId = null;
@@ -2672,6 +2680,7 @@ async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxP
   }
   const db = admin.firestore();
   await db.collection('profiles').doc(uid).set({ stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'sync_complete', message: 'Strava sync complete', meta: { imported: total, lastDocId } });
   return { ok: true, imported: total, lastDocId };
 }
 
@@ -2684,6 +2693,7 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
     afterSec = (String(after).length > 10) ? Math.floor(Number(after) / 1000) : Number(after);
   }
   console.log('[syncStrava] uid', req.auth.uid, 'after', after, 'afterSec', afterSec);
+  await logIntegration({ uid: req.auth.uid, source: 'strava', level: 'info', step: 'sync_trigger', message: 'Manual Strava sync requested', meta: { after, afterSec } });
   return await fetchStravaActivities(req.auth.uid, { afterSec });
 });
 
@@ -2847,6 +2857,7 @@ exports.calendarStatus = httpsV2.onCall(async (req) => {
 
 async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
   const base = countryBaseUrl || 'https://www.parkrun.org.uk';
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_start', message: 'Parkrun sync started', meta: { base, athleteId } });
   const url = `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteId)}&eventNumber=0`;
   const html = await (await fetch(url)).text();
   const cheerio = require('cheerio');
@@ -2938,6 +2949,7 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
     imported += 1;
   }
   await db.collection('profiles').doc(uid).set({ parkrunAthleteId: athleteId, parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_complete', message: 'Parkrun sync complete', meta: { imported } });
   return { ok: true, imported };
 }
 
@@ -2947,6 +2959,7 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
   const uid = req.auth.uid;
   let { athleteId, profileUrl, countryBaseUrl } = req.data || {};
   console.log('[syncParkrun] uid', uid, 'athleteId', athleteId, 'profileUrl?', !!profileUrl, 'base?', countryBaseUrl);
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_trigger', message: 'Manual Parkrun sync requested', meta: { hasProfileUrl: !!profileUrl, countryBaseUrl: countryBaseUrl || null } });
   athleteId = (athleteId || '').toString().trim();
   profileUrl = (profileUrl || '').toString().trim();
   countryBaseUrl = (countryBaseUrl || '').toString().trim();
@@ -2958,7 +2971,12 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
   if (!athleteId) {
     throw new httpsV2.HttpsError('invalid-argument', 'Provide Parkrun athleteId or profileUrl containing athleteNumber.');
   }
-  return await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+  try {
+    return await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+  } catch (e) {
+    await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'sync_error', message: 'Parkrun sync failed', meta: { error: String(e?.message||e) } });
+    throw e;
+  }
 });
 
 // Fitness Overview aggregator
