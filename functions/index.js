@@ -2273,6 +2273,20 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       });
     }
     createdCount += 1;
+
+    // Per-block activity entry (AI-created)
+    const aiActRef = db.collection('activity_stream').doc();
+    batch.set(aiActRef, {
+      id: aiActRef.id,
+      entityId: blockRef.id,
+      entityType: 'calendar_block',
+      activityType: 'created',
+      userId: uid,
+      description: `AI created block: ${enriched.title || proposed.category} (${enriched.theme})`,
+      source: 'ai',
+      createdAt: now,
+      updatedAt: now
+    });
   }
 
   // Activity summary entry for this AI application
@@ -2327,6 +2341,7 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
     return eventsResponse.items.map(event => ({
       id: event.id,
       summary: event.summary || 'Untitled Event',
+      description: event.description || null,
       start: new Date(event.start.dateTime || event.start.date),
       end: new Date(event.end.dateTime || event.end.date)
     }));
@@ -2353,12 +2368,22 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
     const startIso = startMs ? new Date(startMs).toISOString() : null;
     const endIso = endMs ? new Date(endMs).toISOString() : null;
 
+    // Attempt to derive theme from description (e.g., "Theme: Health")
+    let derivedTheme = 'Growth';
+    if (event.description && typeof event.description === 'string') {
+      const m = event.description.match(/Theme:\s*(Health|Growth|Wealth|Tribe|Home)/i);
+      if (m && m[1]) {
+        const t = m[1];
+        derivedTheme = t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+      }
+    }
+
     const payload = {
       ownerUid: uid,
       persona: 'personal',
       title: event.summary || 'Calendar Event',
       description: event.description || null,
-      theme: 'Growth',
+      theme: derivedTheme,
       category: 'Calendar',
       source: 'gcal',
       status: 'synced',
@@ -2459,8 +2484,9 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
   const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
   if (!tokensSnap || tokensSnap.empty) return;
 
-  const startDate = new Date(Date.now() - 6 * 60 * 60 * 1000); // past 6 hours to pick updates
-  const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // next two weeks
+  // Broaden import window so week views always fill across all days
+  const startDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000); // past 14 days
+  const endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // next 30 days
 
   for (const doc of tokensSnap.docs) {
     const tokenId = doc.id;
@@ -3262,13 +3288,16 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
 
 exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const { summary, start, end } = req.data || {};
+  const { summary, start, end, description, bobId } = req.data || {};
   if (!summary || !start || !end) throw new httpsV2.HttpsError("invalid-argument", "summary/start/end required");
   const access = await getAccessToken(req.auth.uid);
+  const body = { summary, start: { dateTime: start }, end: { dateTime: end } };
+  if (description) body['description'] = description;
+  if (bobId) body['extendedProperties'] = { private: { bobId } };
   const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
     method: "POST",
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
-    body: JSON.stringify({ summary, start: { dateTime: start }, end: { dateTime: end } }),
+    body: JSON.stringify(body),
   });
   return { ok: true, event: ev };
 });
@@ -3276,13 +3305,15 @@ exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 // Update an existing Google Calendar event (summary/start/end minimal patch)
 exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const { eventId, summary, start, end } = req.data || {};
+  const { eventId, summary, start, end, description, bobId } = req.data || {};
   if (!eventId) throw new httpsV2.HttpsError("invalid-argument", "eventId required");
   const access = await getAccessToken(req.auth.uid);
   const body = {};
   if (summary) body.summary = summary;
   if (start) body.start = { dateTime: start };
   if (end) body.end = { dateTime: end };
+  if (description) body['description'] = description;
+  if (bobId) body['extendedProperties'] = { private: { bobId } };
   const ev = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
     method: "PATCH",
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
@@ -3293,10 +3324,14 @@ exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 
 exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const maxResults = Math.min(Number(req.data?.maxResults || 20), 100);
+  const maxResults = Math.min(Number(req.data?.maxResults || 200), 500);
   const access = await getAccessToken(req.auth.uid);
-  const now = new Date().toISOString();
-  const data = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(now)}&maxResults=${maxResults}`, {
+  const daysBack = Math.max(Number(req.data?.daysBack || 14), 0);
+  const daysForward = Math.max(Number(req.data?.daysForward || 30), 1);
+  const start = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+  const end = new Date(Date.now() + daysForward * 24 * 60 * 60 * 1000).toISOString();
+  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(start)}&timeMax=${encodeURIComponent(end)}&maxResults=${maxResults}`;
+  const data = await fetchJson(url, {
     headers: { "Authorization": "Bearer " + access },
   });
   return { ok: true, items: data.items || [] };

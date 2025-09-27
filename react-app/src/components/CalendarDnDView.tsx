@@ -79,6 +79,7 @@ const CalendarDnDView: React.FC = () => {
   const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
   const [blockItems, setBlockItems] = useState<ScheduledItem[]>([]);
   const [linkForm, setLinkForm] = useState({ type: 'story' as 'story' | 'task' | 'habit' | 'routine', refId: '' });
+  const [history, setHistory] = useState<any[]>([]);
   const [googleEdit, setGoogleEdit] = useState<{ id: string; summary: string; start: string; end: string } | null>(null);
   const [showDelete, setShowDelete] = useState(false);
   const [deleteScope, setDeleteScope] = useState<'single'|'future'|'all'>('single');
@@ -117,6 +118,7 @@ const CalendarDnDView: React.FC = () => {
   useEffect(() => {
     if (!currentUser || !editBlock) {
       setBlockItems([]);
+      setHistory([]);
       return;
     }
     const q = query(collection(db, 'scheduled_items'), where('ownerUid', '==', currentUser.uid), where('blockId', '==', editBlock.id));
@@ -124,7 +126,18 @@ const CalendarDnDView: React.FC = () => {
       const items = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as ScheduledItem[];
       setBlockItems(items);
     });
-    return () => unsub();
+    // Load activity history (last 20 events) for this block
+    const actQ = query(collection(db, 'activity_stream'), where('entityId', '==', editBlock.id));
+    const unsub2 = onSnapshot(actQ, (snap) => {
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      rows.sort((a, b) => {
+        const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt || a.timestamp || 0);
+        const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt || b.timestamp || 0);
+        return bt - at;
+      });
+      setHistory(rows.slice(0, 20));
+    });
+    return () => { unsub(); unsub2(); };
   }, [currentUser, editBlock]);
 
   useEffect(() => {
@@ -147,14 +160,20 @@ const CalendarDnDView: React.FC = () => {
       try {
         setLoadingGoogle(true);
         const callable = httpsCallable(functions, 'listUpcomingEvents');
-        const res: any = await callable({ maxResults: 50 });
-        const items: RbcEvent[] = (res?.data?.items || []).map((e: any) => ({
-          id: e.id,
-          title: e.summary || 'Untitled',
-          start: new Date(e.start?.dateTime || e.start?.date),
-          end: new Date(e.end?.dateTime || e.end?.date),
-          source: 'google'
-        }));
+        const res: any = await callable({ maxResults: 200, daysBack: 14, daysForward: 30 });
+        const items: RbcEvent[] = (res?.data?.items || []).map((e: any) => {
+          const desc = e.description || '';
+          const m = String(desc).match(/Theme:\s*(Health|Growth|Wealth|Tribe|Home)/i);
+          const theme = m && m[1] ? (m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase()) : undefined;
+          return {
+            id: e.id,
+            title: e.summary || 'Untitled',
+            start: new Date(e.start?.dateTime || e.start?.date),
+            end: new Date(e.end?.dateTime || e.end?.date),
+            source: 'google',
+            block: theme ? ({ theme } as any) : undefined
+          } as RbcEvent;
+        });
         setGoogleEvents(items);
       } catch (e) {
         console.warn('Google events load failed', (e as any)?.message);
@@ -232,7 +251,8 @@ const CalendarDnDView: React.FC = () => {
           const snap = await getDoc(doc(db, 'calendar_blocks', id));
           const data: any = snap.data();
           const summary = (data?.title) || `${data?.category || 'Block'} (${data?.theme || 'Growth'})`;
-          const res: any = await callable({ summary, start: new Date(data.start).toISOString(), end: new Date(data.end).toISOString() });
+          const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${id}\nCategory: ${data?.category || ''}\nSource: BOB`;
+          const res: any = await callable({ summary, start: new Date(data.start).toISOString(), end: new Date(data.end).toISOString(), description, bobId: id });
           const evId = res?.data?.event?.id || res?.data?.id || res?.event?.id;
           if (evId) {
             await updateDoc(doc(db, 'calendar_blocks', id), { googleEventId: evId, syncToGoogle: true, updatedAt: Date.now() });
@@ -275,10 +295,12 @@ const CalendarDnDView: React.FC = () => {
           if (data?.syncToGoogle) {
             const callable = httpsCallable(functions, data?.googleEventId ? 'updateCalendarEvent' : 'createCalendarEvent');
             if (data?.googleEventId) {
-              await (callable as any)({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString() });
+              const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
+              await (callable as any)({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id });
             } else {
               const summary = (data?.title) || `${data?.category || 'Block'} (${data?.theme || 'Growth'})`;
-              const res: any = await (callable as any)({ summary, start: start.toISOString(), end: end.toISOString() });
+              const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
+              const res: any = await (callable as any)({ summary, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id });
               const evId = res?.data?.event?.id || res?.data?.id || res?.event?.id;
               if (evId) await updateDoc(doc(db, 'calendar_blocks', event.id), { googleEventId: evId });
             }
@@ -326,7 +348,8 @@ const CalendarDnDView: React.FC = () => {
           const data: any = snap.data();
           if (data?.syncToGoogle && data?.googleEventId) {
             const callable = httpsCallable(functions, 'updateCalendarEvent');
-            await callable({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString() });
+            const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
+            await callable({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id });
           }
         } catch {}
         if (currentUser) {
@@ -718,6 +741,28 @@ const CalendarDnDView: React.FC = () => {
             <Form.Control as="textarea" rows={3} value={createForm.rationale} onChange={(e)=>setCreateForm({...createForm, rationale: e.target.value})} />
           </Form.Group>
           </Form>
+          {/* History */}
+          <div className="mt-3">
+            <div className="d-flex justify-content-between align-items-center mb-2">
+              <strong>History</strong>
+            </div>
+            {history.length === 0 ? (
+              <div className="text-muted">No activity recorded</div>
+            ) : (
+              <ul className="list-unstyled" style={{ maxHeight: 180, overflowY: 'auto' }}>
+                {history.map((h) => (
+                  <li key={h.id} className="small mb-1">
+                    <Badge bg={h.source === 'ai' ? 'warning' : 'secondary'} className="me-1">{h.source || 'human'}</Badge>
+                    <Badge bg="light" text="dark" className="me-1">{h.activityType}</Badge>
+                    <span>{h.description || ''}</span>
+                    {h.userEmail && (
+                      <span className="text-muted ms-1">• {String(h.userEmail).split('@')[0]}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={()=>setShowCreate(false)}>Cancel</Button>
