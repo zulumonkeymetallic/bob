@@ -359,6 +359,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const [goalSuggestions, setGoalSuggestions] = useState<Goal[]>([]);
+  const [highlightIndex, setHighlightIndex] = useState<number>(0);
   const { trackFieldChange } = useActivityTracking();
 
   // Track story view when component mounts (only once per story)
@@ -379,6 +381,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'goalTitle') {
       const currentTitle = goals.find(g => g.id === story.goalId)?.title || '';
       setEditValue(currentTitle);
+      // Prime suggestions list
+      const seed = currentTitle.toLowerCase();
+      const list = goals
+        .filter(g => !seed || g.title?.toLowerCase().includes(seed) || g.id === story.goalId)
+        .slice(0, 8);
+      setGoalSuggestions(list);
+      setHighlightIndex(0);
     } else {
       setEditValue(value || '');
     }
@@ -477,42 +486,67 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (isEditing && column.editable) {
       // Searchable goal selector using datalist
       if (column.key === 'goalTitle') {
-        const datalistId = `goals-${story.id}`;
         return (
-          <td key={column.key} style={{ width: column.width }}>
-            <div className="relative">
-              <input
-                list={datalistId}
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onBlur={() => {
-                  // Map typed goal title or id to goalId
-                  const match = goals.find(g => g.id === editValue || g.title === editValue);
-                  if (match) {
-                    setEditValue(match.id);
+          <td key={column.key} style={{ width: column.width, position: 'relative' }}>
+            <input
+              value={editValue}
+              onChange={(e) => {
+                const q = e.target.value;
+                setEditValue(q);
+                const ql = q.toLowerCase();
+                const list = goals
+                  .filter(g => !ql || g.title?.toLowerCase().includes(ql) || g.id.toLowerCase() === ql)
+                  .slice(0, 8);
+                setGoalSuggestions(list);
+                setHighlightIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIndex(i => Math.min((goalSuggestions.length||1)-1, i + 1)); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIndex(i => Math.max(0, i - 1)); }
+                else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const sel = goalSuggestions[highlightIndex];
+                  if (sel) {
+                    setEditValue(sel.id);
                   }
                   handleCellSave(column.key);
-                }}
-                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
-                style={{
-                  width: '100%',
-                  padding: '6px 8px',
-                  border: `2px solid ${themeVars.brand}`,
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  backgroundColor: themeVars.panel,
-                  outline: 'none',
-                  boxShadow: 'none',
-                }}
-                placeholder="Search goals..."
-                autoFocus
-              />
-              <datalist id={datalistId}>
-                {goals.map(g => (
-                  <option key={g.id} value={g.title} />
+                } else if (e.key === 'Escape') {
+                  setEditingCell(null);
+                }
+              }}
+              onBlur={() => {
+                // Map typed goal title or id to goalId
+                const match = goals.find(g => g.id === editValue || g.title === editValue);
+                if (match) setEditValue(match.id);
+                handleCellSave(column.key);
+              }}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                border: `2px solid ${themeVars.brand}`,
+                borderRadius: '4px',
+                fontSize: '14px',
+                backgroundColor: themeVars.panel,
+                outline: 'none',
+                boxShadow: 'none',
+              }}
+              placeholder="Search goals by title..."
+              autoFocus
+            />
+            {goalSuggestions.length > 0 && (
+              <div style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 10, background: themeVars.panel, border: `1px solid var(--line)`, borderRadius: 6, boxShadow: '0 6px 16px rgba(0,0,0,0.12)', maxHeight: 180, overflowY: 'auto' }}>
+                {goalSuggestions.map((g, idx) => (
+                  <div
+                    key={g.id}
+                    onMouseDown={(e) => { e.preventDefault(); setEditValue(g.id); handleCellSave(column.key); }}
+                    style={{ padding: '6px 8px', cursor: 'pointer', background: idx === highlightIndex ? 'rgba(99,102,241,0.12)' : 'transparent' }}
+                    title={g.title}
+                  >
+                    {g.title}
+                  </div>
                 ))}
-              </datalist>
-            </div>
+              </div>
+            )}
           </td>
         );
       }
