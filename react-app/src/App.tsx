@@ -63,6 +63,8 @@ import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboard from './components/FinanceDashboard';
+import IntegrationSettings from './components/IntegrationSettings';
+import IntegrationLogs from './components/IntegrationLogs';
 
 // Lazy-loaded heavy routes
 const TravelMap = React.lazy(() => import('./components/travel/TravelMap'));
@@ -239,6 +241,8 @@ function AppContent() {
             <Route path="/routes" element={<RoutesManagementView />} />
             <Route path="/routines" element={<RoutesManagementView />} />
             <Route path="/routes/optimization" element={<RoutesManagementView />} />
+            <Route path="/finance/integrations" element={<IntegrationSettings />} />
+            <Route path="/integrations/logs" element={<IntegrationLogs />} />
             <Route
               path="/travel"
               element={
