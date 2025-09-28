@@ -73,6 +73,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Merchant Mapping', path: '/finance/merchant-mapping', icon: 'tags' },
         { label: 'Transactions', path: '/finance/transactions', icon: 'list' },
         { label: 'Integrations', path: '/finance/integrations', icon: 'plug' },
+        { label: 'Integration Logs', path: '/integrations/logs', icon: 'stream' },
         { label: 'Finance Settings', path: '/finance/settings', icon: 'cog' }
       ]
     },

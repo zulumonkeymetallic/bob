@@ -66,6 +66,7 @@ import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboard from './components/FinanceDashboard';
 import FinanceTransactions from './components/FinanceTransactions';
 import IntegrationSettings from './components/IntegrationSettings';
+import IntegrationLogs from './components/IntegrationLogs';
 import FinanceSettings from './components/FinanceSettings';
 import BudgetSettings from './components/BudgetSettings';
 import FinanceMerchantMapping from './components/FinanceMerchantMapping';
@@ -266,6 +267,7 @@ function AppContent() {
             <Route path="/finance/settings" element={<FinanceSettings />} />
             <Route path="/finance/transactions" element={<FinanceTransactions />} />
             <Route path="/finance/integrations" element={<IntegrationSettings />} />
+            <Route path="/integrations/logs" element={<IntegrationLogs />} />
             <Route path="/finance/budgets" element={<BudgetSettings />} />
             <Route path="/finance/merchant-mapping" element={<FinanceMerchantMapping />} />
             <Route path="/settings" element={<SettingsPage />} />
