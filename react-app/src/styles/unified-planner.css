@@ -1,0 +1,44 @@
+.unified-planner .calendar-placeholder {
+  min-height: 540px;
+  background: linear-gradient(135deg, rgba(86, 103, 242, 0.08), rgba(34, 197, 94, 0.08));
+}
+
+.unified-planner .focus-item {
+  background-color: rgba(25, 135, 84, 0.08);
+  border: 1px solid rgba(25, 135, 84, 0.2);
+}
+
+.unified-planner .focus-item:hover {
+  background-color: rgba(25, 135, 84, 0.15);
+}
+
+.unified-planner .focus-item.completed {
+  background-color: rgba(25, 135, 84, 0.18);
+  border-color: rgba(25, 135, 84, 0.35);
+}
+
+.unified-planner .planner-icon-circle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(16, 185, 129, 0.2));
+  color: #2563eb;
+}
+
+.unified-planner .planner-calendar-wrapper {
+  background: var(--bs-body-bg);
+}
+
+.unified-planner .chore-pill {
+  padding: 12px;
+  border-radius: 12px;
+  background-color: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+}
+
+.unified-planner .chore-pill + .chore-pill {
+  margin-top: 6px;
+}

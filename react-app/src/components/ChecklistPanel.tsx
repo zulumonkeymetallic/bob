@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, getDocs, query, where, doc, updateDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, doc, updateDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { PlanAssignment } from '../types/scheduler';
 import { startOfDay, endOfDay } from 'date-fns';
 import { httpsCallable } from 'firebase/functions';
 import { nextDueAt } from '../utils/recurrence';
+import { schedulerCollections, ScheduledInstanceModel } from '../domain/scheduler/repository';
 
 export interface ChecklistPanelProps {
   title?: string;
@@ -17,42 +17,56 @@ interface ChecklistItem {
   title: string;
   start?: number;
   end?: number;
-  source: 'assignment' | 'task' | 'chore' | 'habit';
+  source: 'scheduled' | 'unscheduled' | 'task' | 'chore' | 'habit';
   raw?: any;
+  status?: string;
+  subtitle?: string;
 }
 
 const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checklist", compact }) => {
   const { currentUser } = useAuth();
-  const [loading, setLoading] = useState(true);
-  const [items, setItems] = useState<ChecklistItem[]>([]);
+  const [loadingScheduled, setLoadingScheduled] = useState(true);
+  const [loadingLoose, setLoadingLoose] = useState(true);
+  const [scheduled, setScheduled] = useState<ScheduledInstanceModel[]>([]);
+  const [looseItems, setLooseItems] = useState<ChecklistItem[]>([]);
 
-  const todayKey = useMemo(() => {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = `${now.getMonth() + 1}`.padStart(2, '0');
-    const d = `${now.getDate()}`.padStart(2, '0');
-    return `${y}${m}${d}`;
-  }, []);
+  const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London', []);
+
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayKey = useMemo(() => todayIso.replace(/-/g, ''), [todayIso]);
 
   useEffect(() => {
-    const load = async () => {
-      if (!currentUser) return;
-      setLoading(true);
+    if (!currentUser) {
+      setScheduled([]);
+      setLoadingScheduled(false);
+      return; 
+    }
+    setLoadingScheduled(true);
+    const unsubscribe = onSnapshot(
+      schedulerCollections.userInstances(db, currentUser.uid, todayKey),
+      (snapshot) => {
+        const docs = snapshot.docs.map((docSnap) => docSnap.data());
+        setScheduled(docs);
+        setLoadingScheduled(false);
+      },
+      () => setLoadingScheduled(false),
+    );
+    return () => unsubscribe();
+  }, [currentUser, todayKey, todayIso]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setLooseItems([]);
+      setLoadingLoose(false);
+      return;
+    }
+    const loadLoose = async () => {
+      setLoadingLoose(true);
       try {
         const list: ChecklistItem[] = [];
+    const start = startOfDay(new Date(todayIso)).getTime();
+    const end = endOfDay(new Date(todayIso)).getTime();
 
-        // Assignments for today, if any
-        const assignmentsRef = collection(db, `plans/${todayKey}/assignments`);
-        const aq = query(assignmentsRef, where('ownerUid', '==', currentUser.uid));
-        const as = await getDocs(aq);
-        as.forEach((d) => {
-          const a = d.data() as any as PlanAssignment;
-          list.push({ id: d.id, title: a.title, start: a.start, end: a.end, source: 'assignment', raw: a });
-        });
-
-        // Also include tasks due today as loose items
-        const start = startOfDay(new Date()).getTime();
-        const end = endOfDay(new Date()).getTime();
         const tasksRef = collection(db, 'tasks');
         const tq = query(
           tasksRef,
@@ -63,17 +77,15 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         const ts = await getDocs(tq);
         ts.forEach((d) => {
           const t = d.data() as any;
-          list.push({ id: `task-${d.id}` , title: t.title, start: t.dueDate, end: t.dueDate, source: 'task', raw: { id: d.id, ...t } });
+          list.push({ id: `task-${d.id}`, title: t.title, start: t.dueDate, end: t.dueDate, source: 'task', raw: { id: d.id, ...t } });
         });
 
-        // Chores due today (using RRULE)
         const choresRef = collection(db, 'chores');
         const cq = query(choresRef, where('ownerUid', '==', currentUser.uid));
         const cs = await getDocs(cq);
         cs.forEach((d) => {
           const c = d.data() as any;
           const dtstart = c.dtstart || c.createdAt || undefined;
-          // Compute next due based on rrule; fall back to existing nextDueAt
           const next = nextDueAt(c.rrule, typeof dtstart === 'number' ? dtstart : undefined, start);
           const due = next || c.nextDueAt;
           if (due && due >= start && due <= end) {
@@ -81,42 +93,70 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
           }
         });
 
-        // Habits due today (daily & active)
-        const habitsSnap = await getDocs(query(collection(db, 'habits'), where('userId','==', currentUser.uid), where('isActive','==', true)));
-        const now = new Date();
-        const todayStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+        const habitsSnap = await getDocs(query(collection(db, 'habits'), where('userId', '==', currentUser.uid), where('isActive', '==', true)));
         for (const hDoc of habitsSnap.docs) {
           const h: any = hDoc.data();
           if (h.frequency === 'daily') {
-            // check entry
-            list.push({ id: `habit-${hDoc.id}`, title: h.name, start: undefined, end: undefined, source: 'habit', raw: { id: hDoc.id, ...h } });
+            list.push({ id: `habit-${hDoc.id}`, title: h.name, source: 'habit', raw: { id: hDoc.id, ...h } });
           }
         }
 
-        setItems(list);
+        setLooseItems(list);
       } finally {
-        setLoading(false);
+        setLoadingLoose(false);
       }
     };
-    // Ensure today's plan is built once per user/day
-    const ensurePlan = async () => {
-      if (!currentUser) return;
-      const key = `planBuilt-${todayKey}-${currentUser.uid}`;
-      if (!localStorage.getItem(key)) {
-        try {
-          const call = httpsCallable(functions, 'buildPlan');
-          await call({ day: `${new Date().toISOString().slice(0,10)}` });
-          // Attempt to sync assignments to Google Calendar as well (best-effort)
-          try {
-            const sync = httpsCallable(functions, 'syncPlanToGoogleCalendar');
-            await sync({ day: `${new Date().toISOString().slice(0,10)}` });
-          } catch {}
-        } catch {}
-        localStorage.setItem(key, '1');
-      }
-    };
-    ensurePlan().finally(load);
+    loadLoose();
   }, [currentUser, todayKey]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const key = `planBuilt-${todayKey}-${currentUser.uid}`;
+    if (!localStorage.getItem(key)) {
+      (async () => {
+        try {
+          const call = httpsCallable(functions, 'planBlocksV2');
+        await call({ startDate: todayIso, days: 1, timezone });
+        } catch (err) {
+          console.warn('Failed to build schedule preview', err);
+        }
+        localStorage.setItem(key, '1');
+      })();
+    }
+  }, [currentUser, todayKey, todayIso, timezone]);
+
+  const scheduledItems: ChecklistItem[] = useMemo(() => {
+    const now = Date.now();
+    return scheduled
+      .filter((inst) => ['planned', 'committed', 'in_progress', 'unscheduled'].includes(inst.status))
+      .map((inst) => {
+        const startMs = inst.plannedStart ? Date.parse(inst.plannedStart) : undefined;
+        const endMs = inst.plannedEnd ? Date.parse(inst.plannedEnd) : undefined;
+        const overdue = inst.status === 'unscheduled' || (!startMs && !endMs);
+        const label = inst.title || (inst.sourceType === 'chore' ? 'Chore' : 'Routine');
+        const subtitlePieces: string[] = [];
+        if (inst.blockId) subtitlePieces.push(`Block ${inst.blockId}`);
+        if (inst.status === 'unscheduled') {
+          subtitlePieces.push(inst.statusReason || 'Waiting for block');
+        }
+        return {
+          id: inst.id,
+          title: label,
+          start: startMs ?? (overdue ? now + 12 * 60 * 60 * 1000 : undefined),
+          end: endMs,
+          source: inst.status === 'unscheduled' ? 'unscheduled' : 'scheduled',
+          raw: inst,
+          status: inst.status,
+          subtitle: subtitlePieces.join(' · ') || undefined,
+        } as ChecklistItem;
+      });
+  }, [scheduled]);
+
+  const items = useMemo(() => {
+    return [...scheduledItems, ...looseItems];
+  }, [scheduledItems, looseItems]);
+
+  const loading = loadingScheduled || loadingLoose;
 
   const now = Date.now();
   const nowNext = items
@@ -130,10 +170,9 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
 
   const markDone = async (item: ChecklistItem) => {
     try {
-      if (item.source === 'assignment') {
-        const dayKey = todayKey;
-        const ref = doc(db, `plans/${dayKey}/assignments/${item.id}`);
-        await updateDoc(ref, { status: 'done', updatedAt: Date.now() });
+      if (item.source === 'scheduled' || item.source === 'unscheduled') {
+        const ref = doc(db, `scheduled_instances/${item.id}`);
+        await updateDoc(ref, { status: 'completed', statusUpdatedAt: Date.now(), updatedAt: Date.now() });
       } else if (item.source === 'task') {
         const id = item.raw?.id || item.id.replace('task-', '');
         await updateDoc(doc(db, 'tasks', id), { status: 2, updatedAt: Date.now() });
@@ -153,7 +192,11 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         });
       }
       // Optimistic remove from UI
-      setItems(prev => prev.filter(i => i.id !== item.id));
+      if (item.source === 'scheduled' || item.source === 'unscheduled') {
+        setScheduled(prev => prev.filter(inst => inst.id !== item.id));
+      } else {
+        setLooseItems(prev => prev.filter(i => i.id !== item.id));
+      }
     } catch (e) {
       console.error('Failed to mark done', e);
       alert('Failed to mark done');
@@ -176,7 +219,7 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
               <div key={i.id} className="d-flex align-items-center justify-content-between border rounded p-2 mb-2">
               <div className="d-flex flex-column">
                 <span className="fw-semibold">{i.title}</span>
-                <small className="text-muted">{i.source === 'assignment' ? 'Planned' : i.source === 'task' ? 'Task' : 'Chore'}</small>
+                <small className="text-muted">{i.subtitle || (i.source === 'scheduled' ? 'Scheduled' : i.source === 'unscheduled' ? 'Needs block' : i.source === 'task' ? 'Task' : i.source === 'chore' ? 'Chore' : 'Habit')}</small>
               </div>
               <button className="btn btn-sm btn-outline-success" onClick={() => markDone(i)}>Done</button>
               </div>
@@ -189,7 +232,7 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
               <div key={i.id} className="d-flex align-items-center justify-content-between border rounded p-2 mb-2">
                 <div className="d-flex flex-column">
                   <span className="fw-semibold">{i.title}</span>
-                  <small className="text-muted">{i.source === 'assignment' ? 'Planned' : i.source === 'task' ? 'Task' : 'Chore'}</small>
+                  <small className="text-muted">{i.subtitle || (i.source === 'scheduled' ? 'Scheduled' : i.source === 'unscheduled' ? 'Needs block' : i.source === 'task' ? 'Task' : i.source === 'chore' ? 'Chore' : 'Habit')}</small>
                 </div>
                 <button className="btn btn-sm btn-outline-success" onClick={() => markDone(i)}>Done</button>
               </div>

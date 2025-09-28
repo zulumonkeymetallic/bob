@@ -102,8 +102,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Calendar',
       icon: 'calendar',
       items: [
-        { label: 'Calendar (Drag & Drop)', path: '/calendar', icon: 'calendar' },
-        { label: 'Calendar Blocks', path: '/calendar-blocks', icon: 'th-large' },
+        { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
         { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]
     },
@@ -112,7 +111,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'check-circle',
       items: [
         { label: 'Daily Habits', path: '/habits', icon: 'check' },
-        { label: 'Chores (RRULE)', path: '/chores', icon: 'broom' },
+        { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
         { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
       ]
     },

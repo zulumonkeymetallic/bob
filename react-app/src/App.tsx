@@ -8,7 +8,7 @@ import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import TasksList from './components/TasksList';
 import PlanningDashboard from './components/PlanningDashboard';
-import Calendar from './components/CalendarDnDView';
+import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
@@ -47,10 +47,8 @@ import SprintsPage from './components/sprints/SprintsPage';
 import SprintTablePage from './components/sprints/SprintTablePage';
 import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
-import CalendarBlockManagerNew from './components/CalendarBlockManagerNew';
 import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
-import ChoresManagement from './components/ChoresManagement';
 import HabitsManagement from './components/HabitsManagement';
 import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
@@ -215,10 +213,8 @@ function AppContent() {
             <Route path="/sprints/table" element={<SprintTablePage />} />
             
             <Route path="/tasks-management" element={<TasksManagement />} />
-            <Route path="/calendar-blocks" element={<CalendarBlockManagerNew />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
-            <Route path="/chores" element={<ChoresManagement />} />
             <Route path="/habits" element={<HabitsManagement />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
@@ -239,7 +235,6 @@ function AppContent() {
             <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
             <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
             <Route path="/routes" element={<RoutesManagementView />} />
-            <Route path="/routines" element={<RoutesManagementView />} />
             <Route path="/routes/optimization" element={<RoutesManagementView />} />
             <Route path="/finance/integrations" element={<IntegrationSettings />} />
             <Route path="/integrations/logs" element={<IntegrationLogs />} />
@@ -254,7 +249,7 @@ function AppContent() {
             
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
-            <Route path="/calendar" element={<Calendar />} />
+            <Route path="/calendar" element={<UnifiedPlannerPage />} />
             <Route path="/running-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/finance" element={<FinanceDashboard />} />
