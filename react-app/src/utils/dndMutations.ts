@@ -236,6 +236,10 @@ export class DnDMutationHandler {
         );
         Object.assign(updateData, rankingChanges);
 
+        // Handle status transitions for kanban moves (e.g., backlog ↔ active)
+        const statusChanges = this.calculateStatusChanges(event, toScope);
+        Object.assign(updateData, statusChanges);
+
         // Apply the update
         transaction.update(entityRef, updateData);
 
@@ -307,6 +311,29 @@ export class DnDMutationHandler {
     }
 
     return changes;
+  }
+
+  private static calculateStatusChanges(
+    event: DnDEvent,
+    toScope: any
+  ): Record<string, any> {
+    if (event.entityType !== 'story') return {};
+
+    if (toScope?.type === 'kanban' && toScope?.lane) {
+      const laneStatusMap: Record<string, number> = {
+        backlog: 0,
+        planned: 1,
+        active: 2,
+        testing: 3,
+        done: 4,
+      };
+
+      if (laneStatusMap[toScope.lane] !== undefined) {
+        return { status: laneStatusMap[toScope.lane] };
+      }
+    }
+
+    return {};
   }
 
   private static async calculateRankingChanges(

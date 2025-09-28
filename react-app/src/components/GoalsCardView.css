@@ -1,6 +1,6 @@
 .goals-card-grid {
   display: grid;
-  gap: 24px;
+  gap: 16px;
   align-items: stretch;
   grid-auto-rows: 1fr;
 }
@@ -57,11 +57,46 @@
 }
 
 .goals-card--grid {
-  min-height: 200px;
+  min-height: 150px;
 }
 
 .goals-card--comfortable {
   min-height: 280px;
+}
+
+.goals-card--grid .goals-card-progress {
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+.goals-card--grid .goals-card-progress__header {
+  font-size: 11px;
+}
+
+.goals-card--grid .goals-card-progress__footer {
+  font-size: 11px;
+}
+
+.goals-card--grid .goals-card-quick-stats {
+  gap: 8px;
+}
+
+.goals-card--grid .goals-card-quick-stat {
+  padding: 8px 10px;
+  gap: 0;
+}
+
+.goals-card--grid .goals-card-quick-stat .label {
+  font-size: 10px;
+}
+
+.goals-card--grid .goals-card-quick-stat .value {
+  font-size: 13px;
+}
+
+.goals-card--grid .goals-card-metadata {
+  gap: 6px 12px;
+  font-size: 12px;
 }
 
 .goals-card-quick-stats {

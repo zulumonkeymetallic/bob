@@ -5,7 +5,7 @@ import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, limit, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import EditGoalModal from './EditGoalModal';
@@ -106,6 +106,12 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     ? 'goals-card-grid goals-card-grid--comfortable'
     : 'goals-card-grid goals-card-grid--grid';
 
+  const compactBodyPadding = showDetailed ? '24px' : '14px 12px';
+  const compactBodyGap = showDetailed ? '16px' : '10px';
+  const headerMargin = showDetailed ? '12px' : '8px';
+  const titleFontSize = showDetailed ? '18px' : '16px';
+  const badgeFontSize = showDetailed ? '12px' : '11px';
+
   const sortedGoals = useMemo(() => {
     const getTargetMillis = (goal: Goal) => {
       const raw = (goal as any).targetDate;
@@ -139,57 +145,56 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   } as const;
 
   
-  const loadLatestActivityForGoal = async (goalId: string) => {
-    if (!currentUser) return;
-    
-    try {
-      // Query latest activities directly from Firestore
-      const q = query(
-        collection(db, 'activity_stream'),
-        where('entityId', '==', goalId),
-        where('ownerUid', '==', currentUser.uid),
-        orderBy('timestamp', 'desc'),
-        limit(10)
-      );
-      
-      const snapshot = await getDocs(q);
-      const activities = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as any[];
-      
-      // Filter out UI activities that aren't meaningful
-      const meaningfulActivities = activities.filter(activity => 
-        !['clicked', 'viewed', 'exported', 'imported'].includes(activity.activityType)
-      );
-      
-      // Get the most recent meaningful activity (comment, status change, or field update)
-      const latestActivity = meaningfulActivities.find(activity => 
-        (activity.activityType === 'note_added' && activity.noteContent) ||
-        activity.activityType === 'status_changed' ||
-        (activity.activityType === 'updated' && activity.fieldName) ||
-        activity.activityType === 'created'
-      );
-      
-      if (latestActivity) {
-        setLatestActivities(prev => ({
-          ...prev,
-          [goalId]: latestActivity
-        }));
-      }
-    } catch (error) {
-      console.error('Error loading latest activity for goal:', goalId, error);
-    }
-  };
-
-  // Load latest activities when goals change
+  // Load latest activities once and reuse similar logic to Gantt/Roadmap
   useEffect(() => {
-    if (currentUser && goals.length > 0) {
-      goals.forEach(goal => {
-        loadLatestActivityForGoal(goal.id);
-      });
+    if (!currentUser?.uid) {
+      setLatestActivities({});
+      return;
     }
-  }, [currentUser, goals]);
+
+    const q = query(
+      collection(db, 'activity_stream'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('timestamp', 'desc'),
+      limit(300)
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const map: Record<string, any> = {};
+        for (const docSnap of snap.docs) {
+          const data = docSnap.data() as any;
+          if (data.entityType !== 'goal') continue;
+          if (!data.activityType) continue;
+
+          // Respect only meaningful activity entries
+          const type = String(data.activityType).toLowerCase();
+          if (['clicked', 'viewed', 'exported', 'imported'].includes(type)) continue;
+
+          const goalId = data.entityId as string;
+          if (!goalId || map[goalId]) continue;
+
+          const isMeaningfulUpdate =
+            (type === 'note_added' && data.noteContent) ||
+            type === 'status_changed' ||
+            (type === 'updated' && data.fieldName) ||
+            type === 'created';
+
+          if (isMeaningfulUpdate) {
+            map[goalId] = { id: docSnap.id, ...data };
+          }
+        }
+        setLatestActivities(map);
+      },
+      (error) => {
+        console.error('GoalsCardView activity stream error:', error);
+        setLatestActivities({});
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser?.uid]);
 
   // Fetch time allocations for goals from calendar blocks
   useEffect(() => {
@@ -453,18 +458,18 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
               <Card.Body
                 style={{
-                  padding: showDetailed ? '24px' : '18px',
+                  padding: compactBodyPadding,
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: showDetailed ? '16px' : '12px'
+                  gap: compactBodyGap
                 }}
               >
                 {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: headerMargin }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <h5 style={{ 
-                      margin: '0 0 8px 0', 
-                      fontSize: '18px', 
+                      margin: '0 0 6px 0', 
+                      fontSize: titleFontSize, 
                       fontWeight: '600',
                       lineHeight: '1.4',
                       wordBreak: 'break-word'
@@ -476,7 +481,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                           style={{
                             backgroundColor: themeColor,
                             color: themeTextColor,
-                            fontSize: '12px'
+                            fontSize: badgeFontSize
                           }}
                         >
                           {themeDef.label}
@@ -485,7 +490,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         style={{ 
                           backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || 'var(--muted)',
                           color: 'var(--on-accent)',
-                          fontSize: '12px'
+                          fontSize: badgeFontSize
                         }}
                       >
                         {getStatusName(goal.status)}
