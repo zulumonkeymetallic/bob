@@ -387,6 +387,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const doneStories = (goal as any).doneStories ?? (goal as any).completedStories ?? null;
           const allocatedMinutes = goalTimeAllocations[goal.id];
           const latestActivity = latestActivities[goal.id];
+          const progressPercent = totalStories && totalStories > 0
+            ? Math.max(0, Math.min(100, Math.round(((doneStories ?? 0) / totalStories) * 100)))
+            : 0;
           const activityButton = (
             <Button
               variant={showDetailed ? 'outline-light' : 'outline-primary'}
@@ -573,27 +576,22 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
                 {!showDetailed && (
                   <div className="goals-card-quick-stats">
-                    <div
-                      className="goals-card-quick-stat"
-                      style={{
-                        background: hexToRgba(themeColor, 0.12),
-                        border: `1px solid ${hexToRgba(themeColor, 0.22)}`,
-                        color: textColor
-                      }}
-                    >
-                      <span className="label">Stories</span>
-                      <span className="value">{totalStories ?? '—'}</span>
-                    </div>
-                    <div
-                      className="goals-card-quick-stat"
-                      style={{
-                        background: hexToRgba(themeColor, 0.12),
-                        border: `1px solid ${hexToRgba(themeColor, 0.22)}`,
-                        color: textColor
-                      }}
-                    >
-                      <span className="label">Done</span>
-                      <span className="value">{doneStories ?? '—'}</span>
+                    <div className="goals-card-progress">
+                      <div className="goals-card-progress__header">
+                        <span>Progress</span>
+                        <span>{progressPercent}%</span>
+                      </div>
+                      <div className="goals-card-progress__bar" style={{ background: hexToRgba(themeColor, 0.18) }}>
+                        <div
+                          className="goals-card-progress__bar-fill"
+                          style={{ width: `${progressPercent}%`, background: hexToRgba(themeColor, 0.45) }}
+                        />
+                      </div>
+                      <div className="goals-card-progress__footer">
+                        {totalStories && totalStories > 0
+                          ? `${doneStories ?? 0} of ${totalStories} stories`
+                          : 'No stories yet'}
+                      </div>
                     </div>
                     <div
                       className="goals-card-quick-stat"
@@ -694,15 +692,29 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 )}
 
                 {showDetailed && (
-                  <div className="goals-card-stats-detailed">
-                    <div className="goals-card-stat-block">
-                      <div className="label">Total Stories</div>
-                      <div className="value">{totalStories ?? '—'}</div>
+                  <>
+                    <div className="goals-card-progress goals-card-progress--detailed">
+                      <div className="goals-card-progress__header">
+                        <span>Progress</span>
+                        <span>{progressPercent}%</span>
+                      </div>
+                      <div className="goals-card-progress__bar" style={{ background: hexToRgba(themeColor, 0.2) }}>
+                        <div
+                          className="goals-card-progress__bar-fill"
+                          style={{ width: `${progressPercent}%`, background: hexToRgba(themeColor, 0.5) }}
+                        />
+                      </div>
+                      <div className="goals-card-progress__footer" style={{ color: textColor }}>
+                        {totalStories && totalStories > 0
+                          ? `${doneStories ?? 0} of ${totalStories} stories`
+                          : 'No stories yet'}
+                      </div>
                     </div>
-                    <div className="goals-card-stat-block">
-                      <div className="label">Done Stories</div>
-                      <div className="value">{doneStories ?? '—'}</div>
-                    </div>
+                    <div className="goals-card-stats-detailed">
+                      <div className="goals-card-stat-block">
+                        <div className="label">Total Stories</div>
+                        <div className="value">{totalStories ?? '—'}</div>
+                      </div>
                     <div className="goals-card-stat-block">
                       <div className="label">Priority</div>
                       <div className="value">{goal.priority ?? '—'}</div>
@@ -715,7 +727,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       <div className="label">This Week</div>
                       <div className="value">{allocatedMinutes !== undefined ? `${Math.round(allocatedMinutes)}m` : '—'}</div>
                     </div>
-                  </div>
+                    </div>
+                  </>
                 )}
 
                 {/* Goal Details */}
