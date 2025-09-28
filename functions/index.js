@@ -8,6 +8,9 @@ const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
 const aiUsageLogger = require("./utils/aiUsageLogger");
 const { rrulestr } = require('rrule');
+const { DateTime } = require('luxon');
+const { planSchedule, makeInstanceId: schedulerMakeInstanceId } = require('./scheduler/engine');
+const DEFAULT_TIMEZONE = 'Europe/London';
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -33,8 +36,6 @@ const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
 const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
 const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
-const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
-const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 
@@ -299,6 +300,136 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   });
 
   return { planId, dayKey, assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })) };
+});
+
+async function fetchGoogleBusy(uid, start, end) {
+  try {
+    const accessToken = await getAccessToken(uid);
+    if (!accessToken) return [];
+    const res = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        timeMin: start.toUTC().toISO(),
+        timeMax: end.toUTC().toISO(),
+        items: [{ id: 'primary' }],
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`freeBusy ${res.status}: ${text}`);
+    }
+    const payload = await res.json();
+    return payload?.calendars?.primary?.busy || [];
+  } catch (err) {
+    console.warn('[planBlocksV2] busy fetch failed', err.message || err);
+    return [];
+  }
+}
+
+exports.planBlocksV2 = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const timezone = req?.data?.timezone || DEFAULT_TIMEZONE;
+  const startDate = req?.data?.startDate || DateTime.now().setZone(timezone).toISODate();
+  const days = Math.min(Math.max(Number(req?.data?.days || 7), 1), 30);
+  const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
+  if (!start.isValid) {
+    throw new httpsV2.HttpsError('invalid-argument', 'Invalid startDate');
+  }
+  const end = start.plus({ days: days - 1 }).endOf('day');
+
+  const db = admin.firestore();
+  const busy = req?.data?.includeBusy === false ? [] : await fetchGoogleBusy(uid, start, end);
+
+  const plan = await planSchedule({
+    db,
+    userId: uid,
+    windowStart: start,
+    windowEnd: end,
+    busy,
+  });
+
+  const existingIds = new Set(plan.existingIds || []);
+  const batch = db.batch();
+  const nowMs = Date.now();
+
+  for (const instance of plan.planned) {
+    const ref = db.collection('scheduled_instances').doc(instance.id);
+    const isExisting = existingIds.has(instance.id);
+    const payload = {
+      ...instance,
+      status: instance.status || 'planned',
+      userId: uid,
+      ownerUid: uid,
+      updatedAt: nowMs,
+    };
+    if (!isExisting) {
+      payload.createdAt = nowMs;
+    }
+    batch.set(ref, payload, { merge: true });
+  }
+
+  for (const unscheduled of plan.unscheduled) {
+    const id = schedulerMakeInstanceId({
+      userId: uid,
+      sourceType: unscheduled.sourceType,
+      sourceId: unscheduled.sourceId,
+      occurrenceDate: unscheduled.dayKey,
+    });
+    const ref = db.collection('scheduled_instances').doc(id);
+    const isExisting = existingIds.has(id);
+    const payload = {
+      id,
+      userId: uid,
+      ownerUid: uid,
+      sourceType: unscheduled.sourceType,
+      sourceId: unscheduled.sourceId,
+      title: unscheduled.title || null,
+      occurrenceDate: unscheduled.dayKey,
+      status: 'unscheduled',
+      statusReason: unscheduled.reason,
+      durationMinutes: 0,
+      priority: 5,
+      requiredBlockId: unscheduled.requiredBlockId || null,
+      candidateBlockIds: unscheduled.candidateBlockIds || [],
+      updatedAt: nowMs,
+    };
+    if (!isExisting) {
+      payload.createdAt = nowMs;
+    }
+    batch.set(ref, payload, { merge: true });
+  }
+
+  await batch.commit();
+
+  const jobDocId = `${uid}__${start.toISODate()}`;
+  await db.collection('planning_jobs').doc(jobDocId).set({
+    id: jobDocId,
+    userId: uid,
+    planningDate: start.toISODate(),
+    windowStart: start.toISODate(),
+    windowEnd: end.toISODate(),
+    solverRunId: plan.solverRunId,
+    status: 'succeeded',
+    startedAt: nowMs,
+    completedAt: nowMs,
+    plannedCount: plan.planned.length,
+    unscheduledCount: plan.unscheduled.length,
+    createdAt: nowMs,
+    updatedAt: nowMs,
+  }, { merge: true });
+
+  return {
+    solverRunId: plan.solverRunId,
+    planned: plan.planned,
+    unscheduled: plan.unscheduled,
+    conflicts: plan.conflicts,
+  };
 });
 
 // Reconcile assignments with Google Calendar: if child events were deleted externally,
