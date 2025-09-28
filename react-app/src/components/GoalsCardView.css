@@ -6,28 +6,39 @@
 }
 
 .goals-card-grid--grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
 }
 
 .goals-card-grid--comfortable {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 32px;
+}
+
+@media (max-width: 1920px) {
+  .goals-card-grid--grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1600px) {
   .goals-card-grid--grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .goals-card-grid--comfortable {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 1200px) {
-  .goals-card-grid--grid,
+@media (max-width: 1280px) {
+  .goals-card-grid--grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
   .goals-card-grid--comfortable {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 980px) {
   .goals-card-grid--grid,
   .goals-card-grid--comfortable {
     grid-template-columns: repeat(1, minmax(0, 1fr));
@@ -46,11 +57,11 @@
 }
 
 .goals-card--grid {
-  min-height: 240px;
+  min-height: 200px;
 }
 
 .goals-card--comfortable {
-  min-height: 300px;
+  min-height: 280px;
 }
 
 .goals-card-quick-stats {

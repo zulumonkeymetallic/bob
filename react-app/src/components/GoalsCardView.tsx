@@ -65,6 +65,23 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     return themeMap.get(themeId) || defaultTheme;
   };
 
+  const hexToRgb = (hex: string) => {
+    const value = hex.replace('#', '');
+    const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value;
+    const bigint = parseInt(full, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return { r, g, b };
+  };
+
+  const rgbToHex = (r: number, g: number, b: number) => `#${[r, g, b]
+    .map(v => {
+      const clamped = Math.max(0, Math.min(255, Math.round(v)));
+      return clamped.toString(16).padStart(2, '0');
+    })
+    .join('')}`;
+
   const hexToRgba = (hex: string, alpha: number) => {
     const value = hex.replace('#', '');
     const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value;
@@ -75,10 +92,41 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   };
 
+  const lightenColor = (hex: string, amount: number) => {
+    const { r, g, b } = hexToRgb(hex);
+    const factor = Math.max(0, Math.min(1, amount));
+    const nr = r + (255 - r) * factor;
+    const ng = g + (255 - g) * factor;
+    const nb = b + (255 - b) * factor;
+    return rgbToHex(nr, ng, nb);
+  };
+
   const showDetailed = cardLayout === 'comfortable';
   const gridClassName = showDetailed
     ? 'goals-card-grid goals-card-grid--comfortable'
     : 'goals-card-grid goals-card-grid--grid';
+
+  const sortedGoals = useMemo(() => {
+    const getTargetMillis = (goal: Goal) => {
+      const raw = (goal as any).targetDate;
+      if (!raw) return Number.POSITIVE_INFINITY;
+      if (typeof raw === 'number') return raw;
+      if (typeof raw === 'string') {
+        const parsed = Date.parse(raw);
+        return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+      }
+      if (raw?.toDate) {
+        try {
+          return raw.toDate().getTime();
+        } catch {
+          return Number.POSITIVE_INFINITY;
+        }
+      }
+      return Number.POSITIVE_INFINITY;
+    };
+
+    return [...goals].sort((a, b) => getTargetMillis(a) - getTargetMillis(b));
+  }, [goals]);
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
   // Status colors via tokens
@@ -323,14 +371,14 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   return (
     <div className="goals-card-view" style={{ padding: '20px' }}>
       <div className={gridClassName}>
-        {goals.map((goal) => {
+        {sortedGoals.map((goal) => {
           const themeDef = resolveTheme(goal.theme);
           const themeColor = themeDef.color || 'var(--brand)';
           const themeTextColor = themeDef.textColor || 'var(--on-accent)';
           const isSelected = selectedGoalId === goal.id;
-          const gradientStart = hexToRgba(themeColor, showDetailed ? 0.45 : 0.28);
-          const gradientEnd = hexToRgba(themeColor, showDetailed ? 0.18 : 0.1);
-          const cardBackground = `linear-gradient(155deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
+          const gradientStart = lightenColor(themeColor, showDetailed ? 0.35 : 0.55);
+          const gradientEnd = lightenColor(themeColor, showDetailed ? 0.6 : 0.78);
+          const cardBackground = `linear-gradient(165deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
           const defaultText = typeof themeVars.text === 'string' ? themeVars.text : '#1f1f1f';
           const defaultMuted = typeof themeVars.muted === 'string' ? themeVars.muted : 'rgba(0,0,0,0.6)';
           const textColor = showDetailed ? (themeDef.textColor || '#ffffff') : defaultText;
@@ -525,20 +573,48 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
                 {!showDetailed && (
                   <div className="goals-card-quick-stats">
-                    <div className="goals-card-quick-stat">
+                    <div
+                      className="goals-card-quick-stat"
+                      style={{
+                        background: hexToRgba(themeColor, 0.12),
+                        border: `1px solid ${hexToRgba(themeColor, 0.22)}`,
+                        color: textColor
+                      }}
+                    >
                       <span className="label">Stories</span>
                       <span className="value">{totalStories ?? '—'}</span>
                     </div>
-                    <div className="goals-card-quick-stat">
+                    <div
+                      className="goals-card-quick-stat"
+                      style={{
+                        background: hexToRgba(themeColor, 0.12),
+                        border: `1px solid ${hexToRgba(themeColor, 0.22)}`,
+                        color: textColor
+                      }}
+                    >
                       <span className="label">Done</span>
                       <span className="value">{doneStories ?? '—'}</span>
                     </div>
-                    <div className="goals-card-quick-stat">
+                    <div
+                      className="goals-card-quick-stat"
+                      style={{
+                        background: hexToRgba(themeColor, 0.12),
+                        border: `1px solid ${hexToRgba(themeColor, 0.22)}`,
+                        color: textColor
+                      }}
+                    >
                       <span className="label">Priority</span>
                       <span className="value">{goal.priority ?? '—'}</span>
                     </div>
                     {allocatedMinutes !== undefined && (
-                      <div className="goals-card-quick-stat">
+                      <div
+                        className="goals-card-quick-stat"
+                        style={{
+                          background: hexToRgba(themeColor, 0.12),
+                          border: `1px solid ${hexToRgba(themeColor, 0.22)}`,
+                          color: textColor
+                        }}
+                      >
                         <span className="label">This Week</span>
                         <span className="value">{Math.round(allocatedMinutes)}m</span>
                       </div>
