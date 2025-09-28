@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, ButtonGroup, Modal, Form, Badge, Dropdown } from 'react-bootstrap';
+import { Button, ButtonGroup, Modal, Form, Badge } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
@@ -9,8 +9,9 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
-import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Activity } from 'lucide-react';
+import { ActivityStreamService, type ActivityEntry } from '../../services/ActivityStreamService';
+import { ChoiceHelper } from '../../config/choices';
+import { Wand2, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
@@ -19,6 +20,16 @@ import GLOBAL_THEMES, { migrateThemeValue, type GlobalTheme } from '../../consta
 type Zoom = 'weeks' | 'months' | 'quarters' | 'years';
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
+
+const ALLOWED_ACTIVITY_TYPES: ReadonlySet<string> = new Set([
+  'created',
+  'updated',
+  'deleted',
+  'note_added',
+  'status_changed',
+  'sprint_changed',
+  'priority_changed'
+]);
 
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
@@ -35,16 +46,13 @@ const GoalRoadmapV3: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
-  const [activityItems, setActivityItems] = useState<any[]>([]);
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
-  const [lastNotes, setLastNotes] = useState<Record<string, string>>({});
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
   const [storyDoneCounts, setStoryDoneCounts] = useState<Record<string, number>>({});
   const [showGlobalActivity, setShowGlobalActivity] = useState(false);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
-  const [globalActivityItems, setGlobalActivityItems] = useState<any[]>([]);
+  const [globalActivityItems, setGlobalActivityItems] = useState<ActivityEntry[]>([]);
   const [showSprints, setShowSprints] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [showEmptyThemes, setShowEmptyThemes] = useState(false);
@@ -115,6 +123,10 @@ const GoalRoadmapV3: React.FC = () => {
       default: return 1.8;
     }
   }, [zoom]);
+
+  const showExtendedMeta = useMemo(() => zoom === 'weeks' || zoom === 'months', [zoom]);
+  const showFullMeta = useMemo(() => zoom === 'weeks', [zoom]);
+  const isCompactZoom = useMemo(() => zoom === 'quarters' || zoom === 'years', [zoom]);
 
   const daysBetween = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime()) / 86400000);
   const xFromDate = useCallback((date: Date) => daysBetween(timeRange.start, date) * pxPerDay, [timeRange.start, pxPerDay]);
@@ -222,60 +234,97 @@ const GoalRoadmapV3: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid]);
 
-  // Subscribe to latest goal notes across the activity stream (for bar preview)
+  // Subscribe once to the owner's activity stream and keep a trimmed cache in memory
   useEffect(() => {
-    if (!currentUser?.uid) return;
+    if (!currentUser?.uid) {
+      setGlobalActivityItems([]);
+      return;
+    }
+
     const q = query(
       collection(db, 'activity_stream'),
       where('ownerUid', '==', currentUser.uid),
       orderBy('timestamp', 'desc'),
-      limit(300)
+      limit(400)
     );
-    const unsub = onSnapshot(
+
+    const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        const map: Record<string, string> = {};
-        for (const d of snap.docs) {
-          const data = d.data() as any;
-          if (data.entityType !== 'goal') continue;
-          if (data.activityType !== 'note_added') continue;
-          const gid = data.entityId as string;
-          if (!gid || map[gid]) continue;
-          if (data.noteContent) {
-            map[gid] = String(data.noteContent);
-          }
-        }
-        setLastNotes(map);
+        const list = snap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })) as ActivityEntry[];
+        setGlobalActivityItems(list);
       },
       (error) => {
-        console.error('GoalRoadmapV3 activity stream error:', error);
-        setLastNotes({});
+        console.error('GoalRoadmapV3 global activity stream error:', error);
+        setGlobalActivityItems([]);
       }
     );
-    return () => unsub();
+
+    return () => unsubscribe();
   }, [currentUser?.uid]);
 
-  // Activity stream subscription per selected goal
-  useEffect(() => {
-    if (!activityGoalId) return;
-    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems);
-    return () => unsub();
-  }, [activityGoalId]);
+  const lastNotes = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const item of globalActivityItems) {
+      if (!item || item.entityType !== 'goal') continue;
+      const type = String(item.activityType || '').toLowerCase();
+      if (type !== 'note_added') continue;
+      const gid = String(item.entityId || '');
+      if (!gid || map[gid]) continue;
+      const note = (item as any).noteContent;
+      if (typeof note === 'string' && note.trim()) {
+        map[gid] = note.trim();
+      }
+    }
+    return map;
+  }, [globalActivityItems]);
 
-  // Global activity stream subscription when modal open
-  useEffect(() => {
-    if (!showGlobalActivity || !currentUser?.uid) return;
-    const q = query(
-      collection(db, 'activity_stream'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('timestamp', 'desc')
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setGlobalActivityItems(list as any[]);
-    });
-    return () => unsub();
-  }, [showGlobalActivity, currentUser?.uid]);
+  const latestActivityByGoal = useMemo(() => {
+    const map = new Map<string, ActivityEntry>();
+    for (const item of globalActivityItems) {
+      if (!item || item.entityType !== 'goal') continue;
+      const type = String(item.activityType || '').toLowerCase();
+      if (!ALLOWED_ACTIVITY_TYPES.has(type)) continue;
+      const gid = String(item.entityId || '');
+      if (!gid || map.has(gid)) continue;
+      map.set(gid, item);
+    }
+    return map;
+  }, [globalActivityItems]);
+
+  const describeActivity = useCallback((activity: ActivityEntry): string => {
+    const type = String(activity.activityType || '').toLowerCase();
+    if (type === 'note_added') {
+      const raw = String((activity as any).noteContent || '').trim();
+      if (!raw) return 'Note added';
+      const clipped = raw.length > 120 ? `${raw.slice(0, 117)}…` : raw;
+      return `Note · ${clipped}`;
+    }
+    if (type === 'status_changed') {
+      const statusValue = Number(activity.newValue ?? activity.description ?? 0);
+      const label = ChoiceHelper.getLabel('goal', 'status', Number.isNaN(statusValue) ? 0 : statusValue);
+      return `Status → ${label}`;
+    }
+    if (type === 'priority_changed') {
+      return `Priority → ${activity.newValue ?? ''}`;
+    }
+    if (type === 'sprint_changed') {
+      return `Sprint → ${activity.newValue ?? ''}`;
+    }
+    if (type === 'updated' && activity.fieldName) {
+      return `${activity.fieldName}: ${activity.newValue ?? ''}`.trim();
+    }
+    if (type === 'created') return 'Goal created';
+    if (type === 'deleted') return 'Goal deleted';
+    return activity.description || activity.activityType || 'Activity';
+  }, []);
+
+  const formatDateLabel = useCallback((value?: number | string | null) => {
+    if (value === null || value === undefined) return '';
+    const date = typeof value === 'number' ? new Date(value) : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString();
+  }, []);
 
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
@@ -392,7 +441,7 @@ const GoalRoadmapV3: React.FC = () => {
       }
     } catch (e) { console.error('Failed to update goal dates', e); }
     finally { const tip = tooltipRef.current; if (tip) tip.style.display='none'; setGuideXs([]); setActiveGuideX(null); dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() }; setDraggingId(null); }
-  }, [dateFromX, pointerMove, currentUser?.uid]);
+  }, [dateFromX, pointerMove, currentUser?.uid, currentUser?.email, snapEnabled, zoom]);
 
   const startDrag = useCallback((ev: React.PointerEvent, goal: Goal, type: 'move'|'start'|'end') => {
     ev.preventDefault();
@@ -415,7 +464,7 @@ const GoalRoadmapV3: React.FC = () => {
       for (let y=start.getFullYear(); y<=end.getFullYear(); y++) { const d=new Date(y,0,1); if(d>=start&&d<=end) guides.push(xFromDate(d)); }
     }
     setGuideXs(guides);
-  }, [pointerMove, pointerUp]);
+  }, [pointerMove, pointerUp, timeRange.start, timeRange.end, zoom, xFromDate]);
 
   // Keyboard nudges for accessibility and precision
   const onKeyNudge = useCallback(async (e: React.KeyboardEvent, g: Goal) => {
@@ -437,7 +486,7 @@ const GoalRoadmapV3: React.FC = () => {
         await ActivityStreamService.logFieldChange(g.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${start.toDateString()} – ${end.toDateString()}`, `${ns.toDateString()} – ${ne.toDateString()}`, 'personal', g.id, 'human');
       }
     } catch (err) { console.error('Nudge failed', err); }
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, currentUser?.email]);
 
   const hexToRgba = (hex: string, alpha: number) => {
     const value = hex.replace('#', '');
@@ -481,14 +530,14 @@ const GoalRoadmapV3: React.FC = () => {
     await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft.trim(), currentUser.uid, currentUser.email || '', 'personal', noteGoalId, 'human');
     try { await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft.trim(), updatedAt: Date.now() }); } catch {}
     setNoteDraft(''); setNoteGoalId(null);
-  }, [noteGoalId, noteDraft, currentUser?.uid]);
+  }, [noteGoalId, noteDraft, currentUser?.uid, currentUser?.email]);
 
   // Compute stacking lanes per theme row to avoid visual overlap
   const getLaneHeight = useCallback(() => {
-    if (zoom === 'weeks') return 92;
-    if (zoom === 'months') return 84;
-    if (zoom === 'quarters') return 64;
-    return 48; // years
+    if (zoom === 'weeks') return 110;
+    if (zoom === 'months') return 96;
+    if (zoom === 'quarters') return 68;
+    return 52; // years
   }, [zoom]);
 
   type TimedGoal = { id: string; start: number; end: number; raw: Goal };
@@ -700,85 +749,151 @@ const GoalRoadmapV3: React.FC = () => {
                   const lane = laneAssign.get(g.id) || 0;
                   const total = storyCounts[g.id] || 0;
                   const done = storyDoneCounts[g.id] || 0;
-                  const pct = total ? Math.round((done/total)*100) : 0;
+                  const pct = total ? Math.round((done / total) * 100) : 0;
+                  const notePreview = lastNotes[g.id] || (g as any)?.recentNote;
+                  const latestActivity = latestActivityByGoal.get(g.id);
+                  const activitySummary = latestActivity ? describeActivity(latestActivity) : null;
+                  const activityIcon = latestActivity ? ActivityStreamService.formatActivityIcon(latestActivity.activityType || '') : null;
+                  const activityTimestamp = latestActivity?.timestamp?.toDate?.()?.toLocaleString?.() ?? '';
+                  const statusValue = typeof g.status === 'number' ? g.status : 0;
+                  const statusLabel = ChoiceHelper.getLabel('goal', 'status', statusValue);
+                  const statusColor = ChoiceHelper.getColor('goal', 'status', statusValue);
+                  const confidenceLabel = ChoiceHelper.getLabel('goal', 'confidence', typeof g.confidence === 'number' ? g.confidence : 0);
+                  const sizeLabel = ChoiceHelper.getLabel('goal', 'size', typeof g.size === 'number' ? g.size : 0);
+                  const statusChipStyle = { '--pill-color': statusColor } as React.CSSProperties;
+                  const startLabel = formatDateLabel(g.startDate);
+                  const endLabel = formatDateLabel(g.endDate) || formatDateLabel((g as any)?.targetDate ?? null);
+                  const isCompact = isCompactZoom;
+
                   return (
                   <div
                     key={g.id}
                     data-grv3-goal={g.id}
-                    className={`grv3-bar ${draggingId===g.id ? 'dragging' : ''}`}
+                    className={`grv3-bar ${draggingId===g.id ? 'dragging' : ''} ${hoveredId===g.id ? 'show-actions' : ''} ${isCompact ? 'compact' : ''}`}
                     style={{ left, width, height: laneH, top: 12 + lane*(laneH + 8), zIndex: hoveredId===g.id ? 1000 : undefined, ...barStyle(g) }}
-                    title={`${g.title} — ${g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} → ${g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}${total ? ` • ${pct}%` : ''}`}
+                    title={`${g.title} — ${startLabel || 'Start TBD'} → ${endLabel || 'End TBD'}${total ? ` • ${pct}%` : ''}`}
                     onPointerDown={(e) => startDrag(e, g, 'move')}
                     tabIndex={0}
                     onKeyDown={(e) => onKeyNudge(e, g)}
                     onMouseEnter={() => setHoveredId(g.id)}
                     onMouseLeave={() => setHoveredId(null)}
-                    onDoubleClick={() => setShowGlobalActivity(true)}
+                    onFocus={() => setHoveredId(g.id)}
+                    onBlur={(e) => {
+                      const next = e.relatedTarget as Node | null;
+                      if (!next || !e.currentTarget.contains(next)) setHoveredId(null);
+                    }}
+                    onDoubleClick={() => showSidebar(g as any, 'goal')}
+                    role="button"
+                    aria-label={`Goal ${g.title}`}
                   >
                     <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
 
                     <div className="grv3-actions">
-                      <Dropdown align="end" onClick={(e) => e.stopPropagation()}>
-                        <Dropdown.Toggle
-                          size="sm"
-                          variant="outline-light"
-                          className="grv3-action-toggle"
-                          aria-label="Open goal actions"
-                        >
-                          <MoreVertical size={16} />
-                        </Dropdown.Toggle>
-                        <Dropdown.Menu>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}>
-                            <Wand2 size={14} className="me-2" />
-                            Generate Stories
-                          </Dropdown.Item>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}>
-                            <ListIcon size={14} className="me-2" />
-                            Open Activity Stream
-                          </Dropdown.Item>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}>
-                            <MessageSquareText size={14} className="me-2" />
-                            Add Note
-                          </Dropdown.Item>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}>
-                            <Edit3 size={14} className="me-2" />
-                            Edit Goal
-                          </Dropdown.Item>
-                          <Dropdown.Divider />
-                          <Dropdown.Item
-                            className="text-danger"
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              const ok = window.confirm(`Delete goal "${g.title}"? This cannot be undone.`);
-                              if (ok) {
-                                try {
-                                  await deleteDoc(doc(db, 'goals', g.id));
-                                } catch (err) {
-                                  window.alert('Failed to delete goal: ' + (err as any)?.message);
-                                }
-                              }
-                            }}
-                          >
-                            <Trash2 size={14} className="me-2" />
-                            Delete Goal
-                          </Dropdown.Item>
-                        </Dropdown.Menu>
-                      </Dropdown>
+                      <button
+                        type="button"
+                        className="grv3-icon-btn"
+                        title="Open activity stream"
+                        aria-label="Open activity stream"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}
+                      >
+                        <Activity size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="grv3-icon-btn"
+                        title="Add note"
+                        aria-label="Add note"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}
+                      >
+                        <MessageSquareText size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="grv3-icon-btn"
+                        title="Generate stories with AI"
+                        aria-label="Generate stories with AI"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}
+                      >
+                        <Wand2 size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="grv3-icon-btn"
+                        title="Edit goal"
+                        aria-label="Edit goal"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}
+                      >
+                        <Edit3 size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="grv3-icon-btn danger"
+                        title="Delete goal"
+                        aria-label="Delete goal"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          const ok = window.confirm(`Delete goal "${g.title}"? This cannot be undone.`);
+                          if (ok) {
+                            try {
+                              await deleteDoc(doc(db, 'goals', g.id));
+                            } catch (err) {
+                              window.alert('Failed to delete goal: ' + (err as any)?.message);
+                            }
+                          }
+                        }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
                     </div>
 
-                    <div className="grv3-title">{g.title}</div>
-                    <div className="grv3-meta">{g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} – {g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}{typeof storyCounts[g.id] === 'number' ? ` • ${storyCounts[g.id]} stories` : ''}</div>
-                    {typeof storyCounts[g.id] === 'number' && storyCounts[g.id] > 0 && (
-                      <div className="mt-1" style={{ width: '100%' }}>
-                        <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,.3)', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${Math.round(((storyDoneCounts[g.id]||0) / storyCounts[g.id]) * 100)}%`, background: 'rgba(255,255,255,.9)' }} />
-                        </div>
-                        <div className="grv3-meta">{Math.round(((storyDoneCounts[g.id]||0) / storyCounts[g.id]) * 100)}%</div>
+                    <div className={`grv3-title ${isCompact ? 'grv3-title-compact' : ''}`}>{g.title}</div>
+                    <div className={`grv3-meta ${isCompact ? 'grv3-meta-compact' : ''}`}>
+                      {startLabel || 'Start TBD'}
+                      {' – '}
+                      {endLabel || 'End TBD'}
+                      {typeof storyCounts[g.id] === 'number' ? ` • ${storyCounts[g.id]} stories` : ''}
+                    </div>
+
+                    {showExtendedMeta && (
+                      <div className="grv3-detail-row">
+                        <span className="grv3-chip grv3-chip-status" style={statusChipStyle}>{statusLabel}</span>
+                        <span className="grv3-chip">{sizeLabel}</span>
+                        {showFullMeta && <span className="grv3-chip">{confidenceLabel} confidence</span>}
+                        {typeof g.priority === 'number' && <span className="grv3-chip">P{g.priority}</span>}
                       </div>
                     )}
-                    {(zoom === 'weeks' || zoom === 'months') && (lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote) && (
-                      <div className="grv3-meta">📝 {lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote}</div>
+
+                    {!isCompact && total > 0 && (
+                      <div className="grv3-progress">
+                        <div className="grv3-progress-track">
+                          <div className="grv3-progress-bar" style={{ width: `${pct}%` }} />
+                        </div>
+                        <div className="grv3-meta grv3-meta-muted">{pct}% complete</div>
+                      </div>
+                    )}
+
+                    {!isCompact && activitySummary && (
+                      <div className="grv3-activity-row">
+                        {activityIcon && <span className="grv3-activity-icon" aria-hidden="true">{activityIcon}</span>}
+                        <span className="grv3-activity-text">{activitySummary}</span>
+                      </div>
+                    )}
+
+                    {showFullMeta && !isCompact && activityTimestamp && (
+                      <div className="grv3-meta grv3-meta-muted">{activityTimestamp}</div>
+                    )}
+
+                    {showExtendedMeta && !isCompact && notePreview && (
+                      <div className="grv3-meta grv3-meta-note">
+                        <MessageSquareText size={12} className="me-1" />
+                        <span>{notePreview}</span>
+                      </div>
                     )}
                   </div>
                   );
@@ -792,37 +907,6 @@ const GoalRoadmapV3: React.FC = () => {
 
       {/* Tooltip for drag */}
       <div ref={tooltipRef} className="grv3-tooltip" style={{ display: 'none' }} />
-
-      {/* Activity Modal */}
-      {/* Activity modal header adopts the goal theme color */}
-      <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
-        {(() => {
-          const g = goals.find(x => x.id === activityGoalId);
-          const themeId = migrateThemeValue(g?.theme ?? 0);
-          const themeDef = getThemeDefinition(themeId);
-          const colorVar = themeDef.color || '#6c757d';
-          const overlay = theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
-          return (
-            <Modal.Header closeButton style={{ ['--modal-color' as any]: String(colorVar), background: `linear-gradient(135deg, var(--modal-color) 0%, ${overlay} 100%)`, color: '#fff' }}>
-              <Modal.Title>Activity Stream</Modal.Title>
-            </Modal.Header>
-          );
-        })()}
-        <Modal.Body>
-          {activityItems.length === 0 ? (
-            <div className="text-muted">No activity yet.</div>
-          ) : (
-            <ul className="list-group">
-              {activityItems.map(a => (
-                <li key={a.id} className="list-group-item">
-                  <div className="small text-muted">{a.timestamp?.toDate?.().toLocaleString?.() || ''}</div>
-                  <div>{a.description || a.activityType}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Modal.Body>
-      </Modal>
 
       {/* Add Note Modal */}
       <Modal show={!!noteGoalId} onHide={() => setNoteGoalId(null)}>
