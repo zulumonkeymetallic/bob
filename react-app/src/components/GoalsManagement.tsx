@@ -22,7 +22,8 @@ const GoalsManagement: React.FC = () => {
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'cards'>('cards');
+  const [cardLayout, setCardLayout] = useState<'grid' | 'comfortable'>('grid');
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
@@ -218,6 +219,26 @@ const GoalsManagement: React.FC = () => {
                 Cards
               </Button>
             </div>
+            {viewMode === 'cards' && (
+              <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
+                <Button
+                  size="sm"
+                  variant={cardLayout === 'grid' ? 'primary' : 'outline-secondary'}
+                  onClick={() => setCardLayout('grid')}
+                  style={{ borderRadius: 0 }}
+                >
+                  4 × 5 Grid
+                </Button>
+                <Button
+                  size="sm"
+                  variant={cardLayout === 'comfortable' ? 'primary' : 'outline-secondary'}
+                  onClick={() => setCardLayout('comfortable')}
+                  style={{ borderRadius: 0 }}
+                >
+                  Comfortable
+                </Button>
+              </div>
+            )}
             <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
               Add Goal
             </Button>
@@ -397,6 +418,7 @@ const GoalsManagement: React.FC = () => {
                     onGoalDelete={handleGoalDelete}
                     onGoalPriorityChange={handleGoalPriorityChange}
                     themes={globalThemes}
+                    cardLayout={cardLayout}
                   />
                 )}
               </div>

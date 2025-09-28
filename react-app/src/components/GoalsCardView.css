@@ -1,8 +1,37 @@
 .goals-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 24px;
   align-items: stretch;
+  grid-auto-rows: 1fr;
+}
+
+.goals-card-grid--grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.goals-card-grid--comfortable {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 32px;
+}
+
+@media (max-width: 1600px) {
+  .goals-card-grid--grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1200px) {
+  .goals-card-grid--grid,
+  .goals-card-grid--comfortable {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .goals-card-grid--grid,
+  .goals-card-grid--comfortable {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+  }
 }
 
 .goals-card-tile {
@@ -11,14 +40,104 @@
   min-height: 100%;
 }
 
-@media (min-width: 992px) {
-  .goals-card-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
+.goals-card {
+  backdrop-filter: blur(6px);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-@media (min-width: 1280px) {
-  .goals-card-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
+.goals-card--grid {
+  min-height: 240px;
+}
+
+.goals-card--comfortable {
+  min-height: 300px;
+}
+
+.goals-card-quick-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.goals-card-quick-stat {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.32);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.goals-card-quick-stat .label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.78;
+}
+
+.goals-card-quick-stat .value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.goals-card-description {
+  margin: 0;
+}
+
+.goals-card-stats-detailed {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.goals-card-stat-block {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.goals-card-stat-block .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.75;
+}
+
+.goals-card-stat-block .value {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.goals-card-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  font-size: 13px;
+}
+
+.goals-card-metadata div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.goals-card-activity-button--icon {
+  font-size: 0 !important;
+  padding: 6px !important;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.goals-card-activity-button--icon svg {
+  margin: 0;
 }

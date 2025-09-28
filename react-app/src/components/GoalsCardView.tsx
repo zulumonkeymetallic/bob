@@ -28,6 +28,7 @@ interface GoalsCardViewProps {
   onGoalSelect?: (goalId: string) => void; // New prop for goal selection
   selectedGoalId?: string | null; // New prop for highlighting selected goal
   themes?: GlobalTheme[];
+  cardLayout?: 'grid' | 'comfortable';
 }
 
 const GoalsCardView: React.FC<GoalsCardViewProps> = ({
@@ -37,7 +38,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   onGoalPriorityChange,
   onGoalSelect,
   selectedGoalId,
-  themes
+  themes,
+  cardLayout = 'grid'
 }) => {
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
@@ -62,6 +64,21 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     const themeId = migrateThemeValue(value);
     return themeMap.get(themeId) || defaultTheme;
   };
+
+  const hexToRgba = (hex: string, alpha: number) => {
+    const value = hex.replace('#', '');
+    const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value;
+    const bigint = parseInt(full, 16);
+    const r = (bigint >> 16) & 255;
+    const g = (bigint >> 8) & 255;
+    const b = bigint & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
+  const showDetailed = cardLayout === 'comfortable';
+  const gridClassName = showDetailed
+    ? 'goals-card-grid goals-card-grid--comfortable'
+    : 'goals-card-grid goals-card-grid--grid';
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
   // Status colors via tokens
@@ -305,42 +322,76 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
   return (
     <div className="goals-card-view" style={{ padding: '20px' }}>
-      <div className="goals-card-grid">
+      <div className={gridClassName}>
         {goals.map((goal) => {
           const themeDef = resolveTheme(goal.theme);
           const themeColor = themeDef.color || 'var(--brand)';
           const themeTextColor = themeDef.textColor || 'var(--on-accent)';
           const isSelected = selectedGoalId === goal.id;
+          const gradientStart = hexToRgba(themeColor, showDetailed ? 0.45 : 0.28);
+          const gradientEnd = hexToRgba(themeColor, showDetailed ? 0.18 : 0.1);
+          const cardBackground = `linear-gradient(155deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
+          const defaultText = typeof themeVars.text === 'string' ? themeVars.text : '#1f1f1f';
+          const defaultMuted = typeof themeVars.muted === 'string' ? themeVars.muted : 'rgba(0,0,0,0.6)';
+          const textColor = showDetailed ? (themeDef.textColor || '#ffffff') : defaultText;
+          const mutedTextColor = showDetailed ? hexToRgba(themeColor, 0.75) : defaultMuted;
+          const totalStories = (goal as any).storyCount ?? (goal as any).storiesCount ?? (goal as any).story_counts ?? null;
+          const doneStories = (goal as any).doneStories ?? (goal as any).completedStories ?? null;
+          const allocatedMinutes = goalTimeAllocations[goal.id];
+          const latestActivity = latestActivities[goal.id];
+          const activityButton = (
+            <Button
+              variant={showDetailed ? 'outline-light' : 'outline-primary'}
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleViewActivityStream(goal, e);
+              }}
+              className={showDetailed ? '' : 'goals-card-activity-button--icon'}
+              style={{
+                fontSize: showDetailed ? '12px' : '0',
+                padding: showDetailed ? '4px 8px' : '6px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: showDetailed ? '4px' : '0'
+              }}
+              aria-label="Open activity stream"
+            >
+              <MessageCircle size={showDetailed ? 12 : 14} />
+              {showDetailed && 'Activity'}
+            </Button>
+          );
 
           return (
             <div key={goal.id} className="goals-card-tile">
-            <Card
-              style={{
+              <Card
+                className={`h-100 goals-card goals-card--${showDetailed ? 'comfortable' : 'grid'}`}
+                style={{
                 height: '100%',
-                border: isSelected ? `3px solid ${themeColor}` : '1px solid var(--line)',
-                boxShadow: isSelected ? '0 0 0 0 transparent' : '0 6px 12px var(--glass-shadow-color)',
-                borderRadius: '12px',
+                border: isSelected ? `3px solid ${themeColor}` : '1px solid rgba(0,0,0,0.06)',
+                boxShadow: isSelected ? '0 0 0 0 transparent' : '0 10px 24px rgba(15, 23, 42, 0.12)',
+                borderRadius: showDetailed ? '16px' : '14px',
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
                 cursor: 'pointer',
-                backgroundColor: isSelected ? (themeVars.card as string) : (themeVars.panel as string),
+                background: cardBackground,
+                color: textColor,
                 flex: '1 1 auto'
-              }}
-              className="h-100"
-              onClick={() => onGoalSelect?.(goal.id)}
-              onMouseEnter={(e) => {
+                }}
+                onClick={() => onGoalSelect?.(goal.id)}
+                onMouseEnter={(e) => {
                 if (!isSelected) {
                   e.currentTarget.style.transform = 'translateY(-2px)';
                   e.currentTarget.style.boxShadow = '0 12px 18px var(--glass-shadow-color)';
                 }
               }}
-              onMouseLeave={(e) => {
+                onMouseLeave={(e) => {
                 if (!isSelected) {
                   e.currentTarget.style.transform = 'translateY(0)';
                   e.currentTarget.style.boxShadow = '0 6px 12px var(--glass-shadow-color)';
                 }
-              }}
-            >
+                }}
+              >
               {/* Theme Bar */}
               <div 
                 style={{
@@ -349,7 +400,14 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 }}
               />
 
-              <Card.Body style={{ padding: '20px' }}>
+              <Card.Body
+                style={{
+                  padding: showDetailed ? '24px' : '18px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: showDetailed ? '16px' : '12px'
+                }}
+              >
                 {/* Header */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -465,112 +523,172 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   </Dropdown>
                 </div>
 
+                {!showDetailed && (
+                  <div className="goals-card-quick-stats">
+                    <div className="goals-card-quick-stat">
+                      <span className="label">Stories</span>
+                      <span className="value">{totalStories ?? '—'}</span>
+                    </div>
+                    <div className="goals-card-quick-stat">
+                      <span className="label">Done</span>
+                      <span className="value">{doneStories ?? '—'}</span>
+                    </div>
+                    <div className="goals-card-quick-stat">
+                      <span className="label">Priority</span>
+                      <span className="value">{goal.priority ?? '—'}</span>
+                    </div>
+                    {allocatedMinutes !== undefined && (
+                      <div className="goals-card-quick-stat">
+                        <span className="label">This Week</span>
+                        <span className="value">{Math.round(allocatedMinutes)}m</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Description */}
-                {goal.description && (
-                  <p style={{ 
-                    margin: '0 0 16px 0', 
-                    color: themeVars.muted as string, 
-                    fontSize: '14px',
-                    lineHeight: '1.5',
-                    display: '-webkit-box',
-                    WebkitLineClamp: 3,
-                    WebkitBoxOrient: 'vertical',
-                    overflow: 'hidden'
-                  }}>
+                {showDetailed && goal.description && (
+                  <p
+                    className="goals-card-description"
+                    style={{
+                      margin: '0 0 16px 0',
+                      color: mutedTextColor,
+                      fontSize: '14px',
+                      lineHeight: '1.5',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden'
+                    }}
+                  >
                     {goal.description}
                   </p>
                 )}
 
                 {/* Latest Status/Comment */}
-                {latestActivities[goal.id] && (
-                  <div style={{
+                {showDetailed && latestActivity && (
+                  <div style={{ 
                     marginBottom: '16px',
                     padding: '12px',
-                    backgroundColor: themeVars.card as string,
-                    border: `1px solid ${themeColor}`,
-                    borderRadius: '6px'
+                    backgroundColor: hexToRgba(themeColor, 0.16),
+                    border: `1px solid ${hexToRgba(themeColor, 0.35)}`,
+                    borderRadius: '10px'
                   }}>
                     <div style={{ 
                       fontSize: '11px', 
                       fontWeight: '600', 
-                      color: themeColor, 
+                      color: textColor, 
                       marginBottom: '6px',
                       textTransform: 'uppercase',
                       letterSpacing: '0.5px'
                     }}>
-                      {latestActivities[goal.id].activityType === 'note_added' 
+                      {latestActivity.activityType === 'note_added' 
                         ? 'Latest Comment'
-                        : latestActivities[goal.id].activityType === 'status_changed'
+                        : latestActivity.activityType === 'status_changed'
                         ? 'Latest Status'
-                        : latestActivities[goal.id].activityType === 'updated'
+                        : latestActivity.activityType === 'updated'
                         ? 'Latest Update'
                         : 'Latest Activity'}
                     </div>
                     <div style={{ 
                       fontSize: '12px', 
-                      color: themeVars.text as string, 
+                      color: textColor, 
                       fontStyle: 'italic',
                       lineHeight: '1.4'
                     }}>
-                      {latestActivities[goal.id].activityType === 'note_added'
-                        ? `"${latestActivities[goal.id].noteContent}"`
-                        : latestActivities[goal.id].activityType === 'status_changed'
-                        ? `Status changed to: ${ChoiceHelper.getLabel('goal', 'status', parseInt(latestActivities[goal.id].newValue) || latestActivities[goal.id].newValue)}`
-                        : latestActivities[goal.id].activityType === 'updated' && latestActivities[goal.id].fieldName
-                        ? `${latestActivities[goal.id].fieldName} changed to: ${latestActivities[goal.id].newValue}`
-                        : latestActivities[goal.id].activityType === 'created'
+                      {latestActivity.activityType === 'note_added'
+                        ? `"${latestActivity.noteContent}"`
+                        : latestActivity.activityType === 'status_changed'
+                        ? `Status changed to: ${ChoiceHelper.getLabel('goal', 'status', parseInt(latestActivity.newValue) || latestActivity.newValue)}`
+                        : latestActivity.activityType === 'updated' && latestActivity.fieldName
+                        ? `${latestActivity.fieldName} changed to: ${latestActivity.newValue}`
+                        : latestActivity.activityType === 'created'
                         ? 'Goal created'
-                        : latestActivities[goal.id].description || 'Activity logged'}
+                        : latestActivity.description || 'Activity logged'}
                     </div>
                     <div style={{ 
                       fontSize: '10px', 
-                      color: themeVars.muted as string, 
+                      color: mutedTextColor, 
                       marginTop: '6px'
                     }}>
-                      {ActivityStreamService.formatTimestamp(latestActivities[goal.id].timestamp)}
-                      {latestActivities[goal.id].userEmail && ` • ${latestActivities[goal.id].userEmail.split('@')[0]}`}
+                      {latestActivity.timestamp ? ActivityStreamService.formatTimestamp(latestActivity.timestamp) : null}
+                      {latestActivity.userEmail && ` • ${latestActivity.userEmail.split('@')[0]}`}
+                    </div>
+                  </div>
+                )}
+
+                {showDetailed && (
+                  <div className="goals-card-stats-detailed">
+                    <div className="goals-card-stat-block">
+                      <div className="label">Total Stories</div>
+                      <div className="value">{totalStories ?? '—'}</div>
+                    </div>
+                    <div className="goals-card-stat-block">
+                      <div className="label">Done Stories</div>
+                      <div className="value">{doneStories ?? '—'}</div>
+                    </div>
+                    <div className="goals-card-stat-block">
+                      <div className="label">Priority</div>
+                      <div className="value">{goal.priority ?? '—'}</div>
+                    </div>
+                    <div className="goals-card-stat-block">
+                      <div className="label">Confidence</div>
+                      <div className="value">{goal.confidence ? `${goal.confidence}/10` : '—'}</div>
+                    </div>
+                    <div className="goals-card-stat-block">
+                      <div className="label">This Week</div>
+                      <div className="value">{allocatedMinutes !== undefined ? `${Math.round(allocatedMinutes)}m` : '—'}</div>
                     </div>
                   </div>
                 )}
 
                 {/* Goal Details */}
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
-                    <Target size={14} style={{ marginRight: '8px' }} />
-                    <span style={{ fontWeight: '500', marginRight: '8px' }}>Size:</span>
-                    <span>{goal.size}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
-                    <Hash size={14} style={{ marginRight: '8px' }} />
-                    <span style={{ fontWeight: '500', marginRight: '8px' }}>Priority:</span>
-                    <span>{goal.priority}</span>
-                  </div>
-                  {goal.confidence && (
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: themeVars.muted as string }}>
-                      <User size={14} style={{ marginRight: '8px' }} />
-                      <span style={{ fontWeight: '500', marginRight: '8px' }}>Confidence:</span>
-                      <span>{goal.confidence}/10</span>
+                {showDetailed && (
+                  <div style={{ marginBottom: '16px', color: mutedTextColor, display: 'grid', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                      <Target size={14} />
+                      <span style={{ fontWeight: '500' }}>Size:</span>
+                      <span>{goal.size}</span>
                     </div>
-                  )}
-                  {goalTimeAllocations[goal.id] !== undefined && (
-                    <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: 'var(--green)' }}>
-                      <Clock size={14} style={{ marginRight: '8px' }} />
-                      <span style={{ fontWeight: '500', marginRight: '8px' }}>This Week:</span>
-                      <span>{Math.round(goalTimeAllocations[goal.id])} minutes allocated</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                      <Hash size={14} />
+                      <span style={{ fontWeight: '500' }}>Priority:</span>
+                      <span>{goal.priority}</span>
                     </div>
-                  )}
-                </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                      <User size={14} />
+                      <span style={{ fontWeight: '500' }}>Owner:</span>
+                      <span>{goal.ownerUid?.split('@')[0] || '—'}</span>
+                    </div>
+                    {goal.confidence && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                        <User size={14} />
+                        <span style={{ fontWeight: '500' }}>Confidence:</span>
+                        <span>{goal.confidence}/10</span>
+                      </div>
+                    )}
+                    {goalTimeAllocations[goal.id] !== undefined && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: textColor }}>
+                        <Clock size={14} />
+                        <span style={{ fontWeight: '500' }}>This Week:</span>
+                        <span>{Math.round(goalTimeAllocations[goal.id])} minutes allocated</span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Footer */}
-                <div style={{ 
-                  display: 'flex', 
-                  justifyContent: 'space-between', 
-                  alignItems: 'center',
-                  paddingTop: '16px',
-                  borderTop: `1px solid ${themeVars.border}`,
-                  fontSize: '12px',
-                  color: themeVars.muted as string
-                }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    paddingTop: showDetailed ? '16px' : '8px',
+                    borderTop: showDetailed ? `1px solid ${hexToRgba(themeColor, 0.25)}` : '1px solid rgba(255,255,255,0.18)',
+                    fontSize: '12px',
+                    color: mutedTextColor
+                  }}
+                >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                       <Calendar size={12} style={{ marginRight: '4px' }} />
@@ -584,7 +702,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     {(() => {
                       const d = toDate(goal.updatedAt);
                       return d ? (
-                        <div style={{ display: 'flex', alignItems: 'center', color: 'var(--green)', fontWeight: '500' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', color: textColor, fontWeight: '500' }}>
                           <Calendar size={12} style={{ marginRight: '4px' }} />
                           <span>
                             Updated: {formatDate(d)} at {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -594,24 +712,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     })()}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Button
-                      variant="outline-primary"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleViewActivityStream(goal, e);
-                      }}
-                      style={{ 
-                        fontSize: '12px',
-                        padding: '4px 8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}
-                    >
-                      <MessageCircle size={12} />
-                      Activity
-                    </Button>
+                    {activityButton}
                   </div>
                 </div>
               </Card.Body>
