@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Alert, Badge, Button, Card, Col, Collapse, Form, ListGroup, Row, Spinner, Table } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { db, functions, firebaseConfig } from '../firebase';
@@ -53,6 +54,7 @@ const relativeTime = (value: any) => {
 
 const IntegrationSettings: React.FC = () => {
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const [profile, setProfile] = useState<ProfileData | null>(null);
 
   const [googleConnected, setGoogleConnected] = useState<boolean>(false);
@@ -386,6 +388,18 @@ const IntegrationSettings: React.FC = () => {
 
   return (
     <div className="d-flex flex-column gap-4">
+      <div className="d-flex justify-content-between align-items-center">
+        <div>
+          <h3 className="mb-0">Integrations</h3>
+          <small className="text-muted">Connect services and view sync status</small>
+        </div>
+        <div>
+          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/integrations/logs')}>
+            <i className="fas fa-stream me-2"></i>
+            Integration Logs
+          </Button>
+        </div>
+      </div>
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
