@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, ButtonGroup, Modal, Form, Badge } from 'react-bootstrap';
+import { Button, ButtonGroup, Modal, Form, Badge, Dropdown } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
@@ -10,15 +10,13 @@ import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Activity } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
-import GLOBAL_THEMES, { getThemeById, migrateThemeValue } from '../../constants/globalThemes';
+import { useGlobalThemes } from '../../hooks/useGlobalThemes';
+import GLOBAL_THEMES, { migrateThemeValue, type GlobalTheme } from '../../constants/globalThemes';
 
 type Zoom = 'weeks' | 'months' | 'quarters' | 'years';
-
-// Adopt V2 theme system sourced from global settings
-const THEMES = GLOBAL_THEMES.map(t => ({ id: t.id, name: t.name || t.label, color: t.color }));
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
 
@@ -27,6 +25,7 @@ const GoalRoadmapV3: React.FC = () => {
   const { theme } = useTheme();
   const { selectedSprintId } = useSprint();
   const { showSidebar } = useSidebar();
+  const { themes: globalThemes } = useGlobalThemes();
 
   const [zoom, setZoom] = useState<Zoom>('quarters');
   const [yearSpan, setYearSpan] = useState<1 | 3 | 5>(3);
@@ -52,6 +51,15 @@ const GoalRoadmapV3: React.FC = () => {
   const [filterHasStories, setFilterHasStories] = useState(false);
   const [filterInSelectedSprint, setFilterInSelectedSprint] = useState(false);
   const [filterOverlapSelectedSprint, setFilterOverlapSelectedSprint] = useState(false);
+
+  const themePalette = useMemo(() => (globalThemes && globalThemes.length ? globalThemes : GLOBAL_THEMES), [globalThemes]);
+  const themeMap = useMemo(() => {
+    const map = new Map<number, GlobalTheme>();
+    themePalette.forEach((item) => map.set(item.id, item));
+    return map;
+  }, [themePalette]);
+  const themesList = useMemo(() => themePalette.map(t => ({ id: t.id, name: t.name || t.label, color: t.color, textColor: t.textColor })), [themePalette]);
+  const getThemeDefinition = useCallback((id: number) => themeMap.get(id) || themePalette[0] || GLOBAL_THEMES[0], [themeMap, themePalette]);
 
   // Viewport culling state
   const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
@@ -438,7 +446,7 @@ const GoalRoadmapV3: React.FC = () => {
     const end = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now()+86400000*90));
     const left = xFromDate(start); const width = Math.max(14, xFromDate(end) - left);
     const themeId = migrateThemeValue(g.theme);
-    const themeDef = getThemeById(themeId);
+    const themeDef = getThemeDefinition(themeId);
     const themeColor = themeDef.color || '#6c757d';
     // V2-inspired subtle gradient using theme color
     const bgStart = hexToRgba(themeColor, theme === 'dark' ? 0.24 : 0.18);
@@ -551,6 +559,15 @@ const GoalRoadmapV3: React.FC = () => {
             setZoom('years');
           }
         }} aria-label="Fit All"><Maximize2 size={14} /></Button>
+        <Button
+          size="sm"
+          variant="outline-secondary"
+          className="ms-2"
+          onClick={() => setShowGlobalActivity(true)}
+        >
+          <Activity size={14} className="me-1" />
+          Activity Feed
+        </Button>
         <Button size="sm" variant="outline-secondary" onClick={() => { 
           // Zoom to Month around today and filter to goals with stories in selected sprint
           setCustomRange(null);
@@ -642,7 +659,7 @@ const GoalRoadmapV3: React.FC = () => {
 
         {/* Theme rows */}
         <div style={{ position: 'relative', width: 260 + totalWidth }}>
-          {THEMES.map(t => {
+          {themesList.map(t => {
             // Prepare timed goals for this theme
             const tg: { id: string; start: number; end: number; raw: Goal }[] = goals
               .filter(g => migrateThemeValue(g.theme) === t.id)
@@ -694,12 +711,52 @@ const GoalRoadmapV3: React.FC = () => {
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
 
                     <div className="grv3-actions">
-                      <button className="grv3-action" title="Generate stories" aria-label="Generate stories" onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}><Wand2 size={16} /></button>
-                      {/* Activity stream icon (matches V2 intent) */}
-                      <button className="grv3-action" title="Activity stream" aria-label="Activity stream" onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}><ListIcon size={16} /></button>
-                      <button className="grv3-action" title="Add note" aria-label="Add note" onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}><MessageSquareText size={16} /></button>
-                      <button className="grv3-action" title="Edit goal" aria-label="Edit goal" onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}><Edit3 size={16} /></button>
-                      <button className="grv3-action" title="Delete goal" aria-label="Delete goal" onClick={async (e) => { e.stopPropagation(); const ok = window.confirm(`Delete goal \"${g.title}\"? This cannot be undone.`); if (ok) { try { await deleteDoc(doc(db, 'goals', g.id)); } catch (err) { window.alert('Failed to delete goal: ' + (err as any)?.message); } } }}><Trash2 size={16} /></button>
+                      <Dropdown align="end" onClick={(e) => e.stopPropagation()}>
+                        <Dropdown.Toggle
+                          size="sm"
+                          variant="outline-light"
+                          className="grv3-action-toggle"
+                          aria-label="Open goal actions"
+                        >
+                          <MoreVertical size={16} />
+                        </Dropdown.Toggle>
+                        <Dropdown.Menu>
+                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}>
+                            <Wand2 size={14} className="me-2" />
+                            Generate Stories
+                          </Dropdown.Item>
+                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}>
+                            <ListIcon size={14} className="me-2" />
+                            Open Activity Stream
+                          </Dropdown.Item>
+                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}>
+                            <MessageSquareText size={14} className="me-2" />
+                            Add Note
+                          </Dropdown.Item>
+                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}>
+                            <Edit3 size={14} className="me-2" />
+                            Edit Goal
+                          </Dropdown.Item>
+                          <Dropdown.Divider />
+                          <Dropdown.Item
+                            className="text-danger"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const ok = window.confirm(`Delete goal "${g.title}"? This cannot be undone.`);
+                              if (ok) {
+                                try {
+                                  await deleteDoc(doc(db, 'goals', g.id));
+                                } catch (err) {
+                                  window.alert('Failed to delete goal: ' + (err as any)?.message);
+                                }
+                              }
+                            }}
+                          >
+                            <Trash2 size={14} className="me-2" />
+                            Delete Goal
+                          </Dropdown.Item>
+                        </Dropdown.Menu>
+                      </Dropdown>
                     </div>
 
                     <div className="grv3-title">{g.title}</div>
@@ -734,7 +791,8 @@ const GoalRoadmapV3: React.FC = () => {
         {(() => {
           const g = goals.find(x => x.id === activityGoalId);
           const themeId = migrateThemeValue(g?.theme ?? 0);
-          const colorVar = getThemeById(themeId).color || '#6c757d';
+          const themeDef = getThemeDefinition(themeId);
+          const colorVar = themeDef.color || '#6c757d';
           const overlay = theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
           return (
             <Modal.Header closeButton style={{ ['--modal-color' as any]: String(colorVar), background: `linear-gradient(135deg, var(--modal-color) 0%, ${overlay} 100%)`, color: '#fff' }}>

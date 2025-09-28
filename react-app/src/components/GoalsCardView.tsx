@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Badge, Button, Dropdown, Modal, Alert } from 'react-bootstrap';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Card, Badge, Button, Dropdown, Modal, Alert } from 'react-bootstrap';
 import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -12,10 +12,13 @@ import EditGoalModal from './EditGoalModal';
 import AddStoryModal from './AddStoryModal';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
-import { getThemeName, getStatusName } from '../utils/statusHelpers';
-import { themeVars, domainThemePrimaryVar } from '../utils/themeVars';
+import { getStatusName } from '../utils/statusHelpers';
+import { themeVars } from '../utils/themeVars';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { toDate, formatDate } from '../utils/firestoreAdapters';
+import type { GlobalTheme } from '../constants/globalThemes';
+import { GLOBAL_THEMES, migrateThemeValue } from '../constants/globalThemes';
+import './GoalsCardView.css';
 
 interface GoalsCardViewProps {
   goals: Goal[];
@@ -24,6 +27,7 @@ interface GoalsCardViewProps {
   onGoalPriorityChange: (goalId: string, newPriority: number) => void;
   onGoalSelect?: (goalId: string) => void; // New prop for goal selection
   selectedGoalId?: string | null; // New prop for highlighting selected goal
+  themes?: GlobalTheme[];
 }
 
 const GoalsCardView: React.FC<GoalsCardViewProps> = ({
@@ -32,7 +36,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   onGoalDelete,
   onGoalPriorityChange,
   onGoalSelect,
-  selectedGoalId
+  selectedGoalId,
+  themes
 }) => {
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
@@ -46,15 +51,19 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
   const [generatingForGoal, setGeneratingForGoal] = useState<string | null>(null);
 
-  // Theme colors mapping via CSS variables (no hardcoded hex)
-  const themeColors = {
-    Health: domainThemePrimaryVar('Health'),
-    Growth: domainThemePrimaryVar('Growth'),
-    Wealth: domainThemePrimaryVar('Wealth'),
-    Tribe: domainThemePrimaryVar('Tribe'),
-    Home: domainThemePrimaryVar('Home')
-  } as const;
+  const themePalette = useMemo(() => (themes && themes.length ? themes : GLOBAL_THEMES), [themes]);
+  const themeMap = useMemo(() => {
+    const map = new Map<number, GlobalTheme>();
+    themePalette.forEach(theme => map.set(theme.id, theme));
+    return map;
+  }, [themePalette]);
+  const defaultTheme = themePalette[0] || GLOBAL_THEMES[0];
+  const resolveTheme = (value: any): GlobalTheme => {
+    const themeId = migrateThemeValue(value);
+    return themeMap.get(themeId) || defaultTheme;
+  };
 
+  // Theme colors mapping via CSS variables (no hardcoded hex)
   // Status colors via tokens
   const statusColors = {
     New: 'var(--muted)',
@@ -295,46 +304,49 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   }
 
   return (
-    <div style={{ padding: '20px' }}>
-      <Row className="g-4">
-        {goals.map((goal) => (
-          <Col key={goal.id} xl={4} lg={6} md={6} sm={12}>
-            <Card 
-              style={{ 
+    <div className="goals-card-view" style={{ padding: '20px' }}>
+      <div className="goals-card-grid">
+        {goals.map((goal) => {
+          const themeDef = resolveTheme(goal.theme);
+          const themeColor = themeDef.color || 'var(--brand)';
+          const themeTextColor = themeDef.textColor || 'var(--on-accent)';
+          const isSelected = selectedGoalId === goal.id;
+
+          return (
+            <div key={goal.id} className="goals-card-tile">
+            <Card
+              style={{
                 height: '100%',
-                border: selectedGoalId === goal.id 
-                  ? `3px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--brand)'}` 
-                  : '1px solid var(--line)',
-                boxShadow: selectedGoalId === goal.id 
-                  ? '0 0 0 0 transparent' 
-                  : '0 4px 6px var(--glass-shadow-color)',
+                border: isSelected ? `3px solid ${themeColor}` : '1px solid var(--line)',
+                boxShadow: isSelected ? '0 0 0 0 transparent' : '0 6px 12px var(--glass-shadow-color)',
                 borderRadius: '12px',
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
                 cursor: 'pointer',
-                backgroundColor: selectedGoalId === goal.id ? (themeVars.card as string) : (themeVars.panel as string)
+                backgroundColor: isSelected ? (themeVars.card as string) : (themeVars.panel as string),
+                flex: '1 1 auto'
               }}
               className="h-100"
               onClick={() => onGoalSelect?.(goal.id)}
               onMouseEnter={(e) => {
-                if (selectedGoalId !== goal.id) {
+                if (!isSelected) {
                   e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 8px 12px var(--glass-shadow-color)';
+                  e.currentTarget.style.boxShadow = '0 12px 18px var(--glass-shadow-color)';
                 }
               }}
               onMouseLeave={(e) => {
-                if (selectedGoalId !== goal.id) {
+                if (!isSelected) {
                   e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 4px 6px var(--glass-shadow-color)';
+                  e.currentTarget.style.boxShadow = '0 6px 12px var(--glass-shadow-color)';
                 }
               }}
             >
               {/* Theme Bar */}
               <div 
-                style={{ 
-                  height: '6px', 
-                  backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)'
-                }} 
+                style={{
+                  height: '6px',
+                  backgroundColor: themeColor
+                }}
               />
 
               <Card.Body style={{ padding: '20px' }}>
@@ -351,15 +363,15 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       {goal.title}
                     </h5>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <Badge 
-                        style={{ 
-                          backgroundColor: themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || 'var(--muted)',
-                          color: 'var(--on-accent)',
-                          fontSize: '12px'
-                        }}
-                      >
-                        {getThemeName(goal.theme)}
-                      </Badge>
+                        <Badge
+                          style={{
+                            backgroundColor: themeColor,
+                            color: themeTextColor,
+                            fontSize: '12px'
+                          }}
+                        >
+                          {themeDef.label}
+                        </Badge>
                       <Badge 
                         style={{ 
                           backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || 'var(--muted)',
@@ -471,17 +483,17 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
                 {/* Latest Status/Comment */}
                 {latestActivities[goal.id] && (
-                  <div style={{ 
+                  <div style={{
                     marginBottom: '16px',
                     padding: '12px',
                     backgroundColor: themeVars.card as string,
-                    border: `1px solid ${themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || themeVars.border}`,
+                    border: `1px solid ${themeColor}`,
                     borderRadius: '6px'
                   }}>
                     <div style={{ 
                       fontSize: '11px', 
                       fontWeight: '600', 
-                      color: (themeColors[getThemeName(goal.theme) as keyof typeof themeColors] || themeVars.brand) as string, 
+                      color: themeColor, 
                       marginBottom: '6px',
                       textTransform: 'uppercase',
                       letterSpacing: '0.5px'
@@ -628,9 +640,10 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               </Alert>
             )}
 
-          </Col>
-        ))}
-      </Row>
+          </div>
+          );
+        })}
+      </div>
 
       {/* Delete Confirmation Modal */}
       <Modal show={!!showDeleteModal} onHide={() => setShowDeleteModal(null)}>

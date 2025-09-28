@@ -396,6 +396,7 @@ const GoalsManagement: React.FC = () => {
                     onGoalUpdate={handleGoalUpdate}
                     onGoalDelete={handleGoalDelete}
                     onGoalPriorityChange={handleGoalPriorityChange}
+                    themes={globalThemes}
                   />
                 )}
               </div>

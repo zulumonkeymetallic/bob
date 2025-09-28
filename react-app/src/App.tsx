@@ -54,7 +54,6 @@ import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
-import ThemeRoadmap from './components/visualization/ThemeRoadmap';
 import GoalRoadmapV3 from './components/visualization/GoalRoadmapV3';
 import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
@@ -227,7 +226,6 @@ function AppContent() {
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
             {/* Legacy V2 removed; no preview route retained */}
-            <Route path="/goals/cards" element={<ThemeRoadmap />} />
             <Route path="/goals/viz" element={<GoalVizPage />} />
             
             {/* Goals Timeline uses Enhanced Gantt (V3) */}

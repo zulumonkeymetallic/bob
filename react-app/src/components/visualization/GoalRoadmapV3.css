@@ -32,10 +32,12 @@
 .grv3-bar.dragging { cursor: grabbing; z-index: 1000; transform: scale(1.03); }
 .grv3-title { font-weight: 800; font-size: 14px; line-height: 1.25; text-shadow: 0 1px 2px rgba(0,0,0,.2); white-space: normal; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .grv3-meta { font-size: 11px; opacity: .95; }
-.grv3-actions { position: absolute; right: 8px; top: 6px; display: flex; gap: 8px; opacity: 0; transition: opacity .12s; pointer-events: none; }
+.grv3-actions { position: absolute; right: 8px; top: 6px; opacity: 0; transition: opacity .12s; pointer-events: none; }
 .grv3-bar:hover .grv3-actions { opacity: 1; pointer-events: auto; }
-.grv3-action { background: transparent; color: inherit; border: none; border-radius: 6px; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
-.grv3-action:hover { opacity: 0.9; }
+.grv3-action-toggle { display: inline-flex; align-items: center; justify-content: center; padding: 2px 6px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.12); background: rgba(255,255,255,0.92); color: #1f1f1f; box-shadow: 0 2px 8px rgba(0,0,0,0.12); line-height: 1; }
+.grv3-action-toggle.btn { line-height: 1; }
+.grv3-action-toggle:hover, .grv3-action-toggle:focus { background: rgba(255,255,255,1); color: #000; }
+.grv3-action-toggle svg { pointer-events: none; }
 .grv3-resize { position: absolute; top:0; bottom:0; width: 10px; background: rgba(255,255,255,.18); opacity: 0; transition: opacity .15s; }
 .grv3-bar:hover .grv3-resize { opacity: 1; }
 .grv3-resize.start { left: 0; cursor: ew-resize; border-radius: 10px 0 0 10px; }

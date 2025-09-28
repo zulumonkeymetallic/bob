@@ -5,7 +5,6 @@ export const BOB_ROUTES = {
   // Core Entity Management
   GOALS: {
     TABLE: '/goals/table',
-    CARDS: '/goals/cards', 
     VISUALIZATION: '/goals/visualization'
   },
   
