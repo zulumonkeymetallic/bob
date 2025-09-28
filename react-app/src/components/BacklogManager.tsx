@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { db, functions as fbFunctions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
 import { Goal, Sprint } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
@@ -27,6 +27,15 @@ interface BacklogItem {
     price?: number;
     genres?: string[];
     releaseDate?: string;
+    coverUrl?: string | null;
+    headerUrl?: string | null;
+    iconUrl?: string | null;
+    playtimeForever?: number;
+    playtimeTwoWeeks?: number;
+    playtimeHours?: number;
+    shortDescription?: string | null;
+    storeUrl?: string | null;
+    lastPlayedAt?: Date | null;
     
     // Trakt specific
     traktId?: string;
@@ -110,8 +119,85 @@ const BacklogManager: React.FC = () => {
     };
   }, [currentUser, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser) return;
+    const steamQuery = query(
+      collection(db, 'steam'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsubscribeSteam = onSnapshot(steamQuery, (snap) => {
+      const steamItems: BacklogItem[] = snap.docs
+        .map((docSnap) => {
+          const data: any = docSnap.data();
+          if (data.hidden) return null;
+          const playtimeHours = typeof data.playtimeHours === 'number'
+            ? data.playtimeHours
+            : (data.playtimeForever || data.playtime_forever || 0) / 60;
+          const lastPlayed = data.lastPlayedAt?.toDate?.()
+            ? data.lastPlayedAt.toDate()
+            : (typeof data.lastPlayedAt === 'number' ? new Date(data.lastPlayedAt) : null);
+          return {
+            id: docSnap.id,
+            title: data.name || `App ${data.appid}`,
+            description: data.shortDescription || '',
+            status: (data.status as BacklogItem['status']) || 'wishlist',
+            priority: 'medium',
+            dateAdded: data.createdAt?.toDate?.() ? data.createdAt.toDate() : new Date(),
+            completedDate: data.status === 'completed' && data.statusUpdatedAt?.toDate?.()
+              ? data.statusUpdatedAt.toDate()
+              : undefined,
+            tags: Array.isArray(data.genres) ? data.genres : [],
+            metadata: {
+              steamId: data.appid,
+              appId: data.appid,
+              genres: Array.isArray(data.genres) ? data.genres : [],
+              coverUrl: data.coverUrl || data.headerUrl || null,
+              headerUrl: data.headerUrl || null,
+              iconUrl: data.iconUrl || null,
+              playtimeForever: data.playtimeForever || data.playtime_forever || 0,
+              playtimeTwoWeeks: data.playtimeTwoWeeks || data.playtime_2weeks || 0,
+              playtimeHours,
+              shortDescription: data.shortDescription || null,
+              storeUrl: data.storeUrl || null,
+              releaseDate: data.releaseDate || null,
+              lastPlayedAt: lastPlayed
+            },
+            source: 'steam',
+            externalUrl: data.storeUrl || `https://store.steampowered.com/app/${data.appid}`
+          } as BacklogItem;
+        })
+        .filter(Boolean) as BacklogItem[];
+
+      steamItems.sort((a, b) => {
+        const bPlay = b.metadata?.playtimeForever || 0;
+        const aPlay = a.metadata?.playtimeForever || 0;
+        return bPlay - aPlay;
+      });
+
+      setBacklogs(prev => {
+        const manualGames = prev.games.filter(item => item.source !== 'steam');
+        return {
+          ...prev,
+          games: [...steamItems, ...manualGames]
+        };
+      });
+    });
+
+    return () => unsubscribeSteam();
+  }, [currentUser]);
+
   // Clear selection when switching tabs
   useEffect(() => { setSelectedIds([]); }, [activeTab]);
+
+  const reviveBacklogItem = (item: any): BacklogItem => ({
+    ...item,
+    dateAdded: item.dateAdded ? new Date(item.dateAdded) : new Date(),
+    completedDate: item.completedDate ? new Date(item.completedDate) : undefined,
+    metadata: {
+      ...item.metadata,
+      lastPlayedAt: item.metadata?.lastPlayedAt ? new Date(item.metadata.lastPlayedAt) : item.metadata?.lastPlayedAt || null
+    }
+  });
 
   const loadBacklogs = () => {
     // For now, load from localStorage
@@ -120,7 +206,19 @@ const BacklogManager: React.FC = () => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        setBacklogs(parsed);
+        setBacklogs((prev) => ({
+          ...prev,
+          ...Object.fromEntries(
+            Object.entries(parsed).map(([key, value]) => (
+              Array.isArray(value)
+                ? [key, value.map(reviveBacklogItem)]
+                : [key, value]
+            ))
+          ),
+          games: Array.isArray(parsed.games)
+            ? parsed.games.filter((item: BacklogItem) => item.source !== 'steam').map(reviveBacklogItem)
+            : prev.games
+        }));
       } catch (error) {
         console.error('Error loading backlogs:', error);
       }
@@ -129,7 +227,11 @@ const BacklogManager: React.FC = () => {
 
   const saveBacklogs = (newBacklogs: Record<BacklogType, BacklogItem[]>) => {
     setBacklogs(newBacklogs);
-    localStorage.setItem(`backlogs_${currentUser?.uid}`, JSON.stringify(newBacklogs));
+    const storagePayload = {
+      ...newBacklogs,
+      games: newBacklogs.games.filter(item => item.source !== 'steam')
+    };
+    localStorage.setItem(`backlogs_${currentUser?.uid}`, JSON.stringify(storagePayload));
   };
 
   const toggleSelected = (id: string) => {
@@ -139,7 +241,7 @@ const BacklogManager: React.FC = () => {
   const scheduleSelectedViaN8n = async () => {
     try {
       const items = backlogs.games
-        .filter(i => selectedIds.includes(i.id))
+        .filter(i => selectedIds.includes(i.id) && i.source === 'steam')
         .map(i => ({ appid: i?.metadata?.appId || i?.metadata?.steamId || null, title: i.title }));
       if (items.length === 0) return;
       const callable = httpsCallable(fbFunctions, 'scheduleSteamGamesViaN8n');
@@ -181,26 +283,68 @@ const BacklogManager: React.FC = () => {
     });
   };
 
-  const updateItemStatus = (itemId: string, newStatus: BacklogItem['status']) => {
+  const updateItemStatus = async (itemId: string, newStatus: BacklogItem['status']) => {
+    const item = backlogs[activeTab].find(entry => entry.id === itemId);
+    if (!item) return;
+
+    if (item.source === 'steam') {
+      try {
+        await updateDoc(doc(db, 'steam', itemId), {
+          status: newStatus,
+          statusUpdatedAt: serverTimestamp(),
+          hidden: newStatus === 'dropped'
+        });
+      } catch (error) {
+        console.error('Failed to update Steam backlog status', error);
+      }
+      setBacklogs(prev => ({
+        ...prev,
+        [activeTab]: prev[activeTab].map(entry =>
+          entry.id === itemId
+            ? { ...entry, status: newStatus, completedDate: newStatus === 'completed' ? new Date() : undefined }
+            : entry
+        )
+      }));
+      return;
+    }
+
     const updatedBacklogs = {
       ...backlogs,
-      [activeTab]: backlogs[activeTab].map(item =>
-        item.id === itemId
+      [activeTab]: backlogs[activeTab].map(entry =>
+        entry.id === itemId
           ? {
-              ...item,
+              ...entry,
               status: newStatus,
               completedDate: newStatus === 'completed' ? new Date() : undefined
             }
-          : item
+          : entry
       )
     };
     saveBacklogs(updatedBacklogs);
   };
 
-  const deleteItem = (itemId: string) => {
+  const deleteItem = async (itemId: string) => {
+    const item = backlogs[activeTab].find(entry => entry.id === itemId);
+    if (item?.source === 'steam') {
+      try {
+        await updateDoc(doc(db, 'steam', itemId), {
+          hidden: true,
+          status: 'dropped',
+          statusUpdatedAt: serverTimestamp()
+        });
+      } catch (error) {
+        console.error('Failed to hide Steam backlog item', error);
+      }
+      setBacklogs(prev => ({
+        ...prev,
+        [activeTab]: prev[activeTab].filter(entry => entry.id !== itemId)
+      }));
+      return;
+    }
+
     const updatedBacklogs = {
       ...backlogs,
-      [activeTab]: backlogs[activeTab].filter(item => item.id !== itemId)
+      [activeTab]: backlogs[activeTab].filter(entry => entry.id !== itemId)
     };
     saveBacklogs(updatedBacklogs);
   };
@@ -228,10 +372,22 @@ const BacklogManager: React.FC = () => {
         updatedAt: serverTimestamp()
       };
       
-      await addDoc(collection(db, 'stories'), storyData);
+      const storyRef = await addDoc(collection(db, 'stories'), storyData);
       
       // Update the backlog item status to completed (converted)
-      updateItemStatus(item.id, 'completed');
+      await updateItemStatus(item.id, 'completed');
+
+      if (item.source === 'steam') {
+        try {
+          await updateDoc(doc(db, 'steam', item.id), {
+            status: 'completed',
+            statusUpdatedAt: serverTimestamp(),
+            linkedStoryId: storyRef.id
+          });
+        } catch (error) {
+          console.error('Failed to update Steam metadata after story conversion', error);
+        }
+      }
       
     } catch (error) {
       console.error('Error converting item to story:', error);
@@ -347,11 +503,9 @@ const BacklogManager: React.FC = () => {
     if (itemIds.length === 0) return;
 
     if (window.confirm(`Are you sure you want to delete ${itemIds.length} item(s)?`)) {
-      const updatedBacklogs = {
-        ...backlogs,
-        [activeTab]: backlogs[activeTab].filter(item => !itemIds.includes(item.id))
-      };
-      saveBacklogs(updatedBacklogs);
+      for (const id of itemIds) {
+        await deleteItem(id);
+      }
     }
   };
 
@@ -483,183 +637,99 @@ const BacklogManager: React.FC = () => {
                   </Card>
                 ) : viewMode === 'list' ? (
                   <ListGroup>
-                    {filteredItems.map(item => (
-                      <ListGroup.Item key={item.id} className="d-flex justify-content-between align-items-start">
-                        <div className="flex-grow-1 d-flex">
-                          <div className="me-2 pt-1">
-                            <Form.Check
-                              type="checkbox"
-                              checked={selectedIds.includes(item.id)}
-                              onChange={() => toggleSelected(item.id)}
-                            />
-                          </div>
-                          <div className="flex-grow-1">
-                          <div className="d-flex align-items-center mb-1">
-                            <h6 className="mb-0 me-2">{item.title}</h6>
-                            <Badge bg={getStatusColor(item.status)} className="me-2">
-                              {item.status}
-                            </Badge>
-                            <Badge bg={getPriorityColor(item.priority)}>
-                              {item.priority}
-                            </Badge>
-                          </div>
-                          {item.description && (
-                            <p className="text-muted mb-1">{item.description}</p>
-                          )}
-                          {item.tags.length > 0 && (
-                            <div className="d-flex gap-1 flex-wrap">
-                              {item.tags.map(tag => (
-                                <Badge key={tag} bg="light" text="dark" style={{ fontSize: '0.7rem' }}>
-                                  {tag}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-                          </div>
-                        </div>
-                        <div className="d-flex flex-column gap-1">
-                          {/* Convert to Story Dropdown */}
-                          {goals.length > 0 && item.status !== 'completed' && (
-                            <Dropdown>
-                              <Dropdown.Toggle variant="outline-primary" size="sm">
-                                Convert to Story
-                              </Dropdown.Toggle>
-                              <Dropdown.Menu>
-                                <Dropdown.Header>Select Goal</Dropdown.Header>
-                                {goals.map(goal => (
-                                  <Dropdown.Item key={goal.id}>
-                                    <div onClick={() => convertToStory(item, goal.id)}>
-                                      <div className="d-flex justify-content-between align-items-center">
-                                        <span>{goal.title}</span>
-                                        <Badge bg={getThemeColor(goal.theme)} className="ms-1">
-                                          {ChoiceHelper.getLabel('goal', 'theme', goal.theme)}
-                                        </Badge>
-                                      </div>
-                                    </div>
-                                    {sprints.length > 0 && (
-                                      <div className="mt-1">
-                                        <small className="text-muted">Add to Sprint:</small>
-                                        {sprints.slice(0, 3).map(sprint => (
-                                          <div 
-                                            key={sprint.id} 
-                                            className="ps-2 py-1 border-start border-2 border-light cursor-pointer"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              convertToStory(item, goal.id, sprint.id);
-                                            }}
-                                          >
-                                            <small>→ {sprint.name}</small>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </Dropdown.Item>
-                                ))}
-                              </Dropdown.Menu>
-                            </Dropdown>
-                          )}
-                          
-                          <Form.Select
-                            size="sm"
-                            value={item.status}
-                            onChange={(e) => updateItemStatus(item.id, e.target.value as BacklogItem['status'])}
-                            style={{ width: '120px' }}
-                          >
-                            <option value="wishlist">Wishlist</option>
-                            <option value="active">Active</option>
-                            <option value="completed">Completed</option>
-                            <option value="dropped">Dropped</option>
-                          </Form.Select>
-                          <Button
-                            variant="outline-primary"
-                            size="sm"
-                            onClick={() => {/* TODO: Add edit functionality */}}
-                            className="me-1"
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            variant="outline-danger"
-                            size="sm"
-                            onClick={() => deleteItem(item.id)}
-                          >
-                            Delete
-                          </Button>
-                        </div>
-                      </ListGroup.Item>
-                    ))}
-                  </ListGroup>
-                ) : (
-                  <Row>
-                    {filteredItems.map(item => (
-                      <Col key={item.id} md={4} className="mb-3">
-                        <Card className="h-100">
-                          <Card.Body>
-                            <div className="d-flex justify-content-between align-items-start mb-2">
-                              <Badge bg={getStatusColor(item.status)}>
-                                {item.status}
-                              </Badge>
-                              <Badge bg={getPriorityColor(item.priority)}>
-                                {item.priority}
-                              </Badge>
-                            </div>
-                            <div className="form-check mb-1">
-                              <input
-                                className="form-check-input"
-                                type="checkbox"
-                                checked={selectedIds.includes(item.id)}
-                                onChange={() => toggleSelected(item.id)}
-                                id={`sel-${item.id}`}
-                              />
-                              <label className="form-check-label small" htmlFor={`sel-${item.id}`}>
-                                Select
-                              </label>
-                            </div>
-                            <Card.Title className="h6">{item.title}</Card.Title>
-                            {item.description && (
-                              <Card.Text className="text-muted small">
-                                {item.description.length > 100
-                                  ? `${item.description.substring(0, 100)}...`
-                                  : item.description}
-                              </Card.Text>
-                            )}
-                            {item.tags.length > 0 && (
-                              <div className="mb-2">
-                                {item.tags.slice(0, 3).map(tag => (
-                                  <Badge key={tag} bg="light" text="dark" className="me-1" style={{ fontSize: '0.7rem' }}>
-                                    {tag}
-                                  </Badge>
-                                ))}
+                    {filteredItems.map(item => {
+                      const cover = item.metadata?.coverUrl || item.metadata?.headerUrl;
+                      const playtime = item.metadata?.playtimeHours;
+                      return (
+                        <ListGroup.Item key={item.id}>
+                          <div className="d-flex justify-content-between align-items-start">
+                            <div className="d-flex flex-grow-1">
+                              <div className="me-2 pt-1">
+                                <Form.Check
+                                  type="checkbox"
+                                  checked={selectedIds.includes(item.id)}
+                                  onChange={() => toggleSelected(item.id)}
+                                />
                               </div>
-                            )}
-                          </Card.Body>
-                          <Card.Footer className="d-flex flex-column gap-1">
-                            {/* Convert to Story Dropdown */}
-                            {goals.length > 0 && item.status !== 'completed' && (
-                              <Dropdown>
-                                <Dropdown.Toggle variant="outline-primary" size="sm" className="w-100">
-                                  Convert to Story
-                                </Dropdown.Toggle>
-                                <Dropdown.Menu>
-                                  <Dropdown.Header>Select Goal</Dropdown.Header>
-                                  {goals.map(goal => (
-                                    <Dropdown.Item 
-                                      key={goal.id}
-                                      onClick={() => convertToStory(item, goal.id)}
-                                    >
-                                      <div className="d-flex justify-content-between align-items-center">
-                                        <span>{goal.title}</span>
-                                        <Badge bg={getThemeColor(goal.theme)} className="ms-1">
-                                          {ChoiceHelper.getLabel('goal', 'theme', goal.theme)}
-                                        </Badge>
-                                      </div>
-                                    </Dropdown.Item>
-                                  ))}
-                                </Dropdown.Menu>
-                              </Dropdown>
-                            )}
-                            
-                            <div className="d-flex gap-1">
+                              {cover ? (
+                                <div className="me-3">
+                                  <img
+                                    src={cover}
+                                    alt={item.title}
+                                    style={{ width: 48, height: 72, objectFit: 'cover', borderRadius: 6 }}
+                                  />
+                                </div>
+                              ) : null}
+                              <div>
+                                <div className="d-flex align-items-center mb-1">
+                                  <h6 className="mb-0 me-2">{item.title}</h6>
+                                  <Badge bg={getStatusColor(item.status)} className="me-2">
+                                    {item.status}
+                                  </Badge>
+                                  <Badge bg={getPriorityColor(item.priority)}>
+                                    {item.priority}
+                                  </Badge>
+                                </div>
+                                {item.description && (
+                                  <p className="text-muted mb-1">{item.description}</p>
+                                )}
+                                {item.tags.length > 0 && (
+                                  <div className="d-flex gap-1 flex-wrap">
+                                    {item.tags.map(tag => (
+                                      <Badge key={tag} bg="light" text="dark" style={{ fontSize: '0.7rem' }}>
+                                        {tag}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                )}
+                                {playtime ? (
+                                  <div className="text-muted small mt-1">
+                                    {playtime.toFixed(1)} hrs played
+                                    {item.metadata?.lastPlayedAt ? ` · Last played ${item.metadata.lastPlayedAt.toLocaleDateString()}` : ''}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="d-flex flex-column gap-2 align-items-end">
+                              {goals.length > 0 && item.status !== 'completed' && (
+                                <Dropdown align="end">
+                                  <Dropdown.Toggle variant="outline-primary" size="sm">
+                                    Convert to Story
+                                  </Dropdown.Toggle>
+                                  <Dropdown.Menu>
+                                    <Dropdown.Header>Select Goal</Dropdown.Header>
+                                    {goals.map(goal => (
+                                      <Dropdown.Item key={goal.id}>
+                                        <div onClick={() => convertToStory(item, goal.id)}>
+                                          <div className="d-flex justify-content-between align-items-center">
+                                            <span>{goal.title}</span>
+                                            <Badge bg={getThemeColor(goal.theme)} className="ms-1">
+                                              {ChoiceHelper.getLabel('goal', 'theme', goal.theme)}
+                                            </Badge>
+                                          </div>
+                                        </div>
+                                        {sprints.length > 0 && (
+                                          <div className="mt-1">
+                                            <small className="text-muted">Add to Sprint:</small>
+                                            {sprints.slice(0, 3).map(sprint => (
+                                              <div
+                                                key={sprint.id}
+                                                className="ps-2 py-1 border-start border-2 border-light cursor-pointer"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  convertToStory(item, goal.id, sprint.id);
+                                                }}
+                                              >
+                                                <small>→ {sprint.name}</small>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </Dropdown.Item>
+                                    ))}
+                                  </Dropdown.Menu>
+                                </Dropdown>
+                              )}
                               <Form.Select
                                 size="sm"
                                 value={item.status}
@@ -675,15 +745,115 @@ const BacklogManager: React.FC = () => {
                                 size="sm"
                                 onClick={() => deleteItem(item.id)}
                               >
-                                ×
+                                Delete
                               </Button>
                             </div>
-                          </Card.Footer>
-                        </Card>
-                      </Col>
-                    ))}
+                          </div>
+                        </ListGroup.Item>
+                      );
+                    })}
+                  </ListGroup>
+                ) : (
+                  <Row xs={1} sm={2} md={2} lg={3} className="g-3">
+                    {filteredItems.map(item => {
+                      const cover = item.metadata?.coverUrl || item.metadata?.headerUrl;
+                      const playtime = item.metadata?.playtimeHours;
+                      return (
+                        <Col key={item.id}>
+                          <Card className="h-100">
+                            {cover ? (
+                              <Card.Img variant="top" src={cover} style={{ height: 180, objectFit: 'cover' }} />
+                            ) : null}
+                            <Card.Body>
+                              <div className="d-flex justify-content-between align-items-start">
+                                <div>
+                                  <Card.Title className="h6">{item.title}</Card.Title>
+                                  <Badge bg={getStatusColor(item.status)} className="me-2">
+                                    {item.status}
+                                  </Badge>
+                                  <Badge bg={getPriorityColor(item.priority)}>
+                                    {item.priority}
+                                  </Badge>
+                                </div>
+                                <div className="text-end" style={{ fontSize: '0.75rem' }}>
+                                  <div>{item.dateAdded.toLocaleDateString()}</div>
+                                  {item.completedDate && (
+                                    <div className="text-success">Completed {item.completedDate.toLocaleDateString()}</div>
+                                  )}
+                                </div>
+                              </div>
+                              {item.description && (
+                                <Card.Text className="text-muted mt-2">
+                                  {item.description.length > 120 ? `${item.description.substring(0, 120)}...` : item.description}
+                                </Card.Text>
+                              )}
+                              {item.tags.length > 0 && (
+                                <div className="mb-2">
+                                  {item.tags.slice(0, 3).map(tag => (
+                                    <Badge key={tag} bg="light" text="dark" className="me-1" style={{ fontSize: '0.7rem' }}>
+                                      {tag}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                              {playtime ? (
+                                <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                                  {playtime.toFixed(1)} hrs played
+                                  {item.metadata?.lastPlayedAt ? ` · Last played ${item.metadata.lastPlayedAt.toLocaleDateString()}` : ''}
+                                </div>
+                              ) : null}
+                            </Card.Body>
+                            <Card.Footer className="d-flex flex-column gap-1">
+                              {goals.length > 0 && item.status !== 'completed' && (
+                                <Dropdown>
+                                  <Dropdown.Toggle variant="outline-primary" size="sm" className="w-100">
+                                    Convert to Story
+                                  </Dropdown.Toggle>
+                                  <Dropdown.Menu>
+                                    <Dropdown.Header>Select Goal</Dropdown.Header>
+                                    {goals.map(goal => (
+                                      <Dropdown.Item
+                                        key={goal.id}
+                                        onClick={() => convertToStory(item, goal.id)}
+                                      >
+                                        <div className="d-flex justify-content-between align-items-center">
+                                          <span>{goal.title}</span>
+                                          <Badge bg={getThemeColor(goal.theme)} className="ms-1">
+                                            {ChoiceHelper.getLabel('goal', 'theme', goal.theme)}
+                                          </Badge>
+                                        </div>
+                                      </Dropdown.Item>
+                                    ))}
+                                  </Dropdown.Menu>
+                                </Dropdown>
+                              )}
+                              <div className="d-flex gap-1">
+                                <Form.Select
+                                  size="sm"
+                                  value={item.status}
+                                  onChange={(e) => updateItemStatus(item.id, e.target.value as BacklogItem['status'])}
+                                >
+                                  <option value="wishlist">Wishlist</option>
+                                  <option value="active">Active</option>
+                                  <option value="completed">Completed</option>
+                                  <option value="dropped">Dropped</option>
+                                </Form.Select>
+                                <Button
+                                  variant="outline-danger"
+                                  size="sm"
+                                  onClick={() => deleteItem(item.id)}
+                                >
+                                  ×
+                                </Button>
+                              </div>
+                            </Card.Footer>
+                          </Card>
+                        </Col>
+                      );
+                    })}
                   </Row>
                 )}
+
               </Tab.Pane>
             </Tab.Content>
           </Col>

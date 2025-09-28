@@ -3555,15 +3555,76 @@ async function _syncSteam(uid) {
     throw new Error("SteamID not found in profile.");
   }
 
-  const url = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${process.env.STEAM_WEB_API_KEY}&steamid=${steamId}&format=json`;
+  const url = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${process.env.STEAM_WEB_API_KEY}&steamid=${steamId}&include_appinfo=1&include_played_free_games=1&format=json`;
   const data = await fetchJson(url);
 
   const games = data.response.games || [];
 
+  // Fetch richer metadata for top-played titles (limit to avoid excessive calls)
+  const detailTargets = [...games]
+    .sort((a, b) => (b.playtime_forever || 0) - (a.playtime_forever || 0))
+    .slice(0, 50);
+
+  const detailsMap = new Map();
+  await Promise.all(detailTargets.map(async (game) => {
+    try {
+      const detailResp = await fetchJson(`https://store.steampowered.com/api/appdetails?cc=us&l=en&appids=${game.appid}`);
+      const payload = detailResp?.[game.appid];
+      if (payload?.success && payload?.data) {
+        detailsMap.set(game.appid, payload.data);
+      }
+    } catch (error) {
+      console.error(`Failed to fetch store metadata for app ${game.appid}`, error);
+    }
+  }));
+
   const batch = db.batch();
   for (const item of games) {
     const docRef = db.collection('steam').doc(`${uid}_${item.appid}`);
-    batch.set(docRef, { ...item, ownerUid: uid }, { merge: true });
+    const appData = detailsMap.get(item.appid) || null;
+
+    const iconUrl = item.img_icon_url
+      ? `https://media.steampowered.com/steamcommunity/public/images/apps/${item.appid}/${item.img_icon_url}.jpg`
+      : null;
+    const logoUrl = item.img_logo_url
+      ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${item.appid}/${item.img_logo_url}.jpg`
+      : null;
+    const headerUrl = appData?.header_image || `https://cdn.cloudflare.steamstatic.com/steam/apps/${item.appid}/header.jpg`;
+    const coverUrl = appData?.library_asset || `https://cdn.cloudflare.steamstatic.com/steam/apps/${item.appid}/library_600x900.jpg`;
+    const capsuleUrl = appData?.capsule_image || null;
+
+    const docData = {
+      ownerUid: uid,
+      appid: item.appid,
+      name: item.name || `App ${item.appid}`,
+      iconUrl,
+      logoUrl,
+      headerUrl,
+      coverUrl,
+      capsuleUrl,
+      playtimeForever: item.playtime_forever || 0,
+      playtimeTwoWeeks: item.playtime_2weeks || 0,
+      playtimeHours: Math.round(((item.playtime_forever || 0) / 60) * 10) / 10,
+      lastPlayedAt: item.rtime_last_played
+        ? admin.firestore.Timestamp.fromMillis((item.rtime_last_played || 0) * 1000)
+        : admin.firestore.FieldValue.delete(),
+      genres: Array.isArray(appData?.genres)
+        ? appData.genres.map((g) => g.description).filter(Boolean)
+        : [],
+      releaseDate: appData?.release_date?.date || null,
+      isFree: typeof appData?.is_free === 'boolean' ? appData.is_free : null,
+      shortDescription: appData?.short_description || null,
+      storeUrl: `https://store.steampowered.com/app/${item.appid}`,
+      libraryStatus: 'owned',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      raw: {
+        playtimeWindowsForever: item.playtime_windows_forever || null,
+        playtimeMacForever: item.playtime_mac_forever || null,
+        playtimeLinuxForever: item.playtime_linux_forever || null,
+      }
+    };
+
+    batch.set(docRef, docData, { merge: true });
   }
   await batch.commit();
 

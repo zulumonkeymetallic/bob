@@ -150,13 +150,14 @@ const IntegrationSettings: React.FC = () => {
 
     const steamQuery = query(
       collection(db, 'steam'),
-      where('ownerUid', '==', currentUser.uid),
-      limit(5)
+      where('ownerUid', '==', currentUser.uid)
     );
     const unsubscribeSteam = onSnapshot(steamQuery, (snap) => {
-      const rows = snap.docs.map((docSnap) => docSnap.data());
-      rows.sort((a, b) => (b.playtime_forever || 0) - (a.playtime_forever || 0));
-      setSteamGames(rows.slice(0, 5));
+      const rows = snap.docs
+        .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+        .filter((row: any) => !row.hidden)
+        .sort((a: any, b: any) => (b.playtimeForever || b.playtime_forever || 0) - (a.playtimeForever || a.playtime_forever || 0));
+      setSteamGames(rows.slice(0, 8));
     });
 
     const traktQuery = query(
@@ -643,17 +644,47 @@ const IntegrationSettings: React.FC = () => {
             <Table size="sm" responsive>
               <thead>
                 <tr>
+                  <th style={{ width: 60 }}></th>
                   <th>Title</th>
                   <th>Playtime (hrs)</th>
+                  <th>Last Played</th>
                 </tr>
               </thead>
               <tbody>
-                {steamGames.map((game: any) => (
-                  <tr key={game.appid}>
-                    <td>{game.name || `App ${game.appid}`}</td>
-                    <td>{game.playtime_forever ? (game.playtime_forever / 60).toFixed(1) : '0'}</td>
-                  </tr>
-                ))}
+                {steamGames.map((game: any) => {
+                  const cover = game.coverUrl || game.headerUrl;
+                  const playtimeHours = typeof game.playtimeHours === 'number'
+                    ? game.playtimeHours
+                    : (game.playtimeForever || game.playtime_forever || 0) / 60;
+                  const lastPlayed = game.lastPlayedAt?.toDate?.()
+                    ? game.lastPlayedAt.toDate()
+                    : (typeof game.lastPlayedAt === 'number'
+                        ? new Date(game.lastPlayedAt)
+                        : null);
+                  return (
+                    <tr key={game.appid}>
+                      <td>
+                        {cover ? (
+                          <img
+                            src={cover}
+                            alt={game.name || `App ${game.appid}`}
+                            style={{ width: 40, height: 60, objectFit: 'cover', borderRadius: 4 }}
+                          />
+                        ) : null}
+                      </td>
+                      <td>
+                        <div className="fw-semibold">{game.name || `App ${game.appid}`}</div>
+                        {Array.isArray(game.genres) && game.genres.length > 0 ? (
+                          <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                            {game.genres.slice(0, 2).join(', ')}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td>{playtimeHours ? playtimeHours.toFixed(1) : '0'}</td>
+                      <td>{lastPlayed ? lastPlayed.toLocaleDateString() : '—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </Table>
           )}
