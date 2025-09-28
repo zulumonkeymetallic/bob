@@ -235,20 +235,28 @@ const EnhancedGanttChart: React.FC = () => {
     const q = query(
       collection(db, 'activity_stream'),
       where('ownerUid', '==', currentUser.uid),
-      where('entityType', '==', 'goal'),
-      where('activityType', '==', 'note_added'),
       orderBy('timestamp', 'desc'),
       limit(300)
     );
-    const unsub = onSnapshot(q, (snap) => {
-      const map: Record<string, string> = {};
-      for (const d of snap.docs) {
-        const data = d.data() as any;
-        const gid = data.entityId as string;
-        if (!map[gid] && data.noteContent) map[gid] = String(data.noteContent);
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const map: Record<string, string> = {};
+        for (const d of snap.docs) {
+          const data = d.data() as any;
+          if (data.entityType !== 'goal') continue;
+          if (data.activityType !== 'note_added') continue;
+          const gid = data.entityId as string;
+          if (!gid || map[gid]) continue;
+          if (data.noteContent) map[gid] = String(data.noteContent);
+        }
+        setLastNotes(map);
+      },
+      (error) => {
+        logger.error('gantt', 'Activity stream snapshot error', error);
+        setLastNotes({});
       }
-      setLastNotes(map);
-    });
+    );
     return () => unsub();
   }, [currentUser?.uid]);
 

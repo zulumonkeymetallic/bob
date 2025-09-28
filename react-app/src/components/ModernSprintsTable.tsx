@@ -78,7 +78,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     objective: '',
     startDate: '',
     endDate: '',
-    status: 'planned'
+    status: '0'
   });
 
   // Load sprints
@@ -148,8 +148,16 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
 
     try {
       const existingRefs = sprints.map(s => s.ref);
+      const statusNumber = parseInt(formData.status, 10);
+      const startDateMs = formData.startDate ? new Date(formData.startDate).getTime() : Date.now();
+      const endDateMs = formData.endDate ? new Date(formData.endDate).getTime() : startDateMs;
+
       const sprintData = {
-        ...formData,
+        name: formData.name.trim(),
+        objective: formData.objective.trim(),
+        startDate: startDateMs,
+        endDate: endDateMs,
+        status: Number.isFinite(statusNumber) ? statusNumber : 0,
         ref: generateRef('sprint', existingRefs),
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
@@ -171,8 +179,16 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     if (!editingSprint || !currentUser) return;
 
     try {
+      const statusNumber = parseInt(formData.status, 10);
+      const startDateMs = formData.startDate ? new Date(formData.startDate).getTime() : editingSprint.startDate;
+      const endDateMs = formData.endDate ? new Date(formData.endDate).getTime() : editingSprint.endDate;
+
       await updateDoc(doc(db, 'sprints', editingSprint.id), {
-        ...formData,
+        name: formData.name.trim(),
+        objective: formData.objective.trim(),
+        startDate: startDateMs,
+        endDate: endDateMs,
+        status: Number.isFinite(statusNumber) ? statusNumber : editingSprint.status,
         updatedAt: serverTimestamp(),
         updatedBy: currentUser.email
       });
@@ -220,7 +236,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       objective: '',
       startDate: '',
       endDate: '',
-      status: 'planned'
+      status: '0'
     });
   };
 
@@ -541,10 +557,10 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                 value={formData.status}
                 onChange={(e) => setFormData({ ...formData, status: e.target.value })}
               >
-                <option value="planned">Planned</option>
-                <option value="active">Active</option>
-                <option value="completed">Completed</option>
-                <option value="cancelled">Cancelled</option>
+                <option value="0">Planning</option>
+                <option value="1">Active</option>
+                <option value="2">Complete</option>
+                <option value="3">Cancelled</option>
               </Form.Select>
             </Form.Group>
           </Form>

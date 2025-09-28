@@ -3,7 +3,7 @@ import { Container, Card, Row, Col, Button, Form, InputGroup, Badge } from 'reac
 import { Plus, Upload, List, Grid } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Goal, Task, Sprint } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
@@ -17,6 +17,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import { themeVars } from '../utils/themeVars';
 import ConfirmDialog from './ConfirmDialog';
+import { arrayMove } from '@dnd-kit/sortable';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -93,26 +94,33 @@ const StoriesManagement: React.FC = () => {
     // Subscribe to real-time updates
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
       console.log('🔄 Stories snapshot received, docs count:', snapshot.docs.length);
-      const storiesData = snapshot.docs.map(doc => {
+      const rawStories = snapshot.docs.map(doc => {
         const data = doc.data();
-        return {
+        const baseStory = {
           id: doc.id,
           ...data,
           // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
-        };
+        } as Story;
+        if (typeof (baseStory as any).orderIndex !== 'number') {
+          (baseStory as any).orderIndex = data.orderIndex ?? data.rank ?? 0;
+        }
+        return baseStory;
       }) as Story[];
+
+      const normalizedStories = rawStories
+        .map((story, index) => ({
+          ...story,
+          orderIndex:
+            typeof story.orderIndex === 'number'
+              ? story.orderIndex
+              : (typeof story.priority === 'number' ? story.priority * 1000 : index * 1000),
+        }))
+        .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
       
-      // Sort by createdAt in memory to avoid index requirements
-      storiesData.sort((a, b) => {
-        const aDate = a.createdAt instanceof Date ? a.createdAt : new Date(0);
-        const bDate = b.createdAt instanceof Date ? b.createdAt : new Date(0);
-        return bDate.getTime() - aDate.getTime(); // Desc order (newest first)
-      });
-      
-      console.log('📊 Setting stories state with:', storiesData.length, 'stories');
-      setStories(storiesData);
+      console.log('📊 Setting stories state with:', normalizedStories.length, 'stories');
+      setStories(normalizedStories);
     });
     
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
@@ -206,6 +214,31 @@ const StoriesManagement: React.FC = () => {
     }
   };
 
+  const handleStoryReorder = async (activeId: string, overId: string) => {
+    try {
+      const ordered = [...stories].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+      const ids = ordered.map(story => story.id);
+      const activeIndex = ids.indexOf(activeId);
+      const overIndex = ids.indexOf(overId);
+
+      if (activeIndex === -1 || overIndex === -1) return;
+
+      const newOrder = arrayMove(ids, activeIndex, overIndex);
+      const batch = writeBatch(db);
+
+      newOrder.forEach((id, index) => {
+        batch.update(doc(db, 'stories', id), {
+          orderIndex: index * 1000,
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      await batch.commit();
+    } catch (error) {
+      console.error('Error reordering stories:', error);
+    }
+  };
+
   const handleStoryAdd = async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
     try {
       console.log('📚 Adding new story:', storyData);
@@ -216,6 +249,10 @@ const StoriesManagement: React.FC = () => {
       const existingRefs = stories.map(s => s.ref).filter(Boolean) as string[];
       const refNumber = generateRef('story', existingRefs);
       
+      const maxOrderIndex = stories.length > 0
+        ? Math.max(...stories.map(s => (typeof s.orderIndex === 'number' ? s.orderIndex : 0)))
+        : 0;
+
       // Create the story document
       const newStory = {
         ...storyData,
@@ -231,7 +268,7 @@ const StoriesManagement: React.FC = () => {
         theme: storyData.theme || 1, // 1=Health
         points: storyData.points || 1,
         wipLimit: storyData.wipLimit || 3,
-        orderIndex: storyData.orderIndex || 0
+        orderIndex: storyData.orderIndex ?? (maxOrderIndex + 1000)
       };
 
       console.log('💾 Story data being saved:', newStory);
@@ -283,12 +320,14 @@ const StoriesManagement: React.FC = () => {
   console.log('✅ Filtered stories:', filteredStories.length);
   console.log('📝 Stories being passed to table:', filteredStories.map(s => ({ id: s.id, title: s.title, goalId: s.goalId })));
 
+  const orderedFilteredStories = [...filteredStories].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
   // Get counts for dashboard cards
   const storyCounts = {
-    total: filteredStories.length,
-    backlog: filteredStories.filter(s => isStatus(s.status, 'backlog')).length,
-    active: filteredStories.filter(s => isStatus(s.status, 'active')).length,
-    done: filteredStories.filter(s => isStatus(s.status, 'done')).length
+    total: orderedFilteredStories.length,
+    backlog: orderedFilteredStories.filter(s => isStatus(s.status, 'backlog')).length,
+    active: orderedFilteredStories.filter(s => isStatus(s.status, 'active')).length,
+    done: orderedFilteredStories.filter(s => isStatus(s.status, 'done')).length
   };
 
   return (
@@ -508,7 +547,7 @@ const StoriesManagement: React.FC = () => {
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
-              Stories ({filteredStories.length})
+              Stories ({orderedFilteredStories.length})
             </h5>
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
@@ -528,7 +567,7 @@ const StoriesManagement: React.FC = () => {
               <div style={{ height: '600px', overflow: 'auto' }} data-component="StoriesManagement">
                 {viewMode === 'list' ? (
                   <ModernStoriesTable
-                    stories={filteredStories}
+                    stories={orderedFilteredStories}
                     goals={goals}
                     onStoryUpdate={handleStoryUpdate}
                     onStoryDelete={handleStoryDelete}
@@ -538,10 +577,11 @@ const StoriesManagement: React.FC = () => {
                     onEditStory={openEditStory}
                     goalId="all"
                     enableInlineTasks
+                    onStoryReorder={handleStoryReorder}
                   />
                 ) : (
                   <StoriesCardView 
-                    stories={filteredStories}
+                    stories={orderedFilteredStories}
                     goals={goals}
                     onStoryUpdate={handleStoryUpdate}
                     onStoryDelete={handleStoryDelete}

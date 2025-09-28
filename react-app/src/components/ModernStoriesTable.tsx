@@ -65,6 +65,7 @@ interface ModernStoriesTableProps {
   onEditStory?: (story: Story) => void; // New prop for story editing
   goalId?: string; // Made optional for full stories table
   enableInlineTasks?: boolean; // Only show green caret + inline tasks when true
+  onStoryReorder?: (activeId: string, overId: string) => Promise<void>;
 }
 
 const defaultColumns: Column[] = [
@@ -804,6 +805,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onEditStory,
   goalId,
   enableInlineTasks = false,
+  onStoryReorder,
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -1086,10 +1088,19 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
-    if (over && active.id !== over.id) {
-      const newIndex = sortedRows.findIndex(item => item.id === over.id);
-      
-      // Update priority based on new position (1-indexed)
+    if (!over || active.id === over.id) return;
+
+    if (onStoryReorder) {
+      try {
+        await onStoryReorder(active.id as string, over.id as string);
+      } catch (error) {
+        console.error('Error reordering stories:', error);
+      }
+      return;
+    }
+
+    const newIndex = sortedRows.findIndex(item => item.id === over.id);
+    if (newIndex >= 0) {
       await onStoryPriorityChange(active.id as string, newIndex + 1);
     }
   };
