@@ -275,7 +275,8 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
                       <Button
                         className="btn btn-light btn-sm py-0 px-1"
                         title="Edit Goal"
-                        onClick={() => setEditGoal(goal)}
+                        onMouseDown={(e: any) => e.stopPropagation()}
+                        onClick={(e: any) => { e.stopPropagation(); setEditGoal(goal); }}
                       >
                         <Edit3 size={14} />
                       </Button>
@@ -309,7 +310,15 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
                       <button className="btn btn-light btn-sm py-0 px-1" title="Generate stories with AI" onClick={(e) => { e.stopPropagation(); handleGenerateStories(goal); }}>
                         <Wand2 size={14} />
                       </button>
-                      <button className="btn btn-light btn-sm py-0 px-1" title="View activity" onClick={(e) => { e.stopPropagation(); showSidebar(goal as any, 'goal'); }}>
+                      <button
+                        className="btn btn-light btn-sm py-0 px-1"
+                        title="View activity"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActivityGoalId(goal.id);
+                          setShowActivityStream(true);
+                        }}
+                      >
                         <Activity size={14} />
                       </button>
                       <button className="btn btn-light btn-sm py-0 px-1" title="View stories" onClick={(e) => { e.stopPropagation(); setSelectedGoalId(goal.id); }}>

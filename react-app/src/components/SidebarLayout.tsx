@@ -60,7 +60,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
         { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'project-diagram' },
-        { label: 'Goal Card View (Review)', path: '/goals/cards', icon: 'th-large' },
+        { label: 'Goal Cards', path: '/goals?view=cards', icon: 'th-large' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },
@@ -69,7 +69,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'piggy-bank',
       items: [
         { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
-        { label: 'Integrations', path: '/settings?tab=integrations', icon: 'plug' }
+        { label: 'Budgets', path: '/finance/budgets', icon: 'chart-pie' },
+        { label: 'Merchant Mapping', path: '/finance/merchant-mapping', icon: 'tags' },
+        { label: 'Transactions', path: '/finance/transactions', icon: 'list' },
+        { label: 'Integrations', path: '/finance/integrations', icon: 'plug' },
+        { label: 'Integration Logs', path: '/integrations/logs', icon: 'stream' },
+        { label: 'Finance Settings', path: '/finance/settings', icon: 'cog' }
       ]
     },
     {

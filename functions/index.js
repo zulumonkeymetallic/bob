@@ -8,6 +8,7 @@ const admin = require("firebase-admin");
 const { OpenAI } = require("openai");
 const aiUsageLogger = require("./utils/aiUsageLogger");
 const { rrulestr } = require('rrule');
+const { logIntegration } = require('./utils/integrationLogger');
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -33,8 +34,6 @@ const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
 const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
 const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
-const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
-const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 
@@ -299,6 +298,544 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   });
 
   return { planId, dayKey, assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })) };
+});
+
+// EPIC A2/A3/A4 — Constraint-Aware Auto-Scheduling into Blocks with non-negotiables and roll-forward policy
+exports.scheduleIntoBlocks = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const startDate = String(req?.data?.startDate || new Date().toISOString().slice(0,10)); // YYYY-MM-DD
+  const endDate = String(req?.data?.endDate || startDate);
+  const apply = !!req?.data?.apply;
+  const tz = 'Europe/London'; // TODO: user setting
+  const db = admin.firestore();
+
+  // Helpers
+  const toDay = (s) => new Date(s + 'T00:00:00');
+  const sod = toDay(startDate);
+  const eod = new Date(toDay(endDate)); eod.setDate(eod.getDate() + 1); // exclusive end
+  const days = [];
+  for (let d = new Date(sod); d < eod; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+
+  function hhmmToMs(day, hhmm) {
+    const [h, m] = String(hhmm||'00:00').split(':').map(Number);
+    const t = new Date(day);
+    t.setHours(h||0, m||0, 0, 0);
+    return t.getTime();
+  }
+  function subtractIntervals(base, cuts) {
+    // base: array of [s,e), cuts: array of [s,e)
+    let res = [...base];
+    for (const [cs, ce] of cuts) {
+      const next = [];
+      for (const [s,e] of res) {
+        if (ce <= s || cs >= e) { next.push([s,e]); continue; }
+        if (cs > s) next.push([s, Math.min(cs, e)]);
+        if (ce < e) next.push([Math.max(ce, s), e]);
+      }
+      res = next.filter(([s,e]) => e - s >= 5*60000); // keep >= 5m
+    }
+    return res;
+  }
+  function rruleMatchesDay(rruleText, day) {
+    try {
+      if (!rruleText) return true;
+      const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
+      const dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
+      const hasDt = /DTSTART/i.test(String(rruleText||''));
+      const text = hasDt ? rruleText : `DTSTART:${dayStart.toISOString().replace(/[-:]/g,'').split('.')[0]}Z\n${rruleText}`;
+      const rule = rrulestr(text);
+      const occ = rule.between(dayStart, dayEnd, true);
+      return occ && occ.length > 0;
+    } catch { return true; }
+  }
+  function makeInstanceId({ userId, srcType, srcId, startMs }) {
+    const raw = `${userId}:${srcType}:${srcId}:${new Date(startMs).toISOString().slice(0,10)}`;
+    let h = 0; for (let i=0;i<raw.length;i++) h = (h*33 + raw.charCodeAt(i))>>>0; return h.toString(36);
+  }
+
+  // Load blocks
+  const blocksSnap = await db.collection('blocks').where('ownerUid','==',uid).where('enabled','==',true).get();
+  const blocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+  function mapBlockToColorId(b) {
+    try {
+      if (!b) return undefined;
+      // Prefer explicit theme name mapping if present on block name
+      const name = String(b.name || '').toLowerCase();
+      if (name.includes('chores')) return '6'; // orange
+      if (name.includes('reflection') || name.includes('journal')) return '9'; // blue
+      if (name.includes('gaming')) return '7'; // graphite
+      if (name.includes('fitness') || name.includes('workout')) return '11'; // green
+      // If color hex is provided, hash to 1..11 range
+      const hex = String(b.color || '').replace('#','');
+      if (hex) {
+        let h=0; for (let i=0;i<hex.length;i++) h = (h*33 + hex.charCodeAt(i))>>>0;
+        const id = (h % 11) + 1; return String(id);
+      }
+    } catch {}
+    return undefined;
+  }
+
+  // Load chores and habits (as routines)
+  const choresSnap = await db.collection('chores').where('ownerUid','==',uid).get();
+  const chores = choresSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+  const habitsSnap = await db.collection('habits').where('userId','==',uid).where('isActive','==',true).get();
+  const habits = habitsSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+  // Build day → free intervals per block with capacity tracking
+  const dayPlans = {};
+  for (const day of days) {
+    const dayKey = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
+    const dow = day.getDay();
+    dayPlans[dayKey] = [];
+    for (const b of blocks) {
+      if (Array.isArray(b.disabledDates) && b.disabledDates.includes(dayKey)) continue;
+      if (!rruleMatchesDay(b.rrule || '', day)) continue;
+      // Windows → intervals (subtract quiet hours)
+      let intervals = [];
+      for (const w of (b.windows||[])) {
+        const daysFilter = w.days && w.days.length ? w.days : undefined;
+        if (daysFilter && !daysFilter.includes(dow)) continue;
+        const s = hhmmToMs(day, w.start);
+        const e = hhmmToMs(day, w.end);
+        if (!isFinite(s) || !isFinite(e) || e <= s) continue;
+        intervals.push([s,e]);
+      }
+      // Quiet hours exclude
+      const qhCuts = (b?.constraints?.quietHours || []).map(q => [hhmmToMs(day, q.start), hhmmToMs(day, q.end)]);
+      if (qhCuts.length) intervals = subtractIntervals(intervals, qhCuts);
+      // Buffer pre/post are applied during placement; keep raw intervals now
+      const cap = Math.max(0, Number(b.dailyCapacity || 0));
+      const usableMinutes = Math.floor(intervals.reduce((sum,[s,e]) => sum + (e-s), 0)/60000);
+      const maxAlloc = cap > 0 ? Math.min(cap, usableMinutes) : usableMinutes;
+      dayPlans[dayKey].push({ block: b, intervals, remainingMin: maxAlloc });
+    }
+    // Order by priority desc then earliest
+    dayPlans[dayKey].sort((a,b)=> (Number(b.block.priority||0) - Number(a.block.priority||0)) || ((a.intervals[0]?.[0]||0) - (b.intervals[0]?.[0]||0)) );
+  }
+
+  // Fetch Google Calendar busy and subtract
+  async function fetchBusy(dayStart, dayEnd) {
+    try {
+      const access = await getAccessToken(uid);
+      const res = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+        method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timeMin: new Date(dayStart).toISOString(), timeMax: new Date(dayEnd).toISOString(), items: [{ id: 'primary' }] })
+      });
+      const data = await res.json();
+      const cal = (data?.calendars && data.calendars.primary) || {}; // {busy:[{start,end}]}
+      const busy = Array.isArray(cal.busy) ? cal.busy.map(x => [Date.parse(x.start), Date.parse(x.end)]) : [];
+      return busy;
+    } catch { return []; }
+  }
+  for (const day of days) {
+    const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
+    const dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
+    const busy = await fetchBusy(dayStart.getTime(), dayEnd.getTime());
+    const key = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
+    for (const plan of dayPlans[key]) {
+      if (busy.length) plan.intervals = subtractIntervals(plan.intervals, busy);
+    }
+  }
+
+  // Build items occurrences for window
+  function expandChoreOccurrences(chore) {
+    try {
+      const r = rrulestr(String(chore.rrule || ''));
+      const occ = r.between(sod, new Date(eod.getTime()-1), true);
+      return occ.map(dt => ({
+        type: 'chore',
+        id: chore.id,
+        title: chore.title || 'Chore',
+        requiredBlock: (chore.requiredBlock || chore.block || '').toString(),
+        durationMin: Number(chore.estimatedMinutes || chore.duration || 30),
+        policy: chore.policy || 'roll_forward',
+        occurrenceMs: dt.getTime(),
+        meta: { choreId: chore.id }
+      }));
+    } catch {
+      return [];
+    }
+  }
+  function expandHabitDaily(habit) {
+    // naive daily habit within window
+    const out = [];
+    for (const day of days) {
+      out.push({
+        type: 'habit',
+        id: habit.id,
+        title: habit.name || 'Habit',
+        requiredBlock: (habit.requiredBlock || '').toString(),
+        durationMin: Number(habit.targetValue ? Math.max(5, Math.min(120, habit.targetValue)) : 15),
+        policy: habit.policy || 'roll_forward',
+        occurrenceMs: new Date(day).setHours(9,0,0,0), // preference 09:00
+        meta: { habitId: habit.id }
+      });
+    }
+    return out;
+  }
+  const items = [
+    ...chores.flatMap(expandChoreOccurrences),
+    ...habits.flatMap(expandHabitDaily)
+  ];
+
+  // Place items greedily according to block priority > earliest feasible > least fragmentation
+  function placeInDay(dayKey, item) {
+    const plans = dayPlans[dayKey] || [];
+    const candidates = [];
+    for (const p of plans) {
+      const b = p.block;
+      if (item.requiredBlock && String(item.requiredBlock).trim()) {
+        if (String(b.name).toLowerCase() !== String(item.requiredBlock).toLowerCase()) continue;
+      }
+      // Location constraints: items requiring home only fit blocks with location=home/any
+      const loc = (b?.constraints?.location || 'any');
+      if ((item.requires_home || item.meta?.requires_home) && !(loc === 'home' || loc === 'any')) continue;
+      const minD = Number(b.minDuration || 0);
+      const maxD = Number(b.maxDuration || 0);
+      const dur = item.durationMin;
+      if (minD && dur < minD) continue;
+      if (maxD && dur > maxD) continue;
+      const before = Number(b.buffers?.beforeMin || 0) * 60000;
+      const after = Number(b.buffers?.afterMin || 0) * 60000;
+      for (const [s,e] of p.intervals) {
+        const start = Math.max(s + before, item.occurrenceMs || s);
+        const end = start + dur*60000 + after;
+        if (end <= e && p.remainingMin >= dur) {
+          const fragmentation = (e - s) - (end - s);
+          candidates.push({ p, b, start, end: start + dur*60000, fragmentation });
+        }
+      }
+    }
+    candidates.sort((a,b)=> (Number(b.b.priority||0) - Number(a.b.priority||0)) || (a.start - b.start) || (a.fragmentation - b.fragmentation));
+    if (!candidates.length) return null;
+    const chosen = candidates[0];
+    // commit reservation: advance interval and capacity
+    chosen.p.remainingMin -= Math.ceil((chosen.end - chosen.start)/60000);
+    // shrink chosen interval
+    const updated = [];
+    for (const [s,e] of chosen.p.intervals) {
+      if (chosen.start >= e || chosen.end <= s) { updated.push([s,e]); continue; }
+      if (chosen.start > s) updated.push([s, chosen.start]);
+      if (chosen.end < e) updated.push([chosen.end, e]);
+    }
+    chosen.p.intervals = updated;
+    return { blockId: chosen.b.id, start: chosen.start, end: chosen.end };
+  }
+
+  const preview = [];
+  for (const it of items) {
+    const d = new Date(it.occurrenceMs || Date.now());
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const placed = placeInDay(key, it);
+    if (placed) {
+      preview.push({ srcType: it.type, srcId: it.id, title: it.title, blockId: placed.blockId, start: placed.start, end: placed.end, status: 'PLANNED' });
+    } else {
+      preview.push({ srcType: it.type, srcId: it.id, title: it.title, blockId: null, start: null, end: null, status: 'UNSCHEDULED' });
+    }
+  }
+
+  if (!apply) return { ok: true, count: preview.length, scheduled: preview.filter(p=>p.status==='PLANNED').length, preview };
+
+  // Apply: upsert scheduled_instances and create GCal events when placed
+  const batch = db.batch();
+  const created = [];
+  for (const p of preview) {
+    const id = makeInstanceId({ userId: uid, srcType: p.srcType, srcId: p.srcId, startMs: p.start || p.occurrenceMs || Date.now() });
+    const ref = db.collection('scheduled_instances').doc(id);
+    const payload = {
+      id,
+      ownerUid: uid,
+      sourceType: p.srcType,
+      sourceId: p.srcId,
+      title: p.title || null,
+      blockId: p.blockId || null,
+      plannedStart: p.start || null,
+      plannedEnd: p.end || null,
+      occurrenceDateTime: p.start || null,
+      status: p.status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    batch.set(ref, payload, { merge: true });
+    created.push({ id, ...payload });
+  }
+  await batch.commit();
+
+  // Create Google Calendar events for placed ones (idempotent: extendedProperties.private.instanceId)
+  try {
+    const access = await getAccessToken(uid);
+    for (const p of created.filter(x=>x.status==='PLANNED' && x.blockId)) {
+      try {
+        const b = blocks.find(b=>b.id===p.blockId);
+        const summary = `[${p.sourceType==='habit'?'Routine':'Chore'}] ${p.title || 'Item'}`;
+        const colorId = mapBlockToColorId(b);
+        const body = { summary, start: { dateTime: new Date(p.plannedStart).toISOString() }, end: { dateTime: new Date(p.plannedEnd).toISOString() }, extendedProperties: { private: { instanceId: p.id, blockId: p.blockId } } };
+        if (colorId) body['colorId'] = colorId;
+        const res = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', { method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const evId = res?.id || null;
+        if (evId) await db.collection('scheduled_instances').doc(p.id).set({ gcalEventId: evId }, { merge: true });
+      } catch {}
+    }
+  } catch {}
+
+  return { ok: true, count: preview.length, created: created.length };
+});
+
+// A4 — Overdue & Reschedule Policy (roll_forward within grace window)
+exports.replanOverdue = schedulerV2.onSchedule('every 60 minutes', async (event) => {
+  const db = admin.firestore();
+  const now = Date.now();
+  const staleSnap = await db.collection('scheduled_instances').where('status','==','PLANNED').where('plannedEnd','<=', now).get();
+  const updates = [];
+  for (const d of staleSnap.docs) {
+    const s = { id: d.id, ...(d.data()||{}) };
+    const policy = s.policy || 'roll_forward';
+    if (policy === 'skip') {
+      updates.push(db.collection('scheduled_instances').doc(d.id).set({ status: 'SKIPPED', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+      continue;
+    }
+    if (policy === 'roll_forward') {
+      // simple: mark MISSED and let user re-run planner; optional: attempt immediate reschedule by bumping occurrence to next day 09:00
+      updates.push(db.collection('scheduled_instances').doc(d.id).set({ status: 'MISSED', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+      continue;
+    }
+    if (policy === 'escalate_to_next_priority_block') {
+      updates.push(db.collection('scheduled_instances').doc(d.id).set({ status: 'ROLLED', updatedAt: admin.firestore.FieldValue.serverTimestamp(), metadata: { escalated: true } }, { merge: true }));
+      continue;
+    }
+  }
+  await Promise.allSettled(updates);
+  return { ok: true, checked: staleSnap.size };
+});
+
+// ===== Routines → Calendar Blocks Planner (Habits + Chores)
+// Focused planner to integrate routines directly into calendar_blocks with AI-style metadata
+exports.planRoutines = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const day = req?.data?.day || new Date().toISOString().slice(0,10); // YYYY-MM-DD
+  const includeHabits = req?.data?.includeHabits !== false; // default true
+  const includeChores = req?.data?.includeChores !== false; // default true
+  const apply = !!req?.data?.apply; // if false, dry-run
+  const persona = req?.data?.persona || 'personal';
+
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+
+  const db = admin.firestore();
+  const sod = new Date(date); sod.setHours(0,0,0,0);
+  const eod = new Date(date); eod.setHours(23,59,59,999);
+
+  // Helpers
+  function toTimeMs(hhmm) {
+    const [hh, mm] = String(hhmm || '07:00').split(':').map(x=>Number(x));
+    const t = new Date(sod);
+    t.setHours(hh||7, mm||0, 0, 0);
+    return t.getTime();
+  }
+  function mapTheme(num) {
+    const m = { 1: 'Health', 2: 'Growth', 3: 'Wealth', 4: 'Tribe', 5: 'Home' };
+    return m[String(num)] || m[num] || 'Growth';
+  }
+  function overlaps(aStart, aEnd, bStart, bEnd) {
+    return Math.max(aStart, bStart) < Math.min(aEnd, bEnd);
+  }
+  function nextDue(rruleText, dtstartMs, fromMs) {
+    try {
+      const hasDt = /DTSTART/i.test(String(rruleText||''));
+      const text = !hasDt && dtstartMs
+        ? `DTSTART:${new Date(dtstartMs).toISOString().replace(/[-:]/g,'').split('.')[0]}Z\n${rruleText}`
+        : rruleText;
+      const rule = rrulestr(text);
+      const next = rule.after(new Date(fromMs), true);
+      return next ? next.getTime() : null;
+    } catch { return null; }
+  }
+
+  // Load existing blocks for conflict checks
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('start', '>=', sod.getTime())
+    .where('start', '<=', eod.getTime())
+    .get();
+  const existingBlocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+  // Load routines
+  const proposals = [];
+  if (includeHabits) {
+    const habitsSnap = await db.collection('habits')
+      .where('userId', '==', uid)
+      .where('isActive', '==', true)
+      .get();
+    const dow = new Date(sod).getDay(); // 0=Sun..6=Sat
+    for (const d of habitsSnap.docs) {
+      const h = { id: d.id, ...(d.data()||{}) };
+      const freq = String(h.frequency || 'daily');
+      const weeklyOk = freq === 'weekly' ? (Array.isArray(h.daysOfWeek) && h.daysOfWeek.includes(dow)) : true;
+      if (!weeklyOk && freq !== 'daily') continue;
+      const start = toTimeMs(h.scheduleTime || '07:00');
+      const minutes = 15;
+      const end = start + minutes*60000;
+      let s = start, e = end;
+      // simple conflict-avoidance: nudge by 15m if overlaps
+      let nudges = 0;
+      while (existingBlocks.some(b => overlaps(s,e,b.start,b.end)) && nudges < 8) {
+        s += 15*60000; e += 15*60000; nudges++;
+      }
+      proposals.push({
+        type: 'habit', id: h.id, title: h.name || 'Habit',
+        start: s, end: e,
+        theme: mapTheme(h.theme || (h.linkedGoalTheme || 2)),
+        category: 'Wellbeing',
+        rationale: `Habit at preferred time${nudges?` (+${nudges*15}m)`:''}`,
+        habitId: h.id
+      });
+    }
+  }
+  if (includeChores) {
+    const choresSnap = await db.collection('chores')
+      .where('ownerUid', '==', uid)
+      .get();
+    for (const d of choresSnap.docs) {
+      const c = { id: d.id, ...(d.data()||{}) };
+      const due = nextDue(c.rrule, c.dtstart || c.createdAt || undefined, sod.getTime() - 1);
+      if (!due || due < sod.getTime() || due > eod.getTime()) continue;
+      const minutes = Number(c.estimatedMinutes) || 15;
+      let s = due, e = due + minutes*60000;
+      let nudges = 0;
+      while (existingBlocks.some(b => overlaps(s,e,b.start,b.end)) && nudges < 8) {
+        s += 15*60000; e += 15*60000; nudges++;
+      }
+      proposals.push({
+        type: 'chore', id: c.id, title: c.title || 'Chore',
+        start: s, end: e,
+        theme: mapTheme(c.theme || 5),
+        category: 'Chores',
+        rationale: `Chore scheduled at due time${nudges?` (+${nudges*15}m)`:''}; choreId=${c.id}`
+      });
+    }
+  }
+
+  // Sort by time and apply if requested
+  proposals.sort((a,b)=>a.start-b.start);
+  let created = 0;
+  const createdIds = [];
+  if (apply) {
+    const batch = db.batch();
+    for (const p of proposals) {
+      const ref = db.collection('calendar_blocks').doc();
+      batch.set(ref, {
+        id: ref.id,
+        googleEventId: null,
+        syncToGoogle: false,
+        taskId: null,
+        goalId: null,
+        storyId: null,
+        habitId: p.type === 'habit' ? p.habitId : null,
+        seriesId: null,
+        subTheme: null,
+        persona,
+        theme: p.theme,
+        category: p.category,
+        start: p.start,
+        end: p.end,
+        flexibility: 'soft',
+        status: 'applied',
+        colorId: null,
+        visibility: 'default',
+        createdBy: 'ai',
+        rationale: p.rationale,
+        version: 1,
+        ownerUid: uid,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      });
+      createdIds.push(ref.id);
+
+      // Link scheduled item for habits/chores with deep link
+      if (p.type === 'habit') {
+        const schedRef = db.collection('scheduled_items').doc();
+        batch.set(schedRef, {
+          id: schedRef.id,
+          ownerUid: uid,
+          blockId: ref.id,
+          type: 'habit',
+          refId: String(p.habitId),
+          title: p.title || 'Habit',
+          linkUrl: `/habits?habitId=${p.habitId}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      }
+      if (p.type === 'chore') {
+        const schedRef = db.collection('scheduled_items').doc();
+        batch.set(schedRef, {
+          id: schedRef.id,
+          ownerUid: uid,
+          blockId: ref.id,
+          type: 'routine',
+          refId: String(p.id),
+          title: p.title || 'Chore',
+          linkUrl: `/chores?choreId=${p.id}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      }
+      created++;
+    }
+    await batch.commit();
+  }
+
+  // Auto-sync routines to Google if enabled
+  if (apply && createdIds.length) {
+    try {
+      const prof = await db.collection('profiles').doc(uid).get();
+      const auto = prof.exists && !!prof.data().autoSyncPlannerToGoogle;
+      if (auto) {
+        const access = await getAccessToken(uid);
+        for (const bid of createdIds) {
+          try {
+            const snap = await db.collection('calendar_blocks').doc(bid).get();
+            if (!snap.exists) continue;
+            const b = snap.data() || {};
+            const summary = b.title || `${b.category || 'Block'} (${b.theme || 'Growth'})`;
+            const desc = `Theme: ${b.theme || 'Growth'}\nBy: AI\nBOB BlockId: ${bid}\nCategory: ${b.category || ''}\nSource: Routines`;
+            const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+              method: "POST",
+              headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+              body: JSON.stringify({ summary, description: desc, start: { dateTime: new Date(b.start).toISOString() }, end: { dateTime: new Date(b.end).toISOString() }, extendedProperties: { private: { bobId: bid } } })
+            });
+            const evId = ev?.id;
+            if (evId) {
+              await db.collection('calendar_blocks').doc(bid).set({ googleEventId: evId, syncToGoogle: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+              try { await logIntegration({ uid, source: 'google', level: 'info', step: 'routines_auto_sync', message: 'Auto-synced routine block to Google', meta: { blockId: bid, eventId: evId } }); } catch {}
+            }
+          } catch (e) {
+            try { await logIntegration({ uid, source: 'google', level: 'error', step: 'routines_auto_sync_error', message: 'Failed to auto-sync routine block', meta: { blockId: bid, error: String(e?.message||e) } }); } catch {}
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Audit
+  try {
+    await db.collection('activity_stream').add({
+      entityId: uid,
+      entityType: 'plan',
+      activityType: 'routines_planned',
+      userId: uid,
+      description: `Planned ${proposals.length} routine blocks for ${day}`,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  } catch {}
+
+  return { day, count: proposals.length, created: apply ? created : 0, applied: !!apply, proposals };
 });
 
 // Reconcile assignments with Google Calendar: if child events were deleted externally,
@@ -650,8 +1187,10 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
       stravaLastSyncAt: null
     }, { merge: true });
 
+    await logIntegration({ uid, source: 'strava', level: 'info', step: 'oauth_callback', message: 'Strava connected', meta: { athleteId: athlete.id || null } });
     res.status(200).send("<script>window.close();</script>Strava connected. You can close this window.");
   } catch (e) {
+    try { await logIntegration({ uid: null, source: 'strava', level: 'error', step: 'oauth_callback', message: 'Strava OAuth callback error', meta: { error: String(e?.message||e) } }); } catch {}
     console.error('Strava OAuth callback error:', e);
     res.status(500).send("Strava OAuth callback error: " + e.message);
   }
@@ -750,8 +1289,10 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    try { await logIntegration({ uid, source: 'monzo', level: 'info', step: 'oauth_callback', message: 'Monzo connected', meta: { monzoUserId } }); } catch {}
     res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
   } catch (e) {
+    try { await logIntegration({ uid: null, source: 'monzo', level: 'error', step: 'oauth_callback', message: 'Monzo OAuth callback error', meta: { error: String(e?.message||e) } }); } catch {}
     console.error('Monzo OAuth callback error:', e);
     res.status(500).send("Monzo OAuth callback error: " + e.message);
   }
@@ -884,6 +1425,7 @@ exports.revokeMonzoAccess = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CL
   } catch {}
   await db.collection('profiles').doc(uid).set({ monzoConnected: false, monzoUserId: null }, { merge: true });
   await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoked', uid });
+  try { await logIntegration({ uid, source: 'monzo', level: 'info', step: 'revoke', message: 'Monzo access revoked' }); } catch {}
   return { ok: true };
 });
 
@@ -1195,12 +1737,24 @@ const THEME_NAME_MAP = {
 
 async function computeMonzoAnalytics(uid) {
   const db = admin.firestore();
+  // Load optional finance mapping: merchant→category and category→bucket
+  let merchantToCategory = {};
+  let categoryToBucket = {};
+  try {
+    const mapSnap = await db.collection('finance_mapping').doc(uid).get();
+    if (mapSnap.exists) {
+      const d = mapSnap.data() || {};
+      merchantToCategory = d.merchantToCategory || {};
+      categoryToBucket = d.categoryToBucket || {};
+    }
+  } catch {}
   const txSnap = await db.collection('monzo_transactions').where('ownerUid', '==', uid).get();
   const potSnap = await db.collection('monzo_pots').where('ownerUid', '==', uid).get();
   const goalsSnap = await db.collection('goals').where('ownerUid', '==', uid).get();
 
   const totals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
   const categoryTotals = new Map();
+  const bucketTotals = new Map();
   const monthly = {};
   const pendingClassification = [];
   let pendingCount = 0;
@@ -1208,18 +1762,37 @@ async function computeMonzoAnalytics(uid) {
   txSnap.forEach((doc) => {
     const data = doc.data() || {};
     const amount = Number(data.amount != null ? data.amount : (data.amountMinor || 0) / 100);
-    const catType = String(data.userCategoryType || data.categoryType || data.defaultCategoryType || inferDefaultCategoryType(data.raw || {}));
+    // Merchant/category mapping
+    const merchantName = String((data.merchant && (data.merchant.name || data.merchant.merchant || data.merchant.id)) || data.description || '').toLowerCase();
+    let mapped = null;
+    if (merchantName && merchantToCategory && merchantToCategory[merchantName]) {
+      mapped = merchantToCategory[merchantName]; // { type, label }
+    }
+    const catType = String(
+      data.userCategoryType ||
+      (mapped && mapped.type) ||
+      data.categoryType ||
+      data.defaultCategoryType ||
+      inferDefaultCategoryType(data.raw || {})
+    );
     const canonType = ['mandatory', 'optional', 'savings', 'income'].includes(catType) ? catType : (amount >= 0 ? 'income' : 'optional');
     const absAmount = amount < 0 ? Math.abs(amount) : amount;
 
     totals[canonType] = (totals[canonType] || 0) + absAmount;
 
-    const categoryLabel = data.userCategoryLabel || data.userCategory || data.defaultCategoryLabel || data.merchant?.name || data.description || 'Uncategorised';
+    const categoryLabel = data.userCategoryLabel || data.userCategory || (mapped && mapped.label) || data.defaultCategoryLabel || data.merchant?.name || data.description || 'Uncategorised';
     const current = categoryTotals.get(categoryLabel) || { amount: 0, count: 0, type: canonType };
     current.amount += absAmount;
     current.count += 1;
     current.type = canonType;
     categoryTotals.set(categoryLabel, current);
+
+    // Bucket mapping from category
+    const bucket = categoryToBucket[categoryLabel] || 'Unassigned';
+    const bcur = bucketTotals.get(bucket) || { amount: 0, count: 0 };
+    bcur.amount += absAmount;
+    bcur.count += 1;
+    bucketTotals.set(bucket, bcur);
 
     const monthKey = data.monthKey || (data.createdISO ? toMonthKey(data.createdISO) : null);
     if (monthKey) {
@@ -1250,10 +1823,15 @@ async function computeMonzoAnalytics(uid) {
     .slice(0, 50)
     .map(([label, stats]) => ({ label, amount: stats.amount, count: stats.count, type: stats.type }));
 
+  const buckets = Array.from(bucketTotals.entries())
+    .sort((a, b) => b[1].amount - a[1].amount)
+    .map(([label, stats]) => ({ label, amount: stats.amount, count: stats.count }));
+
   const summaryDoc = {
     ownerUid: uid,
     totals,
     categories,
+    buckets,
     monthly,
     pendingClassification,
     pendingCount,
@@ -1275,6 +1853,38 @@ async function computeMonzoAnalytics(uid) {
   const goals = goalsSnap.docs.map((g) => ({ id: g.id, ...(g.data() || {}) }));
   const goalSummaries = [];
   const themeTotals = {};
+
+  // Compute theme-level pot balances (match pots by theme name/synonyms)
+  const THEME_SYNONYMS = {
+    1: ['health', 'fitness'],
+    2: ['growth', 'spiritual'],
+    3: ['finance', 'wealth', 'money'],
+    4: ['tribe', 'family', 'relationships'],
+    5: ['home', 'living', 'house']
+  };
+  const themePotBalance = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  potSnap.forEach((p) => {
+    const pot = p.data() || {};
+    const name = String(pot.name || '').toLowerCase();
+    const balMinor = Number(pot.balance || 0);
+    const bal = balMinor / 100;
+    let matchedTheme = null;
+    // Prefer explicit theme words in pot name
+    for (const [tidStr, words] of Object.entries(THEME_SYNONYMS)) {
+      const tid = Number(tidStr);
+      if (words.some(w => name.includes(w))) { matchedTheme = tid; break; }
+    }
+    // Fallback: try the canonical theme names
+    if (!matchedTheme) {
+      for (const [tidStr, tname] of Object.entries(THEME_NAME_MAP)) {
+        const tid = Number(tidStr);
+        if (name.includes(String(tname || '').toLowerCase().split('&')[0].trim())) { matchedTheme = tid; break; }
+      }
+    }
+    if (matchedTheme && themePotBalance.hasOwnProperty(matchedTheme)) {
+      themePotBalance[matchedTheme] += bal;
+    }
+  });
 
   goals.forEach((goal) => {
     const estimatedCost = Number(goal.estimatedCost || goal.targetValue || goal.target || 0);
@@ -1332,9 +1942,17 @@ async function computeMonzoAnalytics(uid) {
     const agg = themeTotals[themeId];
     agg.goalCount += 1;
     agg.totalEstimatedCost += estimatedCost;
-    agg.totalPotBalance += potBalance;
-    agg.totalShortfall += shortfall;
+    // Do NOT sum pot balance here per-goal to avoid double counting shared theme pots
+    // agg.totalPotBalance will be assigned from themePotBalance after processing all goals
   });
+
+  // Finalise theme totals with theme-level pot balances to avoid double counting
+  for (const [tidStr, t] of Object.entries(themeTotals)) {
+    const tid = Number(tidStr);
+    const potBal = themePotBalance[tid] || 0;
+    t.totalPotBalance = potBal;
+    t.totalShortfall = Math.max((t.totalEstimatedCost || 0) - potBal, 0);
+  }
 
   const alignmentDoc = {
     ownerUid: uid,
@@ -1946,6 +2564,7 @@ function themeLabelFromNumber(n) {
 async function applyCalendarBlocks(uid, persona, blocks) {
   const db = admin.firestore();
   const batch = db.batch();
+  const createdBlockIds = [];
 
   // Helper: derive title, theme, goal link for a proposed block
   async function enrichBlock(proposed) {
@@ -2029,7 +2648,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     const enriched = await enrichBlock(proposed);
     const blockRef = db.collection('calendar_blocks').doc();
 
-    batch.set(blockRef, {
+    const toSet = {
       ...proposed,
       id: blockRef.id,
       persona,
@@ -2045,13 +2664,18 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       habitId: enriched.habitId || proposed.habitId || null,
       updatedAt: now,
       createdAt: now
-    });
+    };
+    batch.set(blockRef, toSet);
+    createdBlockIds.push(blockRef.id);
 
     // Create scheduled_items doc if a linked entity exists
     let linkType = null, refId = null, linkTitle = null, linkUrl = enriched.linkUrl || null;
     if (enriched.taskId) { linkType = 'task'; refId = enriched.taskId; }
     else if (enriched.storyId) { linkType = 'story'; refId = enriched.storyId; }
     else if (enriched.habitId) { linkType = 'habit'; refId = enriched.habitId; }
+    else if (enriched.goalId) { linkType = 'goal'; refId = enriched.goalId; }
+
+    if (linkType === 'goal' && !linkUrl) linkUrl = `/goals?goalId=${refId}`;
 
     if (linkType && refId) {
       linkTitle = enriched.title || null;
@@ -2069,6 +2693,21 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       });
     }
     createdCount += 1;
+
+    // Per-block activity entry (AI-created)
+    const aiActRef = db.collection('activity_stream').doc();
+    batch.set(aiActRef, {
+      id: aiActRef.id,
+      entityId: blockRef.id,
+      entityType: 'calendar_block',
+      activityType: 'created',
+      userId: uid,
+      description: `AI created block: ${enriched.title || proposed.category} (${enriched.theme})`,
+      linkUrl: `/calendar?blockId=${blockRef.id}`,
+      source: 'ai',
+      createdAt: now,
+      updatedAt: now
+    });
   }
 
   // Activity summary entry for this AI application
@@ -2085,6 +2724,35 @@ async function applyCalendarBlocks(uid, persona, blocks) {
   });
 
   await batch.commit();
+  // Auto-sync to Google if enabled
+  try {
+    const prof = await db.collection('profiles').doc(uid).get();
+    const auto = prof.exists && !!prof.data().autoSyncPlannerToGoogle;
+    if (auto && createdBlockIds.length) {
+      const access = await getAccessToken(uid);
+      for (const bid of createdBlockIds) {
+        try {
+          const snap = await db.collection('calendar_blocks').doc(bid).get();
+          if (!snap.exists) continue;
+          const b = snap.data() || {};
+          const summary = b.title || `${b.category || 'Block'} (${b.theme || 'Growth'})`;
+          const desc = `Theme: ${b.theme || 'Growth'}\nBy: AI\nBOB BlockId: ${bid}\nCategory: ${b.category || ''}\nSource: Planner`;
+          const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+            body: JSON.stringify({ summary, description: desc, start: { dateTime: new Date(b.start).toISOString() }, end: { dateTime: new Date(b.end).toISOString() }, extendedProperties: { private: { bobId: bid } } })
+          });
+          const evId = ev?.id;
+          if (evId) {
+            await db.collection('calendar_blocks').doc(bid).set({ googleEventId: evId, syncToGoogle: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            try { await logIntegration({ uid, source: 'google', level: 'info', step: 'planner_auto_sync', message: 'Auto-synced planner block to Google', meta: { blockId: bid, eventId: evId } }); } catch {}
+          }
+        } catch (e) {
+          try { await logIntegration({ uid, source: 'google', level: 'error', step: 'planner_auto_sync_error', message: 'Failed to auto-sync block', meta: { blockId: bid, error: String(e?.message||e) } }); } catch {}
+        }
+      }
+    }
+  } catch {}
   return createdCount;
 }
 
@@ -2123,6 +2791,7 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
     return eventsResponse.items.map(event => ({
       id: event.id,
       summary: event.summary || 'Untitled Event',
+      description: event.description || null,
       start: new Date(event.start.dateTime || event.start.date),
       end: new Date(event.end.dateTime || event.end.date)
     }));
@@ -2149,12 +2818,22 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
     const startIso = startMs ? new Date(startMs).toISOString() : null;
     const endIso = endMs ? new Date(endMs).toISOString() : null;
 
+    // Attempt to derive theme from description (e.g., "Theme: Health")
+    let derivedTheme = 'Growth';
+    if (event.description && typeof event.description === 'string') {
+      const m = event.description.match(/Theme:\s*(Health|Growth|Wealth|Tribe|Home)/i);
+      if (m && m[1]) {
+        const t = m[1];
+        derivedTheme = t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+      }
+    }
+
     const payload = {
       ownerUid: uid,
       persona: 'personal',
       title: event.summary || 'Calendar Event',
       description: event.description || null,
-      theme: 'Growth',
+      theme: derivedTheme,
       category: 'Calendar',
       source: 'gcal',
       status: 'synced',
@@ -2255,16 +2934,20 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
   const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
   if (!tokensSnap || tokensSnap.empty) return;
 
-  const startDate = new Date(Date.now() - 6 * 60 * 60 * 1000); // past 6 hours to pick updates
-  const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // next two weeks
+  // Broaden import window so week views always fill across all days
+  const startDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000); // past 14 days
+  const endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // next 30 days
 
   for (const doc of tokensSnap.docs) {
     const tokenId = doc.id;
     const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
     try {
+      await logIntegration({ uid, source: 'google', level: 'info', step: 'sync_start', message: 'Google Calendar hourly sync started', meta: { rangeHours: 6 } });
       await importGoogleCalendarEvents(uid, { startDate, endDate });
+      await logIntegration({ uid, source: 'google', level: 'info', step: 'sync_complete', message: 'Google Calendar hourly sync complete' });
     } catch (error) {
       console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
+      try { await logIntegration({ uid, source: 'google', level: 'error', step: 'sync_error', message: 'Google Calendar hourly sync failed', meta: { error: String(error?.message||error) } }); } catch {}
     }
   }
 });
@@ -2410,6 +3093,7 @@ async function getStravaAccessToken(uid) {
     expires_at: refreshed.expires_at,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'token_refresh', message: 'Strava token refreshed' });
   return refreshed.access_token;
 }
 
@@ -2453,6 +3137,7 @@ async function upsertWorkout(uid, activity) {
 
 async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxPages = 3 } = {}) {
   const accessToken = await getStravaAccessToken(uid);
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'sync_start', message: 'Strava sync started', meta: { afterSec, perPage, maxPages } });
   let page = 1;
   let total = 0;
   let lastDocId = null;
@@ -2474,6 +3159,7 @@ async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxP
   }
   const db = admin.firestore();
   await db.collection('profiles').doc(uid).set({ stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await logIntegration({ uid, source: 'strava', level: 'info', step: 'sync_complete', message: 'Strava sync complete', meta: { imported: total, lastDocId } });
   return { ok: true, imported: total, lastDocId };
 }
 
@@ -2486,6 +3172,7 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
     afterSec = (String(after).length > 10) ? Math.floor(Number(after) / 1000) : Number(after);
   }
   console.log('[syncStrava] uid', req.auth.uid, 'after', after, 'afterSec', afterSec);
+  await logIntegration({ uid: req.auth.uid, source: 'strava', level: 'info', step: 'sync_trigger', message: 'Manual Strava sync requested', meta: { after, afterSec } });
   return await fetchStravaActivities(req.auth.uid, { afterSec });
 });
 
@@ -2649,6 +3336,7 @@ exports.calendarStatus = httpsV2.onCall(async (req) => {
 
 async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
   const base = countryBaseUrl || 'https://www.parkrun.org.uk';
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_start', message: 'Parkrun sync started', meta: { base, athleteId } });
   const url = `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteId)}&eventNumber=0`;
   const html = await (await fetch(url)).text();
   const cheerio = require('cheerio');
@@ -2740,6 +3428,7 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
     imported += 1;
   }
   await db.collection('profiles').doc(uid).set({ parkrunAthleteId: athleteId, parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_complete', message: 'Parkrun sync complete', meta: { imported } });
   return { ok: true, imported };
 }
 
@@ -2749,6 +3438,7 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
   const uid = req.auth.uid;
   let { athleteId, profileUrl, countryBaseUrl } = req.data || {};
   console.log('[syncParkrun] uid', uid, 'athleteId', athleteId, 'profileUrl?', !!profileUrl, 'base?', countryBaseUrl);
+  await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'sync_trigger', message: 'Manual Parkrun sync requested', meta: { hasProfileUrl: !!profileUrl, countryBaseUrl: countryBaseUrl || null } });
   athleteId = (athleteId || '').toString().trim();
   profileUrl = (profileUrl || '').toString().trim();
   countryBaseUrl = (countryBaseUrl || '').toString().trim();
@@ -2760,7 +3450,12 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
   if (!athleteId) {
     throw new httpsV2.HttpsError('invalid-argument', 'Provide Parkrun athleteId or profileUrl containing athleteNumber.');
   }
-  return await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+  try {
+    return await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+  } catch (e) {
+    await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'sync_error', message: 'Parkrun sync failed', meta: { error: String(e?.message||e) } });
+    throw e;
+  }
 });
 
 // Fitness Overview aggregator
@@ -3043,13 +3738,17 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
 
 exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const { summary, start, end } = req.data || {};
+  const { summary, start, end, description, bobId, colorId } = req.data || {};
   if (!summary || !start || !end) throw new httpsV2.HttpsError("invalid-argument", "summary/start/end required");
   const access = await getAccessToken(req.auth.uid);
+  const body = { summary, start: { dateTime: start }, end: { dateTime: end } };
+  if (description) body['description'] = description;
+  if (bobId) body['extendedProperties'] = { private: { bobId } };
+  if (colorId) body['colorId'] = String(colorId);
   const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
     method: "POST",
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
-    body: JSON.stringify({ summary, start: { dateTime: start }, end: { dateTime: end } }),
+    body: JSON.stringify(body),
   });
   return { ok: true, event: ev };
 });
@@ -3057,13 +3756,16 @@ exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 // Update an existing Google Calendar event (summary/start/end minimal patch)
 exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const { eventId, summary, start, end } = req.data || {};
+  const { eventId, summary, start, end, description, bobId, colorId } = req.data || {};
   if (!eventId) throw new httpsV2.HttpsError("invalid-argument", "eventId required");
   const access = await getAccessToken(req.auth.uid);
   const body = {};
   if (summary) body.summary = summary;
   if (start) body.start = { dateTime: start };
   if (end) body.end = { dateTime: end };
+  if (description) body['description'] = description;
+  if (bobId) body['extendedProperties'] = { private: { bobId } };
+  if (colorId) body['colorId'] = String(colorId);
   const ev = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
     method: "PATCH",
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
@@ -3074,10 +3776,14 @@ exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 
 exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const maxResults = Math.min(Number(req.data?.maxResults || 20), 100);
+  const maxResults = Math.min(Number(req.data?.maxResults || 200), 500);
   const access = await getAccessToken(req.auth.uid);
-  const now = new Date().toISOString();
-  const data = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(now)}&maxResults=${maxResults}`, {
+  const daysBack = Math.max(Number(req.data?.daysBack || 14), 0);
+  const daysForward = Math.max(Number(req.data?.daysForward || 30), 1);
+  const start = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+  const end = new Date(Date.now() + daysForward * 24 * 60 * 60 * 1000).toISOString();
+  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(start)}&timeMax=${encodeURIComponent(end)}&maxResults=${maxResults}`;
+  const data = await fetchJson(url, {
     headers: { "Authorization": "Bearer " + access },
   });
   return { ok: true, items: data.items || [] };
@@ -3094,6 +3800,107 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
     headers: { 'Authorization': 'Bearer ' + access }
   });
   return { ok: true };
+});
+
+// ===== Finance: Import merchant/category/bucket mappings from CSV
+// Input: { csvText?: string, budgets?: { byCategory?: Record<string, number>, byBucket?: Record<string, number>, currency?: string, monthlyIncome?: number } }
+exports.importFinanceMappings = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const csvText = String(req?.data?.csvText || '').trim();
+  const budgets = req?.data?.budgets || null;
+  if (!csvText) throw new httpsV2.HttpsError('invalid-argument', 'csvText is required');
+
+  function parseCsv(text) {
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(Boolean);
+    if (!lines.length) return [];
+    const header = lines[0].split(',').map(s=>s.trim().replace(/^\uFEFF/, ''));
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      // naive CSV parse (no quoted commas support) – sample data is simple
+      const cols = line.split(',');
+      const row = {};
+      header.forEach((h, idx) => row[h] = (cols[idx] || '').trim());
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  // Derive type from bucket name heuristics
+  function toType(bucket) {
+    const b = String(bucket || '').toLowerCase();
+    if (!b) return 'optional';
+    if (b.includes('mandatory')) return 'mandatory';
+    if (b.includes('discretionary') || b.includes('optional')) return 'optional';
+    if (b.includes('income') || b.includes('salary') || b.includes('wage')) return 'income';
+    if (b.includes('saving') || b.includes('pot')) return 'savings';
+    return 'optional';
+  }
+
+  const rows = parseCsv(csvText);
+  const merchantToCategory = {};
+  const categoryToBucket = {};
+  for (const r of rows) {
+    const merchant = String(r.Merchant || r.Entity || r.Vendor || r.merchant || r.vendor || '').trim();
+    const label = String(r.Category || r.category || r.Label || '').trim();
+    const bucket = String(r['Category Bucket'] || r.Bucket || r.bucket || r.Group || '').trim();
+    if (label && bucket) categoryToBucket[label] = bucket;
+    if (merchant) {
+      merchantToCategory[merchant.toLowerCase()] = { type: toType(bucket), label: label || 'Uncategorised' };
+    }
+  }
+
+  const db = admin.firestore();
+  await db.collection('finance_mapping').doc(uid).set({ merchantToCategory, categoryToBucket }, { merge: true });
+  if (budgets && typeof budgets === 'object') {
+    const allowed = ['byCategory','byBucket','currency','monthlyIncome'];
+    const patch = {};
+    for (const k of allowed) if (budgets[k] != null) patch[k] = budgets[k];
+    if (Object.keys(patch).length) await db.collection('finance_budgets').doc(uid).set(patch, { merge: true });
+  }
+  try { await logIntegration({ uid, source: 'finance', level: 'info', step: 'import_mapping', message: 'Imported finance mapping from CSV', meta: { rows: rows.length } }); } catch {}
+  return { ok: true, importedRows: rows.length, merchants: Object.keys(merchantToCategory).length, categories: Object.keys(categoryToBucket).length };
+});
+
+// Debug Monzo status and token health
+exports.monzoStatus = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const t = await db.collection('tokens').doc(`${uid}_monzo`).get();
+  const profile = await db.collection('profiles').doc(uid).get();
+  const has = t.exists;
+  let needsRefresh = null;
+  let canUse = null;
+  try {
+    const check = await ensureMonzoAccessToken(uid);
+    needsRefresh = false;
+    canUse = !!check.accessToken;
+  } catch (e) {
+    needsRefresh = true;
+    canUse = false;
+  }
+  return { connected: has, profile: profile.exists ? profile.data().monzoConnected : null, tokenDoc: has ? t.data() : null, canUse, needsRefresh };
+});
+
+// Debug Strava status and token health
+exports.stravaStatus = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const t = await db.collection('tokens').doc(`${uid}_strava`).get();
+  const profile = await db.collection('profiles').doc(uid).get();
+  const has = t.exists;
+  let canUse = null;
+  let refreshed = false;
+  try {
+    await getStravaAccessToken(uid);
+    canUse = true;
+  } catch (e) {
+    canUse = false;
+  }
+  return { connected: has, profile: profile.exists ? profile.data().stravaConnected : null, tokenDoc: has ? t.data() : null, canUse, refreshed };
 });
 
 // Sync plan assignments for a day to Google Calendar as child events under parent block events
@@ -3383,6 +4190,7 @@ exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
 
 // ===== Trakt and Steam Sync
 async function _syncTrakt(uid) {
+  await logIntegration({ uid, source: 'trakt', level: 'info', step: 'sync_start', message: 'Trakt sync started' });
   const db = admin.firestore();
   const profile = await db.collection('profiles').doc(uid).get();
   const traktUser = profile.data()?.traktUser;
@@ -3411,11 +4219,12 @@ async function _syncTrakt(uid) {
     traktLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
     traktSyncCount: history.length,
   }, { merge: true });
-
+  await logIntegration({ uid, source: 'trakt', level: 'info', step: 'sync_complete', message: 'Trakt sync complete', meta: { written: history.length } });
   return { ok: true, written: history.length };
 }
 
 async function _syncSteam(uid) {
+  await logIntegration({ uid, source: 'steam', level: 'info', step: 'sync_start', message: 'Steam sync started' });
   const db = admin.firestore();
   const profile = await db.collection('profiles').doc(uid).get();
   const steamId = profile.data()?.steamId;
@@ -3440,7 +4249,7 @@ async function _syncSteam(uid) {
     steamLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
     steamLibrarySize: games.length,
   }, { merge: true });
-
+  await logIntegration({ uid, source: 'steam', level: 'info', step: 'sync_complete', message: 'Steam sync complete', meta: { written: games.length } });
   return { ok: true, written: games.length };
 }
 
@@ -3569,33 +4378,45 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 
     if (data.traktUser) {
       try {
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'daily_sync_start', message: 'Daily Trakt sync started' });
         await _syncTrakt(uid);
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'daily_sync_complete', message: 'Daily Trakt sync complete' });
       } catch (error) {
         console.error(`Failed to sync Trakt for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'trakt', level: 'error', step: 'daily_sync_error', message: 'Daily Trakt sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.steamId) {
       try {
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'daily_sync_start', message: 'Daily Steam sync started' });
         await _syncSteam(uid);
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'daily_sync_complete', message: 'Daily Steam sync complete' });
       } catch (error) {
         console.error(`Failed to sync Steam for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'steam', level: 'error', step: 'daily_sync_error', message: 'Daily Steam sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.stravaConnected && data.stravaAutoSync) {
       try {
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'daily_sync_start', message: 'Daily Strava sync started' });
         await fetchStravaActivities(uid, { maxPages: 2 });
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'daily_sync_complete', message: 'Daily Strava sync complete' });
       } catch (error) {
         console.error(`Failed to sync Strava for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'strava', level: 'error', step: 'daily_sync_error', message: 'Daily Strava sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
     if (data.parkrunAthleteId && data.parkrunAutoSync) {
       try {
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'daily_sync_start', message: 'Daily Parkrun sync started' });
         await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'daily_sync_complete', message: 'Daily Parkrun sync complete' });
       } catch (error) {
         console.error(`Failed to sync Parkrun for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'daily_sync_error', message: 'Daily Parkrun sync failed', meta: { error: String(error?.message||error) } }); } catch {}
       }
     }
 
@@ -3637,9 +4458,88 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 
     if (data.monzoConnected) {
       try {
+        await logIntegration({ uid, source: 'monzo', level: 'info', step: 'daily_sync_start', message: 'Daily Monzo sync started' });
         await syncMonzoDataForUser(uid);
+        await logIntegration({ uid, source: 'monzo', level: 'info', step: 'daily_sync_complete', message: 'Daily Monzo sync complete' });
       } catch (error) {
         console.error(`Failed to sync Monzo for user ${uid}`, error);
+        try { await logIntegration({ uid, source: 'monzo', level: 'error', step: 'daily_sync_error', message: 'Daily Monzo sync failed', meta: { error: String(error?.message||error) } }); } catch {}
+      }
+    }
+  }
+});
+
+// Hourly integrations sync (Strava, Parkrun, Steam, Trakt). Monzo and Google have their own schedules.
+exports.hourlyIntegrations = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+  for (const profile of profiles.docs) {
+    const uid = profile.id;
+    const data = profile.data() || {};
+
+    // Strava
+    if (data.stravaConnected && data.stravaAutoSync) {
+      try {
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'hourly_sync_start', message: 'Hourly Strava sync started' });
+        await fetchStravaActivities(uid, { maxPages: 1, afterSec: Math.floor((Date.now() - 24*3600*1000)/1000) });
+        await logIntegration({ uid, source: 'strava', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Strava sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'strava', level: 'error', step: 'hourly_sync_error', message: 'Hourly Strava sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Parkrun (usually weekly cadence; safe hourly for idempotent writes)
+    if (data.parkrunAthleteId && data.parkrunAutoSync) {
+      try {
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'hourly_sync_start', message: 'Hourly Parkrun sync started' });
+        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+        await logIntegration({ uid, source: 'parkrun', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Parkrun sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'parkrun', level: 'error', step: 'hourly_sync_error', message: 'Hourly Parkrun sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Steam
+    if (data.steamId && data.steamAutoSync !== false) { // default on if steamId present
+      try {
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'hourly_sync_start', message: 'Hourly Steam sync started' });
+        await _syncSteam(uid);
+        await logIntegration({ uid, source: 'steam', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Steam sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'steam', level: 'error', step: 'hourly_sync_error', message: 'Hourly Steam sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+
+    // Trakt
+    if (data.traktUser && data.traktAutoSync !== false) { // default on if configured
+      try {
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'hourly_sync_start', message: 'Hourly Trakt sync started' });
+        await _syncTrakt(uid);
+        await logIntegration({ uid, source: 'trakt', level: 'info', step: 'hourly_sync_complete', message: 'Hourly Trakt sync complete' });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'trakt', level: 'error', step: 'hourly_sync_error', message: 'Hourly Trakt sync failed', meta: { error: String(e?.message||e) } }); } catch {}
+      }
+    }
+  }
+});
+
+// Hourly planner: integrate routines (chores/habits) into today's calendar blocks deterministically
+exports.hourlyPlanner = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+  const day = new Date().toISOString().slice(0,10);
+  for (const p of profiles.docs) {
+    const uid = p.id;
+    const data = p.data() || {};
+    if (data.autoPlanHourly) {
+      try {
+        await logIntegration({ uid, source: 'planner', level: 'info', step: 'hourly_plan_start', message: 'Hourly routines planner started', meta: { day } });
+        // planRoutines callable inline: include habits and chores, apply=true
+        // Reuse internal logic by writing a small inline call
+        await exports.planRoutines.run({ auth: { uid }, data: { day, includeHabits: true, includeChores: true, apply: true, persona: 'personal' } });
+        await logIntegration({ uid, source: 'planner', level: 'info', step: 'hourly_plan_complete', message: 'Hourly routines planner complete', meta: { day } });
+      } catch (e) {
+        try { await logIntegration({ uid, source: 'planner', level: 'error', step: 'hourly_plan_error', message: 'Hourly routines planner failed', meta: { error: String(e?.message||e), day } }); } catch {}
       }
     }
   }

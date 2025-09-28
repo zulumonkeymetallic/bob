@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
+import { Container, Card, Row, Col, Button, Form, InputGroup, ButtonGroup } from 'react-bootstrap';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { List as ListIcon, LayoutGrid } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
@@ -23,6 +25,9 @@ const GoalsManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
+  const [cardDensity, setCardDensity] = useState<'normal' | 'compact' | 'mini'>('normal');
+  const location = useLocation();
+  const navigate = useNavigate();
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
@@ -35,6 +40,13 @@ const GoalsManagement: React.FC = () => {
     if (!currentUser) return;
     loadGoalsData();
   }, [currentUser, currentPersona]);
+
+  // Initialize view mode from URL param (?view=cards) to support /goals/cards redirect
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const v = params.get('view');
+    if (v === 'cards') setViewMode('cards');
+  }, [location.search]);
 
   const loadGoalsData = async () => {
     if (!currentUser) return;
@@ -218,6 +230,20 @@ const GoalsManagement: React.FC = () => {
                 Cards
               </Button>
             </div>
+            {viewMode === 'cards' && (
+              <div className="ms-2 d-flex align-items-center" title="Card density">
+                <select
+                  className="form-select form-select-sm"
+                  style={{ minWidth: 140 }}
+                  value={cardDensity}
+                  onChange={(e) => setCardDensity(e.target.value as any)}
+                >
+                  <option value="normal">Comfortable</option>
+                  <option value="compact">Compact</option>
+                  <option value="mini">Mini</option>
+                </select>
+              </div>
+            )}
             <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
               Add Goal
             </Button>
@@ -363,9 +389,29 @@ const GoalsManagement: React.FC = () => {
             borderBottom: '1px solid var(--notion-border)', 
             padding: '20px 24px' 
           }}>
-            <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: 'var(--notion-text)' }}>
-              Goals ({filteredGoals.length})
-            </h5>
+            <div className="d-flex justify-content-between align-items-center">
+              <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: 'var(--notion-text)' }}>
+                Goals ({filteredGoals.length})
+              </h5>
+              <ButtonGroup size="sm">
+                <Button variant={viewMode==='list'?'primary':'outline-secondary'} onClick={() => {
+                  setViewMode('list');
+                  const params = new URLSearchParams(location.search);
+                  params.delete('view');
+                  navigate(`${location.pathname}?${params.toString()}`, { replace: true });
+                }} title="List view">
+                  <ListIcon size={16} />
+                </Button>
+                <Button variant={viewMode==='cards'?'primary':'outline-secondary'} onClick={() => {
+                  setViewMode('cards');
+                  const params = new URLSearchParams(location.search);
+                  params.set('view','cards');
+                  navigate(`${location.pathname}?${params.toString()}`, { replace: true });
+                }} title="Card view">
+                  <LayoutGrid size={16} />
+                </Button>
+              </ButtonGroup>
+            </div>
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
             {loading ? (
@@ -396,6 +442,7 @@ const GoalsManagement: React.FC = () => {
                     onGoalUpdate={handleGoalUpdate}
                     onGoalDelete={handleGoalDelete}
                     onGoalPriorityChange={handleGoalPriorityChange}
+                    density={cardDensity}
                   />
                 )}
               </div>

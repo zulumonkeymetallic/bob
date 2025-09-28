@@ -182,19 +182,63 @@ const HabitsManagement: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {habits.map(h => (
-                <tr key={h.id}>
-                  <td>{h.name}</td>
-                  <td>{h.frequency}</td>
-                  <td>{h.scheduleTime || '—'}</td>
-                  <td>{h.linkedGoalId ? (goals.find(g=>g.id===h.linkedGoalId)?.title || h.linkedGoalId) : '—'}</td>
-                  <td>{h.isActive ? <Badge bg="success">On</Badge> : <Badge bg="secondary">Off</Badge>}</td>
-                  <td className="text-end">
-                    <Button size="sm" className="me-2" variant="outline-success" onClick={()=>toggleCompleteToday(h)}>Mark Done Today</Button>
-                    <Button size="sm" variant="outline-danger" onClick={()=>handleDelete(h.id)}>Delete</Button>
-                  </td>
-                </tr>
-              ))}
+              {habits.map(h => {
+                const weekly = h.frequency === 'weekly';
+                const days: number[] = Array.isArray(h.daysOfWeek) ? h.daysOfWeek : [];
+                const dayLabels = [
+                  { label: 'Sun', val: 0 },
+                  { label: 'Mon', val: 1 },
+                  { label: 'Tue', val: 2 },
+                  { label: 'Wed', val: 3 },
+                  { label: 'Thu', val: 4 },
+                  { label: 'Fri', val: 5 },
+                  { label: 'Sat', val: 6 },
+                ];
+                return (
+                  <tr key={h.id}>
+                    <td>
+                      <div>{h.name}</div>
+                      {weekly && (
+                        <div className="mt-1 d-flex flex-wrap gap-1">
+                          {dayLabels.map(d => (
+                            <span key={d.val} className="badge" style={{
+                              background: days.includes(d.val) ? '#e0f2fe' : '#f3f4f6',
+                              color: days.includes(d.val) ? '#0369a1' : '#6b7280',
+                              border: '1px solid #e5e7eb'
+                            }}>{d.label}</span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td>{h.frequency}</td>
+                    <td style={{minWidth: 120}}>
+                      <Form.Control
+                        size="sm"
+                        type="time"
+                        value={h.scheduleTime || ''}
+                        onChange={async (e)=>{
+                          const value = e.target.value;
+                          await updateDoc(doc(db, 'habits', h.id), { scheduleTime: value, updatedAt: Date.now() });
+                        }}
+                      />
+                    </td>
+                    <td>{h.linkedGoalId ? (goals.find(g=>g.id===h.linkedGoalId)?.title || h.linkedGoalId) : '—'}</td>
+                    <td>
+                      <Form.Check
+                        type="switch"
+                        checked={!!h.isActive}
+                        onChange={async (e)=>{
+                          await updateDoc(doc(db, 'habits', h.id), { isActive: e.target.checked, updatedAt: Date.now() });
+                        }}
+                      />
+                    </td>
+                    <td className="text-end">
+                      <Button size="sm" className="me-2" variant="outline-success" onClick={()=>toggleCompleteToday(h)}>Mark Done Today</Button>
+                      <Button size="sm" variant="outline-danger" onClick={()=>handleDelete(h.id)}>Delete</Button>
+                    </td>
+                  </tr>
+                );
+              })}
               {habits.length===0 && <tr><td colSpan={6} className="text-muted">No habits yet</td></tr>}
             </tbody>
           </Table>

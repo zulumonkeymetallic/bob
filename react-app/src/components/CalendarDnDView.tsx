@@ -10,7 +10,7 @@ import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, orderBy, getDoc, getDocs } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { CalendarBlock } from '../types';
+import { CalendarBlock, Block } from '../types';
 import { GlobalTheme, GLOBAL_THEMES } from '../constants/globalThemes';
 import { getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { ActivityStreamService } from '../services/ActivityStreamService';
@@ -32,7 +32,7 @@ interface ScheduledItem {
   id: string;
   ownerUid: string;
   blockId: string;
-  type: 'story' | 'task' | 'habit' | 'routine';
+  type: 'story' | 'task' | 'habit' | 'routine' | 'goal';
   refId: string;
   title?: string;
   linkUrl?: string;
@@ -48,10 +48,24 @@ const DEFAULT_THEME_COLORS: Record<string, string> = {
   Home: '#f97316'
 };
 
+const themeToColorId = (theme?: string) => {
+  switch ((theme||'').toString()) {
+    case 'Health': return '11';
+    case 'Growth': return '9';
+    case 'Wealth': return '5';
+    case 'Tribe': return '3';
+    case 'Home': return '6';
+    default: return undefined;
+  }
+};
+
 const CalendarDnDView: React.FC = () => {
   const { currentUser } = useAuth();
   const [blocks, setBlocks] = useState<CalendarBlock[]>([]);
   const [googleEvents, setGoogleEvents] = useState<RbcEvent[]>([]);
+  const [blockDefs, setBlockDefs] = useState<Block[]>([]);
+  const [overlayEvents, setOverlayEvents] = useState<RbcEvent[]>([]);
+  const [showOverlay, setShowOverlay] = useState(true);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [createRange, setCreateRange] = useState<{ start: Date; end: Date } | null>(null);
@@ -79,6 +93,7 @@ const CalendarDnDView: React.FC = () => {
   const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
   const [blockItems, setBlockItems] = useState<ScheduledItem[]>([]);
   const [linkForm, setLinkForm] = useState({ type: 'story' as 'story' | 'task' | 'habit' | 'routine', refId: '' });
+  const [history, setHistory] = useState<any[]>([]);
   const [googleEdit, setGoogleEdit] = useState<{ id: string; summary: string; start: string; end: string } | null>(null);
   const [showDelete, setShowDelete] = useState(false);
   const [deleteScope, setDeleteScope] = useState<'single'|'future'|'all'>('single');
@@ -117,6 +132,7 @@ const CalendarDnDView: React.FC = () => {
   useEffect(() => {
     if (!currentUser || !editBlock) {
       setBlockItems([]);
+      setHistory([]);
       return;
     }
     const q = query(collection(db, 'scheduled_items'), where('ownerUid', '==', currentUser.uid), where('blockId', '==', editBlock.id));
@@ -124,7 +140,18 @@ const CalendarDnDView: React.FC = () => {
       const items = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as ScheduledItem[];
       setBlockItems(items);
     });
-    return () => unsub();
+    // Load activity history (last 20 events) for this block
+    const actQ = query(collection(db, 'activity_stream'), where('entityId', '==', editBlock.id));
+    const unsub2 = onSnapshot(actQ, (snap) => {
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      rows.sort((a, b) => {
+        const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt || a.timestamp || 0);
+        const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt || b.timestamp || 0);
+        return bt - at;
+      });
+      setHistory(rows.slice(0, 20));
+    });
+    return () => { unsub(); unsub2(); };
   }, [currentUser, editBlock]);
 
   useEffect(() => {
@@ -141,20 +168,37 @@ const CalendarDnDView: React.FC = () => {
     return unsub;
   }, [currentUser]);
 
+  // Load block definitions for overlay
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(collection(db, 'blocks'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(q, (snap) => {
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Block[];
+      setBlockDefs(rows);
+    });
+    return unsub;
+  }, [currentUser]);
+
   useEffect(() => {
     const load = async () => {
       if (!currentUser) return;
       try {
         setLoadingGoogle(true);
         const callable = httpsCallable(functions, 'listUpcomingEvents');
-        const res: any = await callable({ maxResults: 50 });
-        const items: RbcEvent[] = (res?.data?.items || []).map((e: any) => ({
-          id: e.id,
-          title: e.summary || 'Untitled',
-          start: new Date(e.start?.dateTime || e.start?.date),
-          end: new Date(e.end?.dateTime || e.end?.date),
-          source: 'google'
-        }));
+        const res: any = await callable({ maxResults: 200, daysBack: 14, daysForward: 30 });
+        const items: RbcEvent[] = (res?.data?.items || []).map((e: any) => {
+          const desc = e.description || '';
+          const m = String(desc).match(/Theme:\s*(Health|Growth|Wealth|Tribe|Home)/i);
+          const theme = m && m[1] ? (m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase()) : undefined;
+          return {
+            id: e.id,
+            title: e.summary || 'Untitled',
+            start: new Date(e.start?.dateTime || e.start?.date),
+            end: new Date(e.end?.dateTime || e.end?.date),
+            source: 'google',
+            block: theme ? ({ theme } as any) : undefined
+          } as RbcEvent;
+        });
         setGoogleEvents(items);
       } catch (e) {
         console.warn('Google events load failed', (e as any)?.message);
@@ -174,8 +218,37 @@ const CalendarDnDView: React.FC = () => {
       source: 'block',
       block: b
     }));
-    return [...googleEvents, ...blockEvents];
-  }, [blocks, googleEvents]);
+    const merged = [...googleEvents, ...blockEvents];
+    return showOverlay ? [...merged, ...overlayEvents] : merged;
+  }, [blocks, googleEvents, overlayEvents, showOverlay]);
+
+  // Compute overlay events for next 30 days based on block windows
+  useEffect(() => {
+    if (!blockDefs.length) { setOverlayEvents([]); return; }
+    const today = new Date(); today.setHours(0,0,0,0);
+    const start = new Date(today.getTime() - 1*24*60*60*1000);
+    const end = new Date(today.getTime() + 30*24*60*60*1000);
+    const days: Date[] = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+    const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const toTime = (d: Date, hhmm: string) => { const [h,m] = String(hhmm||'00:00').split(':').map(Number); const t = new Date(d); t.setHours(h||0, m||0, 0, 0); return t; };
+    const out: RbcEvent[] = [];
+    for (const b of blockDefs) {
+      for (const d of days) {
+        const key = dayKey(d);
+        if (Array.isArray(b.disabledDates) && b.disabledDates.includes(key)) continue;
+        const dow = d.getDay();
+        for (const w of b.windows || []) {
+          const daysFilter = w.days && w.days.length ? w.days : undefined;
+          if (daysFilter && !daysFilter.includes(dow)) continue;
+          const s = toTime(d, w.start), e = toTime(d, w.end);
+          if (e <= s) continue;
+          out.push({ id: `overlay-${b.id}-${key}-${w.start}`, title: b.name, start: s, end: e, source: 'block', block: { theme: b.name } as any, overlayColor: b.color || undefined } as any);
+        }
+      }
+    }
+    setOverlayEvents(out);
+  }, [blockDefs]);
 
   const handleSelectSlot = ({ start, end }: { start: Date; end: Date }) => {
     setCreateRange({ start, end });
@@ -232,7 +305,9 @@ const CalendarDnDView: React.FC = () => {
           const snap = await getDoc(doc(db, 'calendar_blocks', id));
           const data: any = snap.data();
           const summary = (data?.title) || `${data?.category || 'Block'} (${data?.theme || 'Growth'})`;
-          const res: any = await callable({ summary, start: new Date(data.start).toISOString(), end: new Date(data.end).toISOString() });
+          const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${id}\nCategory: ${data?.category || ''}\nSource: BOB`;
+          const colorId = themeToColorId(data?.theme);
+          const res: any = await callable({ summary, start: new Date(data.start).toISOString(), end: new Date(data.end).toISOString(), description, bobId: id, colorId });
           const evId = res?.data?.event?.id || res?.data?.id || res?.event?.id;
           if (evId) {
             await updateDoc(doc(db, 'calendar_blocks', id), { googleEventId: evId, syncToGoogle: true, updatedAt: Date.now() });
@@ -275,10 +350,14 @@ const CalendarDnDView: React.FC = () => {
           if (data?.syncToGoogle) {
             const callable = httpsCallable(functions, data?.googleEventId ? 'updateCalendarEvent' : 'createCalendarEvent');
             if (data?.googleEventId) {
-              await (callable as any)({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString() });
+              const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
+              const colorId = themeToColorId(data?.theme);
+              await (callable as any)({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id, colorId });
             } else {
               const summary = (data?.title) || `${data?.category || 'Block'} (${data?.theme || 'Growth'})`;
-              const res: any = await (callable as any)({ summary, start: start.toISOString(), end: end.toISOString() });
+              const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
+              const colorId = themeToColorId(data?.theme);
+              const res: any = await (callable as any)({ summary, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id, colorId });
               const evId = res?.data?.event?.id || res?.data?.id || res?.event?.id;
               if (evId) await updateDoc(doc(db, 'calendar_blocks', event.id), { googleEventId: evId });
             }
@@ -326,7 +405,9 @@ const CalendarDnDView: React.FC = () => {
           const data: any = snap.data();
           if (data?.syncToGoogle && data?.googleEventId) {
             const callable = httpsCallable(functions, 'updateCalendarEvent');
-            await callable({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString() });
+            const description = `Theme: ${data?.theme || 'Growth'}\nBy: Human\nBOB BlockId: ${event.id}\nCategory: ${data?.category || ''}\nSource: BOB`;
+            const colorId = themeToColorId(data?.theme);
+            await callable({ eventId: data.googleEventId, start: start.toISOString(), end: end.toISOString(), description, bobId: event.id, colorId });
           }
         } catch {}
         if (currentUser) {
@@ -382,6 +463,29 @@ const CalendarDnDView: React.FC = () => {
     });
   };
 
+  // Support deep-link open by blockId param
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const blockId = params.get('blockId');
+    if (!blockId || !blocks.length) return;
+    const b = blocks.find(x => x.id === blockId);
+    if (b) {
+      // Open modal pre-filled
+      setEditBlock(b);
+      setEditScope('single');
+      setEditForm({
+        title: `${b.category || 'Block'} (${b.theme})`,
+        theme: b.theme,
+        category: b.category || '',
+        flexibility: b.flexibility,
+        rationale: b.rationale || '',
+        start: new Date(b.start).toISOString().slice(0, 16),
+        end: new Date(b.end).toISOString().slice(0, 16),
+        syncToGoogle: (b as any).syncToGoogle || false
+      });
+    }
+  }, [blocks]);
+
   const saveEditBlock = async () => {
     if (!editBlock || !currentUser) return;
     try {
@@ -435,11 +539,12 @@ const CalendarDnDView: React.FC = () => {
           const d: any = t.data;
           if (editForm.syncToGoogle) {
             const callable = httpsCallable(functions, d?.googleEventId ? 'updateCalendarEvent' : 'createCalendarEvent');
+            const colorId = themeToColorId(editForm.theme || d?.theme);
             if (d?.googleEventId) {
-              await (callable as any)({ eventId: d.googleEventId, summary: editForm.category, start: new Date(upd.start).toISOString(), end: new Date(upd.end).toISOString() });
+              await (callable as any)({ eventId: d.googleEventId, summary: editForm.category, start: new Date(upd.start).toISOString(), end: new Date(upd.end).toISOString(), colorId });
             } else {
               const summary = (d?.title) || `${editForm.category || d?.category || 'Block'} (${editForm.theme || d?.theme || 'Growth'})`;
-              const res: any = await (callable as any)({ summary, start: new Date(upd.start).toISOString(), end: new Date(upd.end).toISOString() });
+              const res: any = await (callable as any)({ summary, start: new Date(upd.start).toISOString(), end: new Date(upd.end).toISOString(), colorId });
               const evId = res?.data?.event?.id || res?.data?.id || res?.event?.id;
               if (evId) await updateDoc(doc(db, 'calendar_blocks', t.id), { googleEventId: evId });
             }
@@ -625,9 +730,10 @@ const CalendarDnDView: React.FC = () => {
     }
     const themeLabel = evt.block?.theme || 'Health';
     const themeMatch = globalThemes.find(t => t.label === themeLabel || t.name === themeLabel);
-    const bg = themeMatch?.color || DEFAULT_THEME_COLORS[themeLabel] || '#64748b';
+    const isOverlay = String(evt.id).startsWith('overlay-');
+    const bg = (isOverlay && (evt as any).overlayColor) || themeMatch?.color || DEFAULT_THEME_COLORS[themeLabel] || '#64748b';
     const tx = getContrastTextColor(bg);
-    return { style: { backgroundColor: bg, color: tx, border: 'none' } };
+    return { style: { backgroundColor: bg, color: tx, border: 'none', opacity: isOverlay ? 0.18 : 1, pointerEvents: isOverlay ? 'none' : 'auto' } };
   };
 
   if (!currentUser) {
@@ -639,6 +745,10 @@ const CalendarDnDView: React.FC = () => {
       <div className="d-flex justify-content-between align-items-center mb-2">
         <h2 className="mb-0">Calendar</h2>
         <div className="d-flex gap-2">
+          <div className="form-check form-switch d-flex align-items-center">
+            <input id="blocksOverlaySwitch" className="form-check-input" type="checkbox" checked={showOverlay} onChange={(e)=>setShowOverlay(e.target.checked)} />
+            <label htmlFor="blocksOverlaySwitch" className="form-check-label ms-2">Blocks Overlay</label>
+          </div>
           <Button variant="outline-secondary" size="sm" onClick={() => window.location.reload()} disabled={loadingGoogle}>
             {loadingGoogle ? 'Loading Google…' : 'Reload Google Events'}
           </Button>
@@ -718,6 +828,28 @@ const CalendarDnDView: React.FC = () => {
             <Form.Control as="textarea" rows={3} value={createForm.rationale} onChange={(e)=>setCreateForm({...createForm, rationale: e.target.value})} />
           </Form.Group>
           </Form>
+          {/* History */}
+          <div className="mt-3">
+            <div className="d-flex justify-content-between align-items-center mb-2">
+              <strong>History</strong>
+            </div>
+            {history.length === 0 ? (
+              <div className="text-muted">No activity recorded</div>
+            ) : (
+              <ul className="list-unstyled" style={{ maxHeight: 180, overflowY: 'auto' }}>
+                {history.map((h) => (
+                  <li key={h.id} className="small mb-1">
+                    <Badge bg={h.source === 'ai' ? 'warning' : 'secondary'} className="me-1">{h.source || 'human'}</Badge>
+                    <Badge bg="light" text="dark" className="me-1">{h.activityType}</Badge>
+                    <span>{h.description || ''}</span>
+                    {h.userEmail && (
+                      <span className="text-muted ms-1">• {String(h.userEmail).split('@')[0]}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={()=>setShowCreate(false)}>Cancel</Button>
@@ -762,6 +894,20 @@ const CalendarDnDView: React.FC = () => {
                   start: new Date(googleEdit.start).toISOString(),
                   end: new Date(googleEdit.end).toISOString()
                 });
+                // Log to activity if a block is open with a googleEventId matching
+                try {
+                  if (editBlock && (editBlock as any).googleEventId === googleEdit.id && currentUser) {
+                    await ActivityStreamService.addActivity({
+                      entityId: editBlock.id,
+                      entityType: 'calendar_block',
+                      activityType: 'updated',
+                      userId: currentUser.uid,
+                      userEmail: currentUser.email || undefined,
+                      description: 'Updated Google event via editor',
+                      source: 'human'
+                    });
+                  }
+                } catch {}
                 setGoogleEdit(null);
                 window.setTimeout(()=>window.location.reload(), 300);
               } catch (e: any) {
@@ -863,10 +1009,33 @@ const CalendarDnDView: React.FC = () => {
               <Form.Control as="textarea" rows={3} value={editForm.rationale} onChange={(e)=>setEditForm({...editForm, rationale: e.target.value})} />
             </Form.Group>
           </Form>
-          {/* Linked items */}
-          <div className="mt-3">
-            <div className="d-flex justify-content-between align-items-center mb-2">
-              <strong>Linked Items</strong>
+            {/* Quick open primary linked item */}
+            <div className="mt-3 mb-2">
+              {(() => {
+                const priorityOrder = ['routine','habit','task','story','goal'];
+                const byType: Record<string, ScheduledItem[]> = {} as any;
+                blockItems.forEach(i => { byType[i.type] = byType[i.type] || []; byType[i.type].push(i); });
+                let primary: ScheduledItem | null = null;
+                for (const t of priorityOrder) {
+                  if (byType[t] && byType[t].length) { primary = byType[t][0]; break; }
+                }
+                return (
+                  <Button
+                    size="sm"
+                    variant="outline-success"
+                    disabled={!primary || !primary.linkUrl}
+                    onClick={() => { if (primary?.linkUrl) window.location.href = primary.linkUrl; }}
+                  >
+                    {primary ? `Open ${primary.type}` : 'No linked items'}
+                  </Button>
+                );
+              })()}
+            </div>
+
+            {/* Linked items */}
+            <div className="mt-3">
+              <div className="d-flex justify-content-between align-items-center mb-2">
+                <strong>Linked Items</strong>
               <div className="d-flex gap-2">
                 <Form.Select size="sm" style={{ width: '140px' }} value={linkForm.type} onChange={(e)=>setLinkForm({ ...linkForm, type: e.target.value as any })}>
                   <option value="story">Story</option>
@@ -934,7 +1103,7 @@ const CalendarDnDView: React.FC = () => {
                 }
                 await deleteDoc(doc(db, 'calendar_blocks', editBlock.id));
                 if (currentUser) {
-                  await ActivityStreamService.addActivity({ entityId: editBlock.id, entityType: 'calendar_block', activityType: 'deleted', userId: currentUser.uid, userEmail: currentUser.email || undefined, description: 'Deleted block', source: 'human' });
+                  await ActivityStreamService.addActivity({ entityId: editBlock.id, entityType: 'calendar_block', activityType: 'deleted', userId: currentUser.uid, userEmail: currentUser.email || undefined, description: 'Deleted block', linkUrl: `/calendar?blockId=${editBlock.id}`, source: 'human' });
                 }
                 setEditBlock(null);
               } catch (e) { console.error(e); alert('Failed to delete block'); }

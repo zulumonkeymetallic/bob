@@ -36,6 +36,27 @@ service cloud.firestore {
     match /chores/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     // Alias for blocks in new schema (calendar_blocks already exists separately)
     match /blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Scheduled instances produced by the scheduling engine
+    match /scheduled_instances/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Optional routines collection for future use (habits exist today)
+    match /routines/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+
+    // Finance mappings and budgets (user-managed)
+    match /finance_mapping/{uid} { allow read, write: if isSignedIn() && request.auth.uid == uid; }
+    match /finance_budgets/{uid} { allow read, write: if isSignedIn() && request.auth.uid == uid; }
+
+    // Monzo data: client reads only; server writes via Admin SDK
+    match /monzo_accounts/{id} { allow read: if isOwner(); allow create, update, delete: if false; }
+    match /monzo_pots/{id} { allow read: if isOwner(); allow create, update, delete: if false; }
+    match /monzo_transactions/{id} { allow read: if isOwner(); allow create, update, delete: if false; }
+    match /monzo_budget_summary/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if false; }
+    match /monzo_goal_alignment/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if false; }
+
+    // Integration logs (server writes, user reads own)
+    match /integration_logs/{id} { allow read: if isOwner(); allow create, update, delete: if false; }
+
+    // Items linked to calendar blocks (user-managed)
+    match /scheduled_items/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 
     // Plans -> per-day document with assignments subcollection
     match /plans/{dayKey} {

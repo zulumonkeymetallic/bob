@@ -7,6 +7,7 @@ import { useAuth } from '../../contexts/AuthContext';
 type Budgets = {
   currency: string;
   byCategory: Record<string, number>; // minor units
+  byBucket?: Record<string, number>; // minor units
   updatedAt?: number;
 };
 
@@ -16,6 +17,7 @@ const BudgetSettings: React.FC = () => {
   const { currentUser } = useAuth();
   const [currency, setCurrency] = useState('GBP');
   const [byCategory, setByCategory] = useState<Record<string, number>>({});
+  const [byBucket, setByBucket] = useState<Record<string, number>>({});
   const [newCat, setNewCat] = useState('');
   const [saved, setSaved] = useState<string>('');
 
@@ -28,6 +30,7 @@ const BudgetSettings: React.FC = () => {
         const data = snap.data() as Budgets;
         setCurrency(data.currency || 'GBP');
         setByCategory(data.byCategory || {});
+        setByBucket(data.byBucket || {});
       } else {
         // initialize defaults
         const init: Record<string, number> = {};
@@ -41,7 +44,7 @@ const BudgetSettings: React.FC = () => {
   const save = async () => {
     if (!currentUser) return;
     const ref = doc(db, 'finance_budgets', currentUser.uid);
-    await setDoc(ref, { currency, byCategory, updatedAt: Date.now() });
+    await setDoc(ref, { currency, byCategory, byBucket, updatedAt: Date.now() });
     setSaved('Saved');
     setTimeout(()=>setSaved(''), 1800);
   };
@@ -56,6 +59,19 @@ const BudgetSettings: React.FC = () => {
     const key = newCat.trim().toLowerCase().replace(/\s+/g,'_');
     if (!key) return;
     setByCategory(prev => ({ ...prev, [key]: prev[key] || 0 }));
+    setNewCat('');
+  };
+
+  const setBucketBudget = (bucket: string, majorStr: string) => {
+    const major = Number(majorStr || '0');
+    const minor = Math.round(major * 100);
+    setByBucket(prev => ({ ...prev, [bucket]: minor }));
+  };
+
+  const addBucket = () => {
+    const key = newCat.trim();
+    if (!key) return;
+    setByBucket(prev => ({ ...prev, [key]: prev[key] || 0 }));
     setNewCat('');
   };
 
@@ -97,6 +113,29 @@ const BudgetSettings: React.FC = () => {
           <Form.Control size="sm" placeholder="Add category (e.g., childcare)" value={newCat} onChange={(e)=>setNewCat(e.target.value)} />
           <Button size="sm" variant="outline-secondary" onClick={addCategory}>Add</Button>
         </div>
+
+        <h6 className="mt-3">Bucket Budgets</h6>
+        <Table size="sm" hover responsive>
+          <thead><tr><th>Bucket</th><th style={{width:180}}>Monthly Budget</th></tr></thead>
+          <tbody>
+            {Object.entries(byBucket).map(([bucket, minor]) => (
+              <tr key={bucket}>
+                <td>{bucket}</td>
+                <td>
+                  <div className="input-group input-group-sm">
+                    <span className="input-group-text">{currency}</span>
+                    <input className="form-control" type="number" min={0} step="1" value={(minor||0)/100}
+                      onChange={(e)=>setBucketBudget(bucket, e.target.value)} />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+        <div className="d-flex gap-2 mb-2">
+          <Form.Control size="sm" placeholder="Add bucket (e.g., Household)" value={newCat} onChange={(e)=>setNewCat(e.target.value)} />
+          <Button size="sm" variant="outline-secondary" onClick={addBucket}>Add</Button>
+        </div>
         <Button variant="primary" size="sm" onClick={save}>Save Budgets</Button>
       </Card.Body>
     </Card>
@@ -104,4 +143,3 @@ const BudgetSettings: React.FC = () => {
 };
 
 export default BudgetSettings;
-

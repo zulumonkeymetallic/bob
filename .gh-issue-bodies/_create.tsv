@@ -12,3 +12,5 @@ finance_settings_privacy	Finance Settings, Security & Privacy (Monzo)	enhancemen
 theme_blocks_auto_scheduler	Theme Blocks Auto-Scheduler (Two-Way with Google Calendar)	enhancement,themes,automation,ui,firebase-functions,integration,workflow	.gh-issue-bodies/theme_blocks_auto_scheduler.md
 daily_chores_routines	Daily Chores & Routines (Calendar + Optional Reminders)	enhancement,habits,workflow,automation,reminders,ui	.gh-issue-bodies/daily_chores_routines.md
 mfp_integration_macros	MyFitnessPal Integration & Macros Dashboard	enhancement,health,integration,analytics,ui,automation	.gh-issue-bodies/mfp_integration_macros.md
+finance_savings_plan_panel	Savings Plan panel: per-goal required/month and ETA	enhancement,finance,goals,analytics,ui	.gh-issue-bodies/finance_savings_plan_panel.md
+finance_bulk_apply_merchant_mapping	Bulk-apply Merchant Mapping to Transactions	enhancement,finance,integration,data-fix,automation	.gh-issue-bodies/finance_bulk_apply_merchant_mapping.md

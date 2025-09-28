@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Table } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc } from 'firebase/firestore';
+import SprintMetricsPanel from './SprintMetricsPanel';
+import { Sprint, Story, Task } from '../types';
 import { db } from '../firebase';
-import { Story, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { ChoiceHelper } from '../config/choices';
 import SprintKanbanPage from './SprintKanbanPage';
@@ -53,6 +54,13 @@ const Dashboard: React.FC = () => {
   const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
+  // Finance metrics (budget summary)
+  const [monzoSummary, setMonzoSummary] = useState<any | null>(null);
+  const [budgetConfig, setBudgetConfig] = useState<Record<string, number>>({});
+  // Burndown data sources
+  const [activeSprint, setActiveSprint] = useState<any | null>(null);
+  const [sprintStories, setSprintStories] = useState<any[]>([]);
+  const [sprintTasks, setSprintTasks] = useState<any[]>([]);
   const dailyBrief = () => {
     const parts: string[] = [];
     if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
@@ -177,6 +185,22 @@ const Dashboard: React.FC = () => {
     };
   };
 
+  // Subscribe to finance summary and load optional budget config
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(doc(db, 'monzo_budget_summary', currentUser.uid), (snap) => {
+      setMonzoSummary(snap.exists() ? snap.data() : null);
+    });
+    // Load budget config once (no listener needed for dashboard)
+    getDoc(doc(db, 'finance_budgets', currentUser.uid)).then((snap) => {
+      if (snap.exists()) {
+        const d: any = snap.data();
+        setBudgetConfig(d?.byCategory || {});
+      }
+    }).catch(() => {});
+    return () => unsub();
+  }, [currentUser]);
+
   const loadLLMPriority = async () => {
     if (!currentUser) return;
     try {
@@ -252,6 +276,34 @@ const Dashboard: React.FC = () => {
     });
     setTasksDueToday(count);
   };
+
+  // Derived finance KPIs
+  const currency = 'GBP';
+  const formatCurrency = (n: number) => (Number(n) || 0).toLocaleString('en-GB', { style: 'currency', currency });
+  const currentMonthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const monthly = monzoSummary?.monthly?.[currentMonthKey] || null;
+  const monthSpend = (monthly?.mandatory || 0) + (monthly?.optional || 0);
+  const totalBudget = Object.entries(budgetConfig || {})
+    .filter(([k]) => !/income/i.test(k) && !/saving/i.test(k))
+    .reduce((sum, [, v]) => sum + (Number(v) || 0), 0);
+  const budgetLeft = Math.max(totalBudget - monthSpend, 0);
+  const budgetPct = totalBudget > 0 ? Math.min(100, Math.round((monthSpend / totalBudget) * 100)) : 0;
+
+  // Load burndown-related data for selected sprint
+  useEffect(() => {
+    if (!currentUser || !selectedSprintId) { setActiveSprint(null); setSprintStories([]); setSprintTasks([]); return; }
+    const sRef = doc(db, 'sprints', selectedSprintId);
+    const unsubS = onSnapshot(sRef, (snap) => { setActiveSprint(snap.exists() ? { id: snap.id, ...(snap.data() as any) } : null); });
+    const unsubStories = onSnapshot(query(collection(db, 'stories'), where('ownerUid','==', currentUser.uid), where('persona','==', currentPersona)), (snap) => {
+      const all = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      setSprintStories(all.filter((st:any) => st.sprintId === selectedSprintId));
+    });
+    const unsubTasks = onSnapshot(query(collection(db, 'tasks'), where('ownerUid','==', currentUser.uid), where('persona','==', currentPersona)), (snap) => {
+      const all = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      setSprintTasks(all);
+    });
+    return () => { unsubS(); unsubStories(); unsubTasks(); };
+  }, [currentUser, currentPersona, selectedSprintId]);
 
   const getStatusColor = (status: string): string => {
     switch (status) {
@@ -337,11 +389,32 @@ const Dashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
+            <Col md={6} lg={3} className="mt-3 mt-md-0">
+              <Card className="text-center h-100">
+                <Card.Body>
+                  <h5 className="mb-1">{formatCurrency(monthSpend)}</h5>
+                  <div className="text-muted" style={{ fontSize: 13 }}>Month-to-date spend</div>
+                  {totalBudget > 0 && (
+                    <div className="mt-2">
+                      <ProgressBar now={budgetPct} label={`${budgetPct}%`} style={{ height: 8 }} />
+                    </div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col md={6} lg={3} className="mt-3 mt-lg-0">
+              <Card className="text-center h-100">
+                <Card.Body>
+                  <h5 className="mb-1">{totalBudget > 0 ? formatCurrency(budgetLeft) : '—'}</h5>
+                  <div className="text-muted" style={{ fontSize: 13 }}>Budget remaining</div>
+                </Card.Body>
+              </Card>
+            </Col>
           </Row>
 
           {/* Sprint Kanban moved to its own page (/sprints/kanban) */}
 
-          {/* 3-Column Overview: Checklist | Calendar | Theme Breakdown */}
+          {/* 3-Column Overview: Checklist | Calendar | Upcoming Tasks */}
           <Row className="mb-4">
             <Col lg={4} className="mb-3">
               <Card className="h-100">
@@ -382,9 +455,54 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
             <Col lg={4} className="mb-3">
-              <ThemeBreakdown />
+              <Card className="h-100">
+                <Card.Header>
+                  <h5 className="mb-0">Upcoming Tasks</h5>
+                </Card.Header>
+                <Card.Body>
+                  {upcomingTasks.length === 0 ? (
+                    <div className="text-muted">No upcoming tasks</div>
+                  ) : (
+                    <Table size="sm" className="mb-0">
+                      <thead>
+                        <tr>
+                          <th style={{width:'60%'}}>Task</th>
+                          <th>Due</th>
+                          <th>Priority</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...upcomingTasks]
+                          .sort((a:any,b:any)=>{
+                            const ad = a.dueDate || 0; const bd = b.dueDate || 0; return (ad||0) - (bd||0);
+                          })
+                          .slice(0,5)
+                          .map((t:any)=> (
+                            <tr key={t.id}>
+                              <td>{t.title}</td>
+                              <td>{t.dueDate ? new Date(t.dueDate).toLocaleDateString() : '—'}</td>
+                              <td><Badge bg={getPriorityColor(String(t.priority || 'P3'))}>{String(t.priority || 'P3')}</Badge></td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </Table>
+                  )}
+                </Card.Body>
+              </Card>
             </Col>
           </Row>
+
+          {/* Sprint Burndown (Kanban) */}
+          {activeSprint && (
+            <div className="mb-4">
+              <SprintMetricsPanel
+                sprint={activeSprint as any}
+                stories={sprintStories as any}
+                tasks={sprintTasks as any}
+                goals={[]}
+              />
+            </div>
+          )}
         </Col>
       </Row>
     </Container>
