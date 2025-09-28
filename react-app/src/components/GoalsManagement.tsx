@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Goal, Story, Sprint } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
@@ -13,6 +13,7 @@ import SprintSelector from './SprintSelector';
 import { isStatus, getThemeName } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
+import { arrayMove } from '@dnd-kit/sortable';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -52,9 +53,9 @@ const GoalsManagement: React.FC = () => {
     
     // Subscribe to real-time updates
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const goalsData = snapshot.docs.map(doc => {
+      const rawGoals = snapshot.docs.map(doc => {
         const data = doc.data();
-        return {
+        const baseGoal = {
           id: doc.id,
           ...data,
           // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
@@ -65,9 +66,24 @@ const GoalsManagement: React.FC = () => {
             : (typeof data.targetDate === 'object' && data.targetDate?.seconds != null
                 ? (data.targetDate.seconds * 1000 + Math.floor((data.targetDate.nanoseconds || 0) / 1e6))
                 : data.targetDate)
-        };
+        } as Goal;
+        if (typeof (baseGoal as any).orderIndex !== 'number') {
+          (baseGoal as any).orderIndex = data.priority ?? data.rank ?? 0;
+        }
+        return baseGoal;
       }) as Goal[];
-      setGoals(goalsData);
+
+      const normalizedGoals = rawGoals
+        .map((goal, index) => ({
+          ...goal,
+          orderIndex:
+            typeof goal.orderIndex === 'number'
+              ? goal.orderIndex
+              : (goal.priority !== undefined ? Number(goal.priority) * 1000 : index * 1000),
+        }))
+        .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+      setGoals(normalizedGoals);
     });
 
     setLoading(false);
@@ -150,6 +166,31 @@ const GoalsManagement: React.FC = () => {
     }
   };
 
+  const handleGoalReorder = async (activeId: string, overId: string) => {
+    try {
+      const ordered = [...goals].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+      const ids = ordered.map(goal => goal.id);
+      const activeIndex = ids.indexOf(activeId);
+      const overIndex = ids.indexOf(overId);
+
+      if (activeIndex === -1 || overIndex === -1) return;
+
+      const newOrder = arrayMove(ids, activeIndex, overIndex);
+      const batch = writeBatch(db);
+
+      newOrder.forEach((id, index) => {
+        batch.update(doc(db, 'goals', id), {
+          orderIndex: index * 1000,
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      await batch.commit();
+    } catch (error) {
+      console.error('Error reordering goals:', error);
+    }
+  };
+
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
     // If 'All Sprints' is selected (empty string), do NOT fall back to activeSprintId
@@ -165,12 +206,14 @@ const GoalsManagement: React.FC = () => {
     return true;
   });
 
+  const orderedFilteredGoals = [...filteredGoals].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
   // Get counts for dashboard cards
   const goalCounts = {
-    total: filteredGoals.length,
-    active: filteredGoals.filter(g => g.status === 1).length, // Work in Progress
-    done: filteredGoals.filter(g => g.status === 2).length, // Complete
-    paused: filteredGoals.filter(g => g.status === 3).length // Blocked
+    total: orderedFilteredGoals.length,
+    active: orderedFilteredGoals.filter(g => g.status === 1).length, // Work in Progress
+    done: orderedFilteredGoals.filter(g => g.status === 2).length, // Complete
+    paused: orderedFilteredGoals.filter(g => g.status === 3).length // Blocked
   };
 
   return (
@@ -385,7 +428,7 @@ const GoalsManagement: React.FC = () => {
             padding: '20px 24px' 
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: 'var(--notion-text)' }}>
-              Goals ({filteredGoals.length})
+              Goals ({orderedFilteredGoals.length})
             </h5>
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
@@ -405,15 +448,16 @@ const GoalsManagement: React.FC = () => {
               <div style={{ height: '600px', overflow: 'auto' }}>
                 {viewMode === 'list' ? (
                   <ModernGoalsTable
-                    goals={filteredGoals}
+                    goals={orderedFilteredGoals}
                     onGoalUpdate={handleGoalUpdate}
                     onGoalDelete={handleGoalDelete}
                     onGoalPriorityChange={handleGoalPriorityChange}
+                    onGoalReorder={handleGoalReorder}
                     onEditModal={(goal) => setEditGoal(goal)}
                   />
                 ) : (
                   <GoalsCardView
-                    goals={filteredGoals}
+                    goals={orderedFilteredGoals}
                     onGoalUpdate={handleGoalUpdate}
                     onGoalDelete={handleGoalDelete}
                     onGoalPriorityChange={handleGoalPriorityChange}

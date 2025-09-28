@@ -20,6 +20,7 @@ export interface Goal {
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
+  orderIndex?: number; // Stable ordering for modern tables
   // Relationships
   parentGoalId?: string | null; // Optional parent goal relationship
   dependsOnGoalIds?: string[]; // Optional dependency links

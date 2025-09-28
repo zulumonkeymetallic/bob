@@ -69,6 +69,7 @@ interface ModernGoalsTableProps {
   onGoalDelete: (goalId: string) => Promise<void>;
   onGoalPriorityChange: (goalId: string, newPriority: number) => Promise<void>;
   onEditModal?: (goal: Goal) => void;
+  onGoalReorder?: (activeId: string, overId: string) => Promise<void>;
 }
 
 const defaultColumns: Column[] = [
@@ -755,6 +756,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   onGoalDelete,
   onGoalPriorityChange,
   onEditModal,
+  onGoalReorder,
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
@@ -1011,16 +1013,25 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   // Convert goals to table rows with sort order
   const tableRows: GoalTableRow[] = goals.map((goal, index) => ({
     ...goal,
-    sortOrder: index,
+    sortOrder: goal.orderIndex ?? index,
   }));
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
-    if (over && active.id !== over.id) {
-      const newIndex = tableRows.findIndex(item => item.id === over.id);
-      
-      // Update priority based on new position (1-indexed)
+    if (!over || active.id === over.id) return;
+
+    if (onGoalReorder) {
+      try {
+        await onGoalReorder(active.id as string, over.id as string);
+      } catch (error) {
+        console.error('Error reordering goals:', error);
+      }
+      return;
+    }
+
+    const newIndex = tableRows.findIndex(item => item.id === over.id);
+    if (newIndex >= 0) {
       await onGoalPriorityChange(active.id as string, newIndex + 1);
     }
   };
