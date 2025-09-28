@@ -15,6 +15,8 @@ import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import ThemeBreakdown from './ThemeBreakdown';
+import { format } from 'date-fns';
+import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 
 interface DashboardStats {
   activeGoals: number;
@@ -53,6 +55,7 @@ const Dashboard: React.FC = () => {
   const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
+  const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
   const dailyBrief = () => {
     const parts: string[] = [];
     if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
@@ -176,6 +179,27 @@ const Dashboard: React.FC = () => {
       unsubscribeTasks();
     };
   };
+
+  useEffect(() => {
+    if (!currentUser) {
+      setUnscheduledToday([]);
+      return;
+    }
+    const todayKey = format(new Date(), 'yyyyMMdd');
+    const q = query(
+      collection(db, 'scheduled_instances'),
+      where('ownerUid', '==', currentUser.uid),
+      where('occurrenceDate', '==', todayKey),
+      where('status', '==', 'unscheduled'),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const rows = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as ScheduledInstanceModel[];
+      setUnscheduledToday(rows);
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  const unscheduledSummary = unscheduledToday.slice(0, 3);
 
   const loadLLMPriority = async () => {
     if (!currentUser) return;
@@ -346,6 +370,21 @@ const Dashboard: React.FC = () => {
             <Col lg={4} className="mb-3">
               <Card className="h-100">
                 <Card.Body>
+                  {unscheduledToday.length > 0 && (
+                    <Alert variant="warning" className="mb-3">
+                      <strong>Scheduling issues:</strong>
+                      <ul className="mb-0 small">
+                        {unscheduledSummary.map((item) => (
+                          <li key={item.id}>
+                            {item.title || item.sourceId} · {item.statusReason || 'Needs block'}
+                          </li>
+                        ))}
+                      </ul>
+                      {unscheduledToday.length > unscheduledSummary.length && (
+                        <div className="small text-muted mt-1">+{unscheduledToday.length - unscheduledSummary.length} more</div>
+                      )}
+                    </Alert>
+                  )}
                   <ChecklistPanel title="Today's Checklist" compact />
                 </Card.Body>
               </Card>
