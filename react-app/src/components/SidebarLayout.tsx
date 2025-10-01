@@ -81,6 +81,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       ]
     },
     {
+      label: 'Backlog',
+      icon: 'clipboard-list',
+      items: [
+        { label: 'Games', path: '/games-backlog', icon: 'gamepad' }
+      ]
+    },
+    {
       label: 'Tasks',
       icon: 'list-check',
       items: [
@@ -133,7 +140,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'System',
       icon: 'cog',
       items: [
-        { label: 'Settings', path: '/theme-colors', icon: 'cog' }
+        { label: 'Settings', path: '/theme-colors', icon: 'cog' },
+        { label: 'Integration Logs', path: '/integrations/logs', icon: 'stream' }
       ]
     },
     // Removed duplicate Health group at bottom

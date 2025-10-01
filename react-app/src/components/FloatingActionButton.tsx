@@ -233,6 +233,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         
         const taskRef = generateRef('task', existingRefs);
         const effortData = efforts.find(e => e.value === quickAddData.effort);
+        const estimateMinutes = effortData?.minutes || 45;
+        const estimatedHours = Math.round((estimateMinutes / 60) * 100) / 100;
         const taskData = {
           ...baseData,
           ref: taskRef,
@@ -240,7 +242,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           parentId: '', // Will need to be linked later
           effort: quickAddData.effort,
           priority: quickAddData.priority,
-          estimateMin: effortData?.minutes || 45,
+          estimateMin: estimateMinutes,
+          estimatedHours,
           status: 'planned',
           theme: quickAddData.theme,
           hasGoal: false,

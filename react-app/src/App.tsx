@@ -13,6 +13,7 @@ import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
 import PersonalListsManagement from './components/PersonalListsManagement';
+import GamesBacklog from './components/GamesBacklog';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
@@ -193,6 +194,7 @@ function AppContent() {
               <Route path="/tasks" element={<TasksList />} />
               <Route path="/task-list" element={<TaskListView />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
+              <Route path="/games-backlog" element={<GamesBacklog />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
             {/* Legacy sprint routes - redirect to consolidated */}
             <Route path="/kanban" element={<Navigate to="/sprints/kanban" replace />} />

@@ -70,19 +70,14 @@ const CurrentSprintKanban: React.FC = () => {
             const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
             setStories(storiesData);
 
-            if (storiesData.length > 0) {
-                const storyIds = storiesData.map(s => s.id);
-                const tasksQuery = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), where('parentId', 'in', storyIds));
-                const unsubscribeTasks = onSnapshot(tasksQuery, taskSnapshot => {
-                    const tasksData = taskSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
-                    setTasks(tasksData);
-                    setLoading(false);
-                });
-                return () => unsubscribeTasks();
-            } else {
-                setTasks([]);
+            const tasksQuery = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), where('sprintId', '==', activeSprint.id));
+            const unsubscribeTasks = onSnapshot(tasksQuery, taskSnapshot => {
+                const tasksData = taskSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
+                setTasks(tasksData);
                 setLoading(false);
-            }
+            });
+
+            return () => unsubscribeTasks();
         });
 
         return () => unsubscribeStories();

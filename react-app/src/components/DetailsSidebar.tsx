@@ -38,12 +38,27 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
     Home: domainThemePrimaryVar('Home')
   } as const;
 
+  const deriveEstimatedHours = (task: Task): number | undefined => {
+    if (typeof task.estimatedHours === 'number' && !Number.isNaN(task.estimatedHours)) {
+      return Math.round(task.estimatedHours * 100) / 100;
+    }
+    if (typeof task.estimateMin === 'number' && !Number.isNaN(task.estimateMin)) {
+      return Math.round((task.estimateMin / 60) * 100) / 100;
+    }
+    return undefined;
+  };
+
   React.useEffect(() => {
     if (item) {
-      setEditForm({ ...item });
+      if (type === 'task') {
+        const task = item as Task;
+        setEditForm({ ...task, estimatedHours: deriveEstimatedHours(task) });
+      } else {
+        setEditForm({ ...item });
+      }
       setIsEditing(false);
     }
-  }, [item]);
+  }, [item, type]);
 
   if (!isVisible || !item || !type) {
     return null;
@@ -78,6 +93,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   const goal = getGoalForItem();
   const story = type === 'task' ? getStoryForTask(item.id) : null;
   const themeColor = goal?.theme ? themeColors[goal.theme] : (themeVars.muted as string);
+  const derivedEstimatedHours = type === 'task' ? deriveEstimatedHours(item as Task) : undefined;
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return 'Not set';
@@ -381,17 +397,35 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                   Estimate
                 </label>
                 {isEditing ? (
-                  <Form.Control
-                    type="number"
-                    min="15"
-                    value={editForm.estimateMin || 60}
-                    onChange={(e) => setEditForm({ ...editForm, estimateMin: parseInt(e.target.value) })}
-                  />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <Form.Control
+                      type="number"
+                      min="0"
+                      step="0.25"
+                      value={editForm.estimatedHours ?? derivedEstimatedHours ?? 1}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (Number.isNaN(value)) {
+                          setEditForm({ ...editForm, estimatedHours: undefined });
+                          return;
+                        }
+                        const rounded = Math.round(value * 100) / 100;
+                        setEditForm({
+                          ...editForm,
+                          estimatedHours: rounded,
+                          estimateMin: Math.max(5, Math.round(rounded * 60))
+                        });
+                      }}
+                    />
+                    <Form.Text muted>
+                      ≈ {Math.max(5, Math.round((editForm.estimatedHours ?? derivedEstimatedHours ?? 1) * 60))} minutes
+                    </Form.Text>
+                  </div>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Clock size={14} color={themeVars.muted as string} />
                     <span style={{ color: themeVars.muted as string }}>
-                      {(item as Task).estimateMin} minutes
+                      {(derivedEstimatedHours ?? 1).toFixed(2)} h · {(item as Task).estimateMin ?? Math.round(((derivedEstimatedHours ?? 1) * 60))} minutes
                     </span>
                   </div>
                 )}
