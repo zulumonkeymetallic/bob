@@ -52,6 +52,7 @@ export interface Story {
   dueDate?: number; // Legacy compatibility
   taskCount?: number;
   doneTaskCount?: number;
+  metadata?: Record<string, any>;
   // Optional travel/location metadata
   countryCode?: string; // ISO alpha-2
   city?: string;
@@ -102,6 +103,7 @@ export interface Task {
   priority: number; // 1=High, 2=Medium, 3=Low
   effort: 'S' | 'M' | 'L';
   estimateMin: number;
+  estimatedHours?: number;
   startDate?: number;
   dueDate?: number;
   labels?: string[];
@@ -124,7 +126,15 @@ export interface Task {
   // New fields for v3.0.2
   importanceScore?: number;
   isImportant?: boolean;
+  importanceUpdatedAt?: number;
   reminderId?: string;
+  reminderCreatedAt?: number;
+  duplicateOf?: string;
+  duplicateKey?: string;
+  duplicateResolvedAt?: number;
+  duplicateChildren?: string[];
+  reminderSyncDirective?: 'complete' | 'delete' | null;
+  convertedToStoryId?: string;
   // Enhanced fields for v2.1.4+
   sprintId?: string;
   projectId?: string;

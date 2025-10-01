@@ -142,6 +142,7 @@ const ModernKanbanPage: React.FC = () => {
         effort: newTask.effort,
         priority: newTask.priority,
         estimateMin: 0,
+        estimatedHours: 0,
         alignedToGoal: true,
         source: 'web',
         aiLinkConfidence: 0,

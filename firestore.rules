@@ -30,6 +30,7 @@ service cloud.firestore {
     match /activity_stream/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /steam/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 
     // New scheduler-related collections
     match /themes/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

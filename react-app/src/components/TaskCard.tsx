@@ -2,6 +2,8 @@ import React from 'react';
 import { Draggable } from 'react-beautiful-dnd';
 import '../styles/TaskCard.css';
 import { Task } from '../types';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 
 interface TaskCardProps {
   task: Task;
@@ -13,6 +15,7 @@ interface TaskCardProps {
 const TaskCard: React.FC<TaskCardProps> = ({ task, index, onEdit, onDelete }) => {
   const [isEditing, setIsEditing] = React.useState(false);
   const [editedTask, setEditedTask] = React.useState(task);
+  const [isConverting, setIsConverting] = React.useState(false);
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -27,6 +30,47 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, index, onEdit, onDelete }) =>
   const handleCancel = () => {
     setIsEditing(false);
     setEditedTask(task);
+  };
+
+  const handleConvertToStory = async () => {
+    if (isConverting) return;
+    setIsConverting(true);
+    try {
+      const suggestCallable = httpsCallable(functions, 'suggestTaskStoryConversions');
+      const convertCallable = httpsCallable(functions, 'convertTasksToStories');
+
+      const response: any = await suggestCallable({
+        persona: task.persona || 'personal',
+        taskIds: [task.id],
+        limit: 1
+      });
+      const suggestions: any[] = Array.isArray(response?.data?.suggestions) ? response.data.suggestions : [];
+      const suggestion = suggestions.find(item => item.taskId === task.id) || suggestions[0] || null;
+
+      const storyTitle = (suggestion?.storyTitle || task.title || 'New Story').slice(0, 140);
+      const storyDescription = (suggestion?.storyDescription || task.description || '').slice(0, 1200);
+      const goalId = suggestion?.goalId || task.goalId || null;
+
+      await convertCallable({
+        conversions: [{
+          taskId: task.id,
+          storyTitle,
+          storyDescription,
+          goalId
+        }]
+      });
+
+      console.log('🪄 TaskCard: Task converted to story', {
+        taskId: task.id,
+        storyTitle,
+        goalId
+      });
+    } catch (error) {
+      console.error('TaskCard convert failed:', error);
+      window.alert('Could not convert this task to a story. Please try again.');
+    } finally {
+      setIsConverting(false);
+    }
   };
   
   return (
@@ -60,6 +104,14 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, index, onEdit, onDelete }) =>
                 <div className="task-header">
                   <div className="task-title">{task.title}</div>
                   <div className="task-actions">
+                    <button
+                      onClick={handleConvertToStory}
+                      className="btn btn-sm btn-link"
+                      disabled={isConverting}
+                      title={isConverting ? 'Converting…' : 'Convert to Story'}
+                    >
+                      <i className={`bi ${isConverting ? 'bi-hourglass-split' : 'bi-stars'}`}></i>
+                    </button>
                     <button onClick={handleEdit} className="btn btn-sm btn-link">
                       <i className="bi bi-pencil"></i>
                     </button>

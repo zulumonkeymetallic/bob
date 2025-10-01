@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Table, Badge, Button, Form, Row, Col, Modal, InputGroup, Dropdown, Alert } from 'react-bootstrap';
-import { db } from '../firebase';
+import { Container, Table, Badge, Button, Form, Row, Col, Modal, InputGroup, Dropdown, Alert, Spinner, Toast, ToastContainer } from 'react-bootstrap';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, deleteDoc, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 interface TaskWithContext extends Task {
@@ -14,6 +16,17 @@ interface TaskWithContext extends Task {
   storyTitle?: string;
   goalTitle?: string;
   sprintName?: string;
+}
+
+interface StorySuggestion {
+  taskId: string;
+  taskTitle: string;
+  storyTitle: string;
+  storyDescription: string;
+  confidence: number;
+  rationale?: string;
+  goalId?: string | null;
+  goalTitle?: string | null;
 }
 
 const TasksList: React.FC = () => {
@@ -29,13 +42,26 @@ const TasksList: React.FC = () => {
   const [showEditTask, setShowEditTask] = useState(false);
   const [selectedTask, setSelectedTask] = useState<TaskWithContext | null>(null);
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  const [aiSuggestions, setAiSuggestions] = useState<StorySuggestion[]>([]);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSuccess, setAiSuccess] = useState<string | null>(null);
+  const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
   
+  const showToast = (message: string, variant: 'danger' | 'info' | 'success' = 'danger') => {
+    setToastState({ show: true, message, variant });
+  };
+
+  const closeToast = () => setToastState(prev => ({ ...prev, show: false }));
+
   const [filters, setFilters] = useState({
     status: '',
     priority: '',
     effort: '',
     hasGoal: '',
-    search: ''
+    search: '',
+    sprint: ''
   });
 
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -48,13 +74,114 @@ const TasksList: React.FC = () => {
     parentType: 'story' as 'story' | 'project',
     parentId: '',
     theme: 1, // Default to Health & Fitness
-    status: 'planned' as 'planned' | 'in_progress' | 'done'
+    status: 'planned' as 'planned' | 'in_progress' | 'done',
+    estimatedHours: 1
   });
 
   const [editingField, setEditingField] = useState<{taskId: string, field: string, value: any} | null>(null);
   const { themes } = useGlobalThemes();
   const [newTaskThemeInput, setNewTaskThemeInput] = useState('');
   const [editTaskThemeInput, setEditTaskThemeInput] = useState('');
+
+  const effortToHours = (effort: string | undefined): number => {
+    switch (effort) {
+      case 'S':
+        return 0.5;
+      case 'L':
+        return 2;
+      case 'M':
+      default:
+        return 1;
+    }
+  };
+
+  const normalizeEstimatedHours = (task: Partial<Task>): number | undefined => {
+    if (typeof task.estimatedHours === 'number' && !Number.isNaN(task.estimatedHours)) {
+      return task.estimatedHours;
+    }
+    if (typeof task.estimateMin === 'number' && !Number.isNaN(task.estimateMin)) {
+      return Number((task.estimateMin / 60).toFixed(2));
+    }
+    if (task.effort) {
+      return effortToHours(task.effort as string);
+    }
+    return undefined;
+  };
+
+  const roundHours = (value: number): number => {
+    if (!Number.isFinite(value)) return 0;
+    return Math.round(value * 100) / 100;
+  };
+
+  const handleCloseAiModal = () => {
+    setShowAiModal(false);
+    setAiSuggestions([]);
+    setAiError(null);
+    setAiSuccess(null);
+  };
+
+  const fetchAiSuggestions = async () => {
+    if (!currentUser) return;
+    setAiLoading(true);
+    setAiError(null);
+    setAiSuccess(null);
+    try {
+      const callable = httpsCallable(functions, 'suggestTaskStoryConversions');
+      const response: any = await callable({ persona: currentPersona, limit: 8 });
+      const rawSuggestions = Array.isArray(response?.data?.suggestions) ? response.data.suggestions : [];
+      const mapped: StorySuggestion[] = rawSuggestions.map((item: any) => {
+        const fallbackTask = tasks.find(t => t.id === item.taskId);
+        const goalTitle = item.goalTitle || goals.find(g => g.id === item.goalId)?.title || null;
+        const numericConfidence = Number(item.confidence);
+        const confidence = Number.isFinite(numericConfidence) ? Math.max(0, Math.min(1, numericConfidence)) : 0.5;
+        return {
+          taskId: item.taskId,
+          taskTitle: item.taskTitle || fallbackTask?.title || 'Task',
+          storyTitle: item.storyTitle || fallbackTask?.title || 'Story',
+          storyDescription: item.storyDescription || fallbackTask?.description || '',
+          confidence,
+          rationale: item.rationale || '',
+          goalId: item.goalId || null,
+          goalTitle
+        };
+      });
+      setAiSuggestions(mapped);
+      setShowAiModal(true);
+      if (!mapped.length) {
+        setAiSuccess('No strong conversion candidates right now. Try adding more detail to tasks.');
+      }
+    } catch (error: any) {
+      const message = error?.message || 'Failed to fetch AI suggestions';
+      setAiError(message);
+      setShowAiModal(true);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleConvertSuggestion = async (suggestion: StorySuggestion) => {
+    if (!currentUser) return;
+    setAiLoading(true);
+    setAiError(null);
+    setAiSuccess(null);
+    try {
+      const callable = httpsCallable(functions, 'convertTasksToStories');
+      await callable({
+        conversions: [{
+          taskId: suggestion.taskId,
+          storyTitle: suggestion.storyTitle,
+          storyDescription: suggestion.storyDescription,
+          goalId: suggestion.goalId || null
+        }]
+      });
+      setAiSuggestions(prev => prev.filter(item => item.taskId !== suggestion.taskId));
+      setAiSuccess(`Created story "${suggestion.storyTitle}"`);
+    } catch (error: any) {
+      setAiError(error?.message || 'Failed to convert task');
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   useEffect(() => {
     // Initialize add/edit theme input labels when data changes
@@ -95,13 +222,24 @@ const TasksList: React.FC = () => {
       });
       
       // Add reference numbers and context
-      const tasksWithContext = tasksData.map((task, index) => ({
-        ...task,
-        referenceNumber: generateReferenceNumber(task, index),
-        storyTitle: stories.find(s => s.id === task.storyId)?.title || '',
-        goalTitle: goals.find(g => g.id === task.goalId)?.title || '',
-        sprintName: sprints.find(s => s.id === task.sprintId)?.name || ''
-      }));
+      const activeTasks = tasksData.filter(task => !task.deleted);
+      const tasksWithContext = activeTasks.map((task, index) => {
+        const estimatedHours = normalizeEstimatedHours(task);
+        const parentStory = stories.find(s => s.id === (task.storyId || (task.parentType === 'story' ? task.parentId : undefined)));
+        const parentGoal = goals.find(g => g.id === (parentStory?.goalId || task.goalId));
+        const derivedTheme = parentStory?.theme ?? parentGoal?.theme ?? task.theme;
+        const derivedSprintId = effectiveSprintId(task, stories, sprints);
+        return {
+          ...task,
+          sprintId: derivedSprintId ?? null,
+          theme: derivedTheme ?? task.theme,
+          estimatedHours,
+          referenceNumber: generateReferenceNumber(task, index),
+          storyTitle: parentStory?.title || '',
+          goalTitle: parentGoal?.title || '',
+          sprintName: sprintNameForId(sprints, derivedSprintId)
+        };
+      });
       
       setTasks(tasksWithContext);
     });
@@ -207,6 +345,14 @@ const TasksList: React.FC = () => {
       }
     }
 
+    if (filters.sprint) {
+      if (filters.sprint === 'none') {
+        filtered = filtered.filter(task => !task.sprintId);
+      } else {
+        filtered = filtered.filter(task => task.sprintId === filters.sprint);
+      }
+    }
+
     if (filters.search) {
       const searchLower = filters.search.toLowerCase();
       filtered = filtered.filter(task => 
@@ -253,12 +399,21 @@ const TasksList: React.FC = () => {
         timestamp: new Date().toISOString()
       });
 
-      const taskData = {
+      const estimatedHoursValue = normalizeEstimatedHours({
+        estimatedHours: newTask.estimatedHours,
+        effort: newTask.effort
+      }) ?? effortToHours(newTask.effort);
+      const estimatedHoursRounded = roundHours(estimatedHoursValue);
+      const estimateMinutes = Math.max(5, Math.round(estimatedHoursRounded * 60));
+
+      const taskData: any = {
         ref: ref, // Add reference number
         title: newTask.title,
         description: newTask.description,
         priority: newTask.priority,
         effort: newTask.effort,
+        estimatedHours: estimatedHoursRounded,
+        estimateMin: estimateMinutes,
         status: newTask.status,
         theme: newTask.theme,
         persona: currentPersona,
@@ -269,6 +424,15 @@ const TasksList: React.FC = () => {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
+
+      const derivedSprint = deriveTaskSprint({
+        task: { ...taskData, id: ref } as Task,
+        stories,
+        sprints
+      }).sprintId;
+      if (derivedSprint) {
+        taskData.sprintId = derivedSprint;
+      }
 
       console.log('💾 TasksList: Saving TASK to database', {
         action: 'task_save_start',
@@ -293,7 +457,8 @@ const TasksList: React.FC = () => {
         parentType: currentPersona === 'personal' ? 'story' : 'project',
         parentId: '',
         theme: 1, // Default to Health & Fitness
-        status: 'planned'
+        status: 'planned',
+        estimatedHours: 1
       });
       setShowAddTask(false);
     } catch (error) {
@@ -318,8 +483,57 @@ const TasksList: React.FC = () => {
         timestamp: new Date().toISOString()
       });
 
+      const existingTask = tasks.find(t => t.id === taskId);
+      if (!existingTask) return;
+
+      const derivation = deriveTaskSprint({
+        task: existingTask,
+        updates,
+        stories,
+        sprints
+      });
+
+      if (!isDueDateWithinStorySprint(derivation.dueDateMs, derivation.story, sprints)) {
+        showToast('Task due date must fall within the linked story sprint window.');
+        console.warn('⚠️ TasksList: due date outside sprint window', {
+          taskId,
+          dueDate: derivation.dueDateMs,
+          sprintId: derivation.story?.sprintId
+        });
+        return;
+      }
+
+      const payload: Partial<Task> & { updatedAt?: any } = { ...updates };
+      if ('dueDate' in updates) {
+        payload.dueDate = derivation.dueDateMs ?? null;
+      }
+      if (payload.estimatedHours !== undefined) {
+        const hours = Number(payload.estimatedHours);
+        if (!Number.isNaN(hours)) {
+          payload.estimatedHours = roundHours(hours);
+          payload.estimateMin = Math.max(5, Math.round(payload.estimatedHours * 60));
+        } else {
+          delete payload.estimatedHours;
+        }
+      } else if (payload.estimateMin !== undefined) {
+        const minutes = Number(payload.estimateMin);
+        if (!Number.isNaN(minutes)) {
+          payload.estimatedHours = roundHours(minutes / 60);
+        }
+      }
+
+      if (derivation.story?.sprintId) {
+        payload.sprintId = derivation.story.sprintId;
+      } else if ('sprintId' in payload || derivation.sprintId !== existingTask.sprintId) {
+        payload.sprintId = derivation.sprintId ?? null;
+      }
+
+      if (payload.sprintId === existingTask.sprintId || (payload.sprintId == null && !existingTask.sprintId)) {
+        delete payload.sprintId;
+      }
+
       await updateDoc(doc(db, 'tasks', taskId), {
-        ...updates,
+        ...payload,
         updatedAt: serverTimestamp()
       });
 
@@ -419,7 +633,8 @@ const TasksList: React.FC = () => {
   };
 
   const handleEditTask = (task: TaskWithContext) => {
-    setSelectedTask(task);
+    const estimatedHours = normalizeEstimatedHours(task);
+    setSelectedTask({ ...task, estimatedHours });
     setShowEditTask(true);
   };
 
@@ -427,17 +642,18 @@ const TasksList: React.FC = () => {
     if (!selectedTask || !currentUser) return;
 
     try {
-      await updateDoc(doc(db, 'tasks', selectedTask.id), {
+      await handleUpdateTask(selectedTask.id, {
         title: selectedTask.title,
         description: selectedTask.description,
         priority: selectedTask.priority,
         effort: selectedTask.effort,
-        status: selectedTask.status,
+        status: selectedTask.status as any,
         theme: selectedTask.theme,
         storyId: selectedTask.storyId || null,
         projectId: selectedTask.projectId || null,
         sprintId: selectedTask.sprintId || null,
-        updatedAt: serverTimestamp()
+        estimatedHours: normalizeEstimatedHours(selectedTask),
+        estimateMin: selectedTask.estimateMin
       });
 
       setShowEditTask(false);
@@ -490,6 +706,16 @@ const TasksList: React.FC = () => {
           </p>
         </div>
         <div className="d-flex gap-2">
+          <Button variant="outline-info" onClick={fetchAiSuggestions} disabled={aiLoading}>
+            {aiLoading ? (
+              <span className="d-inline-flex align-items-center gap-2">
+                <Spinner animation="border" size="sm" />
+                Working...
+              </span>
+            ) : (
+              'AI Story Suggestions'
+            )}
+          </Button>
           <Button variant="primary" onClick={() => setShowAddTask(true)}>
             + Add Task
           </Button>
@@ -557,6 +783,21 @@ const TasksList: React.FC = () => {
               Clear
             </Button>
           </InputGroup>
+        </Col>
+      </Row>
+      <Row className="mb-4">
+        <Col md={3} sm={6} className="mb-2 mb-md-0">
+          <Form.Select
+            value={filters.sprint}
+            onChange={(e) => setFilters({ ...filters, sprint: e.target.value })}
+            size="sm"
+          >
+            <option value="">All Sprints</option>
+            <option value="none">No Sprint</option>
+            {sprints.map((sprint) => (
+              <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+            ))}
+          </Form.Select>
         </Col>
       </Row>
 
@@ -698,6 +939,57 @@ const TasksList: React.FC = () => {
         </div>
       )}
 
+      <Modal show={showAiModal} onHide={handleCloseAiModal} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>AI Story Suggestions</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {aiError && <Alert variant="danger">{aiError}</Alert>}
+          {aiSuccess && <Alert variant="success">{aiSuccess}</Alert>}
+          {aiLoading && (
+            <div className="text-center my-4">
+              <Spinner animation="border" />
+            </div>
+          )}
+          {!aiLoading && !aiSuggestions.length && !aiError && (
+            <p className="mb-0 text-muted">No suggestions available right now. Try again after updating your tasks.</p>
+          )}
+          {aiSuggestions.map((suggestion) => (
+            <div key={suggestion.taskId} className="border rounded p-3 mb-3">
+              <div className="d-flex justify-content-between align-items-start gap-3">
+                <div>
+                  <h5 className="mb-1">{suggestion.storyTitle}</h5>
+                  <div className="text-muted mb-2">Derived from task: {suggestion.taskTitle}</div>
+                  {suggestion.goalTitle && (
+                    <div className="mb-2"><strong>Goal:</strong> {suggestion.goalTitle}</div>
+                  )}
+                  <p style={{ whiteSpace: 'pre-wrap' }} className="mb-2">{suggestion.storyDescription || 'No description provided by AI.'}</p>
+                  {suggestion.rationale && (
+                    <div className="text-muted"><strong>Why:</strong> {suggestion.rationale}</div>
+                  )}
+                </div>
+                <div className="text-end" style={{ minWidth: '140px' }}>
+                  <div className="mb-2"><Badge bg="info">Confidence {(suggestion.confidence * 100).toFixed(0)}%</Badge></div>
+                  <Button
+                    variant="success"
+                    size="sm"
+                    onClick={() => handleConvertSuggestion(suggestion)}
+                    disabled={aiLoading}
+                  >
+                    Convert to Story
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={handleCloseAiModal}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
       {/* Add Task Modal */}
       <Modal show={showAddTask} onHide={() => setShowAddTask(false)} size="lg">
         <Modal.Header closeButton>
@@ -793,6 +1085,27 @@ const TasksList: React.FC = () => {
               </Col>
               <Col md={3}>
                 <Form.Group className="mb-3">
+                  <Form.Label>Estimated Hours</Form.Label>
+                  <Form.Control
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={newTask.estimatedHours ?? 1}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value);
+                      setNewTask({
+                        ...newTask,
+                        estimatedHours: Number.isNaN(value) ? undefined : value
+                      });
+                    }}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+
+            <Row>
+              <Col md={4}>
+                <Form.Group className="mb-3">
                   <Form.Label>Parent Type</Form.Label>
                   <Form.Select
                     value={newTask.parentType}
@@ -803,25 +1116,26 @@ const TasksList: React.FC = () => {
                   </Form.Select>
                 </Form.Group>
               </Col>
+              <Col md={8}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Parent {newTask.parentType}</Form.Label>
+                  <Form.Select
+                    value={newTask.parentId}
+                    onChange={(e) => setNewTask({...newTask, parentId: e.target.value})}
+                  >
+                    <option value="">Select {newTask.parentType}</option>
+                    {newTask.parentType === 'story' ? 
+                      stories.map(story => (
+                        <option key={story.id} value={story.id}>{story.title}</option>
+                      )) :
+                      projects.map(project => (
+                        <option key={project.id} value={project.id}>{project.title}</option>
+                      ))
+                    }
+                  </Form.Select>
+                </Form.Group>
+              </Col>
             </Row>
-
-            <Form.Group className="mb-3">
-              <Form.Label>Parent {newTask.parentType}</Form.Label>
-              <Form.Select
-                value={newTask.parentId}
-                onChange={(e) => setNewTask({...newTask, parentId: e.target.value})}
-              >
-                <option value="">Select {newTask.parentType}</option>
-                {newTask.parentType === 'story' ? 
-                  stories.map(story => (
-                    <option key={story.id} value={story.id}>{story.title}</option>
-                  )) :
-                  projects.map(project => (
-                    <option key={project.id} value={project.id}>{project.title}</option>
-                  ))
-                }
-              </Form.Select>
-            </Form.Group>
           </Form>
         </Modal.Body>
         <Modal.Footer>
@@ -908,7 +1222,16 @@ const TasksList: React.FC = () => {
                     <Form.Label>Effort</Form.Label>
                     <Form.Select
                       value={selectedTask.effort}
-                      onChange={(e) => setSelectedTask({...selectedTask, effort: e.target.value as any})}
+                      onChange={(e) => {
+                        const nextEffort = e.target.value as any;
+                        const hoursFromEffort = normalizeEstimatedHours({ effort: nextEffort });
+                        setSelectedTask({
+                          ...selectedTask,
+                          effort: nextEffort,
+                          estimatedHours: selectedTask.estimatedHours ?? hoursFromEffort,
+                          estimateMin: selectedTask.estimateMin ?? (hoursFromEffort ? Math.round(hoursFromEffort * 60) : undefined)
+                        });
+                      }}
                     >
                       <option value="S">Small</option>
                       <option value="M">Medium</option>
@@ -930,6 +1253,28 @@ const TasksList: React.FC = () => {
                   </Form.Group>
                 </Col>
                 <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Estimated Hours</Form.Label>
+                    <Form.Control
+                      type="number"
+                      min="0"
+                      step="0.25"
+                      value={selectedTask.estimatedHours ?? normalizeEstimatedHours(selectedTask) ?? 1}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        setSelectedTask({
+                          ...selectedTask,
+                          estimatedHours: Number.isNaN(value) ? undefined : roundHours(value),
+                          estimateMin: Number.isNaN(value) ? selectedTask.estimateMin : Math.max(5, Math.round(roundHours(value) * 60))
+                        });
+                      }}
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <Row>
+                <Col md={6}>
                   <Form.Group className="mb-3">
                     <Form.Label>Sprint</Form.Label>
                     <Form.Select
@@ -956,10 +1301,14 @@ const TasksList: React.FC = () => {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      <ToastContainer position="bottom-end" className="p-3">
+        <Toast bg={toastState.variant} onClose={closeToast} show={toastState.show} delay={4000} autohide>
+          <Toast.Body className={toastState.variant === 'info' ? '' : 'text-white'}>{toastState.message}</Toast.Body>
+        </Toast>
+      </ToastContainer>
     </Container>
   );
 };
 
 export default TasksList;
-
-export {};

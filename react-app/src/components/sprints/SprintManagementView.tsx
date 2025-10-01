@@ -51,7 +51,8 @@ const SprintManagementView = () => {
     title: '',
     description: '',
     effort: 'M' as 'S' | 'M' | 'L',
-    priority: 2 as 1 | 2 | 3
+    priority: 2 as 1 | 2 | 3,
+    estimatedHours: 1
   });
 
   // Load real data from Firebase
@@ -210,6 +211,13 @@ const SprintManagementView = () => {
 
     try {
       const taskRef = generateRef('task', []);
+      const estimateMin = newTask.estimatedHours !== undefined
+        ? Math.max(5, Math.round(newTask.estimatedHours * 60))
+        : (newTask.effort === 'S' ? 30 : newTask.effort === 'M' ? 120 : 480);
+      const estimatedHours = newTask.estimatedHours !== undefined
+        ? Math.round(newTask.estimatedHours * 100) / 100
+        : Math.round((estimateMin / 60) * 100) / 100;
+
       await addDoc(collection(db, 'tasks'), {
         ref: taskRef,
         title: newTask.title,
@@ -219,7 +227,8 @@ const SprintManagementView = () => {
         status: 0, // To Do
         priority: newTask.priority,
         effort: newTask.effort,
-        estimateMin: newTask.effort === 'S' ? 30 : newTask.effort === 'M' ? 120 : 480,
+        estimateMin,
+        estimatedHours,
         persona: currentPersona,
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
@@ -235,7 +244,8 @@ const SprintManagementView = () => {
         title: '',
         description: '',
         effort: 'M',
-        priority: 2
+        priority: 2,
+        estimatedHours: 1
       });
       setShowAddTask(false);
     } catch (error) {

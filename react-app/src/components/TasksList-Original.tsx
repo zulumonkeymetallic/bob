@@ -33,7 +33,8 @@ const TasksList: React.FC = () => {
     effort: 'M' as 'S' | 'M' | 'L',
     parentType: 'story' as 'story' | 'project',
     parentId: '',
-    theme: 'Health' as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home'
+    theme: 'Health' as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
+    estimatedHours: 1
   });
 
   // Load data based on current persona
@@ -142,6 +143,9 @@ const TasksList: React.FC = () => {
     if (!currentUser || !newTask.title.trim()) return;
 
     try {
+      const estimateMin = newTask.effort === 'S' ? 30 : newTask.effort === 'M' ? 60 : 120;
+      const estimatedHours = Math.round((estimateMin / 60) * 100) / 100;
+
       await addDoc(collection(db, 'tasks'), {
         ...newTask,
         persona: currentPersona,
@@ -156,7 +160,8 @@ const TasksList: React.FC = () => {
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        estimateMin: newTask.effort === 'S' ? 30 : newTask.effort === 'M' ? 60 : 120
+        estimateMin,
+        estimatedHours
       });
 
       setNewTask({
@@ -166,7 +171,8 @@ const TasksList: React.FC = () => {
         effort: 'M',
         parentType: 'story',
         parentId: '',
-        theme: 'Health'
+        theme: 'Health',
+        estimatedHours: 1
       });
       setShowAddTask(false);
     } catch (error) {
@@ -190,6 +196,13 @@ const TasksList: React.FC = () => {
 
     try {
       const taskRef = doc(db, 'tasks', selectedTask.id);
+      const estimateMin = newTask.estimatedHours !== undefined
+        ? Math.max(5, Math.round(newTask.estimatedHours * 60))
+        : (newTask.effort === 'S' ? 30 : newTask.effort === 'M' ? 60 : 120);
+      const estimatedHours = newTask.estimatedHours !== undefined
+        ? Math.round(newTask.estimatedHours * 100) / 100
+        : Math.round((estimateMin / 60) * 100) / 100;
+
       await updateDoc(taskRef, {
         title: newTask.title,
         description: newTask.description,
@@ -198,7 +211,8 @@ const TasksList: React.FC = () => {
         parentType: newTask.parentType,
         parentId: newTask.parentId,
         theme: newTask.theme,
-        estimateMin: newTask.effort === 'S' ? 30 : newTask.effort === 'M' ? 60 : 120,
+        estimateMin,
+        estimatedHours,
         updatedAt: serverTimestamp()
       });
 
@@ -209,7 +223,8 @@ const TasksList: React.FC = () => {
         effort: 'M',
         parentType: 'story',
         parentId: '',
-        theme: 'Health'
+        theme: 'Health',
+        estimatedHours: 1
       });
       setShowEditTask(false);
       setSelectedTask(null);
@@ -248,7 +263,12 @@ const TasksList: React.FC = () => {
       effort: task.effort,
       parentType: task.parentType,
       parentId: task.parentId,
-      theme: getThemeName(task.theme) as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home'
+      theme: getThemeName(task.theme) as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
+      estimatedHours: typeof task.estimatedHours === 'number'
+        ? Math.round(task.estimatedHours * 100) / 100
+        : task.estimateMin
+          ? Math.round((task.estimateMin / 60) * 100) / 100
+          : 1
     });
     setShowEditTask(true);
   };

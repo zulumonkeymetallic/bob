@@ -158,29 +158,29 @@ const STORY_TEMPLATES = {
 
 const TASK_TEMPLATES = {
   health: [
-    { title: "30-minute morning run", effort: "M", estimateMin: 30, description: "Easy pace morning run for base building" },
-    { title: "Strength training - legs", effort: "M", estimateMin: 45, description: "Leg workout for running strength" },
-    { title: "Plan weekly meals", effort: "S", estimateMin: 20, description: "Healthy meal planning for training" }
+    { title: "30-minute morning run", effort: "M", estimateMin: 30, estimatedHours: 0.5, description: "Easy pace morning run for base building" },
+    { title: "Strength training - legs", effort: "M", estimateMin: 45, estimatedHours: 0.75, description: "Leg workout for running strength" },
+    { title: "Plan weekly meals", effort: "S", estimateMin: 20, estimatedHours: 0.33, description: "Healthy meal planning for training" }
   ],
   wealth: [
-    { title: "Review monthly budget", effort: "M", estimateMin: 60, description: "Analyze spending and adjust budget" },
-    { title: "Research investment options", effort: "L", estimateMin: 90, description: "Research and compare investment accounts" },
-    { title: "Track daily expenses", effort: "S", estimateMin: 10, description: "Log daily spending in tracking app" }
+    { title: "Review monthly budget", effort: "M", estimateMin: 60, estimatedHours: 1, description: "Analyze spending and adjust budget" },
+    { title: "Research investment options", effort: "L", estimateMin: 90, estimatedHours: 1.5, description: "Research and compare investment accounts" },
+    { title: "Track daily expenses", effort: "S", estimateMin: 10, estimatedHours: 0.17, description: "Log daily spending in tracking app" }
   ],
   growth: [
-    { title: "Complete React Native lesson", effort: "M", estimateMin: 60, description: "Work through course materials and exercises" },
-    { title: "Build practice component", effort: "L", estimateMin: 120, description: "Create component from scratch for practice" },
-    { title: "Read development articles", effort: "S", estimateMin: 30, description: "Stay updated with latest development trends" }
+    { title: "Complete React Native lesson", effort: "M", estimateMin: 60, estimatedHours: 1, description: "Work through course materials and exercises" },
+    { title: "Build practice component", effort: "L", estimateMin: 120, estimatedHours: 2, description: "Create component from scratch for practice" },
+    { title: "Read development articles", effort: "S", estimateMin: 30, estimatedHours: 0.5, description: "Stay updated with latest development trends" }
   ],
   tribe: [
-    { title: "Call family member", effort: "S", estimateMin: 30, description: "Weekly check-in call with family" },
-    { title: "Plan weekend family activity", effort: "M", estimateMin: 45, description: "Research and plan family outing" },
-    { title: "Send thank you message", effort: "S", estimateMin: 15, description: "Express gratitude to someone important" }
+    { title: "Call family member", effort: "S", estimateMin: 30, estimatedHours: 0.5, description: "Weekly check-in call with family" },
+    { title: "Plan weekend family activity", effort: "M", estimateMin: 45, estimatedHours: 0.75, description: "Research and plan family outing" },
+    { title: "Send thank you message", effort: "S", estimateMin: 15, estimatedHours: 0.25, description: "Express gratitude to someone important" }
   ],
   home: [
-    { title: "Declutter one drawer", effort: "S", estimateMin: 30, description: "Sort and organize single drawer completely" },
-    { title: "Deep clean one room", effort: "M", estimateMin: 60, description: "Thorough cleaning of selected room" },
-    { title: "Organize digital photos", effort: "L", estimateMin: 90, description: "Sort and organize digital photo collection" }
+    { title: "Declutter one drawer", effort: "S", estimateMin: 30, estimatedHours: 0.5, description: "Sort and organize single drawer completely" },
+    { title: "Deep clean one room", effort: "M", estimateMin: 60, estimatedHours: 1, description: "Thorough cleaning of selected room" },
+    { title: "Organize digital photos", effort: "L", estimateMin: 90, estimatedHours: 1.5, description: "Sort and organize digital photo collection" }
   ]
 };
 
@@ -205,7 +205,7 @@ const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) =
 "Purchase running gear","Complete Marathon Training","P2",2,"backlog","Running shoes purchased","Weather gear acquired","Nutrition supplies ready"`;
       
       case 'tasks':
-        return `title,parentTitle,parentType,effort,priority,estimateMin,description,theme,dueDate,status
+        return `title,parentTitle,parentType,effort,priority,estimateMin,estimatedHours,description,theme,dueDate,status
 "30-minute morning run","Create training schedule","story","M","high",30,"Easy pace base building run","Health","2025-09-01","planned"
 "Research running shoes","Purchase running gear","story","S","med",45,"Compare and select proper running shoes","Health","2025-08-31","planned"`;
     }

@@ -11,6 +11,7 @@ import logger from '../utils/logger';
 import { Story, Goal, Sprint } from '../types';
 import AddGoalModal from './AddGoalModal';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { findSprintForDate } from '../utils/taskSprintHelpers';
 
 interface QuickActionsProps {
   onAction?: (type: string, data: any) => void;
@@ -210,24 +211,35 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         entityData.priority = parseInt(formData.priority.replace('P', ''));
         entityData.effort = formData.size || 'M';
         entityData.estimateMin = 60; // Default estimate
+        entityData.estimatedHours = 1;
         entityData.alignedToGoal = !!formData.storyId;
         entityData.source = 'web';
         entityData.aiLinkConfidence = 0;
-        
+
+        let linkedStory: Story | undefined;
         // Link to story and inherit theme + goal
         if (formData.storyId) {
           entityData.parentType = 'story';
           entityData.parentId = formData.storyId;
-          
-          const story = stories.find(s => s.id === formData.storyId);
-          if (story) {
-            entityData.theme = story.theme || getStoryTheme(formData.storyId);
+
+          linkedStory = stories.find(s => s.id === formData.storyId);
+          if (linkedStory) {
+            entityData.theme = linkedStory.theme || getStoryTheme(formData.storyId);
+            if (linkedStory.sprintId) {
+              entityData.sprintId = linkedStory.sprintId;
+            }
           }
         }
-        
+
         // Set due date
         if (formData.dueDate) {
           entityData.dueDate = new Date(formData.dueDate).getTime();
+          if (!entityData.sprintId) {
+            const matchingSprint = findSprintForDate(sprints, entityData.dueDate);
+            if (matchingSprint) {
+              entityData.sprintId = matchingSprint.id;
+            }
+          }
         }
       }
 

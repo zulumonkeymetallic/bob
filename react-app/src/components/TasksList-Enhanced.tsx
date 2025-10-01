@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Table, Badge, Button, Form, Row, Col, Modal, InputGroup, Dropdown, Alert } from 'react-bootstrap';
+import { Container, Table, Badge, Button, Form, Row, Col, Modal, InputGroup, Dropdown, Alert, Toast, ToastContainer } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 interface TaskWithContext extends Task {
@@ -30,7 +31,14 @@ const TasksList: React.FC = () => {
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [bulkEditMode, setBulkEditMode] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
-  
+  const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
+
+  const showToast = (message: string, variant: 'danger' | 'info' | 'success' = 'danger') => {
+    setToastState({ show: true, message, variant });
+  };
+
+  const closeToast = () => setToastState(prev => ({ ...prev, show: false }));
+
   const [filters, setFilters] = useState({
     status: '',
     priority: '',
@@ -47,13 +55,44 @@ const TasksList: React.FC = () => {
     parentType: 'story' as 'story' | 'project',
     parentId: '',
     theme: 1, // Default to Health & Fitness
-    status: 'todo' as 'todo' | 'in-progress' | 'blocked' | 'done'
+    status: 'todo' as 'todo' | 'in-progress' | 'blocked' | 'done',
+    estimatedHours: 1
   });
 
   const [editingField, setEditingField] = useState<{taskId: string, field: string, value: any} | null>(null);
   const { themes } = useGlobalThemes();
   const [newTaskThemeInput, setNewTaskThemeInput] = useState('');
   const [editTaskThemeInput, setEditTaskThemeInput] = useState('');
+
+  const effortToHours = (effort: string | undefined): number => {
+    switch (effort) {
+      case 'S':
+        return 0.5;
+      case 'L':
+        return 2;
+      case 'M':
+      default:
+        return 1;
+    }
+  };
+
+  const normalizeEstimatedHours = (task: Partial<Task>): number | undefined => {
+    if (typeof task.estimatedHours === 'number' && !Number.isNaN(task.estimatedHours)) {
+      return task.estimatedHours;
+    }
+    if (typeof task.estimateMin === 'number' && !Number.isNaN(task.estimateMin)) {
+      return Number((task.estimateMin / 60).toFixed(2));
+    }
+    if (task.effort) {
+      return effortToHours(task.effort as string);
+    }
+    return undefined;
+  };
+
+  const roundHours = (value: number): number => {
+    if (!Number.isFinite(value)) return 0;
+    return Math.round(value * 100) / 100;
+  };
 
   useEffect(() => {
     const matchNew = themes.find(t => t.id === (newTask as any).theme);
@@ -93,13 +132,24 @@ const TasksList: React.FC = () => {
       });
       
       // Add reference numbers and context
-      const tasksWithContext = tasksData.map((task, index) => ({
-        ...task,
-        referenceNumber: generateReferenceNumber(task, index),
-        storyTitle: stories.find(s => s.id === task.storyId)?.title || '',
-        goalTitle: goals.find(g => g.id === task.goalId)?.title || '',
-        sprintName: sprints.find(s => s.id === task.sprintId)?.name || ''
-      }));
+      const tasksWithContext = tasksData
+        .filter(task => !task.deleted)
+        .map((task, index) => {
+          const estimatedHours = normalizeEstimatedHours(task);
+          const parentStory = stories.find(s => s.id === (task.storyId || (task.parentType === 'story' ? task.parentId : undefined)));
+          const parentGoal = goals.find(g => g.id === (parentStory?.goalId || task.goalId));
+          const derivedSprintId = effectiveSprintId(task, stories, sprints);
+          return {
+            ...task,
+            sprintId: derivedSprintId ?? null,
+            theme: parentStory?.theme ?? parentGoal?.theme ?? task.theme,
+            estimatedHours,
+            referenceNumber: generateReferenceNumber(task, index),
+            storyTitle: parentStory?.title || '',
+            goalTitle: parentGoal?.title || '',
+            sprintName: sprintNameForId(sprints, derivedSprintId)
+          };
+        });
       
       setTasks(tasksWithContext);
     });
@@ -221,11 +271,20 @@ const TasksList: React.FC = () => {
     if (!currentUser || !newTask.title.trim()) return;
 
     try {
-      await addDoc(collection(db, 'tasks'), {
+      const estimatedHoursValue = normalizeEstimatedHours({
+        estimatedHours: newTask.estimatedHours,
+        effort: newTask.effort
+      }) ?? effortToHours(newTask.effort);
+      const estimatedHoursRounded = roundHours(estimatedHoursValue);
+      const estimateMinutes = Math.max(5, Math.round(estimatedHoursRounded * 60));
+
+      const taskData: any = {
         title: newTask.title,
         description: newTask.description,
         priority: newTask.priority,
         effort: newTask.effort,
+        estimatedHours: estimatedHoursRounded,
+        estimateMin: estimateMinutes,
         status: newTask.status,
         theme: newTask.theme,
         persona: currentPersona,
@@ -235,7 +294,18 @@ const TasksList: React.FC = () => {
         sprintId: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
-      });
+      };
+
+      const derivedSprint = deriveTaskSprint({
+        task: { ...taskData, id: `tmp-${Date.now()}` } as Task,
+        stories,
+        sprints
+      }).sprintId;
+      if (derivedSprint) {
+        taskData.sprintId = derivedSprint;
+      }
+
+      await addDoc(collection(db, 'tasks'), taskData);
 
       setNewTask({
         title: '',
@@ -245,7 +315,8 @@ const TasksList: React.FC = () => {
         parentType: currentPersona === 'personal' ? 'story' : 'project',
         parentId: '',
         theme: 1, // Default to Health & Fitness
-        status: 'todo'
+        status: 'todo',
+        estimatedHours: 1
       });
       setShowAddTask(false);
     } catch (error) {
@@ -257,8 +328,52 @@ const TasksList: React.FC = () => {
     if (!currentUser) return;
 
     try {
+      const existingTask = tasks.find(t => t.id === taskId);
+      if (!existingTask) return;
+
+      const derivation = deriveTaskSprint({
+        task: existingTask,
+        updates,
+        stories,
+        sprints
+      });
+
+      if (!isDueDateWithinStorySprint(derivation.dueDateMs, derivation.story, sprints)) {
+        showToast('Task due date must fall within the linked story sprint window.');
+        return;
+      }
+
+      const payload: Partial<Task> & { updatedAt?: any } = { ...updates };
+      if ('dueDate' in updates) {
+        payload.dueDate = derivation.dueDateMs ?? null;
+      }
+      if (payload.estimatedHours !== undefined) {
+        const hours = Number(payload.estimatedHours);
+        if (!Number.isNaN(hours)) {
+          payload.estimatedHours = roundHours(hours);
+          payload.estimateMin = Math.max(5, Math.round(payload.estimatedHours * 60));
+        } else {
+          delete payload.estimatedHours;
+        }
+      } else if (payload.estimateMin !== undefined) {
+        const minutes = Number(payload.estimateMin);
+        if (!Number.isNaN(minutes)) {
+          payload.estimatedHours = roundHours(minutes / 60);
+        }
+      }
+
+      if (derivation.story?.sprintId) {
+        payload.sprintId = derivation.story.sprintId;
+      } else if ('sprintId' in payload || derivation.sprintId !== existingTask.sprintId) {
+        payload.sprintId = derivation.sprintId ?? null;
+      }
+
+      if (payload.sprintId === existingTask.sprintId || (payload.sprintId == null && !existingTask.sprintId)) {
+        delete payload.sprintId;
+      }
+
       await updateDoc(doc(db, 'tasks', taskId), {
-        ...updates,
+        ...payload,
         updatedAt: serverTimestamp()
       });
     } catch (error) {
@@ -296,7 +411,8 @@ const TasksList: React.FC = () => {
   };
 
   const handleEditTask = (task: TaskWithContext) => {
-    setSelectedTask(task);
+    const estimatedHours = normalizeEstimatedHours(task);
+    setSelectedTask({ ...task, estimatedHours });
     setShowEditTask(true);
   };
 
@@ -304,17 +420,18 @@ const TasksList: React.FC = () => {
     if (!selectedTask || !currentUser) return;
 
     try {
-      await updateDoc(doc(db, 'tasks', selectedTask.id), {
+      await handleUpdateTask(selectedTask.id, {
         title: selectedTask.title,
         description: selectedTask.description,
         priority: selectedTask.priority,
         effort: selectedTask.effort,
-        status: selectedTask.status,
+        status: selectedTask.status as any,
         theme: selectedTask.theme,
         storyId: selectedTask.storyId || null,
         projectId: selectedTask.projectId || null,
         sprintId: selectedTask.sprintId || null,
-        updatedAt: serverTimestamp()
+        estimatedHours: normalizeEstimatedHours(selectedTask),
+        estimateMin: selectedTask.estimateMin
       });
 
       setShowEditTask(false);
@@ -861,10 +978,14 @@ const TasksList: React.FC = () => {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      <ToastContainer position="bottom-end" className="p-3">
+        <Toast bg={toastState.variant} onClose={closeToast} show={toastState.show} delay={4000} autohide>
+          <Toast.Body className={toastState.variant === 'info' ? '' : 'text-white'}>{toastState.message}</Toast.Body>
+        </Toast>
+      </ToastContainer>
     </Container>
   );
 };
 
 export default TasksList;
-
-export {};

@@ -38,15 +38,15 @@ const DashboardTaskTable: React.FC<DashboardTaskTableProps> = ({ maxTasks = 10, 
           ...doc.data()
         })) as Task[];
         
-        let filteredTasks = tasksData;
-        
+        let filteredTasks = tasksData.filter(task => !(task as any).deleted);
+
         if (showDueToday) {
           const today = new Date();
           today.setHours(0, 0, 0, 0);
           const tomorrow = new Date(today);
           tomorrow.setDate(tomorrow.getDate() + 1);
           
-          filteredTasks = tasksData.filter(task => {
+          filteredTasks = filteredTasks.filter(task => {
             if (!(task as any).dueDate) return false;
             const dueDate = new Date((task as any).dueDate);
             return dueDate >= today && dueDate < tomorrow;

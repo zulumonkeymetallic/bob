@@ -65,6 +65,7 @@ interface Task {
   id: string;
   title: string;
   storyId: string;
+  estimatedHours?: number;
 }
 
 const CalendarIntegrationView: React.FC = () => {

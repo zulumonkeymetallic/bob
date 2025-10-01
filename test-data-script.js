@@ -14,6 +14,7 @@ const addTestTasks = async () => {
       priority: 'high',
       theme: 'Health',
       estimateMin: 60,
+      estimatedHours: 1,
       status: 'planned',
       description: 'Upper body strength training session'
     },
@@ -26,6 +27,7 @@ const addTestTasks = async () => {
       priority: 'med',
       theme: 'Wealth',
       estimateMin: 90,
+      estimatedHours: 1.5,
       status: 'planned',
       description: 'Analyze investment portfolio and budget'
     },
@@ -38,6 +40,7 @@ const addTestTasks = async () => {
       priority: 'high',
       theme: 'Tribe',
       estimateMin: 30,
+      estimatedHours: 0.5,
       status: 'planned',
       description: 'Weekly family check-in call'
     },
@@ -50,6 +53,7 @@ const addTestTasks = async () => {
       priority: 'high',
       theme: 'Growth',
       estimateMin: 120,
+      estimatedHours: 2,
       status: 'in_progress',
       description: 'Finish and test the AI calendar planning system'
     },
@@ -62,6 +66,7 @@ const addTestTasks = async () => {
       priority: 'low',
       theme: 'Home',
       estimateMin: 45,
+      estimatedHours: 0.75,
       status: 'planned',
       description: 'Declutter and reorganize workspace'
     }

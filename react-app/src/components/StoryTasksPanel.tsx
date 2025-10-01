@@ -110,6 +110,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
         parentId: story.id,
         effort: 'M',
         estimateMin: 60,
+        estimatedHours: 1,
         alignedToGoal: true,
         theme: story.theme || 1,
         source: 'web',

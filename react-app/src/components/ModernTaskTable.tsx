@@ -31,11 +31,15 @@ import {
   Activity
 } from 'lucide-react';
 import { Task, Story, Goal, Sprint } from '../types';
+import { Toast, ToastContainer } from 'react-bootstrap';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars, rgbaCard } from '../utils/themeVars';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
+import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -145,16 +149,33 @@ const defaultColumns: Column[] = [
     type: 'select',
     options: []
   },
+  { 
+    key: 'sprintName', 
+    label: 'Sprint', 
+    width: '15%', 
+    visible: true, 
+    editable: false, 
+    type: 'text'
+  },
 ];
+
+const roundHours = (value: number): number => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 100) / 100;
+};
 
 interface SortableRowProps {
   task: TaskTableRow;
   columns: Column[];
   index: number;
   stories: Story[];
+  sprints: Sprint[];
   onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
   onTaskDelete: (taskId: string) => Promise<void>;
   onEditRequest: (task: TaskTableRow) => void;
+  onSprintAssign: (taskId: string, sprintId: string | null) => Promise<void>;
+  onConvertToStory: (task: TaskTableRow) => Promise<void>;
+  convertLoadingId: string | null;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -162,9 +183,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
   columns, 
   index, 
   stories,
+  sprints,
   onTaskUpdate, 
   onTaskDelete, 
   onEditRequest,
+  onSprintAssign,
+  onConvertToStory,
+  convertLoadingId,
 }) => {
   const { showSidebar } = useSidebar();
   const { trackCRUD, trackFieldChange } = useActivityTracking();
@@ -186,6 +211,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
     transition,
     opacity: isDragging ? 0.5 : 1,
   };
+
+  const isConverting = convertLoadingId === task.id;
 
   const handleCellEdit = (key: string, value: string) => {
     setEditingCell(key);
@@ -233,6 +260,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
             
             console.log(`🎯 Task story cleared for task ${task.id}`);
           }
+        } else if (key === 'dueDate') {
+          const normalizedValue = editValue ? new Date(editValue).getTime() : null;
+          updates = { dueDate: normalizedValue ?? null };
         } else {
           // Regular field update
           updates = { [key]: editValue };
@@ -260,9 +290,27 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
   };
 
+  const handleSprintChange = async (value: string) => {
+    try {
+      const newSprintId = value === 'none' ? null : (value || null);
+      await onSprintAssign(task.id, newSprintId);
+    } catch (error) {
+      console.error('Error assigning sprint:', error);
+    }
+  };
+
   const formatValue = (key: string, value: any): string => {
-    if (key === 'dueDate' && typeof value === 'number') {
-      return new Date(value).toLocaleDateString();
+    if (key === 'dueDate') {
+      if (typeof value === 'number') {
+        const date = new Date(value);
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${date.getFullYear()}-${month}-${day}`;
+      }
+      if (typeof value === 'string') {
+        return value;
+      }
+      return '';
     }
     if (key === 'theme' && typeof value === 'number') {
       const theme = GLOBAL_THEMES.find(t => t.id === value);
@@ -448,7 +496,27 @@ const SortableRow: React.FC<SortableRowProps> = ({
         textAlign: 'center',
         width: '96px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <select
+            value={task.sprintId || ''}
+            onChange={(e) => handleSprintChange(e.target.value)}
+            style={{
+              minWidth: '110px',
+              padding: '4px 6px',
+              borderRadius: 4,
+              border: `1px solid ${themeVars.border}`,
+              backgroundColor: themeVars.panel as string,
+              color: themeVars.text as string,
+              fontSize: '12px'
+            }}
+            title="Assign sprint"
+          >
+            <option value="">Sprint…</option>
+            <option value="none">No Sprint</option>
+            {sprints.map((sprint) => (
+              <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+            ))}
+          </select>
           {/* Activity stream */}
           <button
             onClick={() => {
@@ -462,13 +530,19 @@ const SortableRow: React.FC<SortableRowProps> = ({
           </button>
           {/* AI action */}
           <button
-            onClick={() => {
-              console.log('🪄 ModernTaskTable: AI action clicked', { taskId: task.id });
+            onClick={() => onConvertToStory(task)}
+            disabled={isConverting}
+            style={{ 
+              color: isConverting ? themeVars.muted as string : themeVars.brand as string,
+              padding: 4,
+              borderRadius: 4,
+              border: 'none',
+              background: 'transparent',
+              cursor: isConverting ? 'wait' : 'pointer'
             }}
-            style={{ color: themeVars.brand as string, padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer' }}
-            title="AI Assist"
+            title={isConverting ? 'Converting…' : 'Convert to Story'}
           >
-            <Wand2 size={16} />
+            <Wand2 size={16} style={{ opacity: isConverting ? 0.5 : 1 }} />
           </button>
           {/* Edit action opens modal */}
           <button
@@ -540,6 +614,15 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const [editingTask, setEditingTask] = useState<TaskTableRow | null>(null);
   const [editForm, setEditForm] = useState<Partial<TaskTableRow>>({});
   const [storySearch, setStorySearch] = useState('');
+  const [sprintFilter, setSprintFilter] = useState<string>('all');
+  const [convertLoadingId, setConvertLoadingId] = useState<string | null>(null);
+  const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
+
+  const showToast = (message: string, variant: 'danger' | 'info' | 'success' = 'danger') => {
+    setToastState({ show: true, message, variant });
+  };
+
+  const closeToast = () => setToastState(prev => ({ ...prev, show: false }));
 
   // Update story column options when stories change
   useEffect(() => {
@@ -552,6 +635,61 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     );
   }, [stories]);
 
+  const handleValidatedUpdate = async (taskId: string, updates: Partial<Task>) => {
+    const existingTask = tasks.find(t => t.id === taskId);
+    if (!existingTask) return;
+
+    try {
+      const derivation = deriveTaskSprint({
+        task: existingTask,
+        updates,
+        stories,
+        sprints,
+      });
+
+      if (!isDueDateWithinStorySprint(derivation.dueDateMs, derivation.story, sprints)) {
+        showToast('Task due date must stay within the linked story sprint window.');
+        return;
+      }
+
+      const payload: Partial<Task> = { ...updates };
+
+      if ('dueDate' in updates) {
+        payload.dueDate = derivation.dueDateMs ?? null;
+      }
+
+      if (payload.estimatedHours !== undefined) {
+        const hours = Number(payload.estimatedHours);
+        if (!Number.isNaN(hours)) {
+          payload.estimatedHours = roundHours(hours);
+          payload.estimateMin = Math.max(5, Math.round(payload.estimatedHours * 60));
+        } else {
+          delete payload.estimatedHours;
+        }
+      } else if (payload.estimateMin !== undefined) {
+        const minutes = Number(payload.estimateMin);
+        if (!Number.isNaN(minutes)) {
+          payload.estimatedHours = roundHours(minutes / 60);
+        }
+      }
+
+      if (derivation.story?.sprintId) {
+        payload.sprintId = derivation.story.sprintId;
+      } else if ('sprintId' in payload || derivation.sprintId !== existingTask.sprintId) {
+        payload.sprintId = derivation.sprintId ?? null;
+      }
+
+      if (payload.sprintId === existingTask.sprintId || (payload.sprintId == null && !existingTask.sprintId)) {
+        delete payload.sprintId;
+      }
+
+      await onTaskUpdate(taskId, payload);
+    } catch (error: any) {
+      console.error('ModernTaskTable: failed to update task', { taskId, updates, error });
+      showToast('Unable to update task. Please try again.');
+    }
+  };
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -559,11 +697,21 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
+  const filteredTasks = tasks.filter((task) => {
+    const derivedSprintId = effectiveSprintId(task, stories, sprints);
+    if (sprintFilter === 'none') return !derivedSprintId;
+    if (sprintFilter !== 'all') return derivedSprintId === sprintFilter;
+    return true;
+  });
+
   // Convert tasks to table rows with sort order and story titles
-  const tableRows: TaskTableRow[] = tasks.map((task, index) => {
+  const tableRows: TaskTableRow[] = filteredTasks.map((task, index) => {
     const story = stories.find(s => s.id === task.storyId);
+    const derivedSprintId = effectiveSprintId(task, stories, sprints);
     return {
       ...task,
+      sprintId: derivedSprintId ?? null,
+      sprintName: sprintNameForId(sprints, derivedSprintId),
       sortOrder: index,
       storyTitle: story?.title || '',
     };
@@ -622,6 +770,50 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     }
   };
 
+  const handleSprintAssign = async (taskId: string, newSprintId: string | null) => {
+    await handleValidatedUpdate(taskId, { sprintId: newSprintId });
+  };
+
+  const handleConvertToStory = async (task: TaskTableRow) => {
+    if (!task) return;
+    setConvertLoadingId(task.id);
+    try {
+      const suggestCallable = httpsCallable(functions, 'suggestTaskStoryConversions');
+      const convertCallable = httpsCallable(functions, 'convertTasksToStories');
+
+      const response: any = await suggestCallable({
+        persona: task.persona || 'personal',
+        taskIds: [task.id],
+        limit: 1
+      });
+      const suggestions: any[] = Array.isArray(response?.data?.suggestions) ? response.data.suggestions : [];
+      const suggestion = suggestions.find(item => item.taskId === task.id) || suggestions[0] || null;
+
+      const storyTitle = (suggestion?.storyTitle || task.title || 'New Story').slice(0, 140);
+      const storyDescription = (suggestion?.storyDescription || task.description || '').slice(0, 1200);
+      const goalId = suggestion?.goalId || task.goalId || null;
+
+      await convertCallable({
+        conversions: [{
+          taskId: task.id,
+          storyTitle,
+          storyDescription,
+          goalId
+        }]
+      });
+
+      console.log('🪄 ModernTaskTable: Task converted to story', {
+        taskId: task.id,
+        storyTitle,
+        goalId
+      });
+    } catch (error) {
+      console.error('Error converting task to story:', error);
+    } finally {
+      setConvertLoadingId(null);
+    }
+  };
+
   const toggleColumn = (key: string) => {
     setColumns(prev => 
       prev.map(col => 
@@ -666,8 +858,31 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             color: themeVars.muted as string, 
             margin: 0 
           }}>
-            {tasks.length} tasks • {visibleColumnsCount} columns visible
+            {filteredTasks.length} of {tasks.length} tasks • {visibleColumnsCount} columns visible
           </p>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: '12px', color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              Sprint
+              <select
+                value={sprintFilter}
+                onChange={(e) => setSprintFilter(e.target.value)}
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  border: `1px solid ${themeVars.border}`,
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
+                  fontSize: '12px'
+                }}
+              >
+                <option value="all">All</option>
+                <option value="none">No Sprint</option>
+                {sprints.map((sprint) => (
+                  <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
         <button
           onClick={() => setShowConfig(!showConfig)}
@@ -780,7 +995,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       columns={columns}
                       index={index}
                       stories={stories}
-                      onTaskUpdate={onTaskUpdate}
+                      sprints={sprints}
+                      onTaskUpdate={handleValidatedUpdate}
                       onTaskDelete={onTaskDelete}
                       onEditRequest={(t) => {
                         setEditingTask(t);
@@ -788,6 +1004,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         setStorySearch(t.storyTitle || '');
                         setShowEditModal(true);
                       }}
+                      onSprintAssign={handleSprintAssign}
+                      onConvertToStory={handleConvertToStory}
+                      convertLoadingId={convertLoadingId}
                     />
                   ))}
                 </SortableContext>
@@ -1121,7 +1340,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
               <button type="button" className="btn btn-primary" onClick={async () => {
                 if (!editForm.title) return;
                 if (editingTask) {
-                  await onTaskUpdate(editingTask.id, {
+                  await handleValidatedUpdate(editingTask.id, {
                     title: editForm.title,
                     description: editForm.description,
                     priority: editForm.priority as any,
@@ -1144,6 +1363,11 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         </div>
       </div>
     )}
+    <ToastContainer position="bottom-end" className="p-3">
+      <Toast bg={toastState.variant} onClose={closeToast} show={toastState.show} delay={4000} autohide>
+        <Toast.Body className={toastState.variant === 'info' ? '' : 'text-white'}>{toastState.message}</Toast.Body>
+      </Toast>
+    </ToastContainer>
     </>
   );
 };
