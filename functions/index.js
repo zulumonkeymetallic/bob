@@ -1639,7 +1639,6 @@ exports.generateMonzoAuditReport = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, M
     },
   };
 });
-
 // Nightly analytics refresh for all users with Monzo connected
 exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async () => {
   const db = admin.firestore();
