@@ -8,6 +8,7 @@ import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useSprint } from '../contexts/SprintContext';
 
 const TaskListView: React.FC = () => {
   const { currentUser } = useAuth();
@@ -18,15 +19,15 @@ const TaskListView: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [filterSprint, setFilterSprint] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
 
   useEffect(() => {
     if (!currentUser) return;
-    loadTaskData();
-  }, [currentUser, currentPersona]);
+    return loadTaskData();
+  }, [currentUser, currentPersona, selectedSprintId]);
 
   // Set up the update handler for the global sidebar
   useEffect(() => {
@@ -47,18 +48,26 @@ const TaskListView: React.FC = () => {
     setUpdateHandler(handleItemUpdate);
   }, [setUpdateHandler]);
 
-  const loadTaskData = async () => {
+  const loadTaskData = () => {
     if (!currentUser) return;
     
     setLoading(true);
     
     // Load all related data
-    const tasksQuery = query(
-      collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('priority', 'desc')
-    );
+    const tasksQuery = selectedSprintId
+      ? query(
+          collection(db, 'tasks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          where('sprintId', '==', selectedSprintId),
+          orderBy('priority', 'desc')
+        )
+      : query(
+          collection(db, 'tasks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          orderBy('priority', 'desc')
+        );
     
     const storiesQuery = query(
       collection(db, 'stories'),
@@ -181,6 +190,7 @@ const TaskListView: React.FC = () => {
 
   // Apply filters to tasks
   const filteredTasks = tasks.filter(task => {
+    if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
     if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
@@ -311,13 +321,16 @@ const TaskListView: React.FC = () => {
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Sprint</Form.Label>
                   <Form.Select
-                    value={filterSprint}
-                    onChange={(e) => setFilterSprint(e.target.value)}
+                    value={selectedSprintId || 'all'}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setSelectedSprintId(value === 'all' ? '' : value);
+                    }}
                     style={{ border: '1px solid var(--line)' }}
                   >
                     <option value="all">All Sprints</option>
                     {sprints.map(sprint => (
-                      <option key={sprint.id} value={sprint.name}>{sprint.name}</option>
+                      <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
                     ))}
                   </Form.Select>
                 </Form.Group>
@@ -346,7 +359,7 @@ const TaskListView: React.FC = () => {
                   variant="outline-secondary" 
                   onClick={() => {
                     setFilterStatus('all');
-                    setFilterSprint('all');
+                    setSelectedSprintId('');
                     setFilterTheme('all');
                     setSearchTerm('');
                   }}
