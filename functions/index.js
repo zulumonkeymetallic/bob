@@ -10,7 +10,23 @@ const aiUsageLogger = require("./utils/aiUsageLogger");
 const { rrulestr } = require('rrule');
 const { DateTime } = require('luxon');
 const { planSchedule, makeInstanceId: schedulerMakeInstanceId } = require('./scheduler/engine');
+const { computeMonzoAnalytics } = require('./monzo/analytics');
+const {
+  inferDefaultCategoryType,
+  inferDefaultCategoryLabel,
+  toMonthKey,
+} = require('./monzo/shared');
 const DEFAULT_TIMEZONE = 'Europe/London';
+const {
+  buildDailySummaryData,
+  buildDataQualitySnapshot,
+  loadSchedulerInputs,
+  ensureFirestore,
+  resolveTimezone,
+} = require('./lib/reporting');
+const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
+const { sendEmail } = require('./lib/email');
+const { coerceZone, toDateTime } = require('./lib/time');
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -1209,52 +1225,117 @@ exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () 
   return { ok: true, users: tokens.size };
 });
 
-const MONZO_CATEGORY_TYPE_MAP = {
-  bills: 'mandatory',
-  entertainment: 'optional',
-  expenses: 'mandatory',
-  family: 'mandatory',
-  transport: 'mandatory',
-  groceries: 'mandatory',
-  eating_out: 'optional',
-  holidays: 'optional',
-  shopping: 'optional',
-  personal_care: 'optional',
-  cash: 'optional',
-  general: 'optional',
-  investments: 'savings',
-  transfers: 'savings',
-  savings: 'savings',
-  charity: 'mandatory',
-  business: 'mandatory',
-};
+exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
 
-function inferDefaultCategoryType(tx) {
-  const cat = String(tx.category || '').toLowerCase();
-  if (MONZO_CATEGORY_TYPE_MAP[cat]) return MONZO_CATEGORY_TYPE_MAP[cat];
-  // Monzo uses negative for spend, positive for income/pot transfers
-  if (Number(tx.amount || 0) >= 0) return 'income';
-  return 'optional';
-}
-
-function inferDefaultCategoryLabel(tx) {
-  if (tx.merchant && tx.merchant.name) return tx.merchant.name;
-  if (tx.description) return tx.description;
-  if (tx.category) return tx.category;
-  return 'Uncategorised';
-}
-
-function toMonthKey(isoTs) {
-  try {
-    const date = new Date(isoTs);
-    if (Number.isNaN(date.getTime())) return null;
-    const yyyy = date.getUTCFullYear();
-    const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
-    return `${yyyy}-${mm}`;
-  } catch (e) {
-    return null;
+  const sinceInput = req.data?.since || null;
+  let sinceIso = null;
+  if (sinceInput) {
+    const sinceDate = new Date(sinceInput);
+    if (isNaN(sinceDate.getTime())) {
+      throw new httpsV2.HttpsError('invalid-argument', 'since must be a valid date or ISO string');
+    }
+    sinceIso = sinceDate.toISOString();
   }
-}
+
+  const jobId = req.data?.jobId ? String(req.data.jobId) : null;
+  const db = admin.firestore();
+  let jobRef = null;
+  if (jobId) {
+    jobRef = db.collection('monzo_sync_jobs').doc(jobId);
+    const jobSnap = await jobRef.get();
+    if (!jobSnap.exists) {
+      throw new httpsV2.HttpsError('not-found', 'Monzo sync job not found');
+    }
+    const jobData = jobSnap.data() || {};
+    if (jobData.ownerUid && jobData.ownerUid !== uid) {
+      throw new httpsV2.HttpsError('permission-denied', 'Cannot run a Monzo sync job for another user');
+    }
+    await jobRef.set({
+      state: 'in-progress',
+      startedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  try {
+    const summary = await syncMonzoDataForUser(uid, { since: sinceIso });
+    if (jobRef) {
+      await jobRef.set({
+        state: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastResult: summary,
+      }, { merge: true });
+    }
+    return { ok: true, ...summary };
+  } catch (error) {
+    if (jobRef) {
+      await jobRef.set({
+        state: 'failed',
+        error: String(error?.message || error),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error.message || 'Monzo sync failed');
+  }
+});
+
+exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const transactionId = String(req.data?.transactionId || '').trim();
+  const categoryType = String(req.data?.categoryType || '').trim().toLowerCase();
+  const label = req.data?.label ? String(req.data.label).trim() : null;
+
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+  if (!transactionId) throw new httpsV2.HttpsError('invalid-argument', 'transactionId is required');
+  if (!allowed.has(categoryType)) throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+
+  const db = admin.firestore();
+  const docRef = db.collection('monzo_transactions').doc(`${uid}_${transactionId}`);
+  const snap = await docRef.get();
+  if (!snap.exists) {
+    throw new httpsV2.HttpsError('not-found', 'Transaction not found');
+  }
+
+  await docRef.set({
+    userCategoryType: categoryType,
+    userCategoryLabel: label,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await computeMonzoAnalytics(uid);
+
+  return { ok: true };
+});
+
+exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const analytics = await computeMonzoAnalytics(uid);
+  return { ok: true, analytics };
+});
+
+// Nightly analytics refresh for all users with Monzo connected
+exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider','==','monzo').get();
+  let ok = 0, fail = 0;
+  for (const t of tokens.docs) {
+    try {
+      const data = t.data() || {};
+      const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
+      if (!uid) continue;
+      await computeMonzoAnalytics(uid);
+      ok++;
+    } catch (e) {
+      fail++;
+      try { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) }); } catch {}
+    }
+  }
+  return { ok, fail, scanned: tokens.size };
+});
 
 async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since }) {
   const db = admin.firestore();
@@ -1463,281 +1544,6 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
 
   return summary;
 }
-
-const THEME_NAME_MAP = {
-  1: 'Health',
-  2: 'Growth',
-  3: 'Finance & Wealth',
-  4: 'Tribe',
-  5: 'Home',
-};
-
-async function computeMonzoAnalytics(uid) {
-  const db = admin.firestore();
-  const txSnap = await db.collection('monzo_transactions').where('ownerUid', '==', uid).get();
-  const potSnap = await db.collection('monzo_pots').where('ownerUid', '==', uid).get();
-  const goalsSnap = await db.collection('goals').where('ownerUid', '==', uid).get();
-
-  const totals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
-  const categoryTotals = new Map();
-  const monthly = {};
-  const pendingClassification = [];
-  let pendingCount = 0;
-
-  txSnap.forEach((doc) => {
-    const data = doc.data() || {};
-    const amount = Number(data.amount != null ? data.amount : (data.amountMinor || 0) / 100);
-    const catType = String(data.userCategoryType || data.categoryType || data.defaultCategoryType || inferDefaultCategoryType(data.raw || {}));
-    const canonType = ['mandatory', 'optional', 'savings', 'income'].includes(catType) ? catType : (amount >= 0 ? 'income' : 'optional');
-    const absAmount = amount < 0 ? Math.abs(amount) : amount;
-
-    totals[canonType] = (totals[canonType] || 0) + absAmount;
-
-    const categoryLabel = data.userCategoryLabel || data.userCategory || data.defaultCategoryLabel || data.merchant?.name || data.description || 'Uncategorised';
-    const current = categoryTotals.get(categoryLabel) || { amount: 0, count: 0, type: canonType };
-    current.amount += absAmount;
-    current.count += 1;
-    current.type = canonType;
-    categoryTotals.set(categoryLabel, current);
-
-    const monthKey = data.monthKey || (data.createdISO ? toMonthKey(data.createdISO) : null);
-    if (monthKey) {
-      if (!monthly[monthKey]) {
-        monthly[monthKey] = { mandatory: 0, optional: 0, savings: 0, income: 0 };
-      }
-      monthly[monthKey][canonType] += absAmount;
-    }
-
-    const hasUserCategory = !!data.userCategoryType;
-    if (!hasUserCategory && amount < 0) {
-      pendingCount += 1;
-      if (pendingClassification.length < 25) {
-        pendingClassification.push({
-          transactionId: data.transactionId,
-          description: data.description || categoryLabel,
-          amount: absAmount,
-          createdISO: data.createdISO || null,
-          defaultCategoryType: data.defaultCategoryType || null,
-          defaultCategoryLabel: data.defaultCategoryLabel || null,
-        });
-      }
-    }
-  });
-
-  const categories = Array.from(categoryTotals.entries())
-    .sort((a, b) => b[1].amount - a[1].amount)
-    .slice(0, 50)
-    .map(([label, stats]) => ({ label, amount: stats.amount, count: stats.count, type: stats.type }));
-
-  const summaryDoc = {
-    ownerUid: uid,
-    totals,
-    categories,
-    monthly,
-    pendingClassification,
-    pendingCount,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-
-  await db.collection('monzo_budget_summary').doc(uid).set(summaryDoc, { merge: true });
-
-  // Goal alignment
-  const pots = potSnap.docs.map((p) => ({ id: p.id, ...(p.data() || {}) }));
-  const potIndex = new Map();
-  pots.forEach((potDoc) => {
-    const pot = potDoc || {};
-    const key = String(pot.potId || pot.id || '').toLowerCase();
-    if (key) potIndex.set(key, pot);
-    if (pot.name) potIndex.set(pot.name.toLowerCase(), pot);
-  });
-
-  const goals = goalsSnap.docs.map((g) => ({ id: g.id, ...(g.data() || {}) }));
-  const goalSummaries = [];
-  const themeTotals = {};
-
-  goals.forEach((goal) => {
-    const estimatedCost = Number(goal.estimatedCost || goal.targetValue || goal.target || 0);
-    const themeId = Number(goal.theme || 0);
-    const title = goal.title || 'Goal';
-    const normalizedTitle = title.toLowerCase();
-    let matchedPot = null;
-
-    // Prefer explicit pot mapping if provided
-    const explicitPotId = String(goal.potId || goal.pot_id || '').toLowerCase();
-    if (explicitPotId && potIndex.has(explicitPotId)) {
-      matchedPot = potIndex.get(explicitPotId);
-    }
-
-    if (!matchedPot) {
-      for (const pot of pots) {
-        const potName = String(pot.name || '').toLowerCase();
-        if (potName && (normalizedTitle.includes(potName) || potName.includes(normalizedTitle))) {
-          matchedPot = pot;
-          break;
-        }
-      }
-    }
-
-    const potBalanceMinor = matchedPot?.balance != null ? Number(matchedPot.balance) : 0;
-    const potBalance = potBalanceMinor / 100;
-    const fundedAmount = estimatedCost ? Math.min(potBalance, estimatedCost) : potBalance;
-    const shortfall = estimatedCost ? Math.max(estimatedCost - potBalance, 0) : 0;
-    const fundedPercent = estimatedCost ? Math.min((potBalance / estimatedCost) * 100, 100) : null;
-
-    goalSummaries.push({
-      goalId: goal.id,
-      title,
-      themeId,
-      themeName: THEME_NAME_MAP[themeId] || 'General',
-      estimatedCost,
-      potId: matchedPot?.potId || matchedPot?.id || null,
-      potName: matchedPot?.name || null,
-      potBalance,
-      fundedAmount,
-      fundedPercent,
-      shortfall,
-    });
-
-    if (!themeTotals[themeId]) {
-      themeTotals[themeId] = {
-        themeId,
-        themeName: THEME_NAME_MAP[themeId] || 'General',
-        goalCount: 0,
-        totalEstimatedCost: 0,
-        totalPotBalance: 0,
-        totalShortfall: 0,
-      };
-    }
-    const agg = themeTotals[themeId];
-    agg.goalCount += 1;
-    agg.totalEstimatedCost += estimatedCost;
-    agg.totalPotBalance += potBalance;
-    agg.totalShortfall += shortfall;
-  });
-
-  const alignmentDoc = {
-    ownerUid: uid,
-    goals: goalSummaries,
-    themes: Object.values(themeTotals),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-
-  await db.collection('monzo_goal_alignment').doc(uid).set(alignmentDoc, { merge: true });
-
-  return { summarySnapshot: summaryDoc, alignmentDoc };
-}
-
-exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
-  const uid = req.auth.uid;
-
-  const sinceInput = req.data?.since || null;
-  let sinceIso = null;
-  if (sinceInput) {
-    const sinceDate = new Date(sinceInput);
-    if (isNaN(sinceDate.getTime())) {
-      throw new httpsV2.HttpsError('invalid-argument', 'since must be a valid date or ISO string');
-    }
-    sinceIso = sinceDate.toISOString();
-  }
-
-  const jobId = req.data?.jobId ? String(req.data.jobId) : null;
-  const db = admin.firestore();
-  let jobRef = null;
-  if (jobId) {
-    jobRef = db.collection('monzo_sync_jobs').doc(jobId);
-    const jobSnap = await jobRef.get();
-    if (!jobSnap.exists) {
-      throw new httpsV2.HttpsError('not-found', 'Monzo sync job not found');
-    }
-    const jobData = jobSnap.data() || {};
-    if (jobData.ownerUid && jobData.ownerUid !== uid) {
-      throw new httpsV2.HttpsError('permission-denied', 'Cannot run a Monzo sync job for another user');
-    }
-    await jobRef.set({
-      state: 'in-progress',
-      startedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-  }
-
-  try {
-    const summary = await syncMonzoDataForUser(uid, { since: sinceIso });
-    if (jobRef) {
-      await jobRef.set({
-        state: 'completed',
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-        lastResult: summary,
-      }, { merge: true });
-    }
-    return { ok: true, ...summary };
-  } catch (error) {
-    if (jobRef) {
-      await jobRef.set({
-        state: 'failed',
-        error: String(error?.message || error),
-        failedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-    }
-    if (error instanceof httpsV2.HttpsError) throw error;
-    throw new httpsV2.HttpsError('internal', error.message || 'Monzo sync failed');
-  }
-});
-
-exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
-  const uid = req.auth.uid;
-  const transactionId = String(req.data?.transactionId || '').trim();
-  const categoryType = String(req.data?.categoryType || '').trim().toLowerCase();
-  const label = req.data?.label ? String(req.data.label).trim() : null;
-
-  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
-  if (!transactionId) throw new httpsV2.HttpsError('invalid-argument', 'transactionId is required');
-  if (!allowed.has(categoryType)) throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
-
-  const db = admin.firestore();
-  const docRef = db.collection('monzo_transactions').doc(`${uid}_${transactionId}`);
-  const snap = await docRef.get();
-  if (!snap.exists) {
-    throw new httpsV2.HttpsError('not-found', 'Transaction not found');
-  }
-
-  await docRef.set({
-    userCategoryType: categoryType,
-    userCategoryLabel: label,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
-
-  await computeMonzoAnalytics(uid);
-
-  return { ok: true };
-});
-
-exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
-  const uid = req.auth.uid;
-  const analytics = await computeMonzoAnalytics(uid);
-  return { ok: true, analytics };
-});
-
-// Nightly analytics refresh for all users with Monzo connected
-exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async () => {
-  const db = admin.firestore();
-  const tokens = await db.collection('tokens').where('provider','==','monzo').get();
-  let ok = 0, fail = 0;
-  for (const t of tokens.docs) {
-    try {
-      const data = t.data() || {};
-      const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
-      if (!uid) continue;
-      await computeMonzoAnalytics(uid);
-      ok++;
-    } catch (e) {
-      fail++;
-      try { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) }); } catch {}
-    }
-  }
-  return { ok, fail, scanned: tokens.size };
-});
 
 // ===== AI Planning Function
 exports.planCalendar = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
@@ -4419,6 +4225,241 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
   }
 });
 
+// ===== Daily Summary Email Automation (Issue #204)
+
+const DAILY_SUMMARY_TARGET_MINUTES = 6 * 60;
+const DATA_QUALITY_TARGET_MINUTES = 19 * 60;
+const DISPATCH_WINDOW_MINUTES = 10;
+
+function shouldTriggerWindow(nowLocal, targetMinutes, alreadySentDayIso) {
+  if (!nowLocal) return { shouldSend: false, dayIso: null };
+  const dayIso = nowLocal.toISODate();
+  if (alreadySentDayIso === dayIso) return { shouldSend: false, dayIso };
+  const minutesSinceMidnight = nowLocal.hour * 60 + nowLocal.minute;
+  const diff = Math.abs(minutesSinceMidnight - targetMinutes);
+  return { shouldSend: diff <= DISPATCH_WINDOW_MINUTES, dayIso };
+}
+
+async function recordAutomationStatus(db, { userId, automation, dayIso, status, message, runId }) {
+  const statusRef = db.collection('automation_status').doc(`${automation}_${userId}`);
+  const payload = {
+    userId,
+    automation,
+    lastStatus: status,
+    lastMessage: message || null,
+    lastRunId: runId || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (status === 'success' && dayIso) payload.lastSentDayIso = dayIso;
+  if (status === 'error') payload.lastErrorAt = admin.firestore.FieldValue.serverTimestamp();
+  if (status === 'skipped') payload.lastSkippedAt = admin.firestore.FieldValue.serverTimestamp();
+  await statusRef.set({
+    ...payload,
+  }, { merge: true });
+}
+
+async function logAutomationRun(db, payload) {
+  const ref = db.collection('automation_runs').doc();
+  await ref.set({
+    id: ref.id,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...payload,
+  });
+  return ref.id;
+}
+
+async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runContext }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = nowUtc.setZone(coerceZone(zone));
+  const statusSnap = await db.collection('automation_status').doc(`daily_summary_${userId}`).get();
+  const lastSentDay = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
+  const { shouldSend, dayIso } = shouldTriggerWindow(nowLocal, DAILY_SUMMARY_TARGET_MINUTES, lastSentDay);
+  if (!shouldSend && !runContext?.force) return { skipped: true, reason: 'window_miss' };
+
+  const summaryData = await buildDailySummaryData(db, userId, {
+    day: nowLocal,
+    timezone: zone,
+    locale: profile.locale || profile.language || 'en-GB',
+  });
+
+  const html = renderDailySummaryEmail(summaryData);
+  const subject = `Daily Summary · ${summaryData.metadata.dayIso}`;
+
+  let emailResult = null;
+  if (profile.email) {
+    emailResult = await sendEmail({ to: profile.email, subject, html });
+  }
+
+  await db.collection('daily_summaries').add({
+    userId,
+    dayIso: summaryData.metadata.dayIso,
+    timezone: summaryData.metadata.timezone,
+    locale: summaryData.metadata.locale,
+    summary: summaryData,
+    email: profile.email || null,
+    emailResult: emailResult ? { messageId: emailResult.messageId || null, response: emailResult.response || null } : null,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    runContext,
+  });
+
+  return { skipped: false, dayIso: summaryData.metadata.dayIso };
+}
+
+async function dispatchDataQualityForUser({ db, userId, profile, nowUtc }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = nowUtc.setZone(coerceZone(zone));
+  const statusSnap = await db.collection('automation_status').doc(`data_quality_${userId}`).get();
+  const lastSentDay = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
+  const { shouldSend, dayIso } = shouldTriggerWindow(nowLocal, DATA_QUALITY_TARGET_MINUTES, lastSentDay);
+  if (!shouldSend) return { skipped: true, reason: 'window_miss' };
+
+  const snapshot = await buildDataQualitySnapshot(db, userId, { windowEnd: nowUtc });
+  const html = renderDataQualityEmail({ profile, snapshot });
+  const subject = `Data Quality · ${snapshot.window.endIso?.slice(0, 16) || ''}`;
+
+  let emailResult = null;
+  if (profile.email) {
+    emailResult = await sendEmail({ to: profile.email, subject, html });
+  }
+
+  await db.collection('data_quality_reports').add({
+    userId,
+    window: snapshot.window,
+    summary: snapshot.summaryStats,
+    payload: snapshot,
+    email: profile.email || null,
+    emailResult: emailResult ? { messageId: emailResult.messageId || null } : null,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { skipped: false, dayIso };
+}
+
+exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
+  schedule: 'every 15 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    const userId = doc.id;
+    if (profile.dailySummaryEnabled === false) continue;
+    if (!profile.email && profile.dailySummaryRequireEmail !== false) continue;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'daily_summary',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const result = await dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runContext: { trigger: 'scheduled', runId } });
+      if (!result.skipped) {
+        await recordAutomationStatus(db, { userId, automation: 'daily_summary', dayIso: result.dayIso, status: 'success', runId });
+      }
+      await db.collection('automation_runs').doc(runId).set({ status: result.skipped ? 'skipped' : 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    } catch (error) {
+      console.error('[daily-summary] failed', { userId, error });
+      await db.collection('automation_runs').doc(runId).set({ status: 'error', error: error.message || String(error), completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await recordAutomationStatus(db, { userId, automation: 'daily_summary', dayIso: nowUtc.toISODate(), status: 'error', message: error.message || String(error), runId });
+    }
+  }
+});
+
+exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    const userId = doc.id;
+    if (profile.dataQualityEmailEnabled === false) continue;
+    if (!profile.email && profile.dataQualityRequireEmail !== false) continue;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'data_quality',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const result = await dispatchDataQualityForUser({ db, userId, profile, nowUtc });
+      if (!result.skipped) {
+        await recordAutomationStatus(db, { userId, automation: 'data_quality', dayIso: result.dayIso, status: 'success', runId });
+      }
+      await db.collection('automation_runs').doc(runId).set({ status: result.skipped ? 'skipped' : 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    } catch (error) {
+      console.error('[data-quality] failed', { userId, error });
+      await db.collection('automation_runs').doc(runId).set({ status: 'error', error: error.message || String(error), completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await recordAutomationStatus(db, { userId, automation: 'data_quality', dayIso: nowUtc.toISODate(), status: 'error', message: error.message || String(error), runId });
+    }
+  }
+});
+
+exports.sendDailySummaryNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
+  const profile = profileSnap.data() || {};
+  const nowUtc = DateTime.now().setZone('UTC');
+  try {
+    const runId = await logAutomationRun(db, {
+      automation: 'daily_summary',
+      userId: uid,
+      status: 'manual_start',
+      triggeredBy: 'callable',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    const result = await dispatchDailySummaryForUser({ db, userId: uid, profile, nowUtc, runContext: { trigger: 'manual', runId, force: true } });
+    await recordAutomationStatus(db, { userId: uid, automation: 'daily_summary', dayIso: result.dayIso || nowUtc.toISODate(), status: 'success', runId });
+    await db.collection('automation_runs').doc(runId).set({ status: 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true, result };
+  } catch (error) {
+    console.error('[daily-summary-now] failed', error);
+    throw new httpsV2.HttpsError('internal', error.message || 'Failed to send daily summary');
+  }
+});
+
+exports.previewDailySummary = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
+  const profile = profileSnap.data() || {};
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const summary = await buildDailySummaryData(db, uid, {
+    day: DateTime.now().setZone(coerceZone(zone)),
+    timezone: zone,
+    locale: profile.locale || profile.language || 'en-GB',
+  });
+  const html = renderDailySummaryEmail(summary);
+  return { ok: true, summary, html };
+});
+
+exports.previewDataQualityReport = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
+  const profile = profileSnap.data() || {};
+  const snapshot = await buildDataQualitySnapshot(db, uid, { windowEnd: DateTime.now().setZone('UTC') });
+  const html = renderDataQualityEmail({ profile, snapshot });
+  return { ok: true, snapshot, html };
+});
+
 // ===== New v3.0.2 Functions =====
 
 // Daily Digest Email Generation
@@ -4612,3 +4653,484 @@ exports.cleanupTestTokens = schedulerV2.onSchedule("every 6 hours", async (event
 
 // Export the daily digest function
 exports.generateDailyDigest = generateDailyDigest;
+
+// ===== Task → Story Conversion Automation (Issue #206)
+
+async function generateAcceptanceCriteria(task, goal, { userId }) {
+  const existing = Array.isArray(task.acceptanceCriteria)
+    ? task.acceptanceCriteria.filter(Boolean)
+    : typeof task.acceptanceCriteria === 'string'
+    ? task.acceptanceCriteria.split('\n').map((line) => line.trim()).filter(Boolean)
+    : [];
+  if (existing.length) return existing.slice(0, 10);
+
+  const prompt = [
+    `Task title: ${task.title || 'Untitled task'}`,
+    task.description ? `Description: ${task.description}` : null,
+    goal?.title ? `Goal: ${goal.title}` : null,
+    `Effort estimate: ${task.estimateMin ? `${Math.round(task.estimateMin / 60)} hours` : task.estimatedHours ? `${task.estimatedHours} hours` : 'unknown'}`,
+    `Persona: ${task.persona || 'personal'}`,
+    `Theme: ${task.theme || goal?.theme || 'General'}`,
+    '',
+    'Create 3-5 acceptance criteria as bullet strings. Keep each under 140 characters.',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const response = await callLLMJson({
+      system: 'You draft crisp, testable acceptance criteria for agile user stories. Return JSON {"criteria":[...]}',
+      user: prompt,
+      purpose: 'autoAcceptanceCriteria',
+      userId,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    const parsed = JSON.parse(response || '{}');
+    const criteria = Array.isArray(parsed.criteria) ? parsed.criteria.map((c) => String(c).trim()).filter(Boolean) : [];
+    if (criteria.length) return criteria.slice(0, 6);
+  } catch (error) {
+    console.warn('[auto-convert] LLM acceptance criteria failed', error?.message || error);
+  }
+  return [
+    'Define clear “done” outcome and validation steps.',
+    'Include success metrics or completion signal.',
+    'Address dependencies and blockers before sign-off.',
+  ];
+}
+
+function deriveStorySize(task) {
+  const hours = task.estimatedHours || (task.estimateMin ? task.estimateMin / 60 : null);
+  if (!hours) return 'medium';
+  if (hours <= 3) return 'small';
+  if (hours <= 8) return 'medium';
+  return 'large';
+}
+
+async function autoConvertTask({ db, taskDoc, profile, runId }) {
+  const task = taskDoc.data() || {};
+  const userId = task.ownerUid;
+  if (!userId) return null;
+
+  const now = Date.now();
+  const goalSnap = task.goalId ? await db.collection('goals').doc(task.goalId).get().catch(() => null) : null;
+  const goal = goalSnap && goalSnap.exists ? goalSnap.data() : null;
+  const acceptanceCriteria = await generateAcceptanceCriteria(task, goal, { userId });
+
+  const storyRef = db.collection('stories').doc();
+  const storyRefValue = await generateStoryRef(db, userId);
+  const size = deriveStorySize(task);
+
+  const storyPayload = {
+    ref: storyRefValue,
+    title: task.title || 'Story created from task',
+    description: task.description || '',
+    goalId: task.goalId || null,
+    sprintId: task.sprintId || null,
+    priority: task.priority || 2,
+    points: task.points || Math.max(1, Math.round((task.estimateMin || 240) / 90)),
+    status: 0,
+    theme: task.theme || goal?.theme || 1,
+    persona: task.persona || profile?.persona || 'personal',
+    ownerUid: userId,
+    orderIndex: now,
+    tags: Array.isArray(task.tags) ? task.tags.slice(0, 10) : [],
+    acceptanceCriteria,
+    storySize: size,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    automation: {
+      source: 'task_auto_conversion',
+      taskId: taskDoc.id,
+      runId,
+    },
+  };
+
+  if (task.dueDate) storyPayload.targetDate = task.dueDate;
+  if (task.attachments) storyPayload.attachments = task.attachments;
+
+  const batch = db.batch();
+  batch.set(storyRef, storyPayload);
+
+  const taskUpdate = {
+    status: 2,
+    convertedToStoryId: storyRef.id,
+    autoConvertedAt: admin.firestore.FieldValue.serverTimestamp(),
+    autoConvertedRunId: runId,
+    autoConverted: true,
+    reminderSyncDirective: 'complete',
+    syncState: 'dirty',
+    deleted: true,
+    serverUpdatedAt: now,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  batch.set(taskDoc.ref, taskUpdate, { merge: true });
+
+  await batch.commit();
+
+  // Reminders: close and annotate
+  try {
+    const remindersSnap = await db.collection('reminders').where('taskId', '==', taskDoc.id).get();
+    for (const reminder of remindersSnap.docs) {
+      await reminder.ref.set({
+        status: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        note: `${reminder.data().note || ''}\nConverted to Story ${storyRefValue}`.trim(),
+        syncState: 'dirty',
+      }, { merge: true });
+    }
+  } catch (error) {
+    console.warn('[auto-convert] reminder sync failed', { taskId: taskDoc.id, error });
+  }
+
+  const activityRef = db.collection('activity_stream').doc();
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: storyRef.id,
+    entityType: 'story',
+    activityType: 'task_to_story_conversion',
+    actor: 'AI_Agent',
+    userId,
+    description: `Auto-converted task ${task.ref || taskDoc.id} to story ${storyRefValue}`,
+    metadata: {
+      taskId: taskDoc.id,
+      storyId: storyRef.id,
+      runId,
+      acceptanceCriteria,
+    },
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await db.collection('automation_events').add({
+    type: 'task_auto_conversion',
+    userId,
+    taskId: taskDoc.id,
+    storyId: storyRef.id,
+    runId,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  if (!task.goalId) {
+    await db.collection('automation_alerts').add({
+      type: 'missing_goal_link',
+      userId,
+      storyId: storyRef.id,
+      taskId: taskDoc.id,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      resolved: false,
+      message: 'Story created from task without goal linkage',
+    });
+  }
+
+  return { taskId: taskDoc.id, storyId: storyRef.id, storyRef: storyRefValue };
+}
+
+exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+}, async () => {
+  const db = ensureFirestore();
+  const profilesSnap = await db.collection('profiles').get();
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    if (profile.autoConversionEnabled === false) continue;
+    const userId = doc.id;
+
+    const thresholdMinutes = Number(profile.autoConversionThresholdMinutes || 240);
+    const pointsThreshold = Number(profile.autoConversionThresholdPoints || 2);
+
+    const runId = await logAutomationRun(db, {
+      automation: 'task_auto_conversion',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      thresholdMinutes,
+      pointsThreshold,
+    });
+
+    try {
+      const tasksSnap = await db.collection('tasks')
+        .where('ownerUid', '==', userId)
+        .get();
+
+      const candidates = tasksSnap.docs.filter((taskDoc) => {
+        const data = taskDoc.data() || {};
+        if (data.autoConverted || data.convertedToStoryId) return false;
+        if (data.autoConversionSkip === true) return false;
+        const status = data.status;
+        if (status === 2 || status === 3 || status === 'done' || status === 'completed') return false;
+        const estMinutes = Number(data.estimateMin || 0);
+        const estHours = Number(data.estimatedHours || 0);
+        const points = Number(data.points || 0);
+        if (estMinutes >= thresholdMinutes) return true;
+        if (estHours >= 4) return true;
+        if (points > pointsThreshold) return true;
+        return false;
+      });
+
+      const results = [];
+      for (const taskDoc of candidates.slice(0, 10)) {
+        try {
+          const conversion = await autoConvertTask({ db, taskDoc, profile, runId });
+          if (conversion) results.push(conversion);
+        } catch (error) {
+          console.error('[auto-convert] task failed', { taskId: taskDoc.id, error });
+          await db.collection('automation_exceptions').add({
+            automation: 'task_auto_conversion',
+            userId,
+            taskId: taskDoc.id,
+            message: error.message || String(error),
+            runId,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'success',
+        converted: results,
+        processed: candidates.length,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error('[auto-convert] run failed', { userId, error });
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'error',
+        error: error.message || String(error),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  }
+});
+
+// ===== Scheduler Adjustments (Issue #207)
+
+const WORKDAY_MINUTES_DEFAULT = 8 * 60;
+
+function isTaskLocked(task) {
+  return task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
+}
+
+function buildBlockedMinutes(calendarBlocks, zone) {
+  const map = new Map();
+  for (const block of calendarBlocks) {
+    const start = toDateTime(block.start || block.startIso || block.startAt, { zone });
+    const end = toDateTime(block.end || block.endIso || block.endAt, { zone });
+    if (!start || !end) continue;
+    const day = start.toISODate();
+    const minutes = Math.max(0, end.diff(start, 'minutes').minutes);
+    const current = map.get(day) || 0;
+    map.set(day, current + minutes);
+  }
+  return map;
+}
+
+function isNonWorkingDay(dt, profile) {
+  if (!dt) return false;
+  const weekendDisabled = profile?.workWeekends === true ? [] : [6, 7];
+  return weekendDisabled.includes(dt.weekday);
+}
+
+function findNextWorkingDate(startDt, context) {
+  const { blockedMinutes, workdayMinutes, profile } = context;
+  let candidate = startDt;
+  for (let i = 0; i < 14; i++) {
+    const day = candidate.toISODate();
+    const blocked = blockedMinutes.get(day) || 0;
+    if (!isNonWorkingDay(candidate, profile) && blocked < workdayMinutes) {
+      return candidate;
+    }
+    candidate = candidate.plus({ days: 1 });
+  }
+  return startDt;
+}
+
+async function updateTaskDueDate(db, taskId, { newDueDateMs, reason, userId, runId, itemRef }) {
+  const taskRef = db.collection('tasks').doc(taskId);
+  await taskRef.set({
+    dueDate: newDueDateMs,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    serverUpdatedAt: Date.now(),
+    scheduler: {
+      lastRunId: runId,
+      lastReason: reason,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    syncState: 'dirty',
+  }, { merge: true });
+
+  try {
+    const remindersSnap = await db.collection('reminders').where('taskId', '==', taskId).get();
+    for (const reminder of remindersSnap.docs) {
+      await reminder.ref.set({
+        dueDate: newDueDateMs,
+        dueAt: newDueDateMs,
+        note: `${reminder.data().note || ''}\nDue date adjusted by scheduler (${reason}).`.trim(),
+        syncState: 'dirty',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  } catch (error) {
+    console.warn('[scheduler] reminder update failed', { taskId, error });
+  }
+
+  const activityRef = db.collection('activity_stream').doc();
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: taskId,
+    entityType: 'task',
+    activityType: 'scheduler_due_date_adjustment',
+    actor: 'AI_Scheduler',
+    userId,
+    description: `Scheduler moved ${itemRef || taskId} due date (${reason}).`,
+    metadata: { taskId, reason, runId, dueDate: newDueDateMs },
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+exports.runDailySchedulerAdjustments = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '1GiB',
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    const userId = doc.id;
+    if (profile.schedulerEnabled === false) continue;
+
+    const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+    const nowLocal = nowUtc.setZone(coerceZone(zone));
+    const statusSnap = await db.collection('automation_status').doc(`scheduler_${userId}`).get();
+    const lastSentDay = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
+    const { shouldSend, dayIso } = shouldTriggerWindow(nowLocal, DAILY_SUMMARY_TARGET_MINUTES, lastSentDay);
+    if (!shouldSend) continue;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'scheduler_adjustments',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const { tasks, stories, dependencies } = await loadSchedulerInputs(db, userId, { timezone: zone });
+      const calendarSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', userId)
+        .where('start', '>=', nowLocal.minus({ days: 1 }).startOf('day').toMillis())
+        .where('start', '<=', nowLocal.plus({ days: 14 }).endOf('day').toMillis())
+        .get()
+        .catch(() => ({ docs: [] }));
+      const calendarBlocks = calendarSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+      const blockedMinutes = buildBlockedMinutes(calendarBlocks, zone);
+      const workdayMinutes = Number(profile.workdayMinutes || WORKDAY_MINUTES_DEFAULT);
+      const context = { blockedMinutes, workdayMinutes, profile };
+
+      const taskDueMap = new Map();
+      const storyDueMap = new Map();
+      tasks.forEach((task) => {
+        const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
+        if (dueMs) taskDueMap.set(task.id, DateTime.fromMillis(dueMs, { zone }));
+      });
+      stories.forEach((story) => {
+        const dueMs = toMillis(story.sprintDueDate || story.targetDate || story.plannedStartDate);
+        if (dueMs) storyDueMap.set(story.id, DateTime.fromMillis(dueMs, { zone }));
+      });
+
+      const today = nowLocal.startOf('day');
+      const changes = [];
+
+      for (const task of tasks) {
+        if (isTaskLocked(task)) continue;
+        const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
+        const dueDt = dueMs ? DateTime.fromMillis(dueMs, { zone }) : null;
+        let candidate = dueDt || today.plus({ days: 1 });
+        let reason = '';
+
+        if (!dueDt) {
+          reason = 'missing_due_date';
+        } else if (dueDt < today) {
+          candidate = today.plus({ days: 1 });
+          reason = 'overdue_pull_forward';
+        }
+
+        const depKey = dependencies.get(`task:${task.id}`) || [];
+        let latestDependency = null;
+        for (const dep of depKey) {
+          const targetId = dep.dependsOn;
+          const depTask = taskDueMap.get(targetId);
+          const depStory = storyDueMap.get(targetId);
+          const depDate = depTask || depStory || null;
+          if (depDate && (!latestDependency || depDate > latestDependency)) {
+            latestDependency = depDate;
+          }
+        }
+        if (latestDependency && candidate <= latestDependency) {
+          candidate = latestDependency.plus({ days: 1 });
+          reason = reason || 'dependency_alignment';
+        }
+
+        candidate = findNextWorkingDate(candidate, context);
+        const candidateIso = candidate.toISODate();
+        const blocked = blockedMinutes.get(candidateIso) || 0;
+        if (blocked >= workdayMinutes) {
+          candidate = findNextWorkingDate(candidate.plus({ days: 1 }), context);
+          reason = reason || 'capacity_conflict';
+        }
+
+        const newDueMs = candidate.endOf('day').toMillis();
+        if (!dueDt || Math.abs(candidate.toMillis() - dueDt.toMillis()) > 60 * 1000) {
+          await updateTaskDueDate(db, task.id, {
+            newDueDateMs: newDueMs,
+            reason: reason || 'normalized',
+            userId,
+            runId,
+            itemRef: task.ref || task.id,
+          });
+          taskDueMap.set(task.id, candidate);
+          changes.push({
+            itemId: task.id,
+            itemRef: task.ref || task.id,
+            previousDue: dueDt ? dueDt.toISODate() : null,
+            newDue: candidateIso,
+            reason: reason || 'normalized',
+          });
+        }
+      }
+
+      await db.collection('scheduler_runs').add({
+        userId,
+        dayIso,
+        runId,
+        timezone: zone,
+        changes,
+        metrics: {
+          totalTasks: tasks.length,
+          adjustedTasks: changes.length,
+          blockedDays: blockedMinutes.size,
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      await recordAutomationStatus(db, { userId, automation: 'scheduler', dayIso, status: 'success', runId });
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'success',
+        changes,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error('[scheduler] run failed', { userId, error });
+      await recordAutomationStatus(db, { userId, automation: 'scheduler', dayIso: nowLocal.toISODate(), status: 'error', message: error.message || String(error) });
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'error',
+        error: error.message || String(error),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  }
+});
