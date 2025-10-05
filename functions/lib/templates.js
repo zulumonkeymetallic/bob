@@ -225,6 +225,29 @@ const renderSchedule = (blocks) => {
   return `<ul style="padding-left:20px;">${items}</ul>`;
 };
 
+const renderMonzo = (monzo) => {
+  if (!monzo) return '<p style="color:#6b7280;">Connect Monzo to track spending.</p>';
+  const parts = [];
+  if (monzo.totals) {
+    const spent = monzo.totals.spent != null ? `£${Number(monzo.totals.spent).toFixed(2)}` : 'n/a';
+    const budget = monzo.totals.budget != null ? `£${Number(monzo.totals.budget).toFixed(2)}` : 'n/a';
+    const remaining = monzo.totals.remaining != null ? `£${Number(monzo.totals.remaining).toFixed(2)}` : 'n/a';
+    parts.push(`<li><strong>Spent:</strong> ${escape(spent)} · <strong>Budget:</strong> ${escape(budget)} · <strong>Left:</strong> ${escape(remaining)}</li>`);
+  }
+  if (Array.isArray(monzo.categories) && monzo.categories.length) {
+    const cats = monzo.categories.slice(0, 3).map((cat) => {
+      const amount = cat.spent != null ? `£${Number(cat.spent).toFixed(2)}` : 'n/a';
+      const name = cat.category || cat.name || 'Category';
+      return `<li>${escape(name)} — ${escape(amount)}</li>`;
+    }).join('\n');
+    parts.push(`<li><strong>Top Categories:</strong><ul style="padding-left:20px;margin-top:4px;">${cats}</ul></li>`);
+  }
+  if (!parts.length) {
+    return '<p style="color:#6b7280;">No recent Monzo activity.</p>';
+  }
+  return `<ul style="padding-left:20px;">${parts.join('')}</ul>`;
+};
+
 const renderChecklist = (reminders) => {
   if (!Array.isArray(reminders) || !reminders.length) {
     return '<p style="color:#6b7280;">Nothing flagged for today—great job!</p>';
@@ -524,6 +547,11 @@ const renderDailySummaryEmail = (data) => {
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Checklist</h2>
         ${renderChecklist(data.reminders || [])}
         <p style="margin-top:8px;font-size:12px;color:#6b7280;">Tick completed items in the BOB dashboard or iOS Reminders; changes stay in sync.</p>
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Finance Snapshot</h2>
+        ${renderMonzo(data.monzo)}
       </section>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">

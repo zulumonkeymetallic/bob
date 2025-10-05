@@ -3,7 +3,7 @@ import { Container, Card, Row, Col, Badge, Button, Alert, Table } from 'react-bo
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
@@ -35,6 +35,17 @@ interface ReminderItem {
   title: string;
   dueDate: Date | null;
   taskId?: string | null;
+}
+
+interface MonzoSummary {
+  totals?: {
+    spent?: number;
+    budget?: number;
+    remaining?: number;
+  } | null;
+  categories?: Array<{ category?: string; name?: string; spent?: number }>;
+  goalAlignment?: any;
+  updatedAt?: any;
 }
 
 interface ChecklistSnapshotItem {
@@ -77,6 +88,7 @@ const Dashboard: React.FC = () => {
   const [remindersDueToday, setRemindersDueToday] = useState<ReminderItem[]>([]);
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
+  const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
   const dailyBrief = () => {
     const parts: string[] = [];
     if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
@@ -193,7 +205,8 @@ const Dashboard: React.FC = () => {
         loadTodayBlocks(),
         countTasksDueToday(),
         loadRemindersDueToday(),
-        loadChecklistDueToday()
+        loadChecklistDueToday(),
+        loadMonzoSummary()
       ]);
     } catch {}
 
@@ -409,6 +422,35 @@ const Dashboard: React.FC = () => {
     setRoutinesDueToday(routines);
   };
 
+  const loadMonzoSummary = async () => {
+    if (!currentUser) {
+      setMonzoSummary(null);
+      return;
+    }
+    try {
+      const budgetSnap = await getDoc(doc(db, 'monzo_budget_summary', currentUser.uid));
+      const alignmentSnap = await getDoc(doc(db, 'monzo_goal_alignment', currentUser.uid));
+      if (!budgetSnap.exists && !alignmentSnap.exists) {
+        setMonzoSummary(null);
+        return;
+      }
+      const summary: MonzoSummary = {};
+      if (budgetSnap.exists) {
+        const data = budgetSnap.data() as any;
+        summary.totals = data?.totals || null;
+        summary.categories = Array.isArray(data?.categories) ? data.categories.slice(0, 4) : [];
+        summary.updatedAt = data?.updatedAt || null;
+      }
+      if (alignmentSnap.exists) {
+        summary.goalAlignment = alignmentSnap.data();
+      }
+      setMonzoSummary(summary);
+    } catch (error) {
+      console.warn('Failed to load Monzo summary', error);
+      setMonzoSummary(null);
+    }
+  };
+
   const getStatusColor = (status: string): string => {
     switch (status) {
       case 'done': return 'success';
@@ -605,6 +647,41 @@ const Dashboard: React.FC = () => {
             <Col lg={4} className="mb-3">
               <ThemeBreakdown onThemeSelect={handleThemeSelect} />
             </Col>
+          </Row>
+
+          <Row className="mb-4">
+            <Col lg={4} className="mb-3">
+              <Card className="h-100">
+                <Card.Header>
+                  <h5 className="mb-0">Finance Snapshot</h5>
+                </Card.Header>
+                <Card.Body>
+                  {!monzoSummary ? (
+                    <div className="text-muted">Connect Monzo to surface spending insights.</div>
+                  ) : (
+                    <>
+                      <div className="mb-2"><strong>Spent:</strong> £{Number(monzoSummary.totals?.spent ?? 0).toFixed(2)}</div>
+                      <div className="mb-2"><strong>Budget:</strong> £{Number(monzoSummary.totals?.budget ?? 0).toFixed(2)}</div>
+                      <div className="mb-3"><strong>Remaining:</strong> £{Number(monzoSummary.totals?.remaining ?? 0).toFixed(2)}</div>
+                      {monzoSummary.categories && monzoSummary.categories.length > 0 && (
+                        <div>
+                          <h6 className="text-muted">Top Categories</h6>
+                          <ul className="list-unstyled mb-0">
+                            {monzoSummary.categories.map((cat, idx) => (
+                              <li key={idx} className="d-flex justify-content-between">
+                                <span>{cat.category || cat.name || 'Category'}</span>
+                                <span>£{Number(cat.spent || 0).toFixed(2)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
           </Row>
 
           <Row className="mb-4">

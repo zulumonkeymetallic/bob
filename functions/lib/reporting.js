@@ -465,6 +465,27 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     console.warn('[reporting] fitness lookup failed', error?.message || error);
   }
 
+  let monzo = null;
+  try {
+    const budgetDoc = await db.collection('monzo_budget_summary').doc(userId).get();
+    if (budgetDoc.exists) {
+      const data = budgetDoc.data() || {};
+      monzo = {
+        totals: data.totals || null,
+        categories: Array.isArray(data.categories) ? data.categories.slice(0, 10) : [],
+        updatedAt: data.updatedAt || null,
+      };
+    }
+    const alignmentDoc = await db.collection('monzo_goal_alignment').doc(userId).get();
+    if (alignmentDoc.exists) {
+      monzo = Object.assign({}, monzo || {}, {
+        goalAlignment: alignmentDoc.data() || null,
+      });
+    }
+  } catch (error) {
+    console.warn('[reporting] monzo lookup failed', error?.message || error);
+  }
+
   const manualRerunCallable = 'sendDailySummaryNow';
 
   const schedulerChanges = schedulerSnap.docs[0]?.data()?.changes || [];
@@ -486,6 +507,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     priorities,
     worldSummary: worldSummary ? { summary: worldSummary, weather: worldWeather, source: worldSource } : null,
     fitness,
+    monzo,
     profile,
     schedulerChanges,
   };
