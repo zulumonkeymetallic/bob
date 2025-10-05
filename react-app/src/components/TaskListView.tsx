@@ -62,22 +62,20 @@ const TaskListView: React.FC = () => {
 
   const loadTaskData = () => {
     if (!currentUser) return;
-    
+
     setLoading(true);
-    
+
     // Load all related data
     const tasksQuery = selectedSprintId
       ? query(
           collection(db, 'tasks'),
           where('ownerUid', '==', currentUser.uid),
-          where('persona', '==', currentPersona),
           where('sprintId', '==', selectedSprintId),
           orderBy('priority', 'desc')
         )
       : query(
           collection(db, 'tasks'),
           where('ownerUid', '==', currentUser.uid),
-          where('persona', '==', currentPersona),
           orderBy('priority', 'desc')
         );
     
@@ -220,6 +218,7 @@ const TaskListView: React.FC = () => {
 
   const filteredTasks = tasks.filter(task => {
     if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
+    if (task.persona && task.persona !== currentPersona) return false;
     if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
     if (filterTheme !== 'all' && !isTheme(task.theme, filterTheme)) return false;
     if (dueFilter === 'today' && !isDueToday(task)) return false;
