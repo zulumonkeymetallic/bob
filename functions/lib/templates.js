@@ -159,6 +159,45 @@ const renderAiFocus = (focus) => {
   return `${intro}<ol style="padding-left:20px;margin:0;">${itemsHtml}</ol>${ask}${attribution}`;
 };
 
+const renderMaintenanceSummary = (maintenance) => {
+  if (!maintenance) {
+    return '<p style="color:#6b7280;">No automation summary available.</p>';
+  }
+
+  const parts = [];
+  if (maintenance.reminders && maintenance.reminders.groupsCreated != null) {
+    parts.push(`<li>${escape(String(maintenance.reminders.groupsCreated))} reminder duplicate groups flagged</li>`);
+  }
+  if (maintenance.dedupe) {
+    parts.push(`<li>${escape(String(maintenance.dedupe.resolved || 0))} duplicate tasks merged (processed ${escape(String(maintenance.dedupe.processed || 0))})</li>`);
+  }
+  if (maintenance.dueDates) {
+    parts.push(`<li>${escape(String(maintenance.dueDates.adjustedTop || 0))} tasks pulled into today/tomorrow; ${escape(String(maintenance.dueDates.deferred || 0))} deferred</li>`);
+  }
+  if (maintenance.conversions) {
+    parts.push(`<li>${escape(String(maintenance.conversions.converted || 0))} oversized tasks converted to stories</li>`);
+  }
+  if (maintenance.calendar) {
+    parts.push(`<li>${escape(String(maintenance.calendar.planned || 0))} calendar blocks scheduled (${escape(String(maintenance.calendar.unscheduled || 0))} pending)</li>`);
+  }
+  const listHtml = parts.length ? `<ul style="margin:0;padding-left:20px;">${parts.join('')}</ul>` : '<p style="color:#6b7280;">No notable automation changes.</p>';
+
+  const topItems = Array.isArray(maintenance.priority?.top) ? maintenance.priority.top.slice(0, 5) : [];
+  const topHtml = topItems.length
+    ? `<ol style="margin-top:12px;padding-left:20px;">${topItems.map((item) => `
+        <li>
+          <span style="font-weight:600;color:#111827;">${escape(item.title || item.taskId || item.id || 'Task')}</span>
+          ${item.bucket ? `<span style="margin-left:8px;padding:2px 8px;border-radius:999px;background:#fee2e2;color:#b91c1c;font-size:12px;">${escape(item.bucket)}</span>` : ''}
+          ${item.score != null ? `<div style="font-size:12px;color:#6b7280;">Score ${escape(String(item.score))}</div>` : ''}
+        </li>
+      `).join('')}</ol>`
+    : '';
+
+  const generatedAt = maintenance.completedAt ? `<p style="margin-top:12px;font-size:12px;color:#9ca3af;">Completed ${escape(maintenance.completedAt)}</p>` : '';
+
+  return `${listHtml}${topHtml}${generatedAt}`;
+};
+
 const renderWorldSummary = (world) => {
   if (!world) return '<p>No world summary available.</p>';
   const parts = [];
@@ -429,6 +468,13 @@ const renderDailySummaryEmail = (data) => {
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">AI focus for today</h2>
         ${renderAiFocus(data.aiFocus)}
       </section>
+
+      ${data.maintenance ? `
+        <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+          <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Automation Snapshot</h2>
+          ${renderMaintenanceSummary(data.maintenance)}
+        </section>
+      ` : ''}
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Tasks due today</h2>

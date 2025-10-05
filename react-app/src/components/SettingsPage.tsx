@@ -243,8 +243,14 @@ const SettingsPage: React.FC = () => {
     setMaintenanceError('');
     try {
       const callable = httpsCallable(functions, 'runNightlyMaintenanceNow');
-      await callable({ sendSummary: false });
-      setMaintenanceStatus('AI reprioritisation completed');
+      const response: any = await callable({ sendSummary: false });
+      const payload = response?.data ?? response;
+      const summary = payload?.maintenance?.summary || payload?.maintenanceSummary;
+      if (summary?.priority && typeof summary.priority.updated === 'number') {
+        setMaintenanceStatus(`AI reprioritised ${summary.priority.updated} tasks and adjusted ${summary.dueDates?.adjustedTop || 0} due dates.`);
+      } else {
+        setMaintenanceStatus('AI reprioritisation completed');
+      }
     } catch (error: any) {
       console.error('Failed to run nightly maintenance', error);
       setMaintenanceError(error?.message || 'Failed to run AI reprioritisation');
