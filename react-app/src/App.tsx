@@ -190,8 +190,9 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/tasks" element={<Navigate to="/task-list" replace />} />
-              <Route path="/task-list" element={<TaskListView />} />
+              <Route path="/tasks" element={<Navigate to="/task" replace />} />
+              <Route path="/task-list" element={<Navigate to="/task" replace />} />
+              <Route path="/task" element={<TaskListView />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
               <Route path="/games-backlog" element={<GamesBacklog />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}

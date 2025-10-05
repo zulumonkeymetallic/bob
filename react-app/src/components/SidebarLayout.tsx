@@ -91,7 +91,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Tasks',
       icon: 'list-check',
       items: [
-        { label: 'Tasks List', path: '/task-list', icon: 'list' }
+        { label: 'Tasks List', path: '/task', icon: 'list' }
       ]
     },
     {
