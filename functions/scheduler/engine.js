@@ -130,6 +130,27 @@ function hhmmToMinutes(hhmm) {
   return Number(h) * 60 + Number(m);
 }
 
+function buildDeepLink(occurrence) {
+  switch (occurrence.sourceType) {
+    case 'story':
+      return `/stories/${occurrence.sourceId}`;
+    case 'task':
+      return `/tasks/${occurrence.sourceId}`;
+    case 'chore':
+      return `/chores/${occurrence.sourceId}`;
+    case 'routine':
+      return `/routines/${occurrence.sourceId}`;
+    default:
+      return null;
+  }
+}
+
+function buildMobileCheckinLink(occurrence) {
+  const deepLink = buildDeepLink(occurrence);
+  if (!deepLink) return null;
+  return `${deepLink}?occurrence=${encodeURIComponent(occurrence.dayKey)}`;
+}
+
 function overlapsBusy(candidateStart, candidateEnd, busyIntervals) {
   if (!busyIntervals || !busyIntervals.length) return false;
   const candidate = Interval.fromDateTimes(candidateStart, candidateEnd);
@@ -318,6 +339,8 @@ function planOccurrences({
     }
 
     if (!candidateSlots.length) {
+      const deepLink = buildDeepLink(occurrence);
+      const mobileCheckinUrl = buildMobileCheckinLink(occurrence);
       unscheduled.push({
         sourceType: occurrence.sourceType,
         sourceId: occurrence.sourceId,
@@ -326,6 +349,9 @@ function planOccurrences({
         reason: 'no-eligible-block',
         requiredBlockId: occurrence.requiredBlockId || null,
         candidateBlockIds: [],
+        deepLink: deepLink || null,
+        mobileCheckinUrl: mobileCheckinUrl || null,
+        policyMode: occurrence.policy?.mode || null,
       });
       conflicts.push({
         dayKey: occurrence.dayKey,
@@ -360,6 +386,8 @@ function planOccurrences({
           slot.nextStart = endWithBuffer;
           continue;
         }
+        const deepLink = buildDeepLink(occurrence);
+        const mobileCheckinUrl = buildMobileCheckinLink(occurrence);
         const instance = {
           id: makeInstanceId({
             userId: occurrence.ownerUid,
@@ -385,12 +413,18 @@ function planOccurrences({
             blockPriority: block.priority,
             tieBreaker: 'blockPriority',
             solverRunId,
+            policyMode: occurrence.policy?.mode || null,
           },
           requiredBlockId: occurrence.requiredBlockId || null,
           candidateBlockIds: candidateBlocks.map((b) => b.id),
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
+        if (deepLink) {
+          instance.deepLink = deepLink;
+          instance.mobileCheckinUrl = mobileCheckinUrl;
+          instance.schedulingContext.deepLink = deepLink;
+        }
         results.push(instance);
         daySlots.capacityRemaining -= occurrence.durationMinutes;
         slot.nextStart = end.plus({ minutes: block.buffers.after + block.buffers.before });

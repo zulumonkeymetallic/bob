@@ -75,7 +75,9 @@ function makeAssignmentId({ planId, itemType, itemId }) {
   return h.toString(36);
 }
 
+const MS_IN_MINUTE = 60 * 1000;
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const CHORE_LOOKAHEAD_DAYS = 90;
 
 function toMillis(value) {
   if (!value && value !== 0) return null;
@@ -494,6 +496,56 @@ async function fetchGoogleBusy(uid, start, end) {
   }
 }
 
+function coercePersonaTimezone(entity) {
+  return entity?.timezone || entity?.recurrence?.timezone || DEFAULT_TIMEZONE;
+}
+
+function computeNextDueAt(recurrence = null, dtstart, fromMillis, lookAheadDays = 60) {
+  if (!recurrence || !recurrence.rrule) return null;
+  const zone = coerceZone(recurrence.timezone);
+  const start = DateTime.fromMillis(fromMillis, { zone }).startOf('day');
+  const end = start.plus({ days: lookAheadDays }).endOf('day');
+  const occurrences = expandRecurrence({ ...recurrence, dtstart }, start, end);
+  if (!occurrences.length) return null;
+  const next = occurrences.find((occ) => occ.toMillis() >= fromMillis);
+  return (next || occurrences[0]).toMillis();
+}
+
+function calculateStreakMetrics(entity, completionMillis) {
+  const zone = coercePersonaTimezone(entity);
+  const last = entity?.lastCompletedAt || null;
+  let streak = Number(entity?.completedStreak || 0);
+  let longest = Number(entity?.longestStreak || 0);
+  if (!last) {
+    streak = 1;
+    return { streak, longest: Math.max(longest, streak) };
+  }
+  const lastDay = DateTime.fromMillis(last, { zone }).startOf('day');
+  const currentDay = DateTime.fromMillis(completionMillis, { zone }).startOf('day');
+  const diff = currentDay.diff(lastDay, 'days').days;
+  if (diff <= 0) {
+    streak = Number(entity?.completedStreak || 1);
+  } else if (diff === 1) {
+    streak = Number(entity?.completedStreak || 0) + 1;
+  } else {
+    streak = 1;
+  }
+  longest = Math.max(longest, streak);
+  return { streak, longest };
+}
+
+async function getChoresCollection(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('chores').where('ownerUid', '==', uid).get();
+  return snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+}
+
+async function getRoutinesCollection(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('routines').where('ownerUid', '==', uid).get();
+  return snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+}
+
 exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -594,6 +646,214 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     unscheduled: plan.unscheduled,
     conflicts: plan.conflicts,
   };
+});
+
+// ===== Chores & Routines Helpers
+exports.listChoresWithStats = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const [chores, trackerSnap] = await Promise.all([
+    getChoresCollection(uid),
+    db.collection('users').doc(uid).collection('tracker').doc('choreStats').get().catch(() => null),
+  ]);
+  const trackerData = trackerSnap?.exists ? trackerSnap.data() || {} : {};
+  const now = Date.now();
+  const items = chores.map((chore) => {
+    const dtstart = toMillis(chore.recurrence?.dtstart || chore.dtstart || chore.createdAt);
+    const nextComputed = computeNextDueAt(chore.recurrence, dtstart, Math.max(now, Number(chore.nextDueAt || now)), CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      completedStreak: Number(chore.completedStreak || 0),
+      longestStreak: Number(chore.longestStreak || 0),
+      completedCount: Number(chore.completedCount || 0),
+      missedCount: Number(chore.missedCount || 0),
+      lastCompletedAt: chore.lastCompletedAt || null,
+      nextDueAt: chore.nextDueAt || nextComputed || null,
+    };
+    return {
+      id: chore.id,
+      title: chore.title || 'Chore',
+      cadence: chore.recurrence?.rrule || null,
+      durationMinutes: Number(chore.durationMinutes || 15),
+      priority: chore.priority || 3,
+      tags: chore.tags || [],
+      requiredBlockId: chore.requiredBlockId || null,
+      eligibleBlockIds: chore.eligibleBlockIds || [],
+      policy: chore.policy || null,
+      timezone: coercePersonaTimezone(chore),
+      stats,
+      tracker: trackerData?.[chore.id] || null,
+    };
+  });
+  return { items };
+});
+
+exports.listRoutinesWithStats = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const [routines, trackerSnap] = await Promise.all([
+    getRoutinesCollection(uid),
+    admin.firestore().collection('users').doc(uid).collection('tracker').doc('routineStats').get().catch(() => null),
+  ]);
+  const trackerData = trackerSnap?.exists ? trackerSnap.data() || {} : {};
+  const now = Date.now();
+  const items = routines.map((routine) => {
+    const dtstart = toMillis(routine.recurrence?.dtstart || routine.dtstart || routine.createdAt);
+    const nextComputed = computeNextDueAt(routine.recurrence, dtstart, Math.max(now, Number(routine.nextDueAt || now)), CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      completedStreak: Number(routine.completedStreak || 0),
+      longestStreak: Number(routine.longestStreak || 0),
+      completedCount: Number(routine.completedCount || 0),
+      missedCount: Number(routine.missedCount || 0),
+      lastCompletedAt: routine.lastCompletedAt || null,
+      nextDueAt: routine.nextDueAt || nextComputed || null,
+    };
+    return {
+      id: routine.id,
+      name: routine.name || 'Routine',
+      cadence: routine.recurrence?.rrule || null,
+      durationMinutes: Number(routine.durationMinutes || 30),
+      priority: routine.priority || 3,
+      theme: routine.theme || null,
+      goalId: routine.goalId || null,
+      tags: routine.tags || [],
+      policy: routine.policy || null,
+      timezone: coercePersonaTimezone(routine),
+      stats,
+      tracker: trackerData?.[routine.id] || null,
+    };
+  });
+  return { items };
+});
+
+exports.completeChore = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const choreId = String(req?.data?.choreId || '').trim();
+  if (!choreId) throw new httpsV2.HttpsError('invalid-argument', 'choreId is required');
+  const db = admin.firestore();
+  const choreRef = db.collection('chores').doc(choreId);
+  const now = Date.now();
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(choreRef);
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Chore not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this chore');
+    const { streak, longest } = calculateStreakMetrics(data, now);
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, now + MS_IN_MINUTE, CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      lastCompletedAt: now,
+      nextDueAt: nextDue || null,
+      completedStreak: streak,
+      longestStreak: longest,
+      completedCount: Number(data.completedCount || 0) + 1,
+      missedCount: Number(data.missedCount || 0),
+    };
+    tx.update(choreRef, { ...stats, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    return stats;
+  });
+  return { ok: true, stats: result };
+});
+
+exports.completeRoutine = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const routineId = String(req?.data?.routineId || '').trim();
+  if (!routineId) throw new httpsV2.HttpsError('invalid-argument', 'routineId is required');
+  const db = admin.firestore();
+  const routineRef = db.collection('routines').doc(routineId);
+  const now = Date.now();
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(routineRef);
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Routine not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this routine');
+    const { streak, longest } = calculateStreakMetrics(data, now);
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, now + MS_IN_MINUTE, CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      lastCompletedAt: now,
+      nextDueAt: nextDue || null,
+      completedStreak: streak,
+      longestStreak: longest,
+      completedCount: Number(data.completedCount || 0) + 1,
+      missedCount: Number(data.missedCount || 0),
+    };
+    tx.update(routineRef, { ...stats, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    return stats;
+  });
+  return { ok: true, stats: result };
+});
+
+exports.skipRoutine = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const routineId = String(req?.data?.routineId || '').trim();
+  if (!routineId) throw new httpsV2.HttpsError('invalid-argument', 'routineId is required');
+  const db = admin.firestore();
+  const routineRef = db.collection('routines').doc(routineId);
+  const now = Date.now();
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(routineRef);
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Routine not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this routine');
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, now + MS_IN_MINUTE, CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      nextDueAt: nextDue || null,
+      completedStreak: 0,
+      missedCount: Number(data.missedCount || 0) + 1,
+    };
+    tx.update(routineRef, { ...stats, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    return stats;
+  });
+  return { ok: true, stats: result };
+});
+
+exports.rolloverChoresAndRoutines = schedulerV2.onSchedule('every day 05:00', async () => {
+  const db = admin.firestore();
+  const [choresSnap, routinesSnap] = await Promise.all([
+    db.collection('chores').get(),
+    db.collection('routines').get(),
+  ]);
+  const now = Date.now();
+  const updates = [];
+  for (const snap of choresSnap.docs) {
+    const data = snap.data() || {};
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, Math.max(now, Number(data.nextDueAt || now)), CHORE_LOOKAHEAD_DAYS);
+    const needsReset = data.nextDueAt && data.nextDueAt < now && (!data.policy || data.policy.mode !== 'hold');
+    const update = {
+      nextDueAt: nextDue || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (needsReset) {
+      update.completedStreak = 0;
+      update.missedCount = Number(data.missedCount || 0) + 1;
+    }
+    updates.push({ ref: snap.ref, update });
+  }
+  for (const snap of routinesSnap.docs) {
+    const data = snap.data() || {};
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, Math.max(now, Number(data.nextDueAt || now)), CHORE_LOOKAHEAD_DAYS);
+    const needsReset = data.nextDueAt && data.nextDueAt < now && (!data.policy || data.policy.mode !== 'hold');
+    const update = {
+      nextDueAt: nextDue || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (needsReset) {
+      update.completedStreak = 0;
+      update.missedCount = Number(data.missedCount || 0) + 1;
+    }
+    updates.push({ ref: snap.ref, update });
+  }
+  const batch = db.batch();
+  updates.forEach(({ ref, update }) => batch.set(ref, update, { merge: true }));
+  await batch.commit();
+  return { ok: true, processed: updates.length };
 });
 
 // Reconcile assignments with Google Calendar: if child events were deleted externally,
