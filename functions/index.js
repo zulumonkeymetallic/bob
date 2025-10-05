@@ -3107,6 +3107,24 @@ async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runI
   return { adjustedTop, deferred, locked: lockedTop };
 }
 
+async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId }) {
+  const dedupeResult = await deduplicateUserTasks({
+    db,
+    userId,
+    dryRun: false,
+    hardDelete: false,
+    logActivity: true,
+    activityActor: 'NightlyMaintenance',
+    runId,
+  });
+
+  const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
+
+  const dueDateAdjustments = await adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId });
+
+  return { dedupeResult, priorityResult, dueDateAdjustments };
+}
+
 exports.deduplicateTasks = httpsV2.onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -4993,18 +5011,7 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
     });
 
     try {
-      const dedupeResult = await deduplicateUserTasks({
-        db,
-        userId,
-        dryRun: false,
-        hardDelete: false,
-        logActivity: true,
-        activityActor: 'NightlyMaintenance',
-        runId,
-      });
-
-      const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
-      const dueDateAdjustments = await adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId });
+      const maintenance = await runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId });
 
       await recordAutomationStatus(db, {
         userId,
@@ -5016,9 +5023,9 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
 
       await db.collection('automation_runs').doc(runId).set({
         status: 'success',
-        dedupe: dedupeResult,
-        prioritization: priorityResult,
-        dueDateAdjustments,
+        dedupe: maintenance.dedupeResult,
+        prioritization: maintenance.priorityResult,
+        dueDateAdjustments: maintenance.dueDateAdjustments,
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     } catch (error) {
@@ -5037,6 +5044,83 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     }
+  }
+});
+
+exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const sendSummary = req?.data?.sendSummary !== false;
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+
+  const runId = await logAutomationRun(db, {
+    automation: 'nightly_task_maintenance',
+    userId: uid,
+    status: 'started',
+    triggeredBy: 'callable',
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  try {
+    const maintenance = await runNightlyMaintenanceForUser({ db, userId: uid, profile, nowUtc, runId });
+
+    let summaryResult = null;
+    if (sendSummary) {
+      summaryResult = await dispatchDailySummaryForUser({
+        db,
+        userId: uid,
+        profile,
+        nowUtc,
+        runContext: { trigger: 'manual_maintenance', runId, force: true },
+      });
+    }
+
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'nightly_task_maintenance',
+      dayIso: nowUtc.toISODate(),
+      status: 'success',
+      runId,
+    });
+
+    await db.collection('automation_runs').doc(runId).set({
+      status: 'success',
+      dedupe: maintenance.dedupeResult,
+      prioritization: maintenance.priorityResult,
+      dueDateAdjustments: maintenance.dueDateAdjustments,
+      manualTrigger: true,
+      dailySummary: summaryResult,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return {
+      ok: true,
+      maintenance,
+      dailySummary: summaryResult,
+      runId,
+    };
+  } catch (error) {
+    console.error('[run-nightly-maintenance-now] failed', error);
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'nightly_task_maintenance',
+      dayIso: nowUtc.toISODate(),
+      status: 'error',
+      message: error?.message || String(error),
+      runId,
+    });
+    await db.collection('automation_runs').doc(runId).set({
+      status: 'error',
+      error: error?.message || String(error),
+      manualTrigger: true,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to run nightly maintenance');
   }
 });
 

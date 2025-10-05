@@ -86,6 +86,9 @@ const SettingsPage: React.FC = () => {
   const [dailySummaryStatus, setDailySummaryStatus] = useState('');
   const [dailySummaryError, setDailySummaryError] = useState('');
   const [dailySummaryRunning, setDailySummaryRunning] = useState(false);
+  const [maintenanceStatus, setMaintenanceStatus] = useState('');
+  const [maintenanceError, setMaintenanceError] = useState('');
+  const [maintenanceRunning, setMaintenanceRunning] = useState(false);
 
   const { entries: diagnosticsEntries, clear: clearDiagnostics, snapshot: snapshotDiagnostics } = useDiagnosticsLog();
 
@@ -233,6 +236,23 @@ const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleRunMaintenance = async () => {
+    if (!currentUser) return;
+    setMaintenanceRunning(true);
+    setMaintenanceStatus('');
+    setMaintenanceError('');
+    try {
+      const callable = httpsCallable(functions, 'runNightlyMaintenanceNow');
+      await callable({ sendSummary: false });
+      setMaintenanceStatus('AI reprioritisation completed');
+    } catch (error: any) {
+      console.error('Failed to run nightly maintenance', error);
+      setMaintenanceError(error?.message || 'Failed to run AI reprioritisation');
+    } finally {
+      setMaintenanceRunning(false);
+    }
+  };
+
   // Check if database needs migration to new theme system
   const checkMigrationStatus = async () => {
     if (!currentUser) return;
@@ -363,6 +383,18 @@ const SettingsPage: React.FC = () => {
     const timer = setTimeout(() => setDailySummaryError(''), 5000);
     return () => clearTimeout(timer);
   }, [dailySummaryError]);
+
+  useEffect(() => {
+    if (!maintenanceStatus) return;
+    const timer = setTimeout(() => setMaintenanceStatus(''), 3000);
+    return () => clearTimeout(timer);
+  }, [maintenanceStatus]);
+
+  useEffect(() => {
+    if (!maintenanceError) return;
+    const timer = setTimeout(() => setMaintenanceError(''), 5000);
+    return () => clearTimeout(timer);
+  }, [maintenanceError]);
 
   // Initialize theme debugging (only when debug mode is enabled)
   useEffect(() => {
@@ -1146,6 +1178,13 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                         </Row>
                         <div className="d-flex flex-wrap gap-2 mt-3">
                           <Button
+                            variant="secondary"
+                            onClick={handleRunMaintenance}
+                            disabled={maintenanceRunning}
+                          >
+                            {maintenanceRunning ? 'Reprioritising…' : 'Run AI Reprioritisation Now'}
+                          </Button>
+                          <Button
                             variant="primary"
                             onClick={handleSaveEmailConfig}
                             disabled={emailConfigLoading || emailConfigSaving}
@@ -1164,6 +1203,8 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                           {emailConfigLoading && <span className="text-muted small">Loading email configuration…</span>}
                           {emailConfigMessage && <span className="text-success small">{emailConfigMessage}</span>}
                           {emailConfigError && <span className="text-danger small">{emailConfigError}</span>}
+                          {maintenanceStatus && <div className="text-success small">{maintenanceStatus}</div>}
+                          {maintenanceError && <div className="text-danger small">{maintenanceError}</div>}
                           {dailySummaryStatus && <div className="text-success small">{dailySummaryStatus}</div>}
                           {dailySummaryError && <div className="text-danger small">{dailySummaryError}</div>}
                         </div>
