@@ -13,11 +13,27 @@ interface BudgetTotals {
   income: number;
 }
 
+interface ThemeProgressItem {
+  themeId: number;
+  themeName: string;
+  goalCount: number;
+  totalEstimatedCost: number;
+  totalPotBalance: number;
+  totalShortfall: number;
+  fundedPercent?: number | null;
+}
+
 interface BudgetSummaryDoc {
   ownerUid: string;
   totals: BudgetTotals;
   categories?: Array<{ label: string; amount: number; count: number; type: string }>;
   monthly?: Record<string, BudgetTotals>;
+  spendTimeline?: Array<{ month: string; mandatory: number; optional: number; savings: number; income: number; net?: number }>;
+  merchantSummary?: Array<{ merchantKey: string; merchantName: string; totalSpend: number; transactions: number; primaryCategoryType: string; lastTransactionISO?: string | null }>;
+  budgetProgress?: Array<{ key: string; budget: number; actual: number; variance: number; utilisation?: number | null }>;
+  currency?: string;
+  netCashflow?: number;
+  themeProgress?: ThemeProgressItem[];
   pendingClassification?: PendingClassificationItem[];
   pendingCount?: number;
 }
@@ -29,6 +45,7 @@ interface PendingClassificationItem {
   createdISO: string | null;
   defaultCategoryType?: string | null;
   defaultCategoryLabel?: string | null;
+  merchantName?: string | null;
 }
 
 interface GoalAlignmentGoal {
@@ -48,14 +65,7 @@ interface GoalAlignmentGoal {
 interface GoalAlignmentDoc {
   ownerUid: string;
   goals?: GoalAlignmentGoal[];
-  themes?: Array<{
-    themeId: number;
-    themeName: string;
-    goalCount: number;
-    totalEstimatedCost: number;
-    totalPotBalance: number;
-    totalShortfall: number;
-  }>;
+  themes?: ThemeProgressItem[];
 }
 
 interface TransactionRow {
@@ -77,9 +87,9 @@ const CATEGORY_OPTIONS = [
   { value: 'income', label: 'Income' },
 ];
 
-const formatCurrency = (value: number | undefined | null) => {
+const formatCurrency = (value: number | undefined | null, currency: string = 'GBP') => {
   const amount = Number.isFinite(Number(value)) ? Number(value) : 0;
-  return amount.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
+  return amount.toLocaleString('en-GB', { style: 'currency', currency });
 };
 
 const formatPercent = (value: number | undefined | null) => {
@@ -179,7 +189,10 @@ const FinanceDashboard: React.FC = () => {
     });
   }, [transactions]);
 
+  const currency = summary?.currency || budgetCurrency || 'GBP';
+  const formatMoney = (value: number | undefined | null) => formatCurrency(value, currency);
   const totals = summary?.totals || { mandatory: 0, optional: 0, savings: 0, income: 0 };
+  const netCashflow = summary?.netCashflow ?? (totals.income - (totals.mandatory + totals.optional + totals.savings));
   const pendingClassification = summary?.pendingClassification || [];
   const pendingCount = summary?.pendingCount || 0;
 
@@ -228,11 +241,24 @@ const FinanceDashboard: React.FC = () => {
   };
 
   const monthlySeries = useMemo(() => {
+    const timeline = summary?.spendTimeline;
+    if (Array.isArray(timeline) && timeline.length > 0) {
+      return timeline.map((item) => ({
+        month: item.month,
+        values: {
+          mandatory: item.mandatory || 0,
+          optional: item.optional || 0,
+          savings: item.savings || 0,
+          income: item.income || 0,
+          net: item.net != null ? item.net : (item.income - ((item.mandatory || 0) + (item.optional || 0) + (item.savings || 0))),
+        },
+      }));
+    }
     if (!summary?.monthly) return [];
     return Object.entries(summary.monthly)
       .sort(([a], [b]) => (a > b ? 1 : -1))
-      .map(([month, values]) => ({ month, values }));
-  }, [summary?.monthly]);
+      .map(([month, values]) => ({ month, values: { ...values, net: (values.income || 0) - ((values.mandatory || 0) + (values.optional || 0) + (values.savings || 0)) } }));
+  }, [summary?.spendTimeline, summary?.monthly]);
 
   // Projections based on average of available months
   const projections = useMemo(() => {
@@ -265,6 +291,12 @@ const FinanceDashboard: React.FC = () => {
     } as Record<string, number | null> as any;
   }, [monthlySeries]);
 
+  const formatCategory = (type: string | null | undefined) => {
+    if (!type) return 'Uncategorised';
+    const normalized = type.toLowerCase();
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
   const renderDelta = (v: number | null | undefined) => {
     if (v == null || Number.isNaN(v)) return null;
     const up = v > 0;
@@ -272,24 +304,45 @@ const FinanceDashboard: React.FC = () => {
     return <Badge bg={up ? 'danger' : 'success'} className="ms-2">{fmt}</Badge>;
   };
 
-  // Budgets vs Actuals (current window from summary.categories)
-  const budgetsView = useMemo(() => {
-    if (!summary || !Array.isArray(summary.categories) || Object.keys(budgets).length === 0) return [] as Array<{ key: string; actual: number; budget: number }>;
+  const budgetLines = useMemo(() => {
+    if (summary?.budgetProgress && summary.budgetProgress.length > 0) {
+      return summary.budgetProgress.map((item) => ({
+        key: item.key || 'Budget',
+        actual: item.actual || 0,
+        budget: item.budget || 0,
+        variance: item.variance != null ? item.variance : ((item.budget || 0) - (item.actual || 0)),
+        utilisation: item.utilisation != null ? item.utilisation : (item.budget > 0 ? (item.actual / item.budget) * 100 : null),
+      }));
+    }
+    if (!summary || Object.keys(budgets).length === 0) return [] as Array<{ key: string; actual: number; budget: number; variance: number; utilisation: number | null }>;
     const actualByLabel: Record<string, number> = {};
-    for (const c of summary.categories) {
+    for (const c of summary.categories || []) {
       const label = String(c.label || '').toLowerCase();
       if (!label) continue;
       actualByLabel[label] = (actualByLabel[label] || 0) + (c.amount || 0);
     }
-    const out: Array<{ key: string; actual: number; budget: number }> = [];
+    const out: Array<{ key: string; actual: number; budget: number; variance: number; utilisation: number | null }> = [];
     for (const [rawKey, budgetMinor] of Object.entries(budgets)) {
       const key = rawKey.toLowerCase();
       const actual = actualByLabel[key] || 0;
       const budget = Number(budgetMinor || 0);
-      out.push({ key: rawKey, actual, budget });
+      const variance = budget - actual;
+      const utilisation = budget > 0 ? (actual / budget) * 100 : null;
+      out.push({ key: rawKey, actual, budget, variance, utilisation });
     }
-    return out.sort((a,b) => (b.actual - b.budget) - (a.actual - a.budget));
+    return out.sort((a, b) => (b.actual - b.budget) - (a.actual - a.budget));
   }, [summary, budgets]);
+
+  const merchantSummary = useMemo(() => {
+    const merchants = summary?.merchantSummary || [];
+    return merchants.slice(0, 6);
+  }, [summary?.merchantSummary]);
+
+  const themeProgress = useMemo(() => {
+    if (summary?.themeProgress && summary.themeProgress.length > 0) return summary.themeProgress;
+    return alignment?.themes || [];
+  }, [summary?.themeProgress, alignment?.themes]);
+
 
   // Identify goals/themes without a matched Monzo pot
   const goalsMissingPots = useMemo(() => (alignment?.goals || []).filter(g => !g.potName), [alignment?.goals]);
@@ -349,7 +402,7 @@ const FinanceDashboard: React.FC = () => {
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
                   <Card.Title>Mandatory Spend {renderDelta(deltas?.mandatory as any)}</Card.Title>
-                  <Card.Text className="display-6">{formatCurrency(totals.mandatory)}</Card.Text>
+                  <Card.Text className="display-6">{formatMoney(totals.mandatory)}</Card.Text>
                   <span className="text-muted">Bills, groceries, commuting</span>
                 </Card.Body>
               </Card>
@@ -358,7 +411,7 @@ const FinanceDashboard: React.FC = () => {
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
                   <Card.Title>Optional Spend {renderDelta(deltas?.optional as any)}</Card.Title>
-                  <Card.Text className="display-6">{formatCurrency(totals.optional)}</Card.Text>
+                  <Card.Text className="display-6">{formatMoney(totals.optional)}</Card.Text>
                   <span className="text-muted">Dining, entertainment, discretionary</span>
                 </Card.Body>
               </Card>
@@ -367,7 +420,7 @@ const FinanceDashboard: React.FC = () => {
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
                   <Card.Title>Savings & Pots {renderDelta(deltas?.savings as any)}</Card.Title>
-                  <Card.Text className="display-6">{formatCurrency(totals.savings)}</Card.Text>
+                  <Card.Text className="display-6">{formatMoney(totals.savings)}</Card.Text>
                   <span className="text-muted">Transfers earmarked for goals</span>
                 </Card.Body>
               </Card>
@@ -376,8 +429,85 @@ const FinanceDashboard: React.FC = () => {
               <Card className="shadow-sm border-0 h-100">
                 <Card.Body>
                   <Card.Title>Income Recorded {renderDelta(deltas?.income as any)}</Card.Title>
-                  <Card.Text className="display-6">{formatCurrency(totals.income)}</Card.Text>
+                  <Card.Text className="display-6">{formatMoney(totals.income)}</Card.Text>
+                  <div className={`small fw-semibold ${netCashflow >= 0 ? 'text-success' : 'text-danger'}`}>
+                    Net Cashflow: {formatMoney(netCashflow)}
+                  </div>
                   <span className="text-muted">Paydays and reimbursements</span>
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
+
+          <Row className="gy-4 mt-1">
+            <Col lg={4}>
+              <Card className="shadow-sm border-0 h-100">
+                <Card.Body>
+                  <Card.Title>Budgets vs Actual</Card.Title>
+                  {budgetLines.length === 0 ? (
+                    <Alert variant="light" className="mb-0">No budgets configured. Set budgets under Settings → Finance.</Alert>
+                  ) : (
+                    <div className="d-flex flex-column gap-2">
+                      {budgetLines.map((line) => {
+                        const pct = line.budget > 0 ? Math.min(100, Math.round((line.actual / line.budget) * 100)) : 0;
+                        const over = line.budget > 0 && line.actual > line.budget;
+                        return (
+                          <div key={line.key}>
+                            <div className="d-flex justify-content-between small"><span>{line.key}</span><span>{formatMoney(line.actual)} / {formatMoney(line.budget)}</span></div>
+                            <ProgressBar now={pct} variant={over ? 'danger' : 'success'} style={{ height: 8 }} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col lg={4}>
+              <Card className="shadow-sm border-0 h-100">
+                <Card.Body>
+                  <Card.Title>Merchant Hotspots</Card.Title>
+                  {merchantSummary.length === 0 ? (
+                    <Alert variant="light" className="mb-0">No spend data yet.</Alert>
+                  ) : (
+                    <Table size="sm" borderless className="mb-0">
+                      <tbody>
+                        {merchantSummary.map((merchant) => (
+                          <tr key={merchant.merchantKey}>
+                            <td>
+                              <div className="fw-semibold">{merchant.merchantName}</div>
+                              <div className="text-muted small">{formatCategory(merchant.primaryCategoryType)}{merchant.lastTransactionISO ? ` · ${new Date(merchant.lastTransactionISO).toLocaleDateString('en-GB')}` : ''}</div>
+                            </td>
+                            <td className="text-end fw-semibold">{formatMoney(merchant.totalSpend)}</td>
+                            <td className="text-end text-muted small">{merchant.transactions} tx</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col lg={4}>
+              <Card className="shadow-sm border-0 h-100">
+                <Card.Body>
+                  <Card.Title>Projections</Card.Title>
+                  {!projections.spendAnnual && !projections.savingsAnnual ? (
+                    <Alert variant="light" className="mb-0">Insufficient data for projections.</Alert>
+                  ) : (
+                    <Table size="sm" borderless className="mb-0">
+                      <tbody>
+                        <tr>
+                          <td className="text-muted">Projected Annual Spend</td>
+                          <td className="text-end fw-semibold">{formatMoney(projections.spendAnnual || 0)}</td>
+                        </tr>
+                        <tr>
+                          <td className="text-muted">Projected Annual Savings</td>
+                          <td className="text-end fw-semibold">{formatMoney(projections.savingsAnnual || 0)}</td>
+                        </tr>
+                      </tbody>
+                    </Table>
+                  )}
                 </Card.Body>
               </Card>
             </Col>
@@ -421,7 +551,7 @@ const FinanceDashboard: React.FC = () => {
                             </td>
                             <td className="text-end">
                               <span className={tx.amount < 0 ? 'text-danger' : 'text-success'}>
-                                {formatCurrency(Math.abs(tx.amount))}
+                                {formatMoney(Math.abs(tx.amount))}
                               </span>
                             </td>
                             <td>
@@ -476,12 +606,15 @@ const FinanceDashboard: React.FC = () => {
                       {pendingClassification.map((item) => (
                         <div key={item.transactionId} className="border rounded p-2">
                           <div className="fw-semibold">{item.description}</div>
+                          {item.merchantName && (
+                            <div className="text-muted small">Merchant: {item.merchantName}</div>
+                          )}
                           <div className="small text-muted d-flex justify-content-between">
                             <span>{item.createdISO ? new Date(item.createdISO).toLocaleDateString('en-GB') : '—'}</span>
-                            <span>{formatCurrency(item.amount)}</span>
+                            <span>{formatMoney(item.amount)}</span>
                           </div>
                           <Badge bg="secondary" className="mt-2">
-                            Default: {item.defaultCategoryType || 'optional'}
+                            Default: {formatCategory(item.defaultCategoryType || 'optional')}
                           </Badge>
                         </div>
                       ))}
@@ -490,52 +623,6 @@ const FinanceDashboard: React.FC = () => {
               </Card.Body>
             </Card>
           </Col>
-            <Col lg={4}>
-              <Card className="shadow-sm border-0 h-100">
-                <Card.Body>
-                  <Card.Title>Budgets vs Actual</Card.Title>
-                  {budgetsView.length === 0 ? (
-                    <Alert variant="light" className="mb-0">No budgets configured. Set budgets under Settings → Finance.</Alert>
-                  ) : (
-                    <div className="d-flex flex-column gap-2">
-                      {budgetsView.map(({ key, actual, budget }) => {
-                        const pct = budget > 0 ? Math.min(100, Math.round((actual / budget) * 100)) : 0;
-                        const over = budget > 0 && actual > budget;
-                        return (
-                          <div key={key}>
-                            <div className="d-flex justify-content-between small"><span>{key}</span><span>{formatCurrency(actual)} / {formatCurrency(budget)}</span></div>
-                            <ProgressBar now={pct} variant={over ? 'danger' : 'success'} style={{ height: 8 }} />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col lg={4}>
-              <Card className="shadow-sm border-0 h-100">
-                <Card.Body>
-                  <Card.Title>Projections</Card.Title>
-                  {!projections.spendAnnual && !projections.savingsAnnual ? (
-                    <Alert variant="light" className="mb-0">Insufficient data for projections.</Alert>
-                  ) : (
-                    <Table size="sm" borderless className="mb-0">
-                      <tbody>
-                        <tr>
-                          <td className="text-muted">Projected Annual Spend</td>
-                          <td className="text-end fw-semibold">{formatCurrency(projections.spendAnnual || 0)}</td>
-                        </tr>
-                        <tr>
-                          <td className="text-muted">Projected Annual Savings</td>
-                          <td className="text-end fw-semibold">{formatCurrency(projections.savingsAnnual || 0)}</td>
-                        </tr>
-                      </tbody>
-                    </Table>
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
           </Row>
 
           <Row className="gy-4 mt-1">
@@ -566,8 +653,8 @@ const FinanceDashboard: React.FC = () => {
                                 {goal.themeName || getThemeName(goal.themeId)}
                               </Badge>
                             </td>
-                            <td className="text-end">{formatCurrency(goal.estimatedCost)}</td>
-                            <td className="text-end">{formatCurrency(goal.potBalance)}</td>
+                            <td className="text-end">{formatMoney(goal.estimatedCost)}</td>
+                            <td className="text-end">{formatMoney(goal.potBalance)}</td>
                             <td className="text-end">
                               <div>{formatPercent(goal.fundedPercent)}</div>
                               {goal.estimatedCost && monthlySavings > 0 && (
@@ -590,8 +677,33 @@ const FinanceDashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col lg={6}>
-              <Card className="shadow-sm border-0 h-100">
+            <Col lg={5}>
+              <Card className="shadow-sm border-0">
+                <Card.Body>
+                  <Card.Title>Theme Progress</Card.Title>
+                  {themeProgress.length === 0 ? (
+                    <Alert variant="light" className="mb-0">Link goals to pots to track progress.</Alert>
+                  ) : (
+                    <Table size="sm" borderless className="mb-0">
+                      <tbody>
+                        {themeProgress.map((theme) => (
+                          <tr key={theme.themeId || theme.themeName}>
+                            <td>
+                              <div className="fw-semibold">{theme.themeName}</div>
+                              <div className="text-muted small">{theme.goalCount} goal{theme.goalCount === 1 ? '' : 's'}</div>
+                            </td>
+                            <td className="text-end">
+                              <div>{formatPercent(theme.fundedPercent)}</div>
+                              <div className="text-muted small">{formatMoney(theme.totalPotBalance)} / {formatMoney(theme.totalEstimatedCost)}</div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  )}
+                </Card.Body>
+              </Card>
+              <Card className="shadow-sm border-0 mt-3">
                 <Card.Body>
                   <Card.Title>Monthly Spend Trends</Card.Title>
                   {monthlySeries.length === 0 ? (
@@ -605,52 +717,54 @@ const FinanceDashboard: React.FC = () => {
                           <th className="text-end">Optional</th>
                           <th className="text-end">Savings</th>
                           <th className="text-end">Income</th>
+                          <th className="text-end">Net</th>
                         </tr>
                       </thead>
                       <tbody>
                         {monthlySeries.map(({ month, values }) => (
                           <tr key={month}>
                             <td>{month}</td>
-                            <td className="text-end">{formatCurrency(values.mandatory)}</td>
-                            <td className="text-end">{formatCurrency(values.optional)}</td>
-                            <td className="text-end">{formatCurrency(values.savings)}</td>
-                            <td className="text-end">{formatCurrency(values.income)}</td>
+                            <td className="text-end">{formatMoney(values.mandatory)}</td>
+                            <td className="text-end">{formatMoney(values.optional)}</td>
+                            <td className="text-end">{formatMoney(values.savings)}</td>
+                            <td className="text-end">{formatMoney(values.income)}</td>
+                            <td className="text-end">{formatMoney(values.net)}</td>
                           </tr>
                         ))}
                       </tbody>
                     </Table>
                   )}
-              </Card.Body>
-            </Card>
-          </Col>
-          {goalsMissingPots && goalsMissingPots.length > 0 && (
-            <Col lg={12}>
-              <Card className="shadow-sm border-0 h-100">
-                <Card.Body>
-                  <Card.Title>Goals without a Monzo Pot</Card.Title>
-                  <Table size="sm" responsive hover className="align-middle">
-                    <thead>
-                      <tr>
-                        <th>Goal</th>
-                        <th>Theme</th>
-                        <th className="text-end">Estimated Cost</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {goalsMissingPots.map((g) => (
-                        <tr key={g.goalId}>
-                          <td>{g.title}</td>
-                          <td>{g.themeName || getThemeName(g.themeId)}</td>
-                          <td className="text-end">{formatCurrency(g.estimatedCost)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
-                  <Alert variant="info" className="mb-0">Tip: Create or rename a pot to match the goal title for automatic alignment.</Alert>
                 </Card.Body>
               </Card>
             </Col>
-          )}
+            {goalsMissingPots && goalsMissingPots.length > 0 && (
+              <Col lg={12}>
+                <Card className="shadow-sm border-0 h-100">
+                  <Card.Body>
+                    <Card.Title>Goals without a Monzo Pot</Card.Title>
+                    <Table size="sm" responsive hover className="align-middle">
+                      <thead>
+                        <tr>
+                          <th>Goal</th>
+                          <th>Theme</th>
+                          <th className="text-end">Estimated Cost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {goalsMissingPots.map((g) => (
+                          <tr key={g.goalId}>
+                            <td>{g.title}</td>
+                            <td>{g.themeName || getThemeName(g.themeId)}</td>
+                            <td className="text-end">{formatMoney(g.estimatedCost)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                    <Alert variant="info" className="mb-0">Tip: Create or rename a pot to match the goal title for automatic alignment.</Alert>
+                  </Card.Body>
+                </Card>
+              </Col>
+            )}
         </Row>
         </>
       )}

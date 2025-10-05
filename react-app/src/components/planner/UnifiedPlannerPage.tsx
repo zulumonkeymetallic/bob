@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   addDays,
   addMinutes,
@@ -7,6 +7,8 @@ import {
   getDay,
   parse,
   startOfWeek,
+  startOfDay,
+  endOfDay,
 } from 'date-fns';
 import { enGB } from 'date-fns/locale';
 import {
@@ -27,8 +29,10 @@ import {
   CheckCircle,
   Clock,
   ExternalLink,
+  Link as LinkIcon,
   ListChecks,
   RefreshCw,
+  Smartphone,
   Sparkles,
 } from 'lucide-react';
 import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
@@ -47,7 +51,9 @@ import {
 } from 'firebase/firestore';
 import type { CalendarBlock } from '../../types';
 import type { ScheduledInstanceModel } from '../../domain/scheduler/repository';
+import { humanizePolicyMode } from '../../utils/schedulerPolicy';
 import '../../styles/unified-planner.css';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -161,6 +167,21 @@ const UnifiedPlannerPage: React.FC = () => {
   const [rebalanceLoading, setRebalanceLoading] = useState(false);
 
   const planner = useUnifiedPlannerData(range);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const state = location.state as { focus?: string } | null;
+    if (!state?.focus) return;
+
+    if (state.focus === 'today' || state.focus === 'checklist') {
+      const today = new Date();
+      setView('day');
+      setRange({ start: startOfDay(today), end: endOfDay(today) });
+    }
+
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
 
   const events: PlannerCalendarEvent[] = useMemo(() => {
     const blockEvents = planner.blocks.map((block) => {
@@ -710,12 +731,55 @@ const UnifiedPlannerPage: React.FC = () => {
                   <div className="text-muted small">AI has placed all chores and routines. Great job!</div>
                 ) : (
                   <ul className="list-unstyled small mb-0">
-                    {unscheduledItems.map((item) => (
-                      <li key={item.id} className="d-flex justify-content-between align-items-center py-1">
-                        <span>{item.title || item.sourceId}</span>
-                        <Badge bg="warning" className="text-dark">{item.sourceType}</Badge>
-                      </li>
-                    ))}
+                    {unscheduledItems.map((item) => {
+                      const typeLabel = item.sourceType.charAt(0).toUpperCase() + item.sourceType.slice(1);
+                      const policyLabel = item.schedulingContext?.policyMode
+                        ? humanizePolicyMode(item.schedulingContext.policyMode)
+                        : null;
+                      const reasonLabel = item.statusReason || 'Waiting for block';
+                      return (
+                        <li key={item.id} className="border rounded p-2 mb-2">
+                          <div className="d-flex justify-content-between align-items-start gap-2">
+                            <div className="d-flex flex-column">
+                              <span className="fw-semibold">{item.title || item.sourceId}</span>
+                              <span className="text-muted small">{typeLabel}{policyLabel ? ` · ${policyLabel}` : ''}</span>
+                              {reasonLabel && (
+                                <span className="text-warning small">{reasonLabel}</span>
+                              )}
+                            </div>
+                            <Badge bg="warning" text="dark">{typeLabel}</Badge>
+                          </div>
+                          {(item.deepLink || item.mobileCheckinUrl) && (
+                            <div className="d-flex gap-2 flex-wrap mt-2">
+                              {item.deepLink && (
+                                <Button
+                                  as="a"
+                                  href={item.deepLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  size="sm"
+                                  variant="outline-primary"
+                                >
+                                  <LinkIcon size={14} className="me-1" /> Open item
+                                </Button>
+                              )}
+                              {item.mobileCheckinUrl && (
+                                <Button
+                                  as="a"
+                                  href={item.mobileCheckinUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  size="sm"
+                                  variant="outline-success"
+                                >
+                                  <Smartphone size={14} className="me-1" /> Check-in
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -781,22 +845,67 @@ const UnifiedPlannerPage: React.FC = () => {
                   </Button>
                 )}
                 {activeEvent.type === 'instance' && activeEvent.instance && (
-                  <div className="d-flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="success"
-                      onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'completed')}
-                    >
-                      <CheckCircle size={16} className="me-1" /> Mark done
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline-secondary"
-                      onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'missed')}
-                    >
-                      Skip
-                    </Button>
-                  </div>
+                  <>
+                    <div className="d-flex gap-2 flex-wrap">
+                      <Button
+                        size="sm"
+                        variant="success"
+                        onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'completed')}
+                      >
+                        <CheckCircle size={16} className="me-1" /> Mark done
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline-secondary"
+                        onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'missed')}
+                      >
+                        Skip
+                      </Button>
+                    </div>
+                    {(activeEvent.instance.deepLink || activeEvent.instance.mobileCheckinUrl) && (
+                      <div className="d-flex gap-2 flex-wrap">
+                        {activeEvent.instance.deepLink && (
+                          <Button
+                            as="a"
+                            href={activeEvent.instance.deepLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            size="sm"
+                            variant="outline-primary"
+                          >
+                            <LinkIcon size={16} className="me-1" /> Open item
+                          </Button>
+                        )}
+                        {activeEvent.instance.mobileCheckinUrl && (
+                          <Button
+                            as="a"
+                            href={activeEvent.instance.mobileCheckinUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            size="sm"
+                            variant="outline-success"
+                          >
+                            <Smartphone size={16} className="me-1" /> Mobile check-in
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    <div className="text-muted small">
+                      Status: {activeEvent.instance.status
+                        .replace(/_/g, ' ')
+                        .replace(/\b\w/g, (char) => char.toUpperCase())}
+                    </div>
+                    {activeEvent.instance.schedulingContext?.policyMode && (
+                      <div className="text-muted small">
+                        Policy: {humanizePolicyMode(activeEvent.instance.schedulingContext.policyMode)}
+                      </div>
+                    )}
+                    {activeEvent.instance.status === 'unscheduled' && activeEvent.instance.statusReason && (
+                      <div className="text-warning small">
+                        Reason: {activeEvent.instance.statusReason}
+                      </div>
+                    )}
+                  </>
                 )}
                 {activeEvent.type === 'block' && activeEvent.block && (
                   <div className="text-muted small">

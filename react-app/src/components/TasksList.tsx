@@ -5,6 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, deleteDoc, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
@@ -61,8 +62,12 @@ const TasksList: React.FC = () => {
     effort: '',
     hasGoal: '',
     search: '',
-    sprint: ''
+    sprint: '',
+    due: ''
   });
+
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
 
@@ -351,6 +356,10 @@ const TasksList: React.FC = () => {
       } else {
         filtered = filtered.filter(task => task.sprintId === filters.sprint);
       }
+    }
+
+    if (filters.due === 'today') {
+      filtered = filtered.filter(task => isDueToday(task));
     }
 
     if (filters.search) {
@@ -800,6 +809,17 @@ const TasksList: React.FC = () => {
           </Form.Select>
         </Col>
       </Row>
+      {filters.due && (
+        <Alert variant="info" className="d-flex justify-content-between align-items-center">
+          <div>
+            <strong>Preset applied:</strong>{' '}
+            {filters.due === 'today' ? 'Showing tasks due today' : filters.due}
+          </div>
+          <Button size="sm" variant="outline-info" onClick={() => setFilters({ ...filters, due: '' })}>
+            Clear preset
+          </Button>
+        </Alert>
+      )}
 
       {/* Tasks Table */}
       <div className="table-responsive">
@@ -1312,3 +1332,17 @@ const TasksList: React.FC = () => {
 };
 
 export default TasksList;
+  useEffect(() => {
+    const state = location.state as { preset?: string } | null;
+    if (state?.preset === 'dueToday') {
+      setFilters(prev => ({ ...prev, due: 'today' }));
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, navigate, location.pathname]);
+
+  const isDueToday = (task: TaskWithContext) => {
+    if (!task.dueDate) return false;
+    const dueDate = task.dueDate instanceof Date ? task.dueDate : new Date(task.dueDate);
+    const today = new Date();
+    return dueDate.toDateString() === today.toDateString();
+  };

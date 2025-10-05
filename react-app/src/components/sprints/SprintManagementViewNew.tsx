@@ -24,6 +24,7 @@ import { useSidebar } from '../../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../../types';
 import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
+import { useSprint } from '../../contexts/SprintContext';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
 // Replaces /kanban route with comprehensive sprint management
@@ -32,6 +33,7 @@ const SprintManagementView: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
   
   // State management
   const [sprints, setSprints] = useState<Sprint[]>([]);
@@ -73,14 +75,16 @@ const SprintManagementView: React.FC = () => {
       setGoals(goalsData);
     });
 
-    // Load stories
-    const storiesQuery = query(
+    let storiesQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona),
-      orderBy('orderIndex', 'asc')
+      orderBy('orderIndex', 'asc'),
     );
-    
+    if (selectedSprintId) {
+      storiesQuery = query(storiesQuery, where('sprintId', '==', selectedSprintId));
+    }
+
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
       const storiesData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -90,12 +94,15 @@ const SprintManagementView: React.FC = () => {
     });
 
     // Load tasks
-    const tasksQuery = query(
+    let tasksQuery = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc')
+      orderBy('createdAt', 'desc'),
     );
+    if (selectedSprintId) {
+      tasksQuery = query(tasksQuery, where('sprintId', '==', selectedSprintId));
+    }
     
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
       const tasksData = snapshot.docs.map(doc => ({
@@ -120,9 +127,13 @@ const SprintManagementView: React.FC = () => {
       setSprints(sprintsData);
       
       // Set default selected sprint (most recent active one)
-      if (sprintsData.length > 0 && !selectedSprint) {
+      if (selectedSprintId) {
+        const match = sprintsData.find(s => s.id === selectedSprintId);
+        if (match) setSelectedSprint(match);
+      } else if (sprintsData.length > 0 && !selectedSprint) {
         const activeSprint = sprintsData.find(s => s.status === 1) || sprintsData[0];
         setSelectedSprint(activeSprint);
+        if (activeSprint) setSelectedSprintId(activeSprint.id);
       }
     });
 
@@ -132,7 +143,17 @@ const SprintManagementView: React.FC = () => {
       unsubscribeTasks();
       unsubscribeSprints();
     };
-  }, [currentUser, currentPersona]);
+  }, [currentUser, currentPersona, selectedSprintId, setSelectedSprintId, selectedSprint]);
+
+  useEffect(() => {
+    if (!selectedSprintId && selectedSprint) {
+      setSelectedSprintId(selectedSprint.id);
+    }
+    if (selectedSprintId && (!selectedSprint || selectedSprint.id !== selectedSprintId)) {
+      const sprint = sprints.find(s => s.id === selectedSprintId) || null;
+      if (sprint) setSelectedSprint(sprint);
+    }
+  }, [selectedSprintId, selectedSprint, sprints, setSelectedSprintId]);
 
   // Helper functions
   const getGoalTitle = (goalId: string) => {
@@ -321,6 +342,7 @@ const SprintManagementView: React.FC = () => {
                       onChange={(e) => {
                         const sprint = sprints.find(s => s.id === e.target.value);
                         setSelectedSprint(sprint || null);
+                        setSelectedSprintId(sprint?.id || '');
                         setSelectedStory(null); // Reset selected story when switching sprints
                       }}
                     >

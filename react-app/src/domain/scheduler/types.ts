@@ -244,6 +244,10 @@ export interface ScheduledInstanceModel {
   statusReason?: string;
   requiredBlockId?: string | null;
   candidateBlockIds?: string[];
+  /** Deep link to the originating entity (story/task/chore/etc.) */
+  deepLink?: string | null;
+  /** Mobile-friendly check-in URL for quick completion */
+  mobileCheckinUrl?: string | null;
   /** When status last changed */
   statusUpdatedAt?: number;
   /** Scheduling metadata for audit */
@@ -251,6 +255,8 @@ export interface ScheduledInstanceModel {
     blockPriority?: BlockPriority;
     solverRunId?: string;
     tieBreaker?: 'blockPriority' | 'earliestFeasible' | 'leastFragmentation';
+    policyMode?: string | null;
+    deepLink?: string | null;
   };
   external?: ExternalSyncState;
   createdAt: number;
@@ -286,6 +292,9 @@ export interface SchedulePreview {
     title?: string;
     requiredBlockId?: string | null;
     candidateBlockIds?: string[];
+    deepLink?: string | null;
+    mobileCheckinUrl?: string | null;
+    policyMode?: string | null;
   }>;
   conflicts: SchedulingConflict[];
 }

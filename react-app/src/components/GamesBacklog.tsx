@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
+import { generateRef } from '../utils/referenceGenerator';
 
 interface SteamGame {
   id: string;
@@ -142,7 +143,10 @@ const GamesBacklog: React.FC = () => {
       const dueDateMs = convertForm.targetDate ? new Date(convertForm.targetDate).getTime() : null;
       const sprintId = convertForm.sprintId || (dueDateMs ? findSprintForDate(sprints, dueDateMs)?.id || null : null);
 
+      const storyRef = generateRef('story', []);
+
       const storyPayload = {
+        ref: storyRef,
         title: selectedGame.name,
         description: `Play and complete ${selectedGame.name}.` + (selectedGame.playtime_forever ? `\nSteam playtime: ${(selectedGame.playtime_forever / 60).toFixed(1)} hrs.` : ''),
         goalId: convertForm.goalId,
@@ -154,7 +158,10 @@ const GamesBacklog: React.FC = () => {
         wipLimit: 3,
         tags: ['steam', 'game'],
         persona: currentPersona,
+        personaKey: currentPersona,
+        ownerPersona: currentPersona,
         ownerUid: currentUser.uid,
+        orderIndex: Date.now(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         metadata: {
@@ -170,7 +177,8 @@ const GamesBacklog: React.FC = () => {
         lastConvertedStoryId: storyDoc.id,
         lastConvertedAt: serverTimestamp(),
         completedAt: convertForm.targetDate ? new Date(convertForm.targetDate).getTime() : null,
-        rating: convertForm.rating
+        rating: convertForm.rating,
+        persona: currentPersona,
       });
 
       setSelectedGame(null);

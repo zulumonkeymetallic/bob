@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table, Dropdown } from 'react-bootstrap';
 import ModernTaskTable from './ModernTaskTable';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Task } from '../types';
+import { useSprint } from '../contexts/SprintContext';
 
 const ModernKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
+  const { selectedSprintId } = useSprint();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -49,12 +51,15 @@ const ModernKanbanPage: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    // Load goals
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid)
     );
-    
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -63,12 +68,6 @@ const ModernKanbanPage: React.FC = () => {
       setGoals(goalsData);
     });
 
-    // Load stories
-    const storiesQuery = query(
-      collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-    
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
       const storiesData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -77,13 +76,24 @@ const ModernKanbanPage: React.FC = () => {
       setStories(storiesData);
     });
 
-    // Load tasks
-    const tasksQuery = query(
+    return () => {
+      unsubscribeGoals();
+      unsubscribeStories();
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    let tasksQuery = query(
       collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('createdAt', 'desc'),
     );
-    
-    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+    if (selectedSprintId) {
+      tasksQuery = query(tasksQuery, where('sprintId', '==', selectedSprintId));
+    }
+
+    const unsubscribe = onSnapshot(tasksQuery, (snapshot) => {
       const tasksData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -91,12 +101,8 @@ const ModernKanbanPage: React.FC = () => {
       setTasks(tasksData);
     });
 
-    return () => {
-      unsubscribeGoals();
-      unsubscribeStories();
-      unsubscribeTasks();
-    };
-  }, [currentUser]);
+    return unsubscribe;
+  }, [currentUser, selectedSprintId]);
 
   const handleAddStory = async () => {
     if (!currentUser || !newStory.title.trim()) return;

@@ -8,7 +8,11 @@ import { Story, Goal } from '../types';
 import { GLOBAL_THEMES, getThemeById, getThemeByName } from '../constants/globalThemes';
 import { isStatus } from '../utils/statusHelpers';
 
-const ThemeBreakdown: React.FC = () => {
+interface ThemeBreakdownProps {
+  onThemeSelect?: (themeId: string) => void;
+}
+
+const ThemeBreakdown: React.FC<ThemeBreakdownProps> = ({ onThemeSelect }) => {
   const { currentUser } = useAuth();
   const { selectedSprintId } = useSprint();
   const [stories, setStories] = useState<Story[]>([]);
@@ -84,8 +88,19 @@ const ThemeBreakdown: React.FC = () => {
         {rows.map(r => {
           const pct = r.stories > 0 ? Math.round((r.doneStories / r.stories) * 100) : 0;
           const themeForRow = getThemeByName(r.label);
+          const handleClick = () => {
+            if (onThemeSelect) {
+              onThemeSelect(String(themeForRow?.id ?? r.key));
+            }
+          };
           return (
-            <div key={r.key} className="mb-3">
+            <div
+              key={r.key}
+              className={`mb-3${onThemeSelect ? ' theme-breakdown-row' : ''}`}
+              role={onThemeSelect ? 'button' : undefined}
+              style={onThemeSelect ? { cursor: 'pointer' } : undefined}
+              onClick={onThemeSelect ? handleClick : undefined}
+            >
               <div className="d-flex justify-content-between align-items-center">
                 <div>
                   <strong style={{ color: themeForRow.color }}>{r.label}</strong>

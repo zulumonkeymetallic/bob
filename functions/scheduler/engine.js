@@ -130,6 +130,27 @@ function hhmmToMinutes(hhmm) {
   return Number(h) * 60 + Number(m);
 }
 
+function buildDeepLink(occurrence) {
+  switch (occurrence.sourceType) {
+    case 'story':
+      return `/stories/${occurrence.sourceId}`;
+    case 'task':
+      return `/tasks/${occurrence.sourceId}`;
+    case 'chore':
+      return `/chores/${occurrence.sourceId}`;
+    case 'routine':
+      return `/routines/${occurrence.sourceId}`;
+    default:
+      return null;
+  }
+}
+
+function buildMobileCheckinLink(occurrence) {
+  const deepLink = buildDeepLink(occurrence);
+  if (!deepLink) return null;
+  return `${deepLink}?occurrence=${encodeURIComponent(occurrence.dayKey)}`;
+}
+
 function overlapsBusy(candidateStart, candidateEnd, busyIntervals) {
   if (!busyIntervals || !busyIntervals.length) return false;
   const candidate = Interval.fromDateTimes(candidateStart, candidateEnd);
@@ -197,7 +218,7 @@ function computeBusyByDay(busyRaw, zone) {
   return busyByDay;
 }
 
-function computeOccurrences(chores, routines, windowStart, windowEnd) {
+function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd) {
   const occurrences = [];
   for (const chore of chores) {
     const zone = coerceZone(chore?.recurrence?.timezone);
@@ -245,6 +266,147 @@ function computeOccurrences(chores, routines, windowStart, windowEnd) {
       });
     }
   }
+  return occurrences;
+}
+
+function clampDurationMinutes(value, { min = 15, max = 240 } = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return min;
+  return Math.max(min, Math.min(max, Math.round(numeric)));
+}
+
+function buildOccurrenceTags(baseTags, theme) {
+  const tags = new Set(Array.isArray(baseTags) ? baseTags.map((tag) => String(tag)) : []);
+  if (theme != null) tags.add(String(theme));
+  return Array.from(tags);
+}
+
+function computeTaskOccurrences(tasks, windowStart, windowEnd, userId) {
+  const occurrences = [];
+  if (!Array.isArray(tasks) || !tasks.length) return occurrences;
+  const startBoundary = windowStart.startOf('day');
+  const endBoundary = windowEnd.endOf('day');
+
+  for (const task of tasks) {
+    if (!task) continue;
+    const ownerUid = task.ownerUid || userId;
+    if (!ownerUid) continue;
+    const status = String(task.status ?? '').toLowerCase();
+    if (status === 'done' || status === 'complete' || status === 'completed' || Number(task.status) === 2) continue;
+    if (task.deleted) continue;
+    if (task.autoConverted || task.convertedToStoryId) continue;
+
+    const zone = task.timezone || task.timeZone || DEFAULT_ZONE;
+    const scheduledStart = toDateTime(task.scheduledStart || task.startDate || task.plannedStart, { zone });
+    const dueDt = toDateTime(task.dueDate || task.dueDateMs || task.targetDate, { zone });
+    const baseDt = scheduledStart || dueDt;
+    if (!baseDt) continue;
+    if (baseDt < startBoundary || baseDt > endBoundary) continue;
+
+    const estimateMinutes = task.estimateMin
+      || (Number.isFinite(Number(task.estimatedHours)) ? Number(task.estimatedHours) * 60 : null)
+      || (Number.isFinite(Number(task.points)) ? Number(task.points) * 45 : null);
+    const durationMinutes = clampDurationMinutes(estimateMinutes || 60);
+    const priority = Number.isFinite(Number(task.schedulerPriority))
+      ? Number(task.schedulerPriority)
+      : Number.isFinite(Number(task.priority))
+      ? Number(task.priority)
+      : 3;
+
+    const theme = task.theme || task.themeId || null;
+    const tags = buildOccurrenceTags(task.tags, theme);
+    const requiredBlockId = task.requiredBlockId || task.blockId || null;
+    const eligibleBlockIds = Array.isArray(task.eligibleBlockIds)
+      ? task.eligibleBlockIds.filter(Boolean)
+      : Array.isArray(task.candidateBlockIds)
+      ? task.candidateBlockIds.filter(Boolean)
+      : [];
+    const policy = task.schedulerPolicy || task.policy || { mode: 'roll_forward', graceWindowMinutes: 90 };
+    const taskRef = task.ref || task.reference || task.displayId || null;
+
+    occurrences.push({
+      sourceType: 'task',
+      sourceId: task.id,
+      ownerUid,
+      durationMinutes,
+      priority,
+      requiredBlockId,
+      eligibleBlockIds,
+      policy,
+      location: task.locationNeeds || null,
+      tags,
+      dayKey: isoDate(baseDt),
+      title: task.title || taskRef || 'Task',
+      theme,
+      goalId: task.goalId || null,
+      storyId: task.storyId || null,
+      sourceRef: taskRef,
+      persona: task.persona || null,
+    });
+  }
+
+  return occurrences;
+}
+
+function computeStoryOccurrences(stories, windowStart, windowEnd, userId) {
+  const occurrences = [];
+  if (!Array.isArray(stories) || !stories.length) return occurrences;
+  const startBoundary = windowStart.startOf('day');
+  const endBoundary = windowEnd.endOf('day');
+
+  for (const story of stories) {
+    if (!story) continue;
+    const ownerUid = story.ownerUid || userId;
+    if (!ownerUid) continue;
+    const status = String(story.status ?? '').toLowerCase();
+    if (status === 'done' || status === 'complete' || status === 'completed' || Number(story.status) === 3) continue;
+    if (story.deleted) continue;
+
+    const zone = story.timezone || story.timeZone || DEFAULT_ZONE;
+    const plannedStart = toDateTime(story.plannedStartDate || story.startDate, { zone });
+    const dueDt = toDateTime(story.sprintDueDate || story.targetDate, { zone });
+    const baseDt = plannedStart || dueDt;
+    if (!baseDt) continue;
+    if (baseDt < startBoundary || baseDt > endBoundary) continue;
+
+    const estimateMinutes = story.estimateMin
+      || (Number.isFinite(Number(story.points)) ? Number(story.points) * 45 : null)
+      || (Number.isFinite(Number(story.estimatedHours)) ? Number(story.estimatedHours) * 60 : null);
+    const durationMinutes = clampDurationMinutes(estimateMinutes || 90, { min: 30, max: 360 });
+    const priority = Number.isFinite(Number(story.schedulerPriority))
+      ? Number(story.schedulerPriority)
+      : Number.isFinite(Number(story.priority))
+      ? Number(story.priority)
+      : 3;
+
+    const theme = story.theme || story.themeId || null;
+    const tags = buildOccurrenceTags(story.tags, theme);
+    const requiredBlockId = story.requiredBlockId || null;
+    const eligibleBlockIds = Array.isArray(story.eligibleBlockIds)
+      ? story.eligibleBlockIds.filter(Boolean)
+      : [];
+    const policy = story.schedulerPolicy || { mode: 'roll_forward', graceWindowMinutes: 120 };
+    const storyRef = story.ref || story.reference || story.displayId || null;
+
+    occurrences.push({
+      sourceType: 'story',
+      sourceId: story.id,
+      ownerUid,
+      durationMinutes,
+      priority,
+      requiredBlockId,
+      eligibleBlockIds,
+      policy,
+      location: story.locationNeeds || null,
+      tags,
+      dayKey: isoDate(baseDt),
+      title: story.title || storyRef || 'Story',
+      theme,
+      goalId: story.goalId || null,
+      storyRef,
+    });
+  }
+
   return occurrences;
 }
 
@@ -300,9 +462,32 @@ function planOccurrences({
   for (const occurrence of sortedOccurrences) {
     const key = `${occurrence.sourceType}:${occurrence.sourceId}:${occurrence.dayKey}`;
     if (existingIndex.has(key)) {
-      // Preserve existing assignment to keep idempotency
+      // Preserve existing assignment but enrich metadata for the latest run
       const existing = existingIndex.get(key);
-      results.push(existing);
+      const deepLink = buildDeepLink(occurrence);
+      const mobileCheckinUrl = buildMobileCheckinLink(occurrence);
+      const schedulingContext = {
+        ...(existing && existing.schedulingContext ? existing.schedulingContext : {}),
+        solverRunId,
+      };
+      if (occurrence.policy && Object.prototype.hasOwnProperty.call(occurrence.policy, 'mode')) {
+        schedulingContext.policyMode = occurrence.policy.mode || null;
+      } else if (typeof schedulingContext.policyMode === 'undefined') {
+        schedulingContext.policyMode = null;
+      }
+      if (deepLink) {
+        schedulingContext.deepLink = deepLink;
+      }
+      const updated = {
+        ...existing,
+        schedulingContext,
+      };
+      if (deepLink) {
+        updated.deepLink = deepLink;
+        updated.mobileCheckinUrl = mobileCheckinUrl;
+      }
+      results.push(updated);
+      existingIndex.set(key, updated);
       continue;
     }
 
@@ -318,6 +503,8 @@ function planOccurrences({
     }
 
     if (!candidateSlots.length) {
+      const deepLink = buildDeepLink(occurrence);
+      const mobileCheckinUrl = buildMobileCheckinLink(occurrence);
       unscheduled.push({
         sourceType: occurrence.sourceType,
         sourceId: occurrence.sourceId,
@@ -326,6 +513,11 @@ function planOccurrences({
         reason: 'no-eligible-block',
         requiredBlockId: occurrence.requiredBlockId || null,
         candidateBlockIds: [],
+        deepLink: deepLink || null,
+        mobileCheckinUrl: mobileCheckinUrl || null,
+        policyMode: occurrence.policy?.mode || null,
+        sourceRef: occurrence.sourceRef || occurrence.storyRef || null,
+        theme: occurrence.theme || null,
       });
       conflicts.push({
         dayKey: occurrence.dayKey,
@@ -360,6 +552,8 @@ function planOccurrences({
           slot.nextStart = endWithBuffer;
           continue;
         }
+        const deepLink = buildDeepLink(occurrence);
+        const mobileCheckinUrl = buildMobileCheckinLink(occurrence);
         const instance = {
           id: makeInstanceId({
             userId: occurrence.ownerUid,
@@ -385,12 +579,25 @@ function planOccurrences({
             blockPriority: block.priority,
             tieBreaker: 'blockPriority',
             solverRunId,
+            policyMode: occurrence.policy?.mode || null,
           },
           requiredBlockId: occurrence.requiredBlockId || null,
           candidateBlockIds: candidateBlocks.map((b) => b.id),
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
+        if (occurrence.sourceRef) instance.sourceRef = occurrence.sourceRef;
+        if (occurrence.storyRef) instance.storyRef = occurrence.storyRef;
+        if (occurrence.theme != null) instance.theme = occurrence.theme;
+        if (occurrence.goalId) instance.goalId = occurrence.goalId;
+        if (occurrence.storyId) instance.storyId = occurrence.storyId;
+        if (occurrence.persona) instance.persona = occurrence.persona;
+        if (Array.isArray(occurrence.tags) && occurrence.tags.length) instance.tags = occurrence.tags;
+        if (deepLink) {
+          instance.deepLink = deepLink;
+          instance.mobileCheckinUrl = mobileCheckinUrl;
+          instance.schedulingContext.deepLink = deepLink;
+        }
         results.push(instance);
         daySlots.capacityRemaining -= occurrence.durationMinutes;
         slot.nextStart = end.plus({ minutes: block.buffers.after + block.buffers.before });
@@ -402,6 +609,8 @@ function planOccurrences({
 
     if (!placed) {
       const blockIds = candidateSlots.map((c) => c.block.id);
+      const deepLink = buildDeepLink(occurrence);
+      const mobileCheckinUrl = buildMobileCheckinLink(occurrence);
       unscheduled.push({
         sourceType: occurrence.sourceType,
         sourceId: occurrence.sourceId,
@@ -410,6 +619,11 @@ function planOccurrences({
         reason: 'no-available-slot',
         requiredBlockId: occurrence.requiredBlockId || null,
         candidateBlockIds: blockIds,
+        deepLink: deepLink || null,
+        mobileCheckinUrl: mobileCheckinUrl || null,
+        policyMode: occurrence.policy?.mode || null,
+        sourceRef: occurrence.sourceRef || occurrence.storyRef || null,
+        theme: occurrence.theme || null,
       });
       for (const candidate of candidateSlots) {
         conflicts.push({
@@ -465,8 +679,24 @@ async function planSchedule({
     .get();
   const existingInstances = existingSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
+  const tasksSnap = await db
+    .collection('tasks')
+    .where('ownerUid', '==', userId)
+    .get();
+  const tasks = tasksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+
+  const storiesSnap = await db
+    .collection('stories')
+    .where('ownerUid', '==', userId)
+    .get();
+  const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+
   const busyByDay = computeBusyByDay(busy, DEFAULT_ZONE);
-  const occurrences = computeOccurrences(chores, routines, windowStart, windowEnd);
+  const occurrences = [
+    ...computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd),
+    ...computeTaskOccurrences(tasks, windowStart, windowEnd, userId),
+    ...computeStoryOccurrences(stories, windowStart, windowEnd, userId),
+  ];
   const { results, unscheduled, conflicts } = planOccurrences({
     blocks,
     occurrences,
