@@ -3,6 +3,7 @@ import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-boots
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
@@ -21,13 +22,24 @@ const TaskListView: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [dueFilter, setDueFilter] = useState<'all' | 'today'>('all');
   const [loading, setLoading] = useState(true);
   const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!currentUser) return;
     return loadTaskData();
   }, [currentUser, currentPersona, selectedSprintId]);
+
+  useEffect(() => {
+    const state = location.state as { preset?: string } | null;
+    if (state?.preset === 'dueToday') {
+      setDueFilter('today');
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   // Set up the update handler for the global sidebar
   useEffect(() => {
@@ -189,9 +201,28 @@ const TaskListView: React.FC = () => {
   };
 
   // Apply filters to tasks
+  const isDueToday = (task: Task): boolean => {
+    const raw = (task.dueDate as any) ?? task.targetDate ?? task.dueDateMs ?? null;
+    if (!raw) return false;
+    const dateValue = raw instanceof Date
+      ? raw
+      : typeof raw === 'object' && typeof raw.toDate === 'function'
+      ? raw.toDate()
+      : Number.isFinite(Number(raw))
+      ? new Date(Number(raw))
+      : new Date(raw);
+    if (!(dateValue instanceof Date) || Number.isNaN(dateValue.getTime())) return false;
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+    return dateValue >= start && dateValue <= end;
+  };
+
   const filteredTasks = tasks.filter(task => {
     if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
     if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
+    if (filterTheme !== 'all' && !isTheme(task.theme, filterTheme)) return false;
+    if (dueFilter === 'today' && !isDueToday(task)) return false;
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -352,6 +383,17 @@ const TaskListView: React.FC = () => {
                   </Form.Select>
                 </Form.Group>
               </Col>
+              <Col md={3}>
+                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
+                  <Form.Check
+                    type="switch"
+                    id="filter-due-today"
+                    label="Only Due Today"
+                    checked={dueFilter === 'today'}
+                    onChange={(e) => setDueFilter(e.target.checked ? 'today' : 'all')}
+                  />
+                </Form.Group>
+              </Col>
             </Row>
             <Row style={{ marginTop: '16px' }}>
               <Col>
@@ -362,6 +404,7 @@ const TaskListView: React.FC = () => {
                     setSelectedSprintId('');
                     setFilterTheme('all');
                     setSearchTerm('');
+                    setDueFilter('all');
                   }}
                   style={{ borderColor: 'var(--line)' }}
                 >

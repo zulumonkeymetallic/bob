@@ -3032,6 +3032,81 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
   return { ok: true, considered: payload.length, updated: updates.length, items: updates };
 }
 
+async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = DateTime.now().setZone(coerceZone(zone)).startOf('day');
+
+  const items = Array.isArray(priorityResult?.items)
+    ? priorityResult.items.slice().sort((a, b) => (a.rank || Number.MAX_SAFE_INTEGER) - (b.rank || Number.MAX_SAFE_INTEGER))
+    : [];
+
+  const topItems = items.slice(0, 10);
+  if (!topItems.length) {
+    return { adjustedTop: 0, deferred: 0, locked: 0 };
+  }
+
+  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = new Map();
+  tasksSnap.forEach((doc) => {
+    const data = doc.data() || {};
+    tasks.set(doc.id, { id: doc.id, ...data });
+  });
+
+  const topTaskIds = new Set();
+  let adjustedTop = 0;
+  let lockedTop = 0;
+
+  for (let index = 0; index < topItems.length; index += 1) {
+    const entry = topItems[index];
+    const taskId = entry?.taskId || entry?.id || entry?.ref;
+    if (!taskId) continue;
+    const task = tasks.get(taskId);
+    if (!task || isTaskLocked(task)) {
+      if (task && isTaskLocked(task)) lockedTop += 1;
+      continue;
+    }
+
+    const dayOffset = index < 5 ? 0 : 1;
+    const desired = nowLocal.plus({ days: dayOffset }).endOf('day');
+    const newDueDateMs = desired.toMillis();
+
+    await updateTaskDueDate(db, task.id, {
+      newDueDateMs,
+      reason: 'ai_focus_top',
+      userId,
+      runId,
+      itemRef: task.ref || task.id,
+    });
+
+    topTaskIds.add(task.id);
+    adjustedTop += 1;
+  }
+
+  const demoteCutoff = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
+  const deferTarget = nowLocal.plus({ days: 4 }).endOf('day').toMillis();
+  let deferred = 0;
+
+  for (const task of tasks.values()) {
+    if (topTaskIds.has(task.id)) continue;
+    if (isTaskLocked(task)) continue;
+    const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
+    if (!dueMs) continue;
+    if (dueMs > demoteCutoff) continue;
+
+    await updateTaskDueDate(db, task.id, {
+      newDueDateMs: deferTarget,
+      reason: 'ai_focus_defer',
+      userId,
+      runId,
+      itemRef: task.ref || task.id,
+    });
+
+    deferred += 1;
+  }
+
+  return { adjustedTop, deferred, locked: lockedTop };
+}
+
 exports.deduplicateTasks = httpsV2.onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -4929,6 +5004,7 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
       });
 
       const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
+      const dueDateAdjustments = await adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId });
 
       await recordAutomationStatus(db, {
         userId,
@@ -4942,6 +5018,7 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
         status: 'success',
         dedupe: dedupeResult,
         prioritization: priorityResult,
+        dueDateAdjustments,
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     } catch (error) {

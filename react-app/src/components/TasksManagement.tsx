@@ -237,7 +237,7 @@ const TasksManagement: React.FC = () => {
                 <Upload size={16} style={{ marginRight: '8px' }} />
                 Import
               </Button>
-              <Button variant="primary" href="/tasks/new">
+              <Button variant="primary" href="/task-list">
                 <Plus size={16} style={{ marginRight: '8px' }} />
                 Add Task
               </Button>
@@ -465,7 +465,7 @@ const TasksManagement: React.FC = () => {
                 <p style={{ color: 'var(--muted)', marginBottom: '24px' }}>
                   Create your first task or adjust your filters to see tasks.
                 </p>
-                <Button variant="primary" href="/tasks/new">
+                <Button variant="primary" href="/task-list">
                   Create Task
                 </Button>
               </Card.Body>

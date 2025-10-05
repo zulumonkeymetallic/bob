@@ -6,7 +6,6 @@ import TaskListView from './components/TaskListView';
 import GoalsManagement from './components/GoalsManagement';
 import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
-import TasksList from './components/TasksList';
 import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import BacklogManager from './components/BacklogManager';
@@ -191,7 +190,7 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/tasks" element={<TasksList />} />
+              <Route path="/tasks" element={<Navigate to="/task-list" replace />} />
               <Route path="/task-list" element={<TaskListView />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
               <Route path="/games-backlog" element={<GamesBacklog />} />

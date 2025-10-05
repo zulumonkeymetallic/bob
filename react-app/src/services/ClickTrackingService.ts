@@ -261,7 +261,7 @@ class ClickTrackingService {
       page = 'Stories';
     } else if (pathname.includes('/sprints')) {
       page = 'Sprints';
-    } else if (pathname.includes('/tasks')) {
+    } else if (pathname.includes('/task-list')) {
       page = 'Tasks';
     } else if (pathname.includes('/calendar')) {
       page = 'Calendar';

@@ -428,7 +428,7 @@ const Dashboard: React.FC = () => {
   };
 
   const handleNavigateToTasksToday = () => {
-    navigate('/tasks', { state: { preset: 'dueToday' } });
+    navigate('/task-list', { state: { preset: 'dueToday' } });
   };
 
   const handleNavigateToCalendarToday = () => {
