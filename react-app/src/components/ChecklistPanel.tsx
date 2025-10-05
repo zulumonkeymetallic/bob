@@ -479,6 +479,7 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
     );
     return actions;
   };
+
   const formatRelativeTime = (value?: number | null) => {
     if (!value) return '—';
     try {
