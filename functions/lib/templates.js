@@ -207,6 +207,45 @@ const renderWorldSummary = (world) => {
   return parts.join('\n');
 };
 
+const renderSchedule = (blocks) => {
+  if (!Array.isArray(blocks) || !blocks.length) {
+    return '<p style="color:#6b7280;">No calendar blocks scheduled today.</p>';
+  }
+  const items = blocks
+    .slice(0, 5)
+    .map((block) => {
+      const title = block.title || block.category || 'Block';
+      const time = block.startDisplay || block.startIso || '';
+      const theme = block.theme ? `<span style="margin-left:8px;font-size:12px;padding:2px 8px;border-radius:999px;background:#dbebff;color:#1d4ed8;">${escape(block.theme)}</span>` : '';
+      const linkTask = block.linkedTask ? ` · <a href="${escape(block.linkedTask.deepLink)}" style="color:#2563eb;">${escape(block.linkedTask.ref)}</a>` : '';
+      const linkStory = block.linkedStory ? ` · <a href="${escape(block.linkedStory.deepLink)}" style="color:#2563eb;">${escape(block.linkedStory.ref)}</a>` : '';
+      return `<li><strong>${escape(time)}</strong> — ${escape(title)}${theme}${linkTask}${linkStory}</li>`;
+    })
+    .join('\n');
+  return `<ul style="padding-left:20px;">${items}</ul>`;
+};
+
+const renderChecklist = (reminders) => {
+  if (!Array.isArray(reminders) || !reminders.length) {
+    return '<p style="color:#6b7280;">Nothing flagged for today—great job!</p>';
+  }
+  const items = reminders
+    .slice(0, 8)
+    .map((item) => {
+      const title = item.title || 'Reminder';
+      let dueDisplay = 'Anytime';
+      if (item.dueDate) {
+        const dateValue = new Date(item.dueDate);
+        if (!Number.isNaN(dateValue.getTime())) {
+          dueDisplay = dateValue.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        }
+      }
+      return `<li style="margin-bottom:6px;"><input type="checkbox" style="margin-right:8px;" />${escape(title)} <span style="font-size:12px;color:#6b7280;">${escape(dueDisplay)}</span></li>`;
+    })
+    .join('\n');
+  return `<ul style="padding-left:0;list-style:none;margin:0;">${items}</ul>`;
+};
+
 const renderFitness = (fitness) => {
   if (!fitness) return '<p>No fitness metrics yet. Connect Strava/Apple Health to enable insights.</p>';
   const blocks = [];
@@ -475,6 +514,17 @@ const renderDailySummaryEmail = (data) => {
           ${renderMaintenanceSummary(data.maintenance)}
         </section>
       ` : ''}
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Today's Schedule</h2>
+        ${renderSchedule(data.calendarBlocks || [])}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Checklist</h2>
+        ${renderChecklist(data.reminders || [])}
+        <p style="margin-top:8px;font-size:12px;color:#6b7280;">Tick completed items in the BOB dashboard or iOS Reminders; changes stay in sync.</p>
+      </section>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Tasks due today</h2>

@@ -3041,7 +3041,8 @@ async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runI
     ? priorityResult.items.slice().sort((a, b) => (a.rank || Number.MAX_SAFE_INTEGER) - (b.rank || Number.MAX_SAFE_INTEGER))
     : [];
 
-  const topItems = items.slice(0, 10);
+  const topLimit = Math.max(1, Math.min(Number(profile.aiFocusTopCount || 5), 10));
+  const topItems = items.slice(0, topLimit);
   if (!topItems.length) {
     return { adjustedTop: 0, deferred: 0, locked: 0 };
   }
@@ -3067,8 +3068,7 @@ async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runI
       continue;
     }
 
-    const dayOffset = index < 5 ? 0 : 1;
-    const desired = nowLocal.plus({ days: dayOffset }).endOf('day');
+    const desired = nowLocal.endOf('day');
     const newDueDateMs = desired.toMillis();
 
     await updateTaskDueDate(db, task.id, {
@@ -3334,6 +3334,7 @@ async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId
 
   const calendarPlan = await generateCalendarPlanForUser({ db, userId, profile, runId });
 
+  const topLimit = Math.max(1, Math.min(Number(profile.aiFocusTopCount || 5), 10));
   const maintenanceSummary = {
     reminders: duplicateReminders,
     dedupe: {
@@ -3344,7 +3345,7 @@ async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId
     priority: {
       considered: priorityResult.considered,
       updated: priorityResult.updated,
-      top: priorityResult.items ? priorityResult.items.slice(0, 5) : [],
+      top: priorityResult.items ? priorityResult.items.slice(0, topLimit) : [],
     },
     dueDates: dueDateAdjustments,
     conversions: conversionResult,
@@ -5634,6 +5635,39 @@ exports.previewDataQualityReport = httpsV2.onCall(async (req) => {
   const snapshot = await buildDataQualitySnapshot(db, uid, { windowEnd: DateTime.now().setZone('UTC') });
   const html = renderDataQualityEmail({ profile, snapshot });
   return { ok: true, snapshot, html };
+});
+
+exports.sendTestEmail = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const email = req?.data?.email || profile.email;
+  if (!email) {
+    throw new httpsV2.HttpsError('failed-precondition', 'No email configured on profile.');
+  }
+
+  const html = `
+    <h1>BOB SMTP Test</h1>
+    <p>This is a test email sent at ${new Date().toISOString()} to confirm SMTP settings.</p>
+    <p>User: ${email}</p>
+  `;
+
+  try {
+    const result = await sendEmail({ to: email, subject: 'BOB SMTP Test Email', html, text: 'SMTP configuration test successful.' });
+    await db.collection('email_tests').add({
+      userId: uid,
+      email,
+      result: { messageId: result?.messageId || null, response: result?.response || null },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return { ok: true, messageId: result?.messageId || null };
+  } catch (error) {
+    console.error('[email-test] failed', error);
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to send test email');
+  }
 });
 
 // ===== New v3.0.2 Functions =====

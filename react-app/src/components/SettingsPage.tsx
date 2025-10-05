@@ -89,6 +89,9 @@ const SettingsPage: React.FC = () => {
   const [maintenanceStatus, setMaintenanceStatus] = useState('');
   const [maintenanceError, setMaintenanceError] = useState('');
   const [maintenanceRunning, setMaintenanceRunning] = useState(false);
+  const [testEmailStatus, setTestEmailStatus] = useState('');
+  const [testEmailError, setTestEmailError] = useState('');
+  const [testEmailRunning, setTestEmailRunning] = useState(false);
 
   const { entries: diagnosticsEntries, clear: clearDiagnostics, snapshot: snapshotDiagnostics } = useDiagnosticsLog();
 
@@ -259,6 +262,25 @@ const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleSendTestEmail = async () => {
+    if (!currentUser) return;
+    setTestEmailRunning(true);
+    setTestEmailStatus('');
+    setTestEmailError('');
+    try {
+      const callable = httpsCallable(functions, 'sendTestEmail');
+      const response: any = await callable({});
+      const payload = response?.data ?? response;
+      const messageId = payload?.messageId || payload?.result?.messageId || 'sent';
+      setTestEmailStatus(`Test email sent (message ${messageId}).`);
+    } catch (error: any) {
+      console.error('Failed to send test email', error);
+      setTestEmailError(error?.message || 'Failed to send test email');
+    } finally {
+      setTestEmailRunning(false);
+    }
+  };
+
   // Check if database needs migration to new theme system
   const checkMigrationStatus = async () => {
     if (!currentUser) return;
@@ -401,6 +423,18 @@ const SettingsPage: React.FC = () => {
     const timer = setTimeout(() => setMaintenanceError(''), 5000);
     return () => clearTimeout(timer);
   }, [maintenanceError]);
+
+  useEffect(() => {
+    if (!testEmailStatus) return;
+    const timer = setTimeout(() => setTestEmailStatus(''), 3000);
+    return () => clearTimeout(timer);
+  }, [testEmailStatus]);
+
+  useEffect(() => {
+    if (!testEmailError) return;
+    const timer = setTimeout(() => setTestEmailError(''), 5000);
+    return () => clearTimeout(timer);
+  }, [testEmailError]);
 
   // Initialize theme debugging (only when debug mode is enabled)
   useEffect(() => {
@@ -1204,6 +1238,13 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                           >
                             {dailySummaryRunning ? 'Triggering…' : 'Send Daily Summary Now'}
                           </Button>
+                          <Button
+                            variant="outline-primary"
+                            onClick={handleSendTestEmail}
+                            disabled={testEmailRunning}
+                          >
+                            {testEmailRunning ? 'Sending…' : 'Send Test Email'}
+                          </Button>
                         </div>
                         <div className="mt-2">
                           {emailConfigLoading && <span className="text-muted small">Loading email configuration…</span>}
@@ -1213,6 +1254,8 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                           {maintenanceError && <div className="text-danger small">{maintenanceError}</div>}
                           {dailySummaryStatus && <div className="text-success small">{dailySummaryStatus}</div>}
                           {dailySummaryError && <div className="text-danger small">{dailySummaryError}</div>}
+                          {testEmailStatus && <div className="text-success small">{testEmailStatus}</div>}
+                          {testEmailError && <div className="text-danger small">{testEmailError}</div>}
                         </div>
                       </Card.Body>
                     </Card>
