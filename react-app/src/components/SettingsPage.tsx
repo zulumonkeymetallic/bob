@@ -13,8 +13,9 @@ import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
 import BudgetSettings from './finance/BudgetSettings';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useDiagnosticsLog } from '../hooks/useDiagnosticsLog';
 
-const SETTINGS_TABS = ['themes', 'database', 'integrations', 'reminders', 'ai', 'system'] as const;
+const SETTINGS_TABS = ['themes', 'database', 'integrations', 'reminders', 'ai', 'system', 'finance', 'diagnostics'] as const;
 type SettingsTab = typeof SETTINGS_TABS[number];
 const DEFAULT_TAB: SettingsTab = 'themes';
 
@@ -68,6 +69,25 @@ const SettingsPage: React.FC = () => {
   const [saveProfileMsg, setSaveProfileMsg] = useState<string>('');
   const [saveProfileError, setSaveProfileError] = useState<string>('');
   const [savingProfile, setSavingProfile] = useState<boolean>(false);
+
+  // Email delivery configuration
+  const [emailService, setEmailService] = useState('');
+  const [emailHost, setEmailHost] = useState('');
+  const [emailPort, setEmailPort] = useState('');
+  const [emailSecure, setEmailSecure] = useState(true);
+  const [emailUser, setEmailUser] = useState('');
+  const [emailPassword, setEmailPassword] = useState('');
+  const [emailFromAddress, setEmailFromAddress] = useState('');
+  const [emailConfigLoading, setEmailConfigLoading] = useState(false);
+  const [emailConfigMessage, setEmailConfigMessage] = useState('');
+  const [emailConfigError, setEmailConfigError] = useState('');
+  const [emailConfigSaving, setEmailConfigSaving] = useState(false);
+
+  const [dailySummaryStatus, setDailySummaryStatus] = useState('');
+  const [dailySummaryError, setDailySummaryError] = useState('');
+  const [dailySummaryRunning, setDailySummaryRunning] = useState(false);
+
+  const { entries: diagnosticsEntries, clear: clearDiagnostics, snapshot: snapshotDiagnostics } = useDiagnosticsLog();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(normalizeTab(new URLSearchParams(location.search).get('tab')));
 
@@ -154,6 +174,65 @@ const SettingsPage: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleDownloadDiagnostics = () => {
+    const payload = snapshotDiagnostics();
+    downloadJson('bob-ai-diagnostics.json', payload);
+  };
+
+  const handleSaveEmailConfig = async () => {
+    if (!currentUser) return;
+    setEmailConfigSaving(true);
+    setEmailConfigMessage('');
+    setEmailConfigError('');
+    try {
+      const trimmedPort = emailPort.trim();
+      let normalizedPort: number | null = null;
+      if (trimmedPort) {
+        const parsed = Number(trimmedPort);
+        if (!Number.isFinite(parsed)) {
+          throw new Error('SMTP port must be a number');
+        }
+        normalizedPort = parsed;
+      }
+
+      await setDoc(doc(db, 'system_settings', 'email'), {
+        service: emailService || null,
+        host: emailHost || null,
+        port: normalizedPort,
+        secure: emailSecure,
+        user: emailUser || null,
+        password: emailPassword || null,
+        from: emailFromAddress || null,
+        updatedAt: serverTimestamp(),
+        updatedBy: currentUser.uid,
+      }, { merge: true });
+
+      setEmailConfigMessage('Email settings saved');
+    } catch (error: any) {
+      console.error('Failed to save email configuration', error);
+      setEmailConfigError(error?.message || 'Failed to save email configuration');
+    } finally {
+      setEmailConfigSaving(false);
+    }
+  };
+
+  const handleSendDailySummary = async () => {
+    if (!currentUser) return;
+    setDailySummaryRunning(true);
+    setDailySummaryStatus('');
+    setDailySummaryError('');
+    try {
+      const callable = httpsCallable(functions, 'sendDailySummaryNow');
+      await callable({});
+      setDailySummaryStatus('Daily summary queued for delivery');
+    } catch (error: any) {
+      console.error('Failed to trigger daily summary', error);
+      setDailySummaryError(error?.message || 'Failed to trigger daily summary');
+    } finally {
+      setDailySummaryRunning(false);
+    }
+  };
+
   // Check if database needs migration to new theme system
   const checkMigrationStatus = async () => {
     if (!currentUser) return;
@@ -226,6 +305,64 @@ const SettingsPage: React.FC = () => {
 
     loadGlobalThemes();
   }, [currentUser]);
+
+  useEffect(() => {
+    const loadEmailConfig = async () => {
+      setEmailConfigLoading(true);
+      setEmailConfigError('');
+      try {
+        const snap = await getDoc(doc(db, 'system_settings', 'email'));
+        if (snap.exists()) {
+          const data = snap.data();
+          setEmailService(data?.service ?? '');
+          setEmailHost(data?.host ?? '');
+          setEmailPort(data?.port != null ? String(data.port) : '');
+          setEmailSecure(data?.secure !== undefined ? Boolean(data.secure) : true);
+          setEmailUser(data?.user ?? '');
+          setEmailPassword(data?.password ?? '');
+          setEmailFromAddress(data?.from ?? '');
+        } else {
+          setEmailService('');
+          setEmailHost('');
+          setEmailPort('');
+          setEmailSecure(true);
+          setEmailUser('');
+          setEmailPassword('');
+          setEmailFromAddress('');
+        }
+      } catch (error: any) {
+        console.error('Failed to load email configuration', error);
+        setEmailConfigError(error?.message || 'Failed to load email configuration');
+      } finally {
+        setEmailConfigLoading(false);
+      }
+    };
+    loadEmailConfig();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!emailConfigMessage) return;
+    const timer = setTimeout(() => setEmailConfigMessage(''), 3000);
+    return () => clearTimeout(timer);
+  }, [emailConfigMessage]);
+
+  useEffect(() => {
+    if (!emailConfigError) return;
+    const timer = setTimeout(() => setEmailConfigError(''), 5000);
+    return () => clearTimeout(timer);
+  }, [emailConfigError]);
+
+  useEffect(() => {
+    if (!dailySummaryStatus) return;
+    const timer = setTimeout(() => setDailySummaryStatus(''), 3000);
+    return () => clearTimeout(timer);
+  }, [dailySummaryStatus]);
+
+  useEffect(() => {
+    if (!dailySummaryError) return;
+    const timer = setTimeout(() => setDailySummaryError(''), 5000);
+    return () => clearTimeout(timer);
+  }, [dailySummaryError]);
 
   // Initialize theme debugging (only when debug mode is enabled)
   useEffect(() => {
@@ -452,6 +589,19 @@ const SettingsPage: React.FC = () => {
                 >
                   <Settings size={20} className="me-2" />
                   System Preferences
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link
+                  eventKey="diagnostics"
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <FileCode size={20} className="me-2" />
+                  Diagnostics Log
+                  {diagnosticsEntries.length > 0 && (
+                    <Badge bg="info" className="ms-2">{diagnosticsEntries.length}</Badge>
+                  )}
                 </Nav.Link>
               </Nav.Item>
               <Nav.Item>
@@ -748,6 +898,67 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                 <AIStoryKPISettings />
               </Tab.Pane>
 
+              <Tab.Pane eventKey="diagnostics">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">AI & Scheduler Diagnostics</h4>
+                    <small className="text-muted">Captured locally whenever planner automation reports an error</small>
+                  </Card.Header>
+                  <Card.Body>
+                    <p className="text-muted small">
+                      These log entries never leave your browser. Share them with the team when reporting planner issues such as
+                      “AI scheduler is unavailable”.
+                    </p>
+
+                    {diagnosticsEntries.length === 0 ? (
+                      <Alert variant="secondary">No diagnostics captured yet. Trigger the planner to populate this log.</Alert>
+                    ) : (
+                      <div className="diagnostics-log border rounded p-3" style={{ maxHeight: 360, overflowY: 'auto', backgroundColor: isDark ? '#1f2937' : '#f8fafc' }}>
+                        {diagnosticsEntries.map((entry) => (
+                          <div key={entry.id} className="mb-3 pb-2 border-bottom">
+                            <div className="d-flex justify-content-between align-items-center mb-1">
+                              <span className="small text-muted">{new Date(entry.timestamp).toLocaleString()}</span>
+                              <div className="d-flex gap-2 align-items-center">
+                                <Badge bg="dark" className="text-uppercase">{entry.level}</Badge>
+                                <Badge bg="secondary">{entry.channel}</Badge>
+                              </div>
+                            </div>
+                            <div className="fw-semibold">{entry.message}</div>
+                            {entry.details && (
+                              <div className="small text-muted">{entry.details}</div>
+                            )}
+                            {entry.context && (
+                              <pre className="bg-transparent border-0 p-0 mt-2 small text-muted" style={{ whiteSpace: 'pre-wrap' }}>
+{JSON.stringify(entry.context, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="d-flex gap-2 mt-3">
+                      <Button
+                        size="sm"
+                        variant="outline-primary"
+                        onClick={handleDownloadDiagnostics}
+                        disabled={diagnosticsEntries.length === 0}
+                      >
+                        Download JSON
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline-danger"
+                        onClick={() => clearDiagnostics()}
+                        disabled={diagnosticsEntries.length === 0}
+                      >
+                        Clear Log
+                      </Button>
+                    </div>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
               {/* System Preferences Tab */}
               <Tab.Pane eventKey="system">
                 <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
@@ -844,6 +1055,118 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                             <Form.Control value={parkrunDefaultStartRun} onChange={(e)=>setParkrunDefaultStartRun(e.target.value)} placeholder="e.g., 552" />
                           </Col>
                         </Row>
+                      </Card.Body>
+                    </Card>
+
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h5 className="mb-2">Email Delivery</h5>
+                        <p className="text-muted small mb-3">
+                          Provide SMTP credentials for daily summaries and automation emails. Leave <em>SMTP Service</em> blank when using a custom host/port.
+                        </p>
+                        <Row className="g-3">
+                          <Col md={6}>
+                            <Form.Group>
+                              <Form.Label>SMTP Service</Form.Label>
+                              <Form.Control
+                                value={emailService}
+                                onChange={(e) => setEmailService(e.target.value)}
+                                placeholder="e.g., gmail"
+                                disabled={emailConfigLoading || emailConfigSaving}
+                              />
+                              <Form.Text className="text-muted">Optional when using a custom host.</Form.Text>
+                            </Form.Group>
+                          </Col>
+                          <Col md={6}>
+                            <Form.Group>
+                              <Form.Label>Custom Host</Form.Label>
+                              <Form.Control
+                                value={emailHost}
+                                onChange={(e) => setEmailHost(e.target.value)}
+                                placeholder="smtp.example.com"
+                                disabled={emailConfigLoading || emailConfigSaving}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={4}>
+                            <Form.Group>
+                              <Form.Label>Port</Form.Label>
+                              <Form.Control
+                                value={emailPort}
+                                onChange={(e) => setEmailPort(e.target.value)}
+                                placeholder="587"
+                                disabled={emailConfigLoading || emailConfigSaving}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={4} className="d-flex align-items-end">
+                            <Form.Check
+                              type="switch"
+                              id="email-secure"
+                              label="Use TLS/SSL"
+                              checked={emailSecure}
+                              onChange={(e) => setEmailSecure(e.target.checked)}
+                              disabled={emailConfigLoading || emailConfigSaving}
+                            />
+                          </Col>
+                          <Col md={4}>
+                            <Form.Group>
+                              <Form.Label>From Address</Form.Label>
+                              <Form.Control
+                                value={emailFromAddress}
+                                onChange={(e) => setEmailFromAddress(e.target.value)}
+                                placeholder="noreply@example.com"
+                                disabled={emailConfigLoading || emailConfigSaving}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={6}>
+                            <Form.Group>
+                              <Form.Label>SMTP Username</Form.Label>
+                              <Form.Control
+                                value={emailUser}
+                                onChange={(e) => setEmailUser(e.target.value)}
+                                placeholder="account@example.com"
+                                disabled={emailConfigLoading || emailConfigSaving}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={6}>
+                            <Form.Group>
+                              <Form.Label>SMTP Password</Form.Label>
+                              <Form.Control
+                                type="password"
+                                value={emailPassword}
+                                onChange={(e) => setEmailPassword(e.target.value)}
+                                placeholder="App-specific password"
+                                disabled={emailConfigLoading || emailConfigSaving}
+                              />
+                            </Form.Group>
+                          </Col>
+                        </Row>
+                        <div className="d-flex flex-wrap gap-2 mt-3">
+                          <Button
+                            variant="primary"
+                            onClick={handleSaveEmailConfig}
+                            disabled={emailConfigLoading || emailConfigSaving}
+                          >
+                            {emailConfigSaving ? 'Saving…' : 'Save Email Settings'}
+                          </Button>
+                          <Button
+                            variant="outline-secondary"
+                            onClick={handleSendDailySummary}
+                            disabled={dailySummaryRunning}
+                          >
+                            {dailySummaryRunning ? 'Triggering…' : 'Send Daily Summary Now'}
+                          </Button>
+                        </div>
+                        <div className="mt-2">
+                          {emailConfigLoading && <span className="text-muted small">Loading email configuration…</span>}
+                          {emailConfigMessage && <span className="text-success small">{emailConfigMessage}</span>}
+                          {emailConfigError && <span className="text-danger small">{emailConfigError}</span>}
+                          {dailySummaryStatus && <div className="text-success small">{dailySummaryStatus}</div>}
+                          {dailySummaryError && <div className="text-danger small">{dailySummaryError}</div>}
+                        </div>
                       </Card.Body>
                     </Card>
 

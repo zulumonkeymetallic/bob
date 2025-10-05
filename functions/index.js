@@ -78,6 +78,7 @@ function makeAssignmentId({ planId, itemType, itemId }) {
 const MS_IN_MINUTE = 60 * 1000;
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const CHORE_LOOKAHEAD_DAYS = 90;
+const AI_PRIORITY_MODEL = process.env.GOOGLEAISTUDIOAPIKEY ? 'gemini-1.5-flash' : 'gpt-4o-mini';
 
 function toMillis(value) {
   if (!value && value !== 0) return null;
@@ -2727,18 +2728,11 @@ exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
   }
 });
 
-exports.deduplicateTasks = httpsV2.onCall(async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-
-  const dryRun = !!request?.data?.dryRun;
-  const hardDelete = !!request?.data?.hardDelete;
-
-  const db = admin.firestore();
-  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = false, logActivity = true, activityActor = 'AI_Agent', runId = null }) {
+  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
   const taskDocs = tasksSnap.docs.map(doc => ({ id: doc.id, ref: doc.ref, data: doc.data() || {} }));
   if (!taskDocs.length) {
-    return { ok: true, processed: 0, duplicatesResolved: 0, dryRun };
+    return { ok: true, processed: 0, duplicatesResolved: 0, dryRun, groups: [] };
   }
 
   const taskById = new Map(taskDocs.map(doc => [doc.id, { id: doc.id, ...doc.data }]));
@@ -2787,7 +2781,7 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
 
   const groups = Array.from(signatureMap.values());
   if (!groups.length) {
-    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, dryRun };
+    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, dryRun, groups: [] };
   }
 
   const canonicalNotes = new Map();
@@ -2856,7 +2850,7 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
   }
 
   if (!duplicateUpdates.length) {
-    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, groups: [], hardDelete };
+    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, groups: summary, hardDelete };
   }
 
   const bulk = db.bulkWriter();
@@ -2913,26 +2907,140 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
     }
   }
 
-  const activityRef = db.collection('activity_stream').doc();
-  await activityRef.set({
-    id: activityRef.id,
-    entityId: `tasks_${uid}`,
-    entityType: 'task',
-    activityType: 'deduplicate_tasks',
-    userId: uid,
-    description: `Resolved ${duplicateUpdates.length} duplicate tasks across ${summary.length} groups`,
-    metadata: { groups: summary, hardDelete },
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
-  });
+  if (logActivity) {
+    const activityRef = db.collection('activity_stream').doc();
+    await activityRef.set({
+      id: activityRef.id,
+      entityId: `tasks_${userId}`,
+      entityType: 'task',
+      activityType: 'deduplicate_tasks',
+      userId,
+      actor: activityActor,
+      description: `Resolved ${duplicateUpdates.length} duplicate tasks across ${summary.length} groups`,
+      metadata: { groups: summary, hardDelete, runId },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  }
 
   return {
     ok: true,
     processed: taskDocs.length,
-    duplicatesResolved: hardDelete ? duplicateUpdates.length : duplicateUpdates.length,
+    duplicatesResolved: duplicateUpdates.length,
     groups: summary,
-    hardDelete
+    hardDelete,
+    dryRun,
   };
+}
+
+async function prioritizeTasksForUser({ db, userId, runId = null }) {
+  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = tasksSnap.docs
+    .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+    .filter((task) => {
+      const status = String(task.status ?? '').toLowerCase();
+      const done = status === 'done' || status === 'complete' || Number(task.status) === 2 || task.deleted === true;
+      return !done;
+    });
+
+  if (!tasks.length) {
+    return { ok: true, considered: 0, updated: 0, items: [] };
+  }
+
+  const sorted = tasks
+    .slice()
+    .sort((a, b) => {
+      const aDue = toMillis(a.dueDate || a.dueDateMs || a.targetDate) || Number.MAX_SAFE_INTEGER;
+      const bDue = toMillis(b.dueDate || b.dueDateMs || b.targetDate) || Number.MAX_SAFE_INTEGER;
+      return aDue - bDue;
+    });
+
+  const payload = sorted.slice(0, 50).map((task) => ({
+    id: task.id,
+    ref: task.ref || task.reference || null,
+    title: task.title || task.description || 'Task',
+    dueDate: task.dueDate || task.targetDate || null,
+    priority: task.priority ?? null,
+    status: task.status || 'todo',
+    theme: task.theme || null,
+    goalId: task.goalId || null,
+    storyId: task.storyId || null,
+  }));
+
+  const idMap = new Map();
+  payload.forEach((task) => {
+    idMap.set(task.id, task.id);
+    if (task.ref) idMap.set(task.ref.toUpperCase(), task.id);
+  });
+
+  const prompt = 'Score tasks 0-100 and bucket TODAY/NEXT/LATER. Return JSON {items:[{id,score,bucket}]}.\nTasks: ' + JSON.stringify(payload);
+
+  let parsed = {};
+  try {
+    const raw = await callLLMJson({
+      system: 'You prioritise tasks for the day. Respond with concise JSON only.',
+      user: prompt,
+      purpose: 'nightlyTaskPrioritization',
+      userId,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    parsed = raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.warn('[priority] LLM prioritisation failed', { userId, error: error?.message || error });
+    return { ok: false, considered: payload.length, updated: 0, error: error?.message || String(error) };
+  }
+
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+  if (!items.length) {
+    return { ok: true, considered: payload.length, updated: 0, items: [] };
+  }
+
+  const updates = [];
+  const bulk = db.bulkWriter();
+  items.slice(0, 20).forEach((item, index) => {
+    const key = (item?.id || item?.ref || '').toString().trim();
+    if (!key) return;
+    const matchedId = idMap.get(key) || idMap.get(key.toUpperCase());
+    if (!matchedId) return;
+    const score = Number(item.score ?? item.priority ?? item.value ?? 0);
+    const bucketRaw = (item.bucket || item.category || '').toString().trim();
+    const bucket = bucketRaw ? bucketRaw.toUpperCase() : 'NEXT';
+    const docRef = db.collection('tasks').doc(matchedId);
+    bulk.set(docRef, {
+      aiPriorityScore: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null,
+      aiPriorityBucket: bucket,
+      aiPriorityRank: index + 1,
+      aiPriorityUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      aiPriorityRunId: runId || null,
+    }, { merge: true });
+    updates.push({ taskId: matchedId, score, bucket, rank: index + 1 });
+  });
+  await bulk.close();
+
+  await db.collection('task_priority_runs').add({
+    userId,
+    runId: runId || null,
+    considered: payload.length,
+    updated: updates.length,
+    items: updates,
+    model: AI_PRIORITY_MODEL,
+    raw: items.slice(0, 20),
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, considered: payload.length, updated: updates.length, items: updates };
+}
+
+exports.deduplicateTasks = httpsV2.onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const dryRun = !!request?.data?.dryRun;
+  const hardDelete = !!request?.data?.hardDelete;
+
+  const db = admin.firestore();
+  return deduplicateUserTasks({ db, userId: uid, dryRun, hardDelete, logActivity: true, activityActor: uid });
 });
 
 exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (req) => {
@@ -3252,6 +3360,205 @@ async function callOpenAI({ system, user, expectJson, temperature, userId, purpo
   const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
   const resp = await aiWrapper(() => openai.chat.completions.create(requestData), { userId, functionName: purpose, request: requestData, purpose });
   return resp?.choices?.[0]?.message?.content || '';
+}
+
+function flattenHierarchyTasks(hierarchy) {
+  const tasks = [];
+  (hierarchy || []).forEach((themeNode) => {
+    const theme = themeNode?.theme || 'General';
+    (themeNode?.goals || []).forEach((goalNode) => {
+      const goalTitle = goalNode?.goalTitle || 'Goal';
+      (goalNode?.stories || []).forEach((storyNode) => {
+        const storyTitle = storyNode?.storyTitle || 'Story';
+        (storyNode?.tasks || []).forEach((task) => {
+          if (!task?.ref) return;
+          tasks.push({
+            ref: task.ref,
+            title: task.description || task.title || 'Task',
+            dueIso: task.dueDateIso || null,
+            dueDisplay: task.dueDateDisplay || null,
+            status: (task.status || '').toLowerCase(),
+            deepLink: task.deepLink || null,
+            theme,
+            goalTitle,
+            storyTitle,
+          });
+        });
+      });
+    });
+  });
+  return tasks;
+}
+
+function buildHeuristicFocus(summaryData, note) {
+  const nowIso = new Date().toISOString();
+  const items = [];
+  if (Array.isArray(summaryData?.priorities)) {
+    summaryData.priorities.slice(0, 3).forEach((item) => {
+      if (!item?.ref) return;
+      items.push({
+        ref: item.ref,
+        title: item.title || 'Task',
+        bucket: 'Today',
+        reason: item.dueDateDisplay ? `Due ${item.dueDateDisplay}` : 'High priority candidate',
+        nextStep: null,
+        confidence: null,
+        dueDisplay: item.dueDateDisplay || null,
+        deepLink: item.deepLink || null,
+      });
+    });
+  }
+
+  if (!items.length) {
+    const flattened = flattenHierarchyTasks(summaryData?.hierarchy || [])
+      .filter((task) => task.ref && !['done', 'completed', 'complete', 'archived'].includes(task.status));
+
+    flattened
+      .sort((a, b) => {
+        const zone = summaryData?.metadata?.timezone || 'UTC';
+        const aMs = a.dueIso ? DateTime.fromISO(a.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+        const bMs = b.dueIso ? DateTime.fromISO(b.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+        return aMs - bMs;
+      })
+      .slice(0, 3)
+      .forEach((task) => {
+        items.push({
+          ref: task.ref,
+          title: task.title,
+          bucket: 'Today',
+          reason: task.dueDisplay ? `Due ${task.dueDisplay}` : `Theme ${task.theme}`,
+          nextStep: null,
+          confidence: null,
+          dueDisplay: task.dueDisplay || null,
+          deepLink: task.deepLink || null,
+        });
+      });
+  }
+
+  return {
+    mode: 'fallback',
+    model: 'heuristic',
+    generatedAt: nowIso,
+    summary: note || 'AI focus unavailable; showing heuristic priorities.',
+    ask: items.length ? 'Tackle these priorities first to stay on track.' : 'No urgent work detected—use the time for strategic planning.',
+    items,
+  };
+}
+
+async function buildDailySummaryAiFocus({ summaryData, userId }) {
+  try {
+    const flattened = flattenHierarchyTasks(summaryData?.hierarchy || [])
+      .filter((task) => task.ref && !['done', 'completed', 'complete', 'archived'].includes(task.status));
+
+    if (!flattened.length) return null;
+
+    const zone = summaryData?.metadata?.timezone || 'UTC';
+    flattened.sort((a, b) => {
+      const aMs = a.dueIso ? DateTime.fromISO(a.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+      const bMs = b.dueIso ? DateTime.fromISO(b.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+      return aMs - bMs;
+    });
+
+    const context = flattened.slice(0, 12).map((task) => ({
+      ref: task.ref,
+      title: task.title,
+      due: task.dueIso || 'none',
+      status: task.status || 'unknown',
+      goal: task.goalTitle,
+      story: task.storyTitle,
+      theme: task.theme,
+    }));
+
+    if (!context.length) return null;
+
+    const system = 'You are an executive productivity assistant. Rank daily work and provide crisp instructions. Respond in JSON only.';
+    const prompt = [
+      `Today is ${summaryData?.metadata?.dayIso || DateTime.now().toISODate()} in timezone ${zone}.`,
+      'Analyse the tasks below and select the most impactful focus items for today.',
+      'Return JSON object {"items":[{"ref":string,"bucket":"Today"|"Watch"|"Defer","rationale":string,"nextStep":string,"confidence":number}],"ask":string,"summary":string}.',
+      'Constraints: use only provided refs; limit items to 3-5; rationale <=120 chars; nextStep <=80 chars; confidence 0-1.',
+      'Tasks:',
+      JSON.stringify(context),
+    ].join('\n');
+
+    const raw = await callLLMJson({
+      system,
+      user: prompt,
+      purpose: 'dailySummaryFocus',
+      userId,
+      expectJson: true,
+      temperature: 0.2,
+    });
+
+    let parsed = {};
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (error) {
+      console.warn('[daily-summary-ai] JSON parse failed', error?.message || error);
+      return buildHeuristicFocus(summaryData, 'AI response could not be parsed.');
+    }
+
+    const candidateMap = new Map();
+    flattened.slice(0, 12).forEach((task) => {
+      candidateMap.set(task.ref.toUpperCase(), task);
+    });
+
+    const aiItems = Array.isArray(parsed.items)
+      ? parsed.items
+      : Array.isArray(parsed.focus)
+      ? parsed.focus
+      : [];
+
+    const normalised = aiItems
+      .map((item) => {
+        const key = (item?.ref || item?.id || '').toString().trim();
+        if (!key) return null;
+        const base = candidateMap.get(key.toUpperCase());
+        if (!base) return null;
+        const rationale = (item.rationale || item.reason || item.explanation || '').toString().trim();
+        const nextStep = (item.nextStep || item.action || '').toString().trim();
+        let confidence = null;
+        if (item.confidence != null) confidence = Number(item.confidence);
+        else if (item.score != null) confidence = Number(item.score);
+        if (Number.isFinite(confidence)) {
+          confidence = Math.min(1, Math.max(0, confidence));
+        } else {
+          confidence = null;
+        }
+        const bucket = (item.bucket || item.category || 'Today').toString().trim() || 'Today';
+        return {
+          ref: base.ref,
+          title: base.title,
+          bucket,
+          reason: rationale || (base.dueDisplay ? `Due ${base.dueDisplay}` : `Theme ${base.theme}`),
+          nextStep: nextStep || null,
+          confidence,
+          dueDisplay: base.dueDisplay || null,
+          deepLink: base.deepLink || null,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 5);
+
+    if (!normalised.length) {
+      return buildHeuristicFocus(summaryData, 'AI produced no actionable items; fallback applied.');
+    }
+
+    const askText = parsed.ask || parsed.callToAction || (normalised.length ? 'Commit to finishing these focus items today.' : null);
+    const summaryText = parsed.summary || parsed.note || null;
+
+    return {
+      mode: 'ai',
+      model: AI_PRIORITY_MODEL,
+      generatedAt: new Date().toISOString(),
+      summary: summaryText,
+      ask: askText,
+      items: normalised,
+    };
+  } catch (error) {
+    console.warn('[daily-summary-ai] focus generation failed', error?.message || error);
+    return buildHeuristicFocus(summaryData, 'AI focus generation failed; showing heuristic priorities.');
+  }
 }
 
 // ===== Strava Helpers
@@ -4588,6 +4895,74 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 
 // ===== Daily Summary Email Automation (Issue #204)
 
+exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
+  schedule: '0 2 * * *',
+  timeZone: 'UTC',
+  memory: '1GiB',
+  secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY],
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    if (profile.nightlyMaintenanceEnabled === false) continue;
+    const userId = doc.id;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'nightly_task_maintenance',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const dedupeResult = await deduplicateUserTasks({
+        db,
+        userId,
+        dryRun: false,
+        hardDelete: false,
+        logActivity: true,
+        activityActor: 'NightlyMaintenance',
+        runId,
+      });
+
+      const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
+
+      await recordAutomationStatus(db, {
+        userId,
+        automation: 'nightly_task_maintenance',
+        dayIso: nowUtc.toISODate(),
+        status: 'success',
+        runId,
+      });
+
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'success',
+        dedupe: dedupeResult,
+        prioritization: priorityResult,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error('[nightly-maintenance] failed', { userId, error });
+      await recordAutomationStatus(db, {
+        userId,
+        automation: 'nightly_task_maintenance',
+        dayIso: nowUtc.toISODate(),
+        status: 'error',
+        message: error?.message || String(error),
+        runId,
+      });
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'error',
+        error: error?.message || String(error),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  }
+});
+
 const DAILY_SUMMARY_TARGET_MINUTES = 6 * 60;
 const DATA_QUALITY_TARGET_MINUTES = 19 * 60;
 const DISPATCH_WINDOW_MINUTES = 10;
@@ -4642,6 +5017,11 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
     timezone: zone,
     locale: profile.locale || profile.language || 'en-GB',
   });
+
+  const aiFocus = await buildDailySummaryAiFocus({ summaryData, userId });
+  if (aiFocus) {
+    summaryData.aiFocus = aiFocus;
+  }
 
   const html = renderDailySummaryEmail(summaryData);
   const subject = `Daily Summary · ${summaryData.metadata.dayIso}`;

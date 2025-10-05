@@ -19,6 +19,7 @@ interface TaskWithContext extends Task {
 const TasksList: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const [rawTasks, setRawTasks] = useState<Task[]>([]);
   const [tasks, setTasks] = useState<TaskWithContext[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
@@ -114,54 +115,38 @@ const TasksList: React.FC = () => {
     return `${personaPrefix}${typePrefix}${number}`;
   };
 
-  // Load data based on current persona
+  // Firestore subscription: tasks for current persona
   useEffect(() => {
     if (!currentUser) return;
 
-    // Load tasks for current persona
     const tasksQuery = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
 
-    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+    const unsubscribe = onSnapshot(tasksQuery, (snapshot) => {
       const tasksData: Task[] = [];
-      snapshot.forEach((doc) => {
-        tasksData.push({ id: doc.id, ...doc.data() } as Task);
+      snapshot.forEach((docSnap) => {
+        tasksData.push({ id: docSnap.id, ...docSnap.data() } as Task);
       });
-      
-      // Add reference numbers and context
-      const tasksWithContext = tasksData
-        .filter(task => !task.deleted)
-        .map((task, index) => {
-          const estimatedHours = normalizeEstimatedHours(task);
-          const parentStory = stories.find(s => s.id === (task.storyId || (task.parentType === 'story' ? task.parentId : undefined)));
-          const parentGoal = goals.find(g => g.id === (parentStory?.goalId || task.goalId));
-          const derivedSprintId = effectiveSprintId(task, stories, sprints);
-          return {
-            ...task,
-            sprintId: derivedSprintId ?? null,
-            theme: parentStory?.theme ?? parentGoal?.theme ?? task.theme,
-            estimatedHours,
-            referenceNumber: generateReferenceNumber(task, index),
-            storyTitle: parentStory?.title || '',
-            goalTitle: parentGoal?.title || '',
-            sprintName: sprintNameForId(sprints, derivedSprintId)
-          };
-        });
-      
-      setTasks(tasksWithContext);
+      setRawTasks(tasksData);
     });
 
-    // Load parent entities
+    return () => unsubscribe();
+  }, [currentUser, currentPersona]);
+
+  // Firestore subscription: supporting entities (goals/stories/projects) based on persona
+  useEffect(() => {
+    if (!currentUser) return;
+
     if (currentPersona === 'personal') {
-      // Load goals and stories for personal
+      setProjects([]);
       const goalsQuery = query(
         collection(db, 'goals'),
         where('ownerUid', '==', currentUser.uid)
       );
-      
+
       const storiesQuery = query(
         collection(db, 'stories'),
         where('ownerUid', '==', currentUser.uid),
@@ -170,46 +155,72 @@ const TasksList: React.FC = () => {
 
       const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
         const goalsData: Goal[] = [];
-        snapshot.forEach((doc) => {
-          goalsData.push({ id: doc.id, ...doc.data() } as Goal);
+        snapshot.forEach((docSnap) => {
+          goalsData.push({ id: docSnap.id, ...docSnap.data() } as Goal);
         });
         setGoals(goalsData);
       });
 
       const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
         const storiesData: Story[] = [];
-        snapshot.forEach((doc) => {
-          storiesData.push({ id: doc.id, ...doc.data() } as Story);
+        snapshot.forEach((docSnap) => {
+          storiesData.push({ id: docSnap.id, ...docSnap.data() } as Story);
         });
         setStories(storiesData);
       });
 
       return () => {
-        unsubscribeTasks();
         unsubscribeGoals();
         unsubscribeStories();
       };
-    } else {
-      // Load projects for work
-      const projectsQuery = query(
-        collection(db, 'projects'),
-        where('ownerUid', '==', currentUser.uid)
-      );
+    }
 
-      const unsubscribeProjects = onSnapshot(projectsQuery, (snapshot) => {
-        const projectsData: WorkProject[] = [];
-        snapshot.forEach((doc) => {
-          projectsData.push({ id: doc.id, ...doc.data() } as WorkProject);
-        });
-        setProjects(projectsData);
+    setGoals([]);
+    setStories([]);
+
+    const projectsQuery = query(
+      collection(db, 'projects'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+
+    const unsubscribeProjects = onSnapshot(projectsQuery, (snapshot) => {
+      const projectsData: WorkProject[] = [];
+      snapshot.forEach((docSnap) => {
+        projectsData.push({ id: docSnap.id, ...docSnap.data() } as WorkProject);
+      });
+      setProjects(projectsData);
+    });
+
+    return () => {
+      unsubscribeProjects();
+    };
+  }, [currentUser, currentPersona]);
+
+  // Derive task context whenever upstream collections change
+  useEffect(() => {
+    const tasksWithContext = rawTasks
+      .filter((task) => !task.deleted)
+      .map((task, index) => {
+        const estimatedHours = normalizeEstimatedHours(task);
+        const parentStory = stories.find(
+          (s) => s.id === (task.storyId || (task.parentType === 'story' ? task.parentId : undefined))
+        );
+        const parentGoal = goals.find((g) => g.id === (parentStory?.goalId || task.goalId));
+        const derivedSprintId = effectiveSprintId(task, stories, sprints);
+        return {
+          ...task,
+          sprintId: derivedSprintId ?? null,
+          theme: parentStory?.theme ?? parentGoal?.theme ?? task.theme,
+          estimatedHours,
+          referenceNumber: generateReferenceNumber(task, index),
+          storyTitle: parentStory?.title || '',
+          goalTitle: parentGoal?.title || '',
+          sprintName: sprintNameForId(sprints, derivedSprintId)
+        };
       });
 
-      return () => {
-        unsubscribeTasks();
-        unsubscribeProjects();
-      };
-    }
-  }, [currentUser, currentPersona, stories, goals, sprints]);
+    setTasks(tasksWithContext);
+  }, [rawTasks, stories, goals, sprints, currentPersona]);
 
   // Load sprints
   useEffect(() => {
