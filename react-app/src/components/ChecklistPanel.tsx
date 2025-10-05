@@ -6,6 +6,7 @@ import { startOfDay, endOfDay, formatDistanceToNow, format } from 'date-fns';
 import { httpsCallable } from 'firebase/functions';
 import { nextDueAt } from '../utils/recurrence';
 import { schedulerCollections, ScheduledInstanceModel } from '../domain/scheduler/repository';
+import { humanizePolicyMode } from '../utils/schedulerPolicy';
 
 export interface ChecklistPanelProps {
   title?: string;
@@ -263,6 +264,9 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         if (inst.status === 'unscheduled') {
           subtitlePieces.push(inst.statusReason || 'Waiting for block');
         }
+        if (inst.schedulingContext?.policyMode) {
+          subtitlePieces.push(`Policy: ${humanizePolicyMode(inst.schedulingContext.policyMode)}`);
+        }
         return {
           id: inst.id,
           title: label,
@@ -414,6 +418,68 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
     }
   };
 
+  const describeSource = (item: ChecklistItem): string => {
+    if (item.subtitle) return item.subtitle;
+    switch (item.source) {
+      case 'scheduled':
+        return 'Scheduled';
+      case 'unscheduled':
+        return 'Needs block';
+      case 'task':
+        return 'Task';
+      case 'chore':
+        return 'Chore';
+      case 'routine':
+        return 'Routine';
+      default:
+        return 'Habit';
+    }
+  };
+
+  const renderActions = (item: ChecklistItem) => {
+    const actions: React.ReactNode[] = [];
+    if ((item.source === 'scheduled' || item.source === 'unscheduled') && item.raw) {
+      const instance = item.raw as ScheduledInstanceModel;
+      if (instance.deepLink) {
+        actions.push(
+          <a
+            key="open"
+            className="btn btn-sm btn-outline-secondary"
+            href={instance.deepLink}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View
+          </a>,
+        );
+      }
+      if (instance.mobileCheckinUrl) {
+        actions.push(
+          <a
+            key="checkin"
+            className="btn btn-sm btn-outline-primary"
+            href={instance.mobileCheckinUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Check-in
+          </a>,
+        );
+      }
+    }
+    actions.push(
+      <button
+        key="done"
+        type="button"
+        className="btn btn-sm btn-outline-success"
+        onClick={() => markDone(item)}
+      >
+        Done
+      </button>,
+    );
+    return actions;
+  };
+
   const formatRelativeTime = (value?: number | null) => {
     if (!value) return '—';
     try {
@@ -444,26 +510,36 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
           <div className="col-12 col-md-6">
             <h6 className="text-muted">Now / Next</h6>
             {nowNext.length === 0 && <div className="text-muted small">Nothing pending</div>}
-            {nowNext.map(i => (
-              <div key={i.id} className="d-flex align-items-center justify-content-between border rounded p-2 mb-2">
-              <div className="d-flex flex-column">
-                <span className="fw-semibold">{i.title}</span>
-                <small className="text-muted">{i.subtitle || (i.source === 'scheduled' ? 'Scheduled' : i.source === 'unscheduled' ? 'Needs block' : i.source === 'task' ? 'Task' : i.source === 'chore' ? 'Chore' : 'Habit')}</small>
-              </div>
-              <button className="btn btn-sm btn-outline-success" onClick={() => markDone(i)}>Done</button>
+            {nowNext.map((item) => (
+              <div
+                key={item.id}
+                className="border rounded p-2 mb-2 d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-2"
+              >
+                <div className="d-flex flex-column">
+                  <span className="fw-semibold">{item.title}</span>
+                  <small className="text-muted">{describeSource(item)}</small>
+                </div>
+                <div className="d-flex flex-wrap gap-2 justify-content-end">
+                  {renderActions(item)}
+                </div>
               </div>
             ))}
           </div>
           <div className="col-12 col-md-6">
             <h6 className="text-muted">Later Today</h6>
             {later.length === 0 && <div className="text-muted small">Nothing later</div>}
-            {later.map(i => (
-              <div key={i.id} className="d-flex align-items-center justify-content-between border rounded p-2 mb-2">
+            {later.map((item) => (
+              <div
+                key={item.id}
+                className="border rounded p-2 mb-2 d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-2"
+              >
                 <div className="d-flex flex-column">
-                  <span className="fw-semibold">{i.title}</span>
-                  <small className="text-muted">{i.subtitle || (i.source === 'scheduled' ? 'Scheduled' : i.source === 'unscheduled' ? 'Needs block' : i.source === 'task' ? 'Task' : i.source === 'chore' ? 'Chore' : 'Habit')}</small>
+                  <span className="fw-semibold">{item.title}</span>
+                  <small className="text-muted">{describeSource(item)}</small>
                 </div>
-                <button className="btn btn-sm btn-outline-success" onClick={() => markDone(i)}>Done</button>
+                <div className="d-flex flex-wrap gap-2 justify-content-end">
+                  {renderActions(item)}
+                </div>
               </div>
             ))}
           </div>

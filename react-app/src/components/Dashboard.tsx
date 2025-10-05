@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Table } from 'react-bootstrap';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
@@ -15,8 +16,10 @@ import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import ThemeBreakdown from './ThemeBreakdown';
-import { format } from 'date-fns';
+import { format, startOfDay, endOfDay } from 'date-fns';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
+import { humanizePolicyMode } from '../utils/schedulerPolicy';
+import { nextDueAt } from '../utils/recurrence';
 
 interface DashboardStats {
   activeGoals: number;
@@ -27,9 +30,24 @@ interface DashboardStats {
   progressScore: number;
 }
 
+interface ReminderItem {
+  id: string;
+  title: string;
+  dueDate: Date | null;
+  taskId?: string | null;
+}
+
+interface ChecklistSnapshotItem {
+  id: string;
+  title: string;
+  dueAt: Date | null;
+  type: 'chore' | 'routine';
+}
+
 const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const navigate = useNavigate();
   
   // Debug logging for authentication
   console.log('🔍 Dashboard: currentUser:', currentUser);
@@ -56,6 +74,9 @@ const Dashboard: React.FC = () => {
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
+  const [remindersDueToday, setRemindersDueToday] = useState<ReminderItem[]>([]);
+  const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
+  const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const dailyBrief = () => {
     const parts: string[] = [];
     if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
@@ -170,7 +191,9 @@ const Dashboard: React.FC = () => {
       await Promise.all([
         loadLLMPriority(),
         loadTodayBlocks(),
-        countTasksDueToday()
+        countTasksDueToday(),
+        loadRemindersDueToday(),
+        loadChecklistDueToday()
       ]);
     } catch {}
 
@@ -277,6 +300,115 @@ const Dashboard: React.FC = () => {
     setTasksDueToday(count);
   };
 
+  const decodeToDate = (value: any): Date | null => {
+    if (value == null) return null;
+    if (value instanceof Date) return value;
+    if (typeof value === 'object' && typeof value.toDate === 'function') {
+      try { return value.toDate(); } catch { return null; }
+    }
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return new Date(numeric);
+    }
+    return null;
+  };
+
+  const loadRemindersDueToday = async () => {
+    if (!currentUser) {
+      setRemindersDueToday([]);
+      return;
+    }
+    const start = startOfDay(new Date()).getTime();
+    const end = endOfDay(new Date()).getTime();
+    const remindersQuery = query(
+      collection(db, 'reminders'),
+      where('ownerUid', '==', currentUser.uid),
+      where('dueDate', '>=', start),
+      where('dueDate', '<=', end)
+    );
+    const snap = await getDocs(remindersQuery).catch(() => null);
+    if (!snap) {
+      setRemindersDueToday([]);
+      return;
+    }
+    const items: ReminderItem[] = [];
+    snap.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      if ((data.status || 'open') === 'done') return;
+      const dueDate = decodeToDate(data.dueDate || data.dueAt);
+      items.push({
+        id: docSnap.id,
+        title: data.title || data.note || 'Reminder',
+        dueDate,
+        taskId: data.taskId || null,
+      });
+    });
+    items.sort((a, b) => {
+      const aTime = a.dueDate ? a.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
+      const bTime = b.dueDate ? b.dueDate.getTime() : Number.MAX_SAFE_INTEGER;
+      return aTime - bTime;
+    });
+    setRemindersDueToday(items);
+  };
+
+  const loadChecklistDueToday = async () => {
+    if (!currentUser) {
+      setChoresDueToday([]);
+      setRoutinesDueToday([]);
+      return;
+    }
+
+    const start = startOfDay(new Date()).getTime();
+    const end = endOfDay(new Date()).getTime();
+
+    const choreSnap = await getDocs(query(collection(db, 'chores'), where('ownerUid', '==', currentUser.uid))).catch(() => null);
+    const routineSnap = await getDocs(query(collection(db, 'routines'), where('ownerUid', '==', currentUser.uid))).catch(() => null);
+
+    const chores: ChecklistSnapshotItem[] = [];
+    if (choreSnap) {
+      choreSnap.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const dtstart = data.dtstart || data.createdAt || undefined;
+        const computed = nextDueAt(data.rrule, typeof dtstart === 'number' ? dtstart : undefined, start);
+        const due = data.nextDueAt || computed;
+        if (due && due >= start && due <= end) {
+          chores.push({
+            id: docSnap.id,
+            title: data.title || 'Chore',
+            dueAt: new Date(due),
+            type: 'chore',
+          });
+        }
+      });
+    }
+
+    const routines: ChecklistSnapshotItem[] = [];
+    if (routineSnap) {
+      routineSnap.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const rrule = data.recurrence?.rrule || data.rrule;
+        if (!rrule) return;
+        const dtstart = data.recurrence?.dtstart || data.dtstart || data.createdAt || undefined;
+        const computed = nextDueAt(rrule, typeof dtstart === 'number' ? dtstart : undefined, start);
+        const due = data.nextDueAt || computed;
+        if (due && due >= start && due <= end) {
+          routines.push({
+            id: docSnap.id,
+            title: data.name || 'Routine',
+            dueAt: new Date(due),
+            type: 'routine',
+          });
+        }
+      });
+    }
+
+    chores.sort((a, b) => (a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER));
+    routines.sort((a, b) => (a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER));
+
+    setChoresDueToday(chores);
+    setRoutinesDueToday(routines);
+  };
+
   const getStatusColor = (status: string): string => {
     switch (status) {
       case 'done': return 'success';
@@ -293,6 +425,22 @@ const Dashboard: React.FC = () => {
       case 'P3': case 'low': return 'secondary';
       default: return 'secondary';
     }
+  };
+
+  const handleNavigateToTasksToday = () => {
+    navigate('/tasks', { state: { preset: 'dueToday' } });
+  };
+
+  const handleNavigateToCalendarToday = () => {
+    navigate('/calendar', { state: { focus: 'today' } });
+  };
+
+  const handleOpenChecklist = () => {
+    navigate('/calendar', { state: { focus: 'checklist' } });
+  };
+
+  const handleThemeSelect = (themeId: string) => {
+    navigate('/stories', { state: { themeId } });
   };
 
   if (!currentUser) {
@@ -346,18 +494,30 @@ const Dashboard: React.FC = () => {
           {/* Key Stats Row */}
           <Row className="mb-4">
             <Col md={6} lg={3}>
-              <Card className="text-center h-100">
+              <Card
+                className="text-center h-100"
+                role="button"
+                style={{ cursor: 'pointer' }}
+                onClick={handleNavigateToTasksToday}
+              >
                 <Card.Body>
                   <h3 className="text-warning">{tasksDueToday}</h3>
                   <p className="mb-0">Tasks Due Today</p>
+                  <small className="text-muted d-block mt-1">Click to review due items</small>
                 </Card.Body>
               </Card>
             </Col>
             <Col md={6} lg={3}>
-              <Card className="text-center h-100">
+              <Card
+                className="text-center h-100"
+                role="button"
+                style={{ cursor: 'pointer' }}
+                onClick={handleNavigateToCalendarToday}
+              >
                 <Card.Body>
                   <h3 className="text-info">{todayBlocks.length}</h3>
                   <p className="mb-0">Today's Blocks</p>
+                  <small className="text-muted d-block mt-1">Open planner for today</small>
                 </Card.Body>
               </Card>
             </Col>
@@ -374,11 +534,28 @@ const Dashboard: React.FC = () => {
                     <Alert variant="warning" className="mb-3">
                       <strong>Scheduling issues:</strong>
                       <ul className="mb-0 small">
-                        {unscheduledSummary.map((item) => (
-                          <li key={item.id}>
-                            {item.title || item.sourceId} · {item.statusReason || 'Needs block'}
-                          </li>
-                        ))}
+                        {unscheduledSummary.map((item) => {
+                          const label = item.title || item.sourceId;
+                          const policyLabel = item.schedulingContext?.policyMode
+                            ? humanizePolicyMode(item.schedulingContext.policyMode)
+                            : null;
+                          return (
+                            <li key={item.id}>
+                              {item.deepLink ? (
+                                <a href={item.deepLink} target="_blank" rel="noopener noreferrer">
+                                  {label}
+                                </a>
+                              ) : (
+                                label
+                              )}
+                              {item.statusReason && <span> · {item.statusReason}</span>}
+                              {policyLabel && <span> · {policyLabel}</span>}
+                              {item.mobileCheckinUrl && (
+                                <span> · <a href={item.mobileCheckinUrl} target="_blank" rel="noopener noreferrer">Check-in</a></span>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
                       {unscheduledToday.length > unscheduledSummary.length && (
                         <div className="small text-muted mt-1">+{unscheduledToday.length - unscheduledSummary.length} more</div>
@@ -386,6 +563,11 @@ const Dashboard: React.FC = () => {
                     </Alert>
                   )}
                   <ChecklistPanel title="Today's Checklist" compact />
+                  <div className="d-flex justify-content-end mt-3">
+                    <Button variant="outline-primary" size="sm" onClick={handleOpenChecklist}>
+                      Open Planner Checklist
+                    </Button>
+                  </div>
                 </Card.Body>
               </Card>
             </Col>
@@ -421,7 +603,82 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
             <Col lg={4} className="mb-3">
-              <ThemeBreakdown />
+              <ThemeBreakdown onThemeSelect={handleThemeSelect} />
+            </Col>
+          </Row>
+
+          <Row className="mb-4">
+            <Col lg={6} className="mb-3">
+              <Card className="h-100">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <h5 className="mb-0">Reminders Due Today</h5>
+                  <Badge bg="warning" text="dark">{remindersDueToday.length}</Badge>
+                </Card.Header>
+                <Card.Body>
+                  {remindersDueToday.length === 0 ? (
+                    <div className="text-muted">No reminders remaining today.</div>
+                  ) : (
+                    <ul className="list-unstyled mb-3">
+                      {remindersDueToday.slice(0, 4).map((reminder) => (
+                        <li key={reminder.id} className="d-flex justify-content-between align-items-center py-1">
+                          <span>{reminder.title}</span>
+                          <small className="text-muted ms-2">
+                            {reminder.dueDate ? format(reminder.dueDate, 'HH:mm') : 'Anytime'}
+                          </small>
+                        </li>
+                      ))}
+                      {remindersDueToday.length > 4 && (
+                        <li className="text-muted small">+{remindersDueToday.length - 4} more</li>
+                      )}
+                    </ul>
+                  )}
+                  <div className="d-flex justify-content-end">
+                    <Button size="sm" variant="outline-primary" onClick={handleNavigateToTasksToday}>
+                      Review tasks & reminders
+                    </Button>
+                  </div>
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col lg={6} className="mb-3">
+              <Card className="h-100">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <h5 className="mb-0">Routines &amp; Chores Today</h5>
+                  <Badge bg="info">{choresDueToday.length + routinesDueToday.length}</Badge>
+                </Card.Header>
+                <Card.Body>
+                  {choresDueToday.length + routinesDueToday.length === 0 ? (
+                    <div className="text-muted">No routines or chores scheduled today.</div>
+                  ) : (
+                    <ul className="list-unstyled mb-3">
+                      {[...choresDueToday, ...routinesDueToday]
+                        .sort((a, b) => (a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER))
+                        .slice(0, 4)
+                        .map((item) => (
+                          <li key={`${item.type}-${item.id}`} className="d-flex justify-content-between align-items-center py-1">
+                            <span>
+                              <Badge bg={item.type === 'chore' ? 'secondary' : 'success'} className="me-2">
+                                {item.type === 'chore' ? 'Chore' : 'Routine'}
+                              </Badge>
+                              {item.title}
+                            </span>
+                            <small className="text-muted ms-2">
+                              {item.dueAt ? format(item.dueAt, 'HH:mm') : 'Anytime'}
+                            </small>
+                          </li>
+                        ))}
+                      {(choresDueToday.length + routinesDueToday.length) > 4 && (
+                        <li className="text-muted small">+{choresDueToday.length + routinesDueToday.length - 4} more</li>
+                      )}
+                    </ul>
+                  )}
+                  <div className="d-flex justify-content-end">
+                    <Button size="sm" variant="outline-primary" onClick={handleOpenChecklist}>
+                      Open daily checklist
+                    </Button>
+                  </div>
+                </Card.Body>
+              </Card>
             </Col>
           </Row>
         </Col>

@@ -599,6 +599,13 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     });
     const ref = db.collection('scheduled_instances').doc(id);
     const isExisting = existingIds.has(id);
+    const schedulingContext = {
+      solverRunId: plan.solverRunId,
+      policyMode: 'policyMode' in unscheduled ? unscheduled.policyMode || null : null,
+    };
+    if (unscheduled.deepLink) {
+      schedulingContext.deepLink = unscheduled.deepLink;
+    }
     const payload = {
       id,
       userId: uid,
@@ -613,6 +620,9 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
       priority: 5,
       requiredBlockId: unscheduled.requiredBlockId || null,
       candidateBlockIds: unscheduled.candidateBlockIds || [],
+      deepLink: unscheduled.deepLink || null,
+      mobileCheckinUrl: unscheduled.mobileCheckinUrl || null,
+      schedulingContext,
       updatedAt: nowMs,
     };
     if (!isExisting) {
@@ -1575,6 +1585,59 @@ exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MO
   const uid = req.auth.uid;
   const analytics = await computeMonzoAnalytics(uid);
   return { ok: true, analytics };
+});
+
+exports.generateMonzoAuditReport = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const analytics = await computeMonzoAnalytics(uid);
+  const summary = analytics.summarySnapshot || {};
+  const alignment = analytics.alignmentDoc || {};
+
+  const recommendations = [];
+  const pendingCount = Number(summary.pendingCount || 0);
+  if (pendingCount > 0) {
+    recommendations.push(`Categorise ${pendingCount} pending transaction${pendingCount === 1 ? '' : 's'} to improve budget accuracy.`);
+  }
+
+  const budgetAlerts = (summary.budgetProgress || []).filter((entry) => Number(entry.variance) < 0);
+  if (budgetAlerts.length) {
+    const labels = budgetAlerts.map((entry) => entry.key).slice(0, 5).join(', ');
+    recommendations.push(`Over-budget categories detected: ${labels}. Review allocations or reclassify upcoming spends.`);
+  }
+
+  const themeShortfalls = (alignment.themes || []).filter((theme) => Number(theme.totalShortfall) > 0);
+  if (themeShortfalls.length) {
+    const labels = themeShortfalls.map((theme) => `${theme.themeName}: £${Number(theme.totalShortfall || 0).toFixed(2)}`).slice(0, 5).join('; ');
+    recommendations.push(`Theme funding gaps identified — prioritise transfers: ${labels}.`);
+  }
+
+  const merchantGaps = (summary.pendingClassification || []).slice(0, 10);
+
+  const audit = {
+    totals: summary.totals || {},
+    netCashflow: summary.netCashflow || 0,
+    pendingCount,
+    pendingClassification: merchantGaps,
+    budgetAlerts,
+    themeProgress: alignment.themes || [],
+    recommendations,
+  };
+
+  const db = admin.firestore();
+  await db.collection('monzo_audit_reports').doc(uid).set({
+    ownerUid: uid,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    audit,
+  }, { merge: true });
+
+  return {
+    ok: true,
+    audit: {
+      ...audit,
+      generatedAt: new Date().toISOString(),
+    },
+  };
 });
 
 // Nightly analytics refresh for all users with Monzo connected
@@ -2730,6 +2793,7 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
   const canonicalNotes = new Map();
   const duplicateUpdates = [];
   const summary = [];
+  const duplicateReminderMappings = [];
 
   for (const group of groups) {
     const ids = group.ids.map(id => id);
@@ -2755,6 +2819,8 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
 
     summary.push({ kept: canonical.id, removed: duplicates.map(d => d.id), keys: Array.from(group.keys) });
 
+    const canonicalRefValue = canonical.ref || canonical.reference || canonical.displayId || canonical.id;
+
     duplicates.forEach(dup => {
       duplicateUpdates.push({
         id: dup.id,
@@ -2768,6 +2834,12 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
           deleted: true,
           serverUpdatedAt: Date.now()
         }
+      });
+      duplicateReminderMappings.push({
+        duplicateId: dup.id,
+        canonicalId: canonical.id,
+        canonicalRef: canonicalRefValue,
+        canonicalTitle: canonical.title || canonicalRefValue,
       });
     });
 
@@ -2811,6 +2883,35 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
   }
 
   await bulk.close();
+
+  if (duplicateReminderMappings.length) {
+    const reminderUpdates = [];
+    for (const mapping of duplicateReminderMappings) {
+      try {
+        const remindersSnap = await db.collection('reminders').where('taskId', '==', mapping.duplicateId).get();
+        remindersSnap.forEach((reminderDoc) => {
+          const reminderData = reminderDoc.data() || {};
+          const existingNote = reminderData.note || '';
+          const mergeNote = `Merged into ${mapping.canonicalRef || mapping.canonicalId}`;
+          const note = existingNote.includes(mergeNote)
+            ? existingNote
+            : `${existingNote}\n${mergeNote}`.trim();
+          reminderUpdates.push(reminderDoc.ref.set({
+            status: 'completed',
+            completedAt: admin.firestore.FieldValue.serverTimestamp(),
+            note,
+            syncState: 'dirty',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true }));
+        });
+      } catch (error) {
+        console.warn('[dedupe] reminder sync failed', { taskId: mapping.duplicateId, error: error?.message || error });
+      }
+    }
+    if (reminderUpdates.length) {
+      await Promise.all(reminderUpdates);
+    }
+  }
 
   const activityRef = db.collection('activity_stream').doc();
   await activityRef.set({

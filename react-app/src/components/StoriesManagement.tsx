@@ -18,6 +18,7 @@ import CompactSprintMetrics from './CompactSprintMetrics';
 import { themeVars } from '../utils/themeVars';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -27,6 +28,7 @@ const StoriesManagement: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [filterGoalInput, setFilterGoalInput] = useState<string>('');
+  const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -59,6 +61,15 @@ const StoriesManagement: React.FC = () => {
     console.log('🎯 Filter Goal:', filterGoal);
     console.log('🔍 Search Term:', searchTerm || '(empty)');
   }, [filterStatus, filterGoal, searchTerm]);
+
+  useEffect(() => {
+    const state = location.state as { themeId?: string } | null;
+    if (state?.themeId) {
+      setFilterTheme(String(state.themeId));
+      // Clear navigation state to avoid reapplying on re-render
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, navigate, location.pathname]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -307,6 +318,7 @@ const StoriesManagement: React.FC = () => {
     if (applyActiveSprintFilter && activeSprintId && story.sprintId !== activeSprintId) return false;
     if (filterStatus !== 'all' && !isStatus(story.status, filterStatus)) return false;
     if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
+    if (filterTheme !== 'all' && String(story.theme ?? '') !== filterTheme) return false;
     if (searchTerm && !story.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -522,6 +534,16 @@ const StoriesManagement: React.FC = () => {
             </Row>
             <Row style={{ marginTop: '16px' }}>
               <Col>
+                {filterTheme !== 'all' && (
+                  <div className="mb-2">
+                    <Badge bg="info" text="dark" className="me-2">
+                      Theme filter active
+                    </Badge>
+                    <Button size="sm" variant="outline-info" onClick={() => setFilterTheme('all')}>
+                      Clear theme filter
+                    </Button>
+                  </div>
+                )}
                 <Button 
                   variant="outline-secondary" 
                   onClick={() => {
@@ -529,6 +551,7 @@ const StoriesManagement: React.FC = () => {
                     setFilterGoal('all');
                     setFilterGoalInput('');
                     setSearchTerm('');
+                    setFilterTheme('all');
                   }}
                   style={{ borderColor: themeVars.border as string }}
                 >
@@ -687,3 +710,5 @@ const StoriesManagement: React.FC = () => {
 };
 
 export default StoriesManagement;
+  const location = useLocation();
+  const navigate = useNavigate();

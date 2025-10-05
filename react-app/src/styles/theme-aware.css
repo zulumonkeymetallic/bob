@@ -330,3 +330,13 @@
     --border-secondary: #6c757d;
   }
 }
+
+.theme-breakdown-row {
+  border-radius: 8px;
+  padding: 6px 8px;
+  transition: background-color 0.2s ease;
+}
+
+.theme-breakdown-row:hover {
+  background-color: rgba(148, 163, 184, 0.12);
+}

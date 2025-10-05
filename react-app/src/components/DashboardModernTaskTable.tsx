@@ -10,6 +10,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import { getThemeClass, getThemeName, getStatusName, getPriorityName } from '../utils/statusHelpers';
 import { getDeadlineInfo } from '../utils/deadlineUtils';
 import ModernTaskTable from './ModernTaskTable';
+import { useSprint } from '../contexts/SprintContext';
 
 interface DashboardModernTaskTableProps {
   maxTasks?: number;
@@ -26,6 +27,7 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { selectedSprintId } = useSprint();
   
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
@@ -45,11 +47,18 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
 
     const setupSubscriptions = () => {
       // Tasks subscription
-      const tasksQuery = query(
-        collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona)
-      );
+      const tasksQuery = selectedSprintId
+        ? query(
+            collection(db, 'tasks'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            where('sprintId', '==', selectedSprintId)
+          )
+        : query(
+            collection(db, 'tasks'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona)
+          );
       
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
         const tasksData = snapshot.docs.map(doc => ({
@@ -89,7 +98,11 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
             .slice(0, maxTasks);
         }
         
-        setTasks(filteredTasks);
+        const sprintFiltered = selectedSprintId
+          ? filteredTasks.filter(task => task.sprintId === selectedSprintId)
+          : filteredTasks;
+
+        setTasks(sprintFiltered);
       });
 
       // Stories subscription
@@ -148,7 +161,7 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
     };
 
     return setupSubscriptions();
-  }, [currentUser, currentPersona, maxTasks, showDueToday]);
+  }, [currentUser, currentPersona, maxTasks, showDueToday, selectedSprintId]);
 
   // Calculate metrics when data changes
   useEffect(() => {
