@@ -1,13 +1,13 @@
 // Version tracking for cache busting
 // Align version with branch build
-export const VERSION = '3.9.1';
+export const VERSION = '3.9.4';
 export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'main-3.9.1';
+export const BUILD_HASH = 'feature-ai-focus-scheduling-3.9.4';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Bulk create FAB flow & sprint filters`);
-console.log(`🔧 Fixes: Clipboard modal polish, sprint filtering for unassigned work items`);
-console.log(`🎯 Features: Backlog capture docs, AI-assisted creation flows`);
+console.log(`✅ Status: Unified daily briefing + checklist`);
+console.log(`🔧 Fixes: Dashboard checklist rendering & task route consolidation`);
+console.log(`🎯 Features: AI-generated morning brief, /tasks navigation update`);
 console.log(`🚀 Architecture: Cache bust via ${BUILD_HASH}`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 

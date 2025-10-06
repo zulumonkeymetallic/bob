@@ -34,7 +34,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   // const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance']);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance', 'Settings', 'Logs']);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
 
   const navigationGroups: NavigationGroup[] = [
@@ -67,9 +67,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Finance',
       icon: 'piggy-bank',
       items: [
-        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
-        { label: 'Integrations', path: '/settings?tab=integrations', icon: 'plug' },
-        { label: 'Integration Logs', path: '/integrations/logs', icon: 'stream' }
+        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' }
       ]
     },
     {
@@ -91,8 +89,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Tasks',
       icon: 'list-check',
       items: [
-        { label: 'Tasks List', path: '/task-list', icon: 'list' },
-        { label: 'Task Board', path: '/tasks', icon: 'clipboard' }
+        { label: 'Tasks List', path: '/tasks', icon: 'list' }
       ]
     },
     {
@@ -137,11 +134,25 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     },
     // (Removed Data Management per request)
     {
-      label: 'System',
+      label: 'Settings',
       icon: 'cog',
       items: [
-        { label: 'Settings', path: '/theme-colors', icon: 'cog' },
-        { label: 'Integration Logs', path: '/integrations/logs', icon: 'stream' }
+        { label: 'Overview', path: '/settings', icon: 'sliders-h' },
+        { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
+        { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
+        { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
+        { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
+        { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
+        { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
+        { label: 'Trakt', path: '/settings/integrations/trakt', icon: 'film' }
+      ]
+    },
+    {
+      label: 'Logs',
+      icon: 'stream',
+      items: [
+        { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
+        { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' }
       ]
     },
     // Removed duplicate Health group at bottom

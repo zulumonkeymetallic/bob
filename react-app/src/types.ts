@@ -106,6 +106,8 @@ export interface Task {
   estimatedHours?: number;
   startDate?: number;
   dueDate?: number;
+  dueDateMs?: number;
+  targetDate?: number | string;
   labels?: string[];
   blockedBy?: string[];
   dependsOn?: string[];
@@ -202,7 +204,7 @@ export interface CalendarBlock {
   seriesId?: string;
   subTheme?: string;
   persona: 'personal' | 'work';
-  theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
+  theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home' | string;
   category: 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep';
   start: number; // timestamp
   end: number; // timestamp

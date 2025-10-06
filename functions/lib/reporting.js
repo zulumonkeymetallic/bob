@@ -10,6 +10,7 @@ const {
   toDateTime,
   toMillis,
 } = require('./time');
+const { expandRecurrence } = require('../scheduler/engine');
 
 const TASK_DONE_STATUSES = new Set(['done', 'completed', 'complete', 'archived', 2, 3]);
 const STORY_DONE_STATUSES = new Set(['done', 'complete', 'archived', 3]);
@@ -47,6 +48,46 @@ const resolveTimezone = (profile, fallback) => {
 };
 
 const toList = (snap) => snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+
+const computeNextOccurrenceInWindow = (recurrence, dtstart, windowStart, windowEnd) => {
+  if (!recurrence || !recurrence.rrule) return null;
+  try {
+    const occurrences = expandRecurrence(
+      { ...recurrence, dtstart },
+      windowStart.minus({ days: 1 }),
+      windowEnd.plus({ days: 1 }),
+    );
+    if (!Array.isArray(occurrences) || !occurrences.length) return null;
+    const startMs = windowStart.toMillis();
+    const endMs = windowEnd.toMillis();
+    const directHit = occurrences.find((occ) => {
+      const millis = occ.toMillis();
+      return millis >= startMs && millis <= endMs;
+    });
+    if (directHit) return directHit.toMillis();
+    const nextAfterStart = occurrences.find((occ) => occ.toMillis() >= startMs);
+    return nextAfterStart ? nextAfterStart.toMillis() : occurrences[0].toMillis();
+  } catch (error) {
+    console.warn('[reporting] recurrence expansion failed', error?.message || error);
+    return null;
+  }
+};
+
+const resolveRecurringDueWithinWindow = (entity, windowStart, windowEnd) => {
+  const startMs = windowStart.toMillis();
+  const endMs = windowEnd.toMillis();
+  const direct = toMillis(entity.nextDueAt || entity.nextDue || entity.dueDate || entity.dueAt);
+  if (direct && direct >= startMs && direct <= endMs) {
+    return direct;
+  }
+  const recurrence = entity.recurrence || null;
+  if (!recurrence || !recurrence.rrule) return null;
+  const dtstart = recurrence.dtstart || entity.dtstart || entity.createdAt || null;
+  const computed = computeNextOccurrenceInWindow(recurrence, dtstart, windowStart, windowEnd);
+  if (!computed) return null;
+  if (computed >= startMs && computed <= endMs) return computed;
+  return null;
+};
 
 const buildActivityIndex = async (db, userId, limit = 400) => {
   const activitySnap = await db
@@ -182,15 +223,31 @@ const ensureGoalReference = (goal) => {
 
 const makeDeepLink = (type, refOrId) => {
   if (!type || !refOrId) return null;
-  const base = type === 'task' ? '/task/' : type === 'story' ? '/story/' : type === 'goal' ? '/goal/' : '/';
+  const base =
+    type === 'task' ? '/task/' :
+    type === 'story' ? '/story/' :
+    type === 'goal' ? '/goal/' :
+    type === 'chore' ? '/chore/' :
+    type === 'routine' ? '/routine/' :
+    '/';
   return `${base}${refOrId}`;
 };
 
 const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-GB' }) => {
   const zone = coerceZone(timezone || DEFAULT_TIMEZONE);
   const { start, end } = computeDayWindow({ day, timezone: zone });
+  const startMs = start.toMillis();
+  const endMs = end.toMillis();
 
-  const [tasksSnap, storiesSnap, calendarSnap, remindersSnap, schedulerSnap] = await Promise.all([
+  const [
+    tasksSnap,
+    storiesSnap,
+    calendarSnap,
+    remindersSnap,
+    schedulerSnap,
+    choresSnap,
+    routinesSnap,
+  ] = await Promise.all([
     db.collection('tasks').where('ownerUid', '==', userId).get(),
     db.collection('stories').where('ownerUid', '==', userId).get(),
     db.collection('calendar_blocks').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
@@ -202,13 +259,15 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       .limit(1)
       .get()
       .catch(() => ({ docs: [] })),
+    db.collection('chores').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('routines').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
   ]);
 
   const tasks = toList(tasksSnap).filter((task) => {
     if (TASK_DONE_STATUSES.has(task.status)) return false;
     const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
     if (!dueMs) return false;
-    return dueMs >= start.toMillis() && dueMs <= end.toMillis();
+    return dueMs >= startMs && dueMs <= endMs;
   });
 
   const stories = toList(storiesSnap).filter((story) => {
@@ -220,7 +279,73 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     return true;
   });
 
+  const rawChores = toList(choresSnap);
+  const dueChores = rawChores
+    .map((chore) => {
+      const dueMs = resolveRecurringDueWithinWindow(chore, start, end);
+      if (!dueMs) return null;
+      const dueDt = DateTime.fromMillis(dueMs, { zone });
+      return {
+        id: chore.id,
+        title: chore.title || 'Chore',
+        dueMs,
+        dueIso: dueDt.toISO(),
+        dueDisplay: formatDateTime(dueDt, { locale }),
+        cadence: chore.recurrence?.rrule || null,
+        durationMinutes: Number(chore.durationMinutes || 0) || null,
+        priority: Number(chore.priority || 0) || null,
+        tags: Array.isArray(chore.tags) ? chore.tags : [],
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.dueMs || Number.MAX_SAFE_INTEGER) - (b.dueMs || Number.MAX_SAFE_INTEGER));
+
+  const rawRoutines = toList(routinesSnap);
+  const dueRoutines = rawRoutines
+    .map((routine) => {
+      const dueMs = resolveRecurringDueWithinWindow(routine, start, end);
+      if (!dueMs) return null;
+      const dueDt = DateTime.fromMillis(dueMs, { zone });
+      return {
+        id: routine.id,
+        title: routine.name || routine.title || 'Routine',
+        dueMs,
+        dueIso: dueDt.toISO(),
+        dueDisplay: formatDateTime(dueDt, { locale }),
+        cadence: routine.recurrence?.rrule || null,
+        durationMinutes: Number(routine.durationMinutes || 0) || null,
+        priority: Number(routine.priority || 0) || null,
+        tags: Array.isArray(routine.tags) ? routine.tags : [],
+        goalId: routine.goalId || null,
+        theme: routine.theme || null,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.dueMs || Number.MAX_SAFE_INTEGER) - (b.dueMs || Number.MAX_SAFE_INTEGER));
+
   const { goalsById, storiesById } = await collectGoalsAndStories(db, tasks, stories);
+  const taskSummaries = tasks.map((task) => {
+    const goal = task.goalId ? goalsById.get(task.goalId) : null;
+    const story = task.storyId ? storiesById.get(task.storyId) : null;
+    const dueDt = toDateTime(task.dueDate || task.dueDateMs || task.targetDate, { zone });
+    return {
+      id: task.id,
+      ref: ensureTaskReference(task),
+      title: task.title || task.description || 'Task',
+      goalId: goal?.id || null,
+      goalTitle: goal?.title || null,
+      storyId: story?.id || null,
+      storyTitle: story?.title || null,
+      theme: task.theme || goal?.theme || story?.theme || 'General',
+      persona: task.persona || null,
+      dueMs: dueDt ? dueDt.toMillis() : null,
+      dueIso: dueDt ? dueDt.toISO() : null,
+      dueDisplay: dueDt ? formatDateTime(dueDt, { locale }) : null,
+      deepLink: makeDeepLink('task', ensureTaskReference(task)),
+      status: normaliseTaskStatus(task.status),
+      estimateMinutes: Number(task.estimateMin || task.estimatedMinutes || 0) || null,
+    };
+  });
   const { latestByEntity } = await buildActivityIndex(db, userId, 400);
 
   const hierarchy = [];
@@ -465,6 +590,27 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     console.warn('[reporting] fitness lookup failed', error?.message || error);
   }
 
+  let monzo = null;
+  try {
+    const budgetDoc = await db.collection('monzo_budget_summary').doc(userId).get();
+    if (budgetDoc.exists) {
+      const data = budgetDoc.data() || {};
+      monzo = {
+        totals: data.totals || null,
+        categories: Array.isArray(data.categories) ? data.categories.slice(0, 10) : [],
+        updatedAt: data.updatedAt || null,
+      };
+    }
+    const alignmentDoc = await db.collection('monzo_goal_alignment').doc(userId).get();
+    if (alignmentDoc.exists) {
+      monzo = Object.assign({}, monzo || {}, {
+        goalAlignment: alignmentDoc.data() || null,
+      });
+    }
+  } catch (error) {
+    console.warn('[reporting] monzo lookup failed', error?.message || error);
+  }
+
   const manualRerunCallable = 'sendDailySummaryNow';
 
   const schedulerChanges = schedulerSnap.docs[0]?.data()?.changes || [];
@@ -480,12 +626,16 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       manualCallable: manualRerunCallable,
     },
     hierarchy,
+    tasksDue: taskSummaries,
     storiesToStart,
     calendarBlocks,
     reminders,
+    choresDue: dueChores,
+    routinesDue: dueRoutines,
     priorities,
     worldSummary: worldSummary ? { summary: worldSummary, weather: worldWeather, source: worldSource } : null,
     fitness,
+    monzo,
     profile,
     schedulerChanges,
   };

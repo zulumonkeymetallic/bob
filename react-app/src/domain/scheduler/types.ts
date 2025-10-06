@@ -1,5 +1,5 @@
 export type BlockPriority = 1 | 2 | 3 | 4 | 5; // 1 = highest, 5 = lowest
-export type SourceType = 'chore' | 'routine';
+export type SourceType = 'chore' | 'routine' | 'task' | 'story';
 export type ScheduledInstanceStatus =
   | 'draft'
   | 'planned'
@@ -259,6 +259,12 @@ export interface ScheduledInstanceModel {
     deepLink?: string | null;
   };
   external?: ExternalSyncState;
+  /** Optional enrichment from scheduling engine */
+  theme?: string | number | null;
+  goalId?: string | null;
+  storyId?: string | null;
+  persona?: string | null;
+  tags?: string[];
   createdAt: number;
   updatedAt: number;
 }

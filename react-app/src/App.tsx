@@ -6,7 +6,6 @@ import TaskListView from './components/TaskListView';
 import GoalsManagement from './components/GoalsManagement';
 import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
-import TasksList from './components/TasksList';
 import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import BacklogManager from './components/BacklogManager';
@@ -63,6 +62,15 @@ import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboard from './components/FinanceDashboard';
 import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
+import SettingsEmailPage from './components/settings/SettingsEmailPage';
+import SettingsPlannerPage from './components/settings/SettingsPlannerPage';
+import AiDiagnosticsLogs from './components/logs/AiDiagnosticsLogs';
+import GoogleCalendarSettings from './components/settings/integrations/GoogleCalendarSettings';
+import MonzoSettings from './components/settings/integrations/MonzoSettings';
+import StravaSettings from './components/settings/integrations/StravaSettings';
+import SteamSettings from './components/settings/integrations/SteamSettings';
+import TraktSettings from './components/settings/integrations/TraktSettings';
+
 
 // Lazy-loaded heavy routes
 const TravelMap = React.lazy(() => import('./components/travel/TravelMap'));
@@ -191,8 +199,9 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/tasks" element={<TasksList />} />
-              <Route path="/task-list" element={<TaskListView />} />
+              <Route path="/tasks" element={<TaskListView />} />
+              <Route path="/task" element={<Navigate to="/tasks" replace />} />
+              <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
               <Route path="/games-backlog" element={<GamesBacklog />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
@@ -236,8 +245,9 @@ function AppContent() {
             <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
             <Route path="/routes" element={<RoutesManagementView />} />
             <Route path="/routes/optimization" element={<RoutesManagementView />} />
-            <Route path="/finance/integrations" element={<IntegrationSettings />} />
-            <Route path="/integrations/logs" element={<IntegrationLogs />} />
+            <Route path="/finance/integrations" element={<Navigate to="/settings/integrations" replace />} />
+            <Route path="/logs/integrations" element={<IntegrationLogs />} />
+            <Route path="/logs/ai" element={<AiDiagnosticsLogs />} />
             <Route
               path="/travel"
               element={
@@ -254,8 +264,16 @@ function AppContent() {
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/finance" element={<FinanceDashboard />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/email" element={<SettingsEmailPage />} />
+            <Route path="/settings/planner" element={<SettingsPlannerPage />} />
+            <Route path="/settings/integrations" element={<IntegrationSettings />} />
+            <Route path="/settings/integrations/google" element={<GoogleCalendarSettings />} />
+            <Route path="/settings/integrations/monzo" element={<MonzoSettings />} />
+            <Route path="/settings/integrations/strava" element={<StravaSettings />} />
+            <Route path="/settings/integrations/steam" element={<SteamSettings />} />
+            <Route path="/settings/integrations/trakt" element={<TraktSettings />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
-            <Route path="/admin" element={<Navigate to="/settings?tab=integrations" replace />} />
+            <Route path="/admin" element={<Navigate to="/settings/integrations" replace />} />
             {/* Removed by request: Test Suite and Changelog routes */}
             <Route path="/test" element={<Navigate to="/dashboard" replace />} />
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />

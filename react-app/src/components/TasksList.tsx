@@ -118,6 +118,23 @@ const TasksList: React.FC = () => {
     return Math.round(value * 100) / 100;
   };
 
+  const isDueToday = (task: TaskWithContext): boolean => {
+    const raw = (task as any).dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs ?? null;
+    if (!raw) return false;
+    const dateValue = raw instanceof Date
+      ? raw
+      : typeof raw === 'object' && typeof raw.toDate === 'function'
+      ? raw.toDate()
+      : Number.isFinite(Number(raw))
+      ? new Date(Number(raw))
+      : new Date(raw);
+    if (!(dateValue instanceof Date) || Number.isNaN(dateValue.getTime())) return false;
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+    return dateValue >= start && dateValue <= end;
+  };
+
   const handleCloseAiModal = () => {
     setShowAiModal(false);
     setAiSuggestions([]);
@@ -1332,17 +1349,3 @@ const TasksList: React.FC = () => {
 };
 
 export default TasksList;
-  useEffect(() => {
-    const state = location.state as { preset?: string } | null;
-    if (state?.preset === 'dueToday') {
-      setFilters(prev => ({ ...prev, due: 'today' }));
-      navigate(location.pathname, { replace: true, state: null });
-    }
-  }, [location.state, navigate, location.pathname]);
-
-  const isDueToday = (task: TaskWithContext) => {
-    if (!task.dueDate) return false;
-    const dueDate = task.dueDate instanceof Date ? task.dueDate : new Date(task.dueDate);
-    const today = new Date();
-    return dueDate.toDateString() === today.toDateString();
-  };

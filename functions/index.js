@@ -27,6 +27,7 @@ const {
 const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime } = require('./lib/time');
+const crypto = require('crypto');
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -1531,6 +1532,12 @@ exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SEC
 
   try {
     const summary = await syncMonzoDataForUser(uid, { since: sinceIso });
+    await recordIntegrationLog(uid, 'monzo', 'success', 'Monzo sync completed', {
+      accounts: summary?.accounts || 0,
+      transactions: summary?.transactions || 0,
+      since: sinceIso,
+      jobId,
+    });
     if (jobRef) {
       await jobRef.set({
         state: 'completed',
@@ -1540,6 +1547,10 @@ exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SEC
     }
     return { ok: true, ...summary };
   } catch (error) {
+    await recordIntegrationLog(uid, 'monzo', 'error', error?.message || 'Monzo sync failed', {
+      since: sinceIso,
+      jobId,
+    });
     if (jobRef) {
       await jobRef.set({
         state: 'failed',
@@ -2684,44 +2695,7 @@ exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   try {
     const db = admin.firestore();
-    const snap = await db.collection('tasks').where('ownerUid', '==', uid).get();
-    const crypto = require('crypto');
-    const tasks = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-    const reminderTasks = tasks.filter(t => t.source === 'ios_reminder');
-    const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    const hash = (s) => crypto.createHash('sha1').update(String(s || '')).digest('hex');
-    const groups = new Map();
-
-    for (const t of reminderTasks) {
-      const key1 = t.reminderId ? `rid:${t.reminderId}` : null;
-      const key2 = `title:${norm(t.title)}|src:${norm(t.sourceRef || '')}`;
-      const key3 = `title:${norm(t.title)}|hash:${hash((t.description || '') + '|' + JSON.stringify(t.checklist || []))}`;
-      for (const k of [key1, key2, key3].filter(Boolean)) {
-        if (!groups.has(k)) groups.set(k, new Set());
-        groups.get(k).add(t.id);
-      }
-    }
-
-    let created = 0;
-    for (const [k, idSet] of groups.entries()) {
-      const ids = Array.from(idSet);
-      if (ids.length < 2) continue;
-      const docId = `dup_${uid}_${hash(k)}`;
-      await db.collection('potential_duplicates').doc(docId).set({
-        id: docId,
-        ownerUid: uid,
-        key: k,
-        method: k.startsWith('rid:') ? 'reminderId' : (k.includes('|src:') ? 'title+sourceRef' : 'title+hash'),
-        taskIds: ids,
-        count: ids.length,
-        status: 'open',
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-      created += 1;
-    }
-
-    return { groupsCreated: created };
+    return await detectDuplicateRemindersForUser({ db, userId: uid });
   } catch (e) {
     console.error('detectDuplicateReminders error:', e);
     throw new httpsV2.HttpsError('internal', e.message);
@@ -2965,12 +2939,15 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
     theme: task.theme || null,
     goalId: task.goalId || null,
     storyId: task.storyId || null,
+    persona: task.persona || null,
   }));
 
   const idMap = new Map();
+  const detailById = new Map();
   payload.forEach((task) => {
     idMap.set(task.id, task.id);
     if (task.ref) idMap.set(task.ref.toUpperCase(), task.id);
+    detailById.set(task.id, task);
   });
 
   const prompt = 'Score tasks 0-100 and bucket TODAY/NEXT/LATER. Return JSON {items:[{id,score,bucket}]}.\nTasks: ' + JSON.stringify(payload);
@@ -3014,7 +2991,17 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
       aiPriorityUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       aiPriorityRunId: runId || null,
     }, { merge: true });
-    updates.push({ taskId: matchedId, score, bucket, rank: index + 1 });
+    const base = detailById.get(matchedId) || {};
+    updates.push({
+      taskId: matchedId,
+      score,
+      bucket,
+      rank: index + 1,
+      title: base.title || null,
+      ref: base.ref || null,
+      dueDate: base.dueDate || null,
+      persona: base.persona || null,
+    });
   });
   await bulk.close();
 
@@ -3029,7 +3016,395 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
     generatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
+  if (updates.length) {
+    try {
+      const activityRef = db.collection('activity_stream').doc();
+      await activityRef.set({
+        id: activityRef.id,
+        entityId: `tasks_${userId}`,
+        entityType: 'task',
+        activityType: 'ai_priority_update',
+        actor: 'AI_Agent',
+        userId,
+        description: `AI reprioritised ${updates.length} tasks`,
+        metadata: {
+          runId,
+          model: AI_PRIORITY_MODEL,
+          top: updates.slice(0, 5),
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      console.warn('[priority] activity stream log failed', { userId, error: error?.message || error });
+    }
+  }
+
   return { ok: true, considered: payload.length, updated: updates.length, items: updates };
+}
+
+async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = DateTime.now().setZone(coerceZone(zone)).startOf('day');
+
+  const topLimit = Math.max(1, Math.min(Number(profile.aiFocusTopCount || 5), 10));
+  const list = Array.isArray(priorityResult?.items) ? priorityResult.items : [];
+
+  // Maintain an ascending list of top N items by rank without sorting the whole array
+  const topItems = [];
+  for (const it of list) {
+    const rank = it && typeof it.rank === 'number' ? it.rank : Number.MAX_SAFE_INTEGER;
+    // Insert into the correct position (small N so O(N^2) is acceptable)
+    let inserted = false;
+    for (let i = 0; i < topItems.length; i++) {
+      const curRank = topItems[i] && typeof topItems[i].rank === 'number' ? topItems[i].rank : Number.MAX_SAFE_INTEGER;
+      if (rank < curRank) {
+        topItems.splice(i, 0, it);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) topItems.push(it);
+    if (topItems.length > topLimit) topItems.pop();
+  }
+  if (!topItems.length) {
+    return { adjustedTop: 0, deferred: 0, locked: 0 };
+  }
+
+  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = new Map();
+  tasksSnap.forEach((doc) => {
+    const data = doc.data() || {};
+    tasks.set(doc.id, { id: doc.id, ...data });
+  });
+
+  const topTaskIds = new Set();
+  let adjustedTop = 0;
+  let lockedTop = 0;
+
+  for (let index = 0; index < topItems.length; index += 1) {
+    const entry = topItems[index];
+    const taskId = entry?.taskId || entry?.id || entry?.ref;
+    if (!taskId) continue;
+    const task = tasks.get(taskId);
+    if (!task || isTaskLocked(task)) {
+      if (task && isTaskLocked(task)) lockedTop += 1;
+      continue;
+    }
+
+    const desired = nowLocal.endOf('day');
+    const newDueDateMs = desired.toMillis();
+
+    await updateTaskDueDate(db, task.id, {
+      newDueDateMs,
+      reason: 'ai_focus_top',
+      userId,
+      runId,
+      itemRef: task.ref || task.id,
+    });
+
+    topTaskIds.add(task.id);
+    adjustedTop += 1;
+  }
+
+  const demoteCutoff = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
+  const deferTarget = nowLocal.plus({ days: 4 }).endOf('day').toMillis();
+  let deferred = 0;
+
+  for (const task of tasks.values()) {
+    if (topTaskIds.has(task.id)) continue;
+    if (isTaskLocked(task)) continue;
+    const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
+    if (!dueMs) continue;
+    if (dueMs > demoteCutoff) continue;
+
+    await updateTaskDueDate(db, task.id, {
+      newDueDateMs: deferTarget,
+      reason: 'ai_focus_defer',
+      userId,
+      runId,
+      itemRef: task.ref || task.id,
+    });
+
+    deferred += 1;
+  }
+
+  return { adjustedTop, deferred, locked: lockedTop };
+}
+
+async function detectDuplicateRemindersForUser({ db, userId }) {
+  const snap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const reminderTasks = tasks.filter((t) => t.source === 'ios_reminder');
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const hash = (s) => crypto.createHash('sha1').update(String(s || '')).digest('hex');
+  const groups = new Map();
+
+  for (const task of reminderTasks) {
+    const key1 = task.reminderId ? `rid:${task.reminderId}` : null;
+    const key2 = `title:${norm(task.title)}|src:${norm(task.sourceRef || '')}`;
+    const key3 = `title:${norm(task.title)}|hash:${hash((task.description || '') + '|' + JSON.stringify(task.checklist || []))}`;
+    for (const key of [key1, key2, key3].filter(Boolean)) {
+      if (!groups.has(key)) groups.set(key, new Set());
+      groups.get(key).add(task.id);
+    }
+  }
+
+  let created = 0;
+  for (const [key, idSet] of groups.entries()) {
+    const ids = Array.from(idSet);
+    if (ids.length < 2) continue;
+    const docId = `dup_${userId}_${hash(key)}`;
+    await db.collection('potential_duplicates').doc(docId).set({
+      id: docId,
+      ownerUid: userId,
+      key,
+      method: key.startsWith('rid:') ? 'reminderId' : (key.includes('|src:') ? 'title+sourceRef' : 'title+hash'),
+      taskIds: ids,
+      count: ids.length,
+      status: 'open',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    created += 1;
+  }
+
+  return { groupsCreated: created, reminderTasks: reminderTasks.length };
+}
+
+async function autoConvertOversizedTasksForUser({ db, userId, profile, runId, maxConversions = 5 }) {
+  if (profile.autoConversionEnabled === false) {
+    return { processed: 0, converted: 0, conversions: [] };
+  }
+  const thresholdMinutes = Number(profile.autoConversionThresholdMinutes || 240);
+  const pointsThreshold = Number(profile.autoConversionThresholdPoints || 2);
+
+  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const candidates = tasksSnap.docs.filter((taskDoc) => {
+    const data = taskDoc.data() || {};
+    if (data.autoConverted || data.convertedToStoryId) return false;
+    if (data.autoConversionSkip === true) return false;
+    const status = data.status;
+    if (status === 2 || status === 3 || status === 'done' || status === 'completed') return false;
+    const estMinutes = Number(data.estimateMin || 0);
+    const estHours = Number(data.estimatedHours || 0);
+    const points = Number(data.points || 0);
+    if (estMinutes >= thresholdMinutes) return true;
+    if (estHours >= 4) return true;
+    if (points > pointsThreshold) return true;
+    return false;
+  });
+
+  const conversions = [];
+  const profileSnapshot = profile || {};
+
+  for (const taskDoc of candidates.slice(0, maxConversions)) {
+    try {
+      const conversion = await autoConvertTask({ db, taskDoc, profile: profileSnapshot, runId });
+      if (conversion) conversions.push(conversion);
+    } catch (error) {
+      console.error('[auto-convert] nightly task failed', { userId, taskId: taskDoc.id, error });
+    }
+  }
+
+  return {
+    processed: candidates.length,
+    converted: conversions.length,
+    conversions,
+  };
+}
+
+async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const windowStart = DateTime.now().setZone(coerceZone(zone)).startOf('day');
+  const windowEnd = windowStart.plus({ days: 6 }).endOf('day');
+
+  let busy = [];
+  try {
+    busy = await fetchGoogleBusy(userId, windowStart.toJSDate(), windowEnd.toJSDate());
+  } catch (error) {
+    console.warn('[calendar-plan] busy lookup failed', { userId, error: error?.message || error });
+  }
+
+  const plan = await planSchedule({
+    db,
+    userId,
+    windowStart,
+    windowEnd,
+    busy,
+  });
+
+  const existingIds = new Set(plan.existingIds || []);
+  const batch = db.batch();
+  const nowMs = Date.now();
+
+  for (const instance of plan.planned) {
+    const ref = db.collection('scheduled_instances').doc(instance.id);
+    const isExisting = existingIds.has(instance.id);
+    const payload = {
+      ...instance,
+      status: instance.status || 'planned',
+      userId,
+      ownerUid: userId,
+      updatedAt: nowMs,
+      runId,
+    };
+    if (!isExisting) {
+      payload.createdAt = nowMs;
+    }
+    batch.set(ref, payload, { merge: true });
+  }
+
+  for (const unscheduled of plan.unscheduled) {
+    const id = schedulerMakeInstanceId({
+      userId,
+      sourceType: unscheduled.sourceType,
+      sourceId: unscheduled.sourceId,
+      occurrenceDate: unscheduled.dayKey,
+    });
+    const ref = db.collection('scheduled_instances').doc(id);
+    const isExisting = existingIds.has(id);
+    const schedulingContext = {
+      solverRunId: plan.solverRunId,
+      policyMode: unscheduled.policyMode || null,
+      deepLink: unscheduled.deepLink || null,
+    };
+    const payload = {
+      id,
+      userId,
+      ownerUid: userId,
+      sourceType: unscheduled.sourceType,
+      sourceId: unscheduled.sourceId,
+      title: unscheduled.title || null,
+      occurrenceDate: unscheduled.dayKey,
+      status: 'unscheduled',
+      statusReason: unscheduled.reason,
+      durationMinutes: 0,
+      priority: unscheduled.priority || 5,
+      requiredBlockId: unscheduled.requiredBlockId || null,
+      candidateBlockIds: unscheduled.candidateBlockIds || [],
+      deepLink: unscheduled.deepLink || null,
+      mobileCheckinUrl: unscheduled.mobileCheckinUrl || null,
+      schedulingContext,
+      updatedAt: nowMs,
+      runId,
+    };
+    if (!isExisting) payload.createdAt = nowMs;
+    batch.set(ref, payload, { merge: true });
+  }
+
+  await batch.commit();
+
+  const jobDocId = `${userId}__${windowStart.toISODate()}`;
+  await db.collection('planning_jobs').doc(jobDocId).set({
+    id: jobDocId,
+    userId,
+    planningDate: windowStart.toISODate(),
+    windowStart: windowStart.toISODate(),
+    windowEnd: windowEnd.toISODate(),
+    solverRunId: plan.solverRunId,
+    status: 'succeeded',
+    startedAt: nowMs,
+    completedAt: nowMs,
+    plannedCount: plan.planned.length,
+    unscheduledCount: plan.unscheduled.length,
+    conflicts: plan.conflicts || [],
+    createdAt: nowMs,
+    updatedAt: nowMs,
+    runId,
+  }, { merge: true });
+
+  return {
+    planned: plan.planned.length,
+    unscheduled: plan.unscheduled.length,
+    conflicts: Array.isArray(plan.conflicts) ? plan.conflicts.length : 0,
+  };
+}
+
+async function getLatestMaintenanceSummary({ db, userId }) {
+  try {
+    const statusDoc = await db.collection('automation_status').doc(`nightly_task_maintenance_${userId}`).get();
+    if (!statusDoc.exists) return null;
+    const lastRunId = statusDoc.data()?.lastRunId || statusDoc.data()?.lastRunIdIso || null;
+    if (!lastRunId) return null;
+    const runDoc = await db.collection('automation_runs').doc(lastRunId).get();
+    if (!runDoc.exists) return null;
+    const data = runDoc.data() || {};
+    return data.maintenanceSummary || data.summary || null;
+  } catch (error) {
+    console.warn('[maintenance] failed to load maintenance summary', { userId, error: error?.message || error });
+    return null;
+  }
+}
+
+async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId }) {
+  const duplicateReminders = await detectDuplicateRemindersForUser({ db, userId });
+
+  const dedupeResult = await deduplicateUserTasks({
+    db,
+    userId,
+    dryRun: false,
+    hardDelete: false,
+    logActivity: true,
+    activityActor: 'NightlyMaintenance',
+    runId,
+  });
+
+  const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
+
+  const dueDateAdjustments = await adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId });
+
+  const conversionResult = await autoConvertOversizedTasksForUser({ db, userId, profile, runId });
+
+  const calendarPlan = await generateCalendarPlanForUser({ db, userId, profile, runId });
+
+  const topLimit = Math.max(1, Math.min(Number(profile.aiFocusTopCount || 5), 10));
+  const maintenanceSummary = {
+    reminders: duplicateReminders,
+    dedupe: {
+      processed: dedupeResult.processed,
+      resolved: dedupeResult.duplicatesResolved,
+      groups: Array.isArray(dedupeResult.groups) ? dedupeResult.groups.length : 0,
+    },
+    priority: {
+      considered: priorityResult.considered,
+      updated: priorityResult.updated,
+      top: priorityResult.items ? priorityResult.items.slice(0, topLimit) : [],
+    },
+    dueDates: dueDateAdjustments,
+    conversions: conversionResult,
+    calendar: calendarPlan,
+    runId,
+    completedAt: nowUtc.toISO(),
+  };
+
+  try {
+    const activityRef = db.collection('activity_stream').doc();
+    await activityRef.set({
+      id: activityRef.id,
+      entityId: `tasks_${userId}`,
+      entityType: 'task',
+      activityType: 'nightly_task_maintenance',
+      actor: 'AI_Agent',
+      userId,
+      description: `Nightly maintenance reprioritised ${priorityResult.updated} tasks and adjusted ${dueDateAdjustments.adjustedTop} due dates.`,
+      metadata: maintenanceSummary,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[maintenance] failed to log activity stream', { userId, error: error?.message || error });
+  }
+
+  return {
+    summary: maintenanceSummary,
+    duplicateReminders,
+    dedupeResult,
+    priorityResult,
+    dueDateAdjustments,
+    conversionResult,
+    calendarPlan,
+  };
 }
 
 exports.deduplicateTasks = httpsV2.onCall(async (request) => {
@@ -3561,6 +3936,296 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
   }
 }
 
+function assembleDailyChecklist(summaryData) {
+  const timezone = summaryData?.metadata?.timezone || DEFAULT_TIMEZONE;
+  const zone = coerceZone(timezone);
+  const nowIso = new Date().toISOString();
+
+  const tasksDue = Array.isArray(summaryData?.tasksDue) ? summaryData.tasksDue : [];
+  const choresDue = Array.isArray(summaryData?.choresDue) ? summaryData.choresDue : [];
+  const routinesDue = Array.isArray(summaryData?.routinesDue) ? summaryData.routinesDue : [];
+  const reminders = Array.isArray(summaryData?.reminders) ? summaryData.reminders : [];
+  const storiesToStart = Array.isArray(summaryData?.storiesToStart) ? summaryData.storiesToStart : [];
+
+  const items = [];
+  const usedKeys = new Set();
+
+  const focusLimitRaw = Number(summaryData?.profile?.aiFocusTopCount || 5);
+  const focusLimit = Math.max(1, Math.min(Number.isFinite(focusLimitRaw) ? focusLimitRaw : 5, 7));
+
+  const tasksById = new Map();
+  const tasksByRef = new Map();
+  tasksDue.forEach((task) => {
+    if (!task?.id) return;
+    tasksById.set(task.id, task);
+    if (task.ref) tasksByRef.set(String(task.ref).toUpperCase(), task);
+  });
+
+  const aiFocusItems = Array.isArray(summaryData?.aiFocus?.items) ? summaryData.aiFocus.items : [];
+  const focusByRef = new Map();
+  aiFocusItems.forEach((focus) => {
+    if (!focus?.ref) return;
+    focusByRef.set(String(focus.ref).toUpperCase(), focus);
+  });
+
+  const maintenanceTop = Array.isArray(summaryData?.maintenance?.priority?.top)
+    ? summaryData.maintenance.priority.top
+    : [];
+
+  const focusCandidates = [];
+  maintenanceTop.forEach((entry, index) => {
+    const task = entry?.taskId ? tasksById.get(entry.taskId) : null;
+    const refUpper = entry?.ref ? String(entry.ref).toUpperCase() : null;
+    const fallback = refUpper ? tasksByRef.get(refUpper) : null;
+    const target = task || fallback;
+    if (!target) return;
+    focusCandidates.push({ target, meta: entry, origin: 'maintenance', order: index });
+  });
+
+  aiFocusItems.forEach((entry, index) => {
+    const refUpper = entry?.ref ? String(entry.ref).toUpperCase() : null;
+    if (!refUpper) return;
+    if (focusCandidates.some((candidate) => candidate.target?.ref && candidate.target.ref.toUpperCase() === refUpper)) {
+      return;
+    }
+    const target = tasksByRef.get(refUpper);
+    if (!target) return;
+    focusCandidates.push({ target, meta: entry, origin: 'ai', order: maintenanceTop.length + index });
+  });
+
+  const pushItem = (payload) => {
+    if (!payload || !payload.key || usedKeys.has(payload.key)) return;
+    payload.order = items.length;
+    items.push(payload);
+    usedKeys.add(payload.key);
+  };
+
+  const buildTaskPayload = (task, meta = {}, origin = 'manual') => {
+    if (!task?.id) return null;
+    const refUpper = task.ref ? String(task.ref).toUpperCase() : null;
+    const focusMeta = refUpper ? focusByRef.get(refUpper) : null;
+    const bucket = focusMeta?.bucket || meta?.bucket || 'Today';
+    const reason = focusMeta?.reason || meta?.reason || (task.dueDisplay ? `Due ${task.dueDisplay}` : `Bucket ${bucket}`);
+    return {
+      key: `task:${task.id}`,
+      type: 'task',
+      category: 'Focus',
+      title: task.title || 'Task',
+      ref: task.ref || null,
+      sourceId: task.id,
+      dueMs: task.dueMs || null,
+      dueDisplay: task.dueDisplay || null,
+      reason,
+      nextStep: focusMeta?.nextStep || meta?.nextStep || null,
+      bucket,
+      deepLink: task.deepLink || null,
+      persona: task.persona || null,
+      highlight: origin === 'maintenance',
+      checkable: true,
+      meta: { origin },
+    };
+  };
+
+  focusCandidates
+    .sort((a, b) => a.order - b.order)
+    .forEach((candidate) => {
+      if (items.filter((item) => item.category === 'Focus').length >= focusLimit) return;
+      pushItem(buildTaskPayload(candidate.target, candidate.meta, candidate.origin));
+    });
+
+  if (items.filter((item) => item.category === 'Focus').length < focusLimit) {
+    tasksDue
+      .filter((task) => !usedKeys.has(`task:${task.id}`))
+      .sort((a, b) => (a.dueMs || Number.MAX_SAFE_INTEGER) - (b.dueMs || Number.MAX_SAFE_INTEGER))
+      .forEach((task) => {
+        if (items.filter((item) => item.category === 'Focus').length >= focusLimit) return;
+        pushItem(buildTaskPayload(task, {}, 'fallback'));
+      });
+  }
+
+  const formatDueTime = (millis) => {
+    if (!millis) return null;
+    const dt = DateTime.fromMillis(millis, { zone });
+    return dt.isValid ? dt.toLocaleString(DateTime.TIME_SIMPLE) : null;
+  };
+
+  const pushCollection = (collection, { category, type, checkable = true, reasonBuilder }) => {
+    (collection || []).forEach((entry) => {
+      if (!entry?.id) return;
+      const key = `${type}:${entry.id}`;
+      if (usedKeys.has(key)) return;
+      const dueMs = entry.dueMs || (entry.dueIso ? DateTime.fromISO(entry.dueIso, { zone }).toMillis() : null);
+      const dueDisplay = entry.dueDisplay || formatDueTime(dueMs);
+      pushItem({
+        key,
+        type,
+        category,
+        title: entry.title || entry.name || 'Item',
+        sourceId: entry.id,
+        dueMs: dueMs || null,
+        dueDisplay,
+        reason: reasonBuilder ? reasonBuilder(entry, dueDisplay) : null,
+        deepLink: entry.deepLink || null,
+        checkable,
+      });
+    });
+  };
+
+  pushCollection(choresDue.slice(0, 4), {
+    category: 'Chores',
+    type: 'chore',
+    reasonBuilder: (entry, dueDisplay) => (dueDisplay ? `Due ${dueDisplay}` : (entry.cadence || null)),
+  });
+
+  pushCollection(routinesDue.slice(0, 4), {
+    category: 'Routines',
+    type: 'routine',
+    reasonBuilder: (entry, dueDisplay) => (dueDisplay ? `Run ${dueDisplay}` : (entry.cadence || null)),
+  });
+
+  const reminderEntries = reminders
+    .filter((rem) => !rem.relatedTaskId || !usedKeys.has(`task:${rem.relatedTaskId}`))
+    .slice(0, 4)
+    .map((rem) => {
+      const dueDt = toDateTime(rem.dueDate || rem.dueAt, { zone, defaultValue: null });
+      return {
+        id: rem.id,
+        title: rem.title || 'Reminder',
+        dueMs: dueDt ? dueDt.toMillis() : null,
+        dueDisplay: dueDt ? dueDt.toLocaleString(DateTime.TIME_SIMPLE) : null,
+        reason: rem.relatedTaskId ? 'Linked to task' : null,
+      };
+    });
+
+  pushCollection(reminderEntries, { category: 'Reminders', type: 'reminder', checkable: true });
+
+  storiesToStart.slice(0, 3).forEach((story) => {
+    if (!story?.id) return;
+    const key = `story:${story.id}`;
+    if (usedKeys.has(key)) return;
+    const dueDt = story.sprintDueDateIso ? DateTime.fromISO(story.sprintDueDateIso, { zone }) : null;
+    pushItem({
+      key,
+      type: 'story',
+      category: 'Stories',
+      title: story.title || 'Story',
+      sourceId: story.id,
+      dueMs: dueDt && dueDt.isValid ? dueDt.toMillis() : null,
+      dueDisplay: story.sprintDueDateDisplay || (dueDt && dueDt.isValid ? dueDt.toLocaleString(DateTime.DATE_MED) : null),
+      reason: story.goal ? `Goal ${story.goal}` : null,
+      deepLink: story.deepLink || null,
+      checkable: false,
+    });
+  });
+
+  return {
+    generatedAt: nowIso,
+    timezone,
+    items,
+    stats: {
+      total: items.length,
+      focus: items.filter((entry) => entry.category === 'Focus').length,
+      chores: items.filter((entry) => entry.type === 'chore').length,
+      routines: items.filter((entry) => entry.type === 'routine').length,
+      reminders: items.filter((entry) => entry.type === 'reminder').length,
+      stories: items.filter((entry) => entry.type === 'story').length,
+    },
+  };
+}
+
+async function buildDailyChecklistBriefing({ summaryData, checklist, userId }) {
+  try {
+    if (!checklist || !Array.isArray(checklist.items) || !checklist.items.length) {
+      return null;
+    }
+
+    const timezone = summaryData?.metadata?.timezone || DEFAULT_TIMEZONE;
+    const focusItems = checklist.items.filter((item) => item.category === 'Focus').slice(0, 5);
+    const choreItems = checklist.items.filter((item) => item.type === 'chore').slice(0, 3);
+    const routineItems = checklist.items.filter((item) => item.type === 'routine').slice(0, 3);
+    const storyItems = checklist.items.filter((item) => item.type === 'story').slice(0, 2);
+
+    const agenda = Array.isArray(summaryData?.calendarBlocks)
+      ? summaryData.calendarBlocks.slice(0, 4).map((block) => ({
+          title: block.title || 'Block',
+          start: block.startDisplay || block.startIso || null,
+          end: block.endDisplay || block.endIso || null,
+          theme: block.theme || null,
+        }))
+      : [];
+
+    const financeTotals = summaryData?.monzo?.totals
+      ? {
+          spent: summaryData.monzo.totals.spent || null,
+          budget: summaryData.monzo.totals.budget || null,
+          remaining: summaryData.monzo.totals.remaining || null,
+        }
+      : null;
+
+    const payload = {
+      date: summaryData?.metadata?.dayIso || DateTime.now().setZone(coerceZone(timezone)).toISODate(),
+      timezone,
+      focus: focusItems.map((item) => ({ title: item.title, reason: item.reason, due: item.dueDisplay })),
+      chores: choreItems.map((item) => ({ title: item.title, due: item.dueDisplay })),
+      routines: routineItems.map((item) => ({ title: item.title, due: item.dueDisplay })),
+      stories: storyItems.map((item) => ({ title: item.title, due: item.dueDisplay })),
+      agenda,
+      finance: financeTotals,
+      stats: checklist.stats || null,
+    };
+
+    const systemPrompt = 'You are an encouraging executive assistant. Write a concise morning briefing (<=80 words). Respond with JSON {"headline":string,"body":string,"checklist":string}.';
+    const userPrompt = `Context: ${JSON.stringify(payload)}`;
+
+    const raw = await callLLMJson({
+      system: systemPrompt,
+      user: userPrompt,
+      purpose: 'dailyChecklistBriefing',
+      userId,
+      expectJson: true,
+      temperature: 0.3,
+    });
+
+    let parsed = {};
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (error) {
+      console.warn('[daily-briefing] JSON parse failed', error?.message || error);
+      parsed = {};
+    }
+
+    const headline = parsed.headline || parsed.title || null;
+    const body = parsed.body || parsed.summary || null;
+    const checklistNote = parsed.checklist || parsed.actions || null;
+
+    return {
+      mode: 'ai',
+      model: process.env.GOOGLEAISTUDIOAPIKEY ? 'gemini-1.5-flash' : 'gpt-4o-mini',
+      generatedAt: new Date().toISOString(),
+      headline: headline || 'Stay on target today',
+      body: body || 'Lead with your focus items, then clear the supporting chores and routines to keep momentum.',
+      checklist: checklistNote || 'Work the focus list top to bottom and tick items the moment they are done so sync stays tight.',
+    };
+  } catch (error) {
+    console.warn('[daily-briefing] generation failed', error?.message || error);
+    const stats = checklist?.stats || {};
+    const focusCount = Number(stats.focus || 0);
+    const upkeepCount = Number((stats.chores || 0) + (stats.routines || 0));
+    const bodyParts = [];
+    if (focusCount) bodyParts.push(`You have ${focusCount} focus ${focusCount === 1 ? 'task' : 'tasks'} to ship—knock those out before midday.`);
+    if (upkeepCount) bodyParts.push(`There are ${upkeepCount} upkeep items queued; clear them in one sweep to keep automations happy.`);
+    if (!bodyParts.length) bodyParts.push('Use the open space for planning or recovery; no urgent items detected.');
+    return {
+      mode: 'fallback',
+      model: 'heuristic',
+      generatedAt: new Date().toISOString(),
+      headline: focusCount ? 'Focus, then upkeep' : 'A light agenda',
+      body: bodyParts.join(' '),
+      checklist: 'Review the list once an hour and tick items so iOS Reminders stays mirrored.',
+    };
+  }
+}
+
 // ===== Strava Helpers
 async function getStravaTokenDoc(uid) {
   const db = admin.firestore();
@@ -3664,13 +4329,27 @@ async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxP
 // Callable to sync Strava activities
 exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
   const after = req.data?.after || null; // ms or sec accepted
   let afterSec = null;
   if (after) {
     afterSec = (String(after).length > 10) ? Math.floor(Number(after) / 1000) : Number(after);
   }
-  console.log('[syncStrava] uid', req.auth.uid, 'after', after, 'afterSec', afterSec);
-  return await fetchStravaActivities(req.auth.uid, { afterSec });
+  console.log('[syncStrava] uid', uid, 'after', after, 'afterSec', afterSec);
+  try {
+    const result = await fetchStravaActivities(uid, { afterSec });
+    await recordIntegrationLog(uid, 'strava', 'success', 'Strava sync completed', {
+      imported: result?.imported || 0,
+      after: afterSec,
+    });
+    return result;
+  } catch (error) {
+    await recordIntegrationLog(uid, 'strava', 'error', error?.message || 'Strava sync failed', {
+      after: afterSec,
+    });
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Strava');
+  }
 });
 
 // Retrieve HR stream for an activity and compute zone times; store on metrics_workouts doc
@@ -3944,7 +4623,22 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
   if (!athleteId) {
     throw new httpsV2.HttpsError('invalid-argument', 'Provide Parkrun athleteId or profileUrl containing athleteNumber.');
   }
-  return await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+  try {
+    const result = await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+    await recordIntegrationLog(uid, 'parkrun', 'success', 'Parkrun results synced', {
+      imported: result?.imported || 0,
+      athleteId,
+      countryBaseUrl,
+    });
+    return result;
+  } catch (error) {
+    await recordIntegrationLog(uid, 'parkrun', 'error', error?.message || 'Parkrun sync failed', {
+      athleteId,
+      countryBaseUrl,
+    });
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Parkrun results');
+  }
 });
 
 // Fitness Overview aggregator
@@ -4599,21 +5293,59 @@ async function _syncTrakt(uid) {
   return { ok: true, written: history.length };
 }
 
+const LOG_RETENTION_DAYS = 30;
+
+const createExpiryTimestamp = (days = LOG_RETENTION_DAYS) => {
+  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  return admin.firestore.Timestamp.fromDate(expiresAt);
+};
+
 async function recordIntegrationLog(uid, integration, status, message, metadata = {}) {
   try {
     const db = admin.firestore();
     const ref = db.collection('integration_logs').doc();
+    const level = status === 'error' ? 'error' : (status === 'warning' ? 'warning' : 'info');
+    const expiresAt = createExpiryTimestamp();
+    const now = admin.firestore.FieldValue.serverTimestamp();
     await ref.set({
       id: ref.id,
       ownerUid: uid,
       integration,
       status,
+      level,
+      source: integration,
       message,
       metadata,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: now,
+      ts: now,
+      expiresAt,
     });
   } catch (error) {
     console.error('Failed to write integration log', { integration, status, message, metadata, error });
+  }
+}
+
+async function recordAiLog(uid, event, status, message, metadata = {}) {
+  try {
+    const db = admin.firestore();
+    const ref = db.collection('ai_logs').doc();
+    const level = status === 'error' ? 'error' : (status === 'warning' ? 'warning' : 'info');
+    const expiresAt = createExpiryTimestamp();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set({
+      id: ref.id,
+      ownerUid: uid,
+      event,
+      status,
+      level,
+      message,
+      metadata,
+      createdAt: now,
+      ts: now,
+      expiresAt,
+    });
+  } catch (error) {
+    console.error('Failed to write AI log', { event, status, message, metadata, error });
   }
 }
 
@@ -4666,7 +5398,18 @@ async function _syncSteam(uid) {
 
 exports.syncTrakt = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  return await _syncTrakt(req.auth.uid);
+  const uid = req.auth.uid;
+  try {
+    const result = await _syncTrakt(uid);
+    await recordIntegrationLog(uid, 'trakt', 'success', 'Trakt history sync completed', {
+      imported: result?.written || 0,
+    });
+    return result;
+  } catch (error) {
+    await recordIntegrationLog(uid, 'trakt', 'error', error?.message || 'Trakt sync failed', {});
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Trakt');
+  }
 });
 
 exports.syncSteam = httpsV2.onCall({ secrets: [STEAM_WEB_API_KEY] }, async (req) => {
@@ -4918,17 +5661,7 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
     });
 
     try {
-      const dedupeResult = await deduplicateUserTasks({
-        db,
-        userId,
-        dryRun: false,
-        hardDelete: false,
-        logActivity: true,
-        activityActor: 'NightlyMaintenance',
-        runId,
-      });
-
-      const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
+      const maintenance = await runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId });
 
       await recordAutomationStatus(db, {
         userId,
@@ -4940,8 +5673,13 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
 
       await db.collection('automation_runs').doc(runId).set({
         status: 'success',
-        dedupe: dedupeResult,
-        prioritization: priorityResult,
+        maintenanceSummary: maintenance.summary,
+        reminderDuplicates: maintenance.duplicateReminders,
+        dedupe: maintenance.dedupeResult,
+        prioritization: maintenance.priorityResult,
+        dueDateAdjustments: maintenance.dueDateAdjustments,
+        conversions: maintenance.conversionResult,
+        calendarPlan: maintenance.calendarPlan,
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     } catch (error) {
@@ -4960,6 +5698,98 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     }
+  }
+});
+
+exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const sendSummary = req?.data?.sendSummary !== false;
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+
+  const runId = await logAutomationRun(db, {
+    automation: 'nightly_task_maintenance',
+    userId: uid,
+    status: 'started',
+    triggeredBy: 'callable',
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  try {
+    const maintenance = await runNightlyMaintenanceForUser({ db, userId: uid, profile, nowUtc, runId });
+
+    let summaryResult = null;
+    if (sendSummary) {
+      summaryResult = await dispatchDailySummaryForUser({
+        db,
+        userId: uid,
+        profile,
+        nowUtc,
+        runContext: { trigger: 'manual_maintenance', runId, force: true, maintenanceSummary: maintenance.summary },
+      });
+    }
+
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'nightly_task_maintenance',
+      dayIso: nowUtc.toISODate(),
+      status: 'success',
+      runId,
+    });
+
+    await db.collection('automation_runs').doc(runId).set({
+      status: 'success',
+      maintenanceSummary: maintenance.summary,
+      reminderDuplicates: maintenance.duplicateReminders,
+      dedupe: maintenance.dedupeResult,
+      prioritization: maintenance.priorityResult,
+      dueDateAdjustments: maintenance.dueDateAdjustments,
+      conversions: maintenance.conversionResult,
+      calendarPlan: maintenance.calendarPlan,
+      manualTrigger: true,
+      dailySummary: summaryResult,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await recordAiLog(uid, 'nightly_maintenance_manual', 'success', 'Manual nightly maintenance completed', {
+      runId,
+      sendSummary,
+      maintenance: maintenance?.summary || null,
+      dailySummary: summaryResult?.dayIso || null,
+    });
+
+    return {
+      ok: true,
+      maintenance,
+      dailySummary: summaryResult,
+      runId,
+    };
+  } catch (error) {
+    console.error('[run-nightly-maintenance-now] failed', error);
+    await recordAiLog(uid, 'nightly_maintenance_manual', 'error', error?.message || 'Manual nightly maintenance failed', {
+      runId,
+      sendSummary,
+    });
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'nightly_task_maintenance',
+      dayIso: nowUtc.toISODate(),
+      status: 'error',
+      message: error?.message || String(error),
+      runId,
+    });
+    await db.collection('automation_runs').doc(runId).set({
+      status: 'error',
+      error: error?.message || String(error),
+      manualTrigger: true,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to run nightly maintenance');
   }
 });
 
@@ -5023,6 +5853,25 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
     summaryData.aiFocus = aiFocus;
   }
 
+  if (runContext?.maintenanceSummary) {
+    summaryData.maintenance = runContext.maintenanceSummary;
+  } else {
+    const latestMaintenance = await getLatestMaintenanceSummary({ db, userId });
+    if (latestMaintenance) {
+      summaryData.maintenance = latestMaintenance;
+    }
+  }
+
+  summaryData.dailyChecklist = assembleDailyChecklist(summaryData);
+  try {
+    const briefing = await buildDailyChecklistBriefing({ summaryData, checklist: summaryData.dailyChecklist, userId });
+    if (briefing) {
+      summaryData.dailyBriefing = briefing;
+    }
+  } catch (error) {
+    console.warn('[daily-summary] briefing generation failed', error?.message || error);
+  }
+
   const html = renderDailySummaryEmail(summaryData);
   const subject = `Daily Summary · ${summaryData.metadata.dayIso}`;
 
@@ -5046,13 +5895,14 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
   return { skipped: false, dayIso: summaryData.metadata.dayIso };
 }
 
-async function dispatchDataQualityForUser({ db, userId, profile, nowUtc }) {
+async function dispatchDataQualityForUser({ db, userId, profile, nowUtc, force = false }) {
   const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
   const nowLocal = nowUtc.setZone(coerceZone(zone));
   const statusSnap = await db.collection('automation_status').doc(`data_quality_${userId}`).get();
   const lastSentDay = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
   const { shouldSend, dayIso } = shouldTriggerWindow(nowLocal, DATA_QUALITY_TARGET_MINUTES, lastSentDay);
-  if (!shouldSend) return { skipped: true, reason: 'window_miss' };
+  const effectiveDayIso = dayIso || nowUtc.toISODate();
+  if (!shouldSend && !force) return { skipped: true, reason: 'window_miss' };
 
   const snapshot = await buildDataQualitySnapshot(db, userId, { windowEnd: nowUtc });
   const html = renderDataQualityEmail({ profile, snapshot });
@@ -5073,7 +5923,7 @@ async function dispatchDataQualityForUser({ db, userId, profile, nowUtc }) {
     generatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  return { skipped: false, dayIso };
+  return { skipped: false, dayIso: effectiveDayIso };
 }
 
 exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
@@ -5154,8 +6004,9 @@ exports.sendDailySummaryNow = httpsV2.onCall(async (req) => {
   if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
   const profile = profileSnap.data() || {};
   const nowUtc = DateTime.now().setZone('UTC');
+  let runId = null;
   try {
-    const runId = await logAutomationRun(db, {
+    runId = await logAutomationRun(db, {
       automation: 'daily_summary',
       userId: uid,
       status: 'manual_start',
@@ -5165,10 +6016,55 @@ exports.sendDailySummaryNow = httpsV2.onCall(async (req) => {
     const result = await dispatchDailySummaryForUser({ db, userId: uid, profile, nowUtc, runContext: { trigger: 'manual', runId, force: true } });
     await recordAutomationStatus(db, { userId: uid, automation: 'daily_summary', dayIso: result.dayIso || nowUtc.toISODate(), status: 'success', runId });
     await db.collection('automation_runs').doc(runId).set({ status: 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await recordAiLog(uid, 'daily_summary_manual', 'success', 'Manual daily summary generated', {
+      runId,
+      dayIso: result.dayIso || nowUtc.toISODate(),
+      skipped: result.skipped || false,
+    });
     return { ok: true, result };
   } catch (error) {
     console.error('[daily-summary-now] failed', error);
+    await recordAiLog(uid, 'daily_summary_manual', 'error', error?.message || 'Failed to send daily summary', {
+      runId,
+    });
     throw new httpsV2.HttpsError('internal', error.message || 'Failed to send daily summary');
+  }
+});
+
+exports.sendDataQualityNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
+  const profile = profileSnap.data() || {};
+  const nowUtc = DateTime.now().setZone('UTC');
+  let runId = null;
+  try {
+    runId = await logAutomationRun(db, {
+      automation: 'data_quality',
+      userId: uid,
+      status: 'manual_start',
+      triggeredBy: 'callable',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    const result = await dispatchDataQualityForUser({ db, userId: uid, profile, nowUtc, force: true });
+    if (!result.skipped) {
+      await recordAutomationStatus(db, { userId: uid, automation: 'data_quality', dayIso: result.dayIso || nowUtc.toISODate(), status: 'success', runId });
+    }
+    await db.collection('automation_runs').doc(runId).set({ status: result.skipped ? 'skipped' : 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await recordAiLog(uid, 'data_quality_manual', result.skipped ? 'warning' : 'success', result.skipped ? 'Manual data quality skipped (window miss)' : 'Manual data quality report generated', {
+      runId,
+      dayIso: result.dayIso || nowUtc.toISODate(),
+      skipped: result.skipped || false,
+    });
+    return { ok: true, result };
+  } catch (error) {
+    console.error('[data-quality-now] failed', error);
+    await recordAiLog(uid, 'data_quality_manual', 'error', error?.message || 'Failed to send data quality report', {
+      runId,
+    });
+    throw new httpsV2.HttpsError('internal', error.message || 'Failed to send data quality report');
   }
 });
 
@@ -5199,6 +6095,121 @@ exports.previewDataQualityReport = httpsV2.onCall(async (req) => {
   const snapshot = await buildDataQualitySnapshot(db, uid, { windowEnd: DateTime.now().setZone('UTC') });
   const html = renderDataQualityEmail({ profile, snapshot });
   return { ok: true, snapshot, html };
+});
+
+exports.sendTestEmail = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const email = req?.data?.email || profile.email;
+  if (!email) {
+    throw new httpsV2.HttpsError('failed-precondition', 'No email configured on profile.');
+  }
+
+  const html = `
+    <h1>BOB SMTP Test</h1>
+    <p>This is a test email sent at ${new Date().toISOString()} to confirm SMTP settings.</p>
+    <p>User: ${email}</p>
+  `;
+
+  try {
+    const result = await sendEmail({ to: email, subject: 'BOB SMTP Test Email', html, text: 'SMTP configuration test successful.' });
+    await db.collection('email_tests').add({
+      userId: uid,
+      email,
+      result: { messageId: result?.messageId || null, response: result?.response || null },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    await recordIntegrationLog(uid, 'email', 'success', 'SMTP test email sent', {
+      messageId: result?.messageId || null,
+      to: email,
+    });
+    return { ok: true, messageId: result?.messageId || null };
+  } catch (error) {
+    console.error('[email-test] failed', error);
+    await recordIntegrationLog(uid, 'email', 'error', error?.message || 'SMTP test email failed', {
+      to: email,
+    });
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to send test email');
+  }
+});
+
+// Save SMTP email configuration (admin-only)
+exports.saveEmailSettings = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+  if (!isAdmin) {
+    throw new httpsV2.HttpsError('permission-denied', 'Only admins can update email settings');
+  }
+
+  const body = req?.data || {};
+  const normalizeBool = (v, fallback = true) => {
+    if (v === undefined || v === null || v === '') return fallback;
+    if (typeof v === 'boolean') return v;
+    const s = String(v).toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on'].includes(s);
+  };
+  const normalizePort = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new httpsV2.HttpsError('invalid-argument', 'SMTP port must be a number');
+    return n;
+  };
+
+  const payload = {
+    service: body.service || null,
+    host: body.host || null,
+    port: normalizePort(body.port),
+    secure: normalizeBool(body.secure, true),
+    user: body.user || null,
+    password: body.password || null,
+    from: body.from || body.user || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedBy: uid,
+  };
+
+  await db.collection('system_settings').doc('email').set(payload, { merge: true });
+  await recordIntegrationLog(uid, 'email', 'success', 'Updated SMTP configuration', {
+    hasHost: !!payload.host,
+    hasService: !!payload.service,
+    secure: !!payload.secure,
+  });
+  return { ok: true };
+});
+
+exports.cleanupUserLogs = schedulerV2.onSchedule({
+  schedule: '0 4 * * *',
+  timeZone: 'UTC',
+}, async () => {
+  const db = ensureFirestore();
+  const collections = ['integration_logs', 'ai_logs'];
+  const cutoff = admin.firestore.Timestamp.now();
+
+  for (const collectionName of collections) {
+    let hasMore = true;
+    while (hasMore) {
+      const snap = await db.collection(collectionName)
+        .where('expiresAt', '<=', cutoff)
+        .limit(500)
+        .get();
+      if (snap.empty) {
+        hasMore = false;
+        break;
+      }
+      const batch = db.batch();
+      snap.docs.forEach((docRef) => batch.delete(docRef.ref));
+      await batch.commit();
+      hasMore = snap.size === 500;
+    }
+  }
 });
 
 // ===== New v3.0.2 Functions =====
