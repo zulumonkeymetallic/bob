@@ -1,13 +1,12 @@
 {
-  "version": "3.9.1",
-  "buildTime": "",
-  "buildHash": "main-3.9.1",
+  "version": "3.9.4",
+  "buildTime": "2025-10-06T21:40:00Z",
+  "buildHash": "feature-ai-focus-scheduling-3.9.4",
   "features": [
-    "Clipboard bulk creation modal for FAB",
-    "LLM-generated acceptance criteria",
-    "AI-enhanced task descriptions",
-    "Goal auto-story generation hook"
+    "AI Focus Scheduling enhancements",
+    "Stability: version parity for login",
+    "Cache loop prevention improvements"
   ],
-  "description": "Adds AI-assisted bulk creation flows from the Floating Action Button",
+  "description": "Align UI + server versions to stop login loop",
   "githubIssues": []
 }

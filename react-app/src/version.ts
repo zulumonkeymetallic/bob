@@ -1,8 +1,8 @@
 // Version tracking for cache busting
 // Align version with branch build
-export const VERSION = '3.9.3';
+export const VERSION = '3.9.4';
 export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'feature-ai-focus-scheduling-3.9.3';
+export const BUILD_HASH = 'feature-ai-focus-scheduling-3.9.4';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
 console.log(`✅ Status: Unified daily briefing + checklist`);
