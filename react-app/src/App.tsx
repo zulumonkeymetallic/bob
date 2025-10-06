@@ -65,6 +65,11 @@ import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
 import SettingsPlannerPage from './components/settings/SettingsPlannerPage';
 import AiDiagnosticsLogs from './components/logs/AiDiagnosticsLogs';
+import GoogleCalendarSettings from './components/settings/integrations/GoogleCalendarSettings';
+import MonzoSettings from './components/settings/integrations/MonzoSettings';
+import StravaSettings from './components/settings/integrations/StravaSettings';
+import SteamSettings from './components/settings/integrations/SteamSettings';
+import TraktSettings from './components/settings/integrations/TraktSettings';
 
 
 // Lazy-loaded heavy routes
@@ -262,6 +267,11 @@ function AppContent() {
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
             <Route path="/settings/integrations" element={<IntegrationSettings />} />
+            <Route path="/settings/integrations/google" element={<GoogleCalendarSettings />} />
+            <Route path="/settings/integrations/monzo" element={<MonzoSettings />} />
+            <Route path="/settings/integrations/strava" element={<StravaSettings />} />
+            <Route path="/settings/integrations/steam" element={<SteamSettings />} />
+            <Route path="/settings/integrations/trakt" element={<TraktSettings />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
             <Route path="/admin" element={<Navigate to="/settings/integrations" replace />} />
             {/* Removed by request: Test Suite and Changelog routes */}

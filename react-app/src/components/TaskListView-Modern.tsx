@@ -29,7 +29,6 @@ const TaskListView: React.FC = () => {
     let tasksQuery = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
       orderBy('priority', 'desc'),
     );
     if (selectedSprintId) {

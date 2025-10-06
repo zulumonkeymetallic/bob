@@ -52,7 +52,13 @@ const relativeTime = (value: any) => {
   return formatDistanceToNow(date, { addSuffix: true });
 };
 
-const IntegrationSettings: React.FC = () => {
+type IntegrationSection = 'google' | 'monzo' | 'strava' | 'steam' | 'trakt' | 'all';
+
+interface IntegrationSettingsProps {
+  section?: IntegrationSection;
+}
+
+const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'all' }) => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [profile, setProfile] = useState<ProfileData | null>(null);
@@ -387,6 +393,8 @@ const IntegrationSettings: React.FC = () => {
   };
 
 
+  const show = (name: IntegrationSection) => section === 'all' || section === name;
+
   return (
     <div className="d-flex flex-column gap-4">
       <div className="d-flex justify-content-between align-items-center">
@@ -395,12 +403,13 @@ const IntegrationSettings: React.FC = () => {
           <small className="text-muted">Connect services and view sync status</small>
         </div>
         <div>
-          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/integrations/logs')}>
+          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/integrations')}>
             <i className="fas fa-stream me-2"></i>
             Integration Logs
           </Button>
         </div>
       </div>
+      {show('google') && (
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
@@ -457,7 +466,9 @@ const IntegrationSettings: React.FC = () => {
           </Collapse>
         </Card.Body>
       </Card>
+      )}
 
+      {show('monzo') && (
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
@@ -534,7 +545,9 @@ const IntegrationSettings: React.FC = () => {
           </div>
         </Card.Body>
       </Card>
+      )}
 
+      {show('strava') && (
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
@@ -597,7 +610,9 @@ const IntegrationSettings: React.FC = () => {
           )}
         </Card.Body>
       </Card>
+      )}
 
+      {show('steam') && (
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
@@ -660,7 +675,9 @@ const IntegrationSettings: React.FC = () => {
           )}
         </Card.Body>
       </Card>
+      )}
 
+      {show('trakt') && (
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
@@ -720,6 +737,7 @@ const IntegrationSettings: React.FC = () => {
           )}
         </Card.Body>
       </Card>
+      )}
     </div>
   );
 };

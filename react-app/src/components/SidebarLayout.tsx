@@ -140,7 +140,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Overview', path: '/settings', icon: 'sliders-h' },
         { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
         { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
-        { label: 'Integrations', path: '/settings/integrations', icon: 'plug' }
+        { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
+        { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
+        { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
+        { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
+        { label: 'Trakt', path: '/settings/integrations/trakt', icon: 'film' }
       ]
     },
     {

@@ -37,6 +37,7 @@ import StoryTasksPanel from './StoryTasksPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useSprint } from '../contexts/SprintContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 
 interface StoryTableRow extends Story {
@@ -810,6 +811,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { selectedSprintId } = useSprint();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -996,6 +998,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
   // Apply filtering and search
   const filteredRows = tableRows.filter(story => {
+    // Respect global sprint selection from context: when a sprint is chosen, enforce it
+    if (selectedSprintId && selectedSprintId !== '' && story.sprintId !== selectedSprintId) {
+      return false;
+    }
     // Search filter (searches title, description, ref, and goal title)
     if (filters.search) {
       const searchLower = filters.search.toLowerCase();
