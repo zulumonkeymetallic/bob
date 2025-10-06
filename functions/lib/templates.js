@@ -159,6 +159,15 @@ const renderAiFocus = (focus) => {
   return `${intro}<ol style="padding-left:20px;margin:0;">${itemsHtml}</ol>${ask}${attribution}`;
 };
 
+/**
+ * Render the daily briefing block as HTML.
+ * @param {Object} briefing - Briefing payload produced by the AI assistant or heuristics.
+ * @param {('ai'|'fallback')} [briefing.mode] - Generation mode; 'ai' for model output or 'fallback' for heuristic.
+ * @param {string} [briefing.model] - Model identifier used to generate the briefing.
+ * @param {string} [briefing.generatedAt] - ISO timestamp for when the briefing was generated.
+ * @param {Array<{ title?: string, description?: string, tips?: string[] }>} [briefing.items] - Bullet items with optional tips.
+ * @returns {string} HTML string safe to embed into email templates.
+ */
 const renderDailyBriefing = (briefing) => {
   if (!briefing) {
     return '<p style="color:#6b7280;">Daily briefing will appear once the nightly automation runs.</p>';

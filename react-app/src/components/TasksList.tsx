@@ -119,11 +119,20 @@ const TasksList: React.FC = () => {
   };
 
   const isDueToday = (task: TaskWithContext): boolean => {
-    const rawDue = task.dueDate as unknown;
-    if (!rawDue) return false;
-    const dueDate = rawDue instanceof Date ? rawDue : new Date(rawDue as number | string);
+    const raw = (task as any).dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs ?? null;
+    if (!raw) return false;
+    const dateValue = raw instanceof Date
+      ? raw
+      : typeof raw === 'object' && typeof raw.toDate === 'function'
+      ? raw.toDate()
+      : Number.isFinite(Number(raw))
+      ? new Date(Number(raw))
+      : new Date(raw);
+    if (!(dateValue instanceof Date) || Number.isNaN(dateValue.getTime())) return false;
     const today = new Date();
-    return dueDate.toDateString() === today.toDateString();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+    return dateValue >= start && dateValue <= end;
   };
 
   const handleCloseAiModal = () => {

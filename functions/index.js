@@ -3047,12 +3047,26 @@ async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runI
   const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
   const nowLocal = DateTime.now().setZone(coerceZone(zone)).startOf('day');
 
-  const items = Array.isArray(priorityResult?.items)
-    ? priorityResult.items.slice().sort((a, b) => (a.rank || Number.MAX_SAFE_INTEGER) - (b.rank || Number.MAX_SAFE_INTEGER))
-    : [];
-
   const topLimit = Math.max(1, Math.min(Number(profile.aiFocusTopCount || 5), 10));
-  const topItems = items.slice(0, topLimit);
+  const list = Array.isArray(priorityResult?.items) ? priorityResult.items : [];
+
+  // Maintain an ascending list of top N items by rank without sorting the whole array
+  const topItems = [];
+  for (const it of list) {
+    const rank = it && typeof it.rank === 'number' ? it.rank : Number.MAX_SAFE_INTEGER;
+    // Insert into the correct position (small N so O(N^2) is acceptable)
+    let inserted = false;
+    for (let i = 0; i < topItems.length; i++) {
+      const curRank = topItems[i] && typeof topItems[i].rank === 'number' ? topItems[i].rank : Number.MAX_SAFE_INTEGER;
+      if (rank < curRank) {
+        topItems.splice(i, 0, it);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) topItems.push(it);
+    if (topItems.length > topLimit) topItems.pop();
+  }
   if (!topItems.length) {
     return { adjustedTop: 0, deferred: 0, locked: 0 };
   }
