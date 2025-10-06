@@ -118,6 +118,14 @@ const TasksList: React.FC = () => {
     return Math.round(value * 100) / 100;
   };
 
+  const isDueToday = (task: TaskWithContext): boolean => {
+    const rawDue = task.dueDate as unknown;
+    if (!rawDue) return false;
+    const dueDate = rawDue instanceof Date ? rawDue : new Date(rawDue as number | string);
+    const today = new Date();
+    return dueDate.toDateString() === today.toDateString();
+  };
+
   const handleCloseAiModal = () => {
     setShowAiModal(false);
     setAiSuggestions([]);
@@ -1332,17 +1340,3 @@ const TasksList: React.FC = () => {
 };
 
 export default TasksList;
-  useEffect(() => {
-    const state = location.state as { preset?: string } | null;
-    if (state?.preset === 'dueToday') {
-      setFilters(prev => ({ ...prev, due: 'today' }));
-      navigate(location.pathname, { replace: true, state: null });
-    }
-  }, [location.state, navigate, location.pathname]);
-
-  const isDueToday = (task: TaskWithContext) => {
-    if (!task.dueDate) return false;
-    const dueDate = task.dueDate instanceof Date ? task.dueDate : new Date(task.dueDate);
-    const today = new Date();
-    return dueDate.toDateString() === today.toDateString();
-  };

@@ -40,6 +40,8 @@ const StoriesManagement: React.FC = () => {
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
+  const location = useLocation();
+  const navigate = useNavigate();
 
   // 📍 PAGE TRACKING
   useEffect(() => {
@@ -63,13 +65,13 @@ const StoriesManagement: React.FC = () => {
   }, [filterStatus, filterGoal, searchTerm]);
 
   useEffect(() => {
-    const state = location.state as { themeId?: string } | null;
+    const state = ((location as unknown) as { state?: { themeId?: string } | null }).state ?? null;
     if (state?.themeId) {
       setFilterTheme(String(state.themeId));
       // Clear navigation state to avoid reapplying on re-render
       navigate(location.pathname, { replace: true, state: null });
     }
-  }, [location.state, navigate, location.pathname]);
+  }, [location, navigate]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -710,5 +712,3 @@ const StoriesManagement: React.FC = () => {
 };
 
 export default StoriesManagement;
-  const location = useLocation();
-  const navigate = useNavigate();

@@ -40,25 +40,17 @@
 
 ## 🎯 Current Critical Defects to Track
 
-### 1. CRITICAL: Drag-and-Drop Library Conflicts
-**GitHub Issue Title:** "Critical: Multiple conflicting drag-and-drop libraries causing system instability"
-**Priority:** Critical
-**Impact:** System crashes, broken functionality across multiple components
+### 1. CRITICAL: Modern Stories table permission-denied via Goals
+**GitHub Issue Body:** `.gh-issue-bodies/story_table_permission_denied.md`
+**Impact:** Story edits from Goals view never persist; console flood of Firestore errors.
 
-### 2. HIGH: Goal Creation Status Mismatch  
-**GitHub Issue Title:** "Goal creation uses incorrect status values, causing display issues"
-**Priority:** High
-**Impact:** Created goals don't appear in lists, counters don't update
+### 2. HIGH: Email automation offline & no SMTP configurator
+**GitHub Issue Body:** `.gh-issue-bodies/email_delivery_config_ui.md`
+**Impact:** Daily summary / data-quality emails fail. Need UI to manage Gmail SMTP + test send.
 
-### 3. HIGH: Sprint Planning Component Crash
-**GitHub Issue Title:** "Sprint Planning crashes due to missing react-dnd dependency"
-**Priority:** High  
-**Impact:** Sprint Planning feature completely unusable
-
-### 4. MEDIUM: Goal Counter Logic
-**GitHub Issue Title:** "Goal counters use filtered instead of total counts"
-**Priority:** Medium
-**Impact:** Misleading dashboard statistics
+### 3. CRITICAL: AI planner nightly automation failing
+**GitHub Issue Body:** `.gh-issue-bodies/ai_planner_nightly_automation.md`
+**Impact:** Auto-plan, 24h rebalance, and nightly scheduling fail; daily pipeline blocked.
 
 ## 🔄 Defect Workflow
 

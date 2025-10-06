@@ -34,12 +34,12 @@ const TaskListView: React.FC = () => {
   }, [currentUser, currentPersona, selectedSprintId]);
 
   useEffect(() => {
-    const state = location.state as { preset?: string } | null;
+    const state = ((location as unknown) as { state?: { preset?: string } | null }).state ?? null;
     if (state?.preset === 'dueToday') {
       setDueFilter('today');
       navigate(location.pathname, { replace: true, state: null });
     }
-  }, [location.state, location.pathname, navigate]);
+  }, [location, navigate]);
 
   // Set up the update handler for the global sidebar
   useEffect(() => {
@@ -218,7 +218,10 @@ const TaskListView: React.FC = () => {
 
   const filteredTasks = tasks.filter(task => {
     if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
-    if (task.persona && task.persona !== currentPersona) return false;
+    if (task.persona) {
+      const persona = typeof task.persona === 'string' ? task.persona.toLowerCase() : String(task.persona).toLowerCase();
+      if (persona && persona !== currentPersona) return false;
+    }
     if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
     if (filterTheme !== 'all' && !isTheme(task.theme, filterTheme)) return false;
     if (dueFilter === 'today' && !isDueToday(task)) return false;

@@ -62,6 +62,10 @@ import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboard from './components/FinanceDashboard';
 import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
+import SettingsEmailPage from './components/settings/SettingsEmailPage';
+import SettingsPlannerPage from './components/settings/SettingsPlannerPage';
+import AiDiagnosticsLogs from './components/logs/AiDiagnosticsLogs';
+
 
 // Lazy-loaded heavy routes
 const TravelMap = React.lazy(() => import('./components/travel/TravelMap'));
@@ -190,9 +194,9 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/tasks" element={<Navigate to="/task" replace />} />
-              <Route path="/task-list" element={<Navigate to="/task" replace />} />
-              <Route path="/task" element={<TaskListView />} />
+              <Route path="/tasks" element={<TaskListView />} />
+              <Route path="/task" element={<Navigate to="/tasks" replace />} />
+              <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
               <Route path="/games-backlog" element={<GamesBacklog />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
@@ -236,8 +240,9 @@ function AppContent() {
             <Route path="/calendar/sync" element={<CalendarIntegrationView />} />
             <Route path="/routes" element={<RoutesManagementView />} />
             <Route path="/routes/optimization" element={<RoutesManagementView />} />
-            <Route path="/finance/integrations" element={<IntegrationSettings />} />
-            <Route path="/integrations/logs" element={<IntegrationLogs />} />
+            <Route path="/finance/integrations" element={<Navigate to="/settings/integrations" replace />} />
+            <Route path="/logs/integrations" element={<IntegrationLogs />} />
+            <Route path="/logs/ai" element={<AiDiagnosticsLogs />} />
             <Route
               path="/travel"
               element={
@@ -254,8 +259,11 @@ function AppContent() {
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/finance" element={<FinanceDashboard />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/email" element={<SettingsEmailPage />} />
+            <Route path="/settings/planner" element={<SettingsPlannerPage />} />
+            <Route path="/settings/integrations" element={<IntegrationSettings />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
-            <Route path="/admin" element={<Navigate to="/settings?tab=integrations" replace />} />
+            <Route path="/admin" element={<Navigate to="/settings/integrations" replace />} />
             {/* Removed by request: Test Suite and Changelog routes */}
             <Route path="/test" element={<Navigate to="/dashboard" replace />} />
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />

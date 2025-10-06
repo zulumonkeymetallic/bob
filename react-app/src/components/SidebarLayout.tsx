@@ -34,7 +34,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   // const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance']);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance', 'Settings', 'Logs']);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
 
   const navigationGroups: NavigationGroup[] = [
@@ -67,9 +67,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Finance',
       icon: 'piggy-bank',
       items: [
-        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
-        { label: 'Integrations', path: '/settings?tab=integrations', icon: 'plug' },
-        { label: 'Integration Logs', path: '/integrations/logs', icon: 'stream' }
+        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' }
       ]
     },
     {
@@ -91,7 +89,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Tasks',
       icon: 'list-check',
       items: [
-        { label: 'Tasks List', path: '/task', icon: 'list' }
+        { label: 'Tasks List', path: '/tasks', icon: 'list' }
       ]
     },
     {
@@ -136,11 +134,21 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     },
     // (Removed Data Management per request)
     {
-      label: 'System',
+      label: 'Settings',
       icon: 'cog',
       items: [
-        { label: 'Settings', path: '/theme-colors', icon: 'cog' },
-        { label: 'Integration Logs', path: '/integrations/logs', icon: 'stream' }
+        { label: 'Overview', path: '/settings', icon: 'sliders-h' },
+        { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
+        { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
+        { label: 'Integrations', path: '/settings/integrations', icon: 'plug' }
+      ]
+    },
+    {
+      label: 'Logs',
+      icon: 'stream',
+      items: [
+        { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
+        { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' }
       ]
     },
     // Removed duplicate Health group at bottom

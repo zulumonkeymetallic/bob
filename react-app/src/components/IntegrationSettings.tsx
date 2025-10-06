@@ -82,6 +82,7 @@ const IntegrationSettings: React.FC = () => {
   const [traktLoading, setTraktLoading] = useState(false);
   const [traktUserInput, setTraktUserInput] = useState('');
 
+
   useEffect(() => {
     if (!currentUser) return;
     const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
