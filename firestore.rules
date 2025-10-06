@@ -5,6 +5,13 @@ service cloud.firestore {
     function isSignedIn() { return request.auth != null; }
     function isOwner() { return isSignedIn() && request.auth.uid == resource.data.ownerUid; }
     function isOwnerForCreate() { return isSignedIn() && request.resource.data.ownerUid == request.auth.uid; }
+    function isAdmin() {
+      // Admin determined by profile flags
+      return isSignedIn() && (
+        get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.isAdmin == true ||
+        get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
 
     match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -76,6 +83,24 @@ service cloud.firestore {
     match /profiles/{uid} {
       allow read, update, delete: if isSignedIn() && request.auth.uid == uid;
       allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.ownerUid == uid;
+    }
+
+    // System settings (admin-only read; writes via Cloud Functions admin SDK)
+    match /system_settings/{doc} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Integration logs - per-user
+    match /integration_logs/{id} {
+      allow read: if isSignedIn() && request.auth.uid == resource.data.ownerUid;
+      allow write: if false;
+    }
+
+    // AI diagnostics logs - per-user
+    match /ai_logs/{id} {
+      allow read: if isSignedIn() && request.auth.uid == resource.data.ownerUid;
+      allow write: if false;
     }
 
     // No client access to tokens by default (server-only)
