@@ -6123,6 +6123,54 @@ exports.sendTestEmail = httpsV2.onCall(async (req) => {
   }
 });
 
+// Save SMTP email configuration (admin-only)
+exports.saveEmailSettings = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+  if (!isAdmin) {
+    throw new httpsV2.HttpsError('permission-denied', 'Only admins can update email settings');
+  }
+
+  const body = req?.data || {};
+  const normalizeBool = (v, fallback = true) => {
+    if (v === undefined || v === null || v === '') return fallback;
+    if (typeof v === 'boolean') return v;
+    const s = String(v).toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on'].includes(s);
+  };
+  const normalizePort = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new httpsV2.HttpsError('invalid-argument', 'SMTP port must be a number');
+    return n;
+  };
+
+  const payload = {
+    service: body.service || null,
+    host: body.host || null,
+    port: normalizePort(body.port),
+    secure: normalizeBool(body.secure, true),
+    user: body.user || null,
+    password: body.password || null,
+    from: body.from || body.user || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedBy: uid,
+  };
+
+  await db.collection('system_settings').doc('email').set(payload, { merge: true });
+  await recordIntegrationLog(uid, 'email', 'success', 'Updated SMTP configuration', {
+    hasHost: !!payload.host,
+    hasService: !!payload.service,
+    secure: !!payload.secure,
+  });
+  return { ok: true };
+});
+
 exports.cleanupUserLogs = schedulerV2.onSchedule({
   schedule: '0 4 * * *',
   timeZone: 'UTC',

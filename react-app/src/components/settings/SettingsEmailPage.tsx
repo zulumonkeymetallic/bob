@@ -120,32 +120,21 @@ const SettingsEmailPage: React.FC = () => {
     setEmailConfigMessage('');
     setEmailConfigError('');
     try {
-      const trimmedPort = emailPort.trim();
-      let normalizedPort: number | null = null;
-      if (trimmedPort) {
-        const parsed = Number(trimmedPort);
-        if (!Number.isFinite(parsed)) {
-          throw new Error('SMTP port must be a number');
-        }
-        normalizedPort = parsed;
-      }
-
-      await setDoc(doc(db, 'system_settings', 'email'), {
-        service: emailService || null,
-        host: emailHost || null,
-        port: normalizedPort,
+      const callable = httpsCallable(functions, 'saveEmailSettings');
+      await callable({
+        service: emailService,
+        host: emailHost,
+        port: emailPort,
         secure: emailSecure,
-        user: emailUser || null,
-        password: emailPassword || null,
-        from: emailFromAddress || null,
-        updatedAt: serverTimestamp(),
-        updatedBy: currentUser.uid,
-      }, { merge: true });
-
+        user: emailUser,
+        password: emailPassword,
+        from: emailFromAddress,
+      });
       setEmailConfigMessage('Email settings saved');
     } catch (error: any) {
       console.error('[settings-email] failed to save config', error);
-      setEmailConfigError(error?.message || 'Failed to save email configuration');
+      const msg = error?.message || 'Failed to save email configuration';
+      setEmailConfigError(msg);
     } finally {
       setEmailConfigSaving(false);
     }
