@@ -1540,6 +1540,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                                     persona: currentPersona,
                                     ref: generateRef('task', existingRefs),
                                     source: 'web',
+                                    sprintId: (story as any)?.sprintId || null,
                                     syncState: 'clean',
                                     createdAt: serverTimestamp(),
                                     updatedAt: serverTimestamp(),

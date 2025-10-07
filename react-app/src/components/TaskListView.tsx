@@ -27,6 +27,7 @@ const TaskListView: React.FC = () => {
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const location = useLocation();
   const navigate = useNavigate();
+  const [prefilledSearchApplied, setPrefilledSearchApplied] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -40,6 +41,16 @@ const TaskListView: React.FC = () => {
       navigate(location.pathname, { replace: true, state: null });
     }
   }, [location, navigate]);
+
+  // Accept global search hand-off (state.search) once
+  useEffect(() => {
+    const state = ((location as unknown) as { state?: { search?: string } | null }).state ?? null;
+    if (!prefilledSearchApplied && state?.search) {
+      setSearchTerm(state.search);
+      setPrefilledSearchApplied(true);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location, navigate, prefilledSearchApplied]);
 
   // Set up the update handler for the global sidebar
   useEffect(() => {

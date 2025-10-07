@@ -252,6 +252,9 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
         theme: 0, // default
         ownerUid: currentUser.uid,
         persona: currentPersona,
+        sprintId: selectedSprintId || null,
+        source: 'web',
+        syncState: 'clean',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         deleted: false

@@ -651,7 +651,12 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
             <Col xl={3} md={6}>
-              <Card className="h-100 shadow-sm border-0">
+              <Card
+                className="h-100 shadow-sm border-0"
+                role="button"
+                onClick={() => navigate('/tasks', { state: { preset: 'dueToday' } })}
+                style={{ cursor: 'pointer' }}
+              >
                 <Card.Body>
                   <div className="text-uppercase text-muted small mb-1">Workload</div>
                   <h3 className="fw-semibold mb-1">{stats.pendingTasks}</h3>

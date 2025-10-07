@@ -282,7 +282,9 @@ const StoriesManagement: React.FC = () => {
         theme: storyData.theme || 1, // 1=Health
         points: storyData.points || 1,
         wipLimit: storyData.wipLimit || 3,
-        orderIndex: storyData.orderIndex ?? (maxOrderIndex + 1000)
+        orderIndex: storyData.orderIndex ?? (maxOrderIndex + 1000),
+        // If a sprint is selected globally, default new story into that sprint so it remains visible
+        sprintId: (selectedSprintId && selectedSprintId !== '') ? selectedSprintId : (storyData as any).sprintId || null
       };
 
       console.log('💾 Story data being saved:', newStory);

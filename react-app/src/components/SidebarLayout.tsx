@@ -8,6 +8,7 @@ import VersionDisplay from './VersionDisplay';
 import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
 import CompactSprintMetrics from './CompactSprintMetrics';
+import GlobalSearchBar from './GlobalSearchBar';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -531,12 +532,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
             <div className="d-flex justify-content-end align-items-center gap-3">
-              {/* Metrics first, then selector so metrics appear to the left of the selector */}
+              {/* Search, metrics, and sprint selector */}
+              <GlobalSearchBar />
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
-              <SprintSelector
-                selectedSprintId={globalSprintId}
-                onSprintChange={setGlobalSprintId}
-              />
+              <SprintSelector selectedSprintId={globalSprintId} onSprintChange={setGlobalSprintId} />
             </div>
           </div>
         </div>
