@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { generateRef } from '../utils/referenceGenerator';
 
 const TasksList: React.FC = () => {
   const { currentUser } = useAuth();
@@ -158,6 +159,7 @@ const TasksList: React.FC = () => {
         serverUpdatedAt: Date.now(),
         createdBy: currentUser.uid,
         ownerUid: currentUser.uid,
+        ref: generateRef('task', tasks.map(t => (t as any).ref).filter(Boolean) as string[]),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         estimateMin,

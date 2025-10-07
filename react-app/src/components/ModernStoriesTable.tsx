@@ -1524,6 +1524,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                                 sprints={sprints as any}
                                 onTaskCreate={async (newTask) => {
                                   const linkedGoal = goals.find(g => g.id === (story as any).goalId);
+                                  // Generate a human-readable reference for the new task and tag source
+                                  const existingRefs = allTasks.map(t => (t as any).ref).filter(Boolean) as string[];
                                   await addDoc(collection(db, 'tasks'), {
                                     title: newTask.title || '',
                                     description: newTask.description || '',
@@ -1536,6 +1538,9 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                                     theme: (linkedGoal as any)?.theme ?? 1,
                                     ownerUid: currentUser!.uid,
                                     persona: currentPersona,
+                                    ref: generateRef('task', existingRefs),
+                                    source: 'web',
+                                    syncState: 'clean',
                                     createdAt: serverTimestamp(),
                                     updatedAt: serverTimestamp(),
                                   } as any);

@@ -141,6 +141,22 @@ const defaultColumns: Column[] = [
     options: ['Health', 'Growth', 'Wealth', 'Tribe', 'Home']
   },
   { 
+    key: 'source', 
+    label: 'Source', 
+    width: '10%', 
+    visible: true, 
+    editable: false, 
+    type: 'text'
+  },
+  { 
+    key: 'syncState', 
+    label: 'State', 
+    width: '10%', 
+    visible: true, 
+    editable: false, 
+    type: 'text'
+  },
+  { 
     key: 'storyTitle', 
     label: 'Story', 
     width: '15%', 

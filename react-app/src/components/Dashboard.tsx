@@ -603,7 +603,12 @@ const Dashboard: React.FC = () => {
 
           <Row className="g-3 mb-4">
             <Col xl={3} md={6}>
-              <Card className="h-100 shadow-sm border-0">
+              <Card
+                className="h-100 shadow-sm border-0"
+                role="button"
+                onClick={() => navigate('/goals')}
+                style={{ cursor: 'pointer' }}
+              >
                 <Card.Body>
                   <div className="text-uppercase text-muted small mb-1">Goals</div>
                   <h3 className="fw-semibold mb-1">{stats.activeGoals}</h3>
@@ -612,7 +617,12 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
             <Col xl={3} md={6}>
-              <Card className="h-100 shadow-sm border-0">
+              <Card
+                className="h-100 shadow-sm border-0"
+                role="button"
+                onClick={() => navigate('/stories')}
+                style={{ cursor: 'pointer' }}
+              >
                 <Card.Body>
                   <div className="text-uppercase text-muted small mb-1">Stories</div>
                   <h3 className="fw-semibold mb-1">{stats.activeStories}</h3>
@@ -622,7 +632,12 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
             <Col xl={3} md={6}>
-              <Card className="h-100 shadow-sm border-0">
+              <Card
+                className="h-100 shadow-sm border-0"
+                role="button"
+                onClick={() => navigate('/sprints/kanban')}
+                style={{ cursor: 'pointer' }}
+              >
                 <Card.Body>
                   <div className="text-uppercase text-muted small mb-1">Sprint Progress</div>
                   <h3 className="fw-semibold mb-1">{stats.sprintTasksDone}/{stats.sprintTasksTotal}</h3>

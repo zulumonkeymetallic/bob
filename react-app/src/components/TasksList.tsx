@@ -466,7 +466,12 @@ const TasksList: React.FC = () => {
         timestamp: new Date().toISOString()
       });
 
-      await addDoc(collection(db, 'tasks'), taskData);
+      await addDoc(collection(db, 'tasks'), {
+        ...taskData,
+        ref: generateRef('task', tasks.map(t => (t as any).ref).filter(Boolean) as string[]),
+        source: 'web',
+        syncState: 'clean',
+      });
       
       console.log('✅ TasksList: TASK created successfully', {
         action: 'task_creation_success',
