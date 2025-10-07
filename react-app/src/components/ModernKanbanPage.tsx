@@ -153,6 +153,8 @@ const ModernKanbanPage: React.FC = () => {
         source: 'web',
         aiLinkConfidence: 0,
         ownerUid: currentUser.uid,
+        ref: generateRef('task', []),
+        syncState: 'clean',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });

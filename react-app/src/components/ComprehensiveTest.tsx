@@ -220,7 +220,7 @@ const ComprehensiveTest: React.FC = () => {
         updatedAt: new Date().toISOString()
       };
 
-      const taskDoc = await addDoc(collection(db, 'tasks'), taskData);
+      const taskDoc = await addDoc(collection(db, 'tasks'), { ...taskData, ref: (taskData as any)?.ref || require('../utils/referenceGenerator').generateRef('task', []), source: (taskData as any)?.source || 'web', syncState: (taskData as any)?.syncState || 'clean' });
       addLog(`✅ Task created: ${taskDoc.id}`);
       setTestResults(prev => ({ ...prev, taskCreate: true }));
 

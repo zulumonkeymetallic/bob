@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Table } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Story, Task, Sprint } from '../types';
-import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
-import { ChoiceHelper } from '../config/choices';
-import SprintKanbanPage from './SprintKanbanPage';
+import { Story, Task, Sprint, Goal } from '../types';
+import { isStatus } from '../utils/statusHelpers';
 import SprintSelector from './SprintSelector';
 import { useSprint } from '../contexts/SprintContext';
 import ChecklistPanel from './ChecklistPanel';
@@ -18,16 +16,20 @@ import CompactSprintMetrics from './CompactSprintMetrics';
 import ThemeBreakdown from './ThemeBreakdown';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
-import { humanizePolicyMode } from '../utils/schedulerPolicy';
 import { nextDueAt } from '../utils/recurrence';
+import { matchesPersona } from '../utils/personaFilter';
 
 interface DashboardStats {
   activeGoals: number;
+  goalsDueSoon: number;
   activeStories: number;
+  storyCompletion: number;
   pendingTasks: number;
   completedToday: number;
   upcomingDeadlines: number;
-  progressScore: number;
+  tasksUnlinked: number;
+  sprintTasksTotal: number;
+  sprintTasksDone: number;
 }
 
 interface ReminderItem {
@@ -35,6 +37,17 @@ interface ReminderItem {
   title: string;
   dueDate: Date | null;
   taskId?: string | null;
+}
+
+interface MonzoSummary {
+  totals?: {
+    spent?: number;
+    budget?: number;
+    remaining?: number;
+  } | null;
+  categories?: Array<{ category?: string; name?: string; spent?: number }>;
+  goalAlignment?: any;
+  updatedAt?: any;
 }
 
 interface ChecklistSnapshotItem {
@@ -57,11 +70,15 @@ const Dashboard: React.FC = () => {
   
   const [stats, setStats] = useState<DashboardStats>({
     activeGoals: 0,
+    goalsDueSoon: 0,
     activeStories: 0,
+    storyCompletion: 0,
     pendingTasks: 0,
     completedToday: 0,
     upcomingDeadlines: 0,
-    progressScore: 0
+    tasksUnlinked: 0,
+    sprintTasksTotal: 0,
+    sprintTasksDone: 0,
   });
   const [recentStories, setRecentStories] = useState<Story[]>([]);
   const [upcomingTasks, setUpcomingTasks] = useState<Task[]>([]);
@@ -69,14 +86,32 @@ const Dashboard: React.FC = () => {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   // Use global sprint selection for consistency across app
   const { selectedSprintId, setSelectedSprintId } = useSprint();
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
+  const [todayGoogleEvents, setTodayGoogleEvents] = useState<Array<{ id: string; title: string; start: number; end: number }>>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
   const [remindersDueToday, setRemindersDueToday] = useState<ReminderItem[]>([]);
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
+  const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
+
+  const decodeToDate = (value: any): Date | null => {
+    if (value == null) return null;
+    if (value instanceof Date) return value;
+    if (typeof value === 'object' && typeof value.toDate === 'function') {
+      try { return value.toDate(); } catch { return null; }
+    }
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return new Date(numeric);
+    }
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) return new Date(parsed);
+    }
+    return null;
+  };
   const dailyBrief = () => {
     const parts: string[] = [];
     if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
@@ -105,18 +140,21 @@ const Dashboard: React.FC = () => {
     const storiesQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
       orderBy('updatedAt', 'desc'),
-      limit(5)
+      limit(8)
+    );
+
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid)
     );
     
     // Load tasks (simplified query while indexes are building)
     const tasksQuery = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
       orderBy('priority', 'desc'),
-      limit(10)
+      limit(40)
     );
 
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -130,16 +168,43 @@ const Dashboard: React.FC = () => {
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
         };
       }) as Story[];
-      setRecentStories(storiesData);
-      
-      // Calculate stats from stories
-      const activeStories = storiesData.filter(s => isStatus(s.status, 'active')).length;
-      const doneStories = storiesData.filter(s => isStatus(s.status, 'done')).length;
-      
+      const personaStories = storiesData.filter(s => matchesPersona(s, currentPersona));
+      setRecentStories(personaStories.slice(0, 5));
+
+      const activeStories = personaStories.filter(story => !isStatus(story.status, 'done')).length;
+      const doneStories = personaStories.filter(story => isStatus(story.status, 'done')).length;
+
       setStats(prev => ({
         ...prev,
         activeStories,
-        progressScore: storiesData.length > 0 ? Math.round((doneStories / storiesData.length) * 100) : 0
+        storyCompletion: storiesData.length > 0 ? Math.round((doneStories / storiesData.length) * 100) : 0,
+      }));
+    });
+
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      const goalData = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          ...data,
+          targetDate: data.targetDate?.toDate ? data.targetDate.toDate() : data.targetDate,
+          dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
+        } as Goal;
+      });
+
+      const personaGoals = goalData.filter(g => matchesPersona(g, currentPersona));
+      const activeGoals = personaGoals.filter(goal => !isStatus(goal.status, 'Complete')).length;
+      const now = new Date();
+      const soon = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+      const dueSoon = personaGoals.filter(goal => {
+        const due = decodeToDate(goal.targetDate || goal.dueDate);
+        return due ? due >= now && due <= soon : false;
+      }).length;
+
+      setStats(prev => ({
+        ...prev,
+        activeGoals,
+        goalsDueSoon: dueSoon,
       }));
     });
 
@@ -155,31 +220,42 @@ const Dashboard: React.FC = () => {
           dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
         };
       }) as Task[];
-      
-      // Filter out 'done' tasks on client side while indexes are building
-      const tasksData = allTasks.filter(task => !isStatus(task.status, 'done')).slice(0, 5);
-      setUpcomingTasks(tasksData);
-      
-      // Calculate task stats
-      const pendingTasks = tasksData.filter(t => !isStatus(t.status, 'done')).length;
-      const todayCompleted = tasksData.filter(t => {
-        if (isStatus(t.status, 'done') && t.updatedAt) {
-          try {
-            const taskDate = typeof t.updatedAt === 'object' && t.updatedAt && 'seconds' in t.updatedAt 
-              ? new Date((t.updatedAt as any).seconds * 1000)
-              : new Date(t.updatedAt as any);
-            return taskDate.toDateString() === new Date().toDateString();
-          } catch {
-            return false;
-          }
-        }
-        return false;
+
+      const personaTasks = allTasks.filter(t => matchesPersona(t, currentPersona));
+      const activeTaskList = personaTasks.filter(task => !isStatus(task.status, 'done'));
+      const nextTasks = activeTaskList.slice(0, 5);
+      setUpcomingTasks(nextTasks);
+
+      const openTasks = personaTasks.filter(task => !isStatus(task.status, 'done')).length;
+      const todayCompleted = personaTasks.filter(task => {
+        if (!isStatus(task.status, 'done') || !task.updatedAt) return false;
+        const completedDate = decodeToDate(task.updatedAt);
+        if (!completedDate) return false;
+        const today = new Date();
+        return completedDate.toDateString() === today.toDateString();
       }).length;
-      
+
+      const unlinkedCount = personaTasks.filter(task => !task.storyId).length;
+      const now = new Date();
+      const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const upcomingDeadlines = personaTasks.filter(task => {
+        const due = decodeToDate(task.dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs);
+        return due ? due >= now && due <= soon : false;
+      }).length;
+
+      const sprintTasks = selectedSprintId
+        ? personaTasks.filter(task => task.sprintId === selectedSprintId)
+        : personaTasks.filter(task => task.sprintId);
+      const sprintDone = sprintTasks.filter(task => isStatus(task.status, 'done')).length;
+
       setStats(prev => ({
         ...prev,
-        pendingTasks,
-        completedToday: todayCompleted
+        pendingTasks: openTasks,
+        completedToday: todayCompleted,
+        tasksUnlinked: unlinkedCount,
+        upcomingDeadlines,
+        sprintTasksTotal: sprintTasks.length,
+        sprintTasksDone: sprintDone,
       }));
     });
 
@@ -191,14 +267,17 @@ const Dashboard: React.FC = () => {
       await Promise.all([
         loadLLMPriority(),
         loadTodayBlocks(),
+        loadTodayGoogleEvents(),
         countTasksDueToday(),
         loadRemindersDueToday(),
-        loadChecklistDueToday()
+        loadChecklistDueToday(),
+        loadMonzoSummary()
       ]);
     } catch {}
 
     return () => {
       unsubscribeStories();
+      unsubscribeGoals();
       unsubscribeTasks();
     };
   };
@@ -276,6 +355,31 @@ const Dashboard: React.FC = () => {
     setTodayBlocks(blocks);
   };
 
+  const loadTodayGoogleEvents = async () => {
+    if (!currentUser) return;
+    try {
+      const callable = httpsCallable(functions, 'listUpcomingEvents');
+      const res: any = await callable({ maxResults: 50 });
+      const items: any[] = Array.isArray(res?.data?.items) ? res.data.items : [];
+      const start = new Date(); start.setHours(0,0,0,0);
+      const end = new Date(); end.setHours(23,59,59,999);
+      const events = items.map((e) => {
+        const startStr = e?.start?.dateTime || e?.start?.date;
+        const endStr = e?.end?.dateTime || e?.end?.date;
+        if (!startStr || !endStr) return null;
+        const s = new Date(startStr).getTime();
+        const ee = new Date(endStr).getTime();
+        return { id: e.id || `${e.summary}-${startStr}`, title: e.summary || 'Event', start: s, end: ee };
+      }).filter(Boolean) as Array<{ id: string; title: string; start: number; end: number }>;
+      const todays = events.filter(ev => ev.start >= start.getTime() && ev.start <= end.getTime())
+        .sort((a,b) => a.start - b.start);
+      setTodayGoogleEvents(todays);
+    } catch (e) {
+      // Non-fatal if Google not connected
+      setTodayGoogleEvents([]);
+    }
+  };
+
   const countTasksDueToday = async () => {
     if (!currentUser) return;
     const start = new Date(); start.setHours(0,0,0,0);
@@ -298,19 +402,6 @@ const Dashboard: React.FC = () => {
       if (due && due >= start.getTime() && due <= end.getTime()) count += 1;
     });
     setTasksDueToday(count);
-  };
-
-  const decodeToDate = (value: any): Date | null => {
-    if (value == null) return null;
-    if (value instanceof Date) return value;
-    if (typeof value === 'object' && typeof value.toDate === 'function') {
-      try { return value.toDate(); } catch { return null; }
-    }
-    const numeric = Number(value);
-    if (Number.isFinite(numeric)) {
-      return new Date(numeric);
-    }
-    return null;
   };
 
   const loadRemindersDueToday = async () => {
@@ -409,30 +500,37 @@ const Dashboard: React.FC = () => {
     setRoutinesDueToday(routines);
   };
 
-  const getStatusColor = (status: string): string => {
-    switch (status) {
-      case 'done': return 'success';
-      case 'active': return 'warning';
-      case 'backlog': return 'secondary';
-      default: return 'secondary';
+  const loadMonzoSummary = async () => {
+    if (!currentUser) {
+      setMonzoSummary(null);
+      return;
     }
-  };
-
-  const getPriorityColor = (priority: string): string => {
-    switch (priority) {
-      case 'P1': case 'high': return 'danger';
-      case 'P2': case 'medium': return 'warning';
-      case 'P3': case 'low': return 'secondary';
-      default: return 'secondary';
+    try {
+      const budgetSnap = await getDoc(doc(db, 'monzo_budget_summary', currentUser.uid));
+      const alignmentSnap = await getDoc(doc(db, 'monzo_goal_alignment', currentUser.uid));
+      if (!budgetSnap.exists && !alignmentSnap.exists) {
+        setMonzoSummary(null);
+        return;
+      }
+      const summary: MonzoSummary = {};
+      if (budgetSnap.exists) {
+        const data = budgetSnap.data() as any;
+        summary.totals = data?.totals || null;
+        summary.categories = Array.isArray(data?.categories) ? data.categories.slice(0, 4) : [];
+        summary.updatedAt = data?.updatedAt || null;
+      }
+      if (alignmentSnap.exists) {
+        summary.goalAlignment = alignmentSnap.data();
+      }
+      setMonzoSummary(summary);
+    } catch (error) {
+      console.warn('Failed to load Monzo summary', error);
+      setMonzoSummary(null);
     }
   };
 
   const handleNavigateToTasksToday = () => {
     navigate('/tasks', { state: { preset: 'dueToday' } });
-  };
-
-  const handleNavigateToCalendarToday = () => {
-    navigate('/calendar', { state: { focus: 'today' } });
   };
 
   const handleOpenChecklist = () => {
@@ -447,153 +545,204 @@ const Dashboard: React.FC = () => {
     return <div>Please sign in to view your dashboard.</div>;
   }
 
+  const sprintProgress = stats.sprintTasksTotal > 0
+    ? Math.min(100, Math.round((stats.sprintTasksDone / stats.sprintTasksTotal) * 100))
+    : 0;
+  const sprintRemaining = Math.max(stats.sprintTasksTotal - stats.sprintTasksDone, 0);
+  const hasSelectedSprint = Boolean(selectedSprintId);
+
+  const sortedUpcoming = [...upcomingTasks].sort((a, b) => {
+    const aDue = decodeToDate(a.dueDate ?? (a as any).targetDate ?? (a as any).dueDateMs)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    const bDue = decodeToDate(b.dueDate ?? (b as any).targetDate ?? (b as any).dueDateMs)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    return aDue - bDue;
+  });
+  const upcomingFocus = sortedUpcoming.slice(0, 4);
+
+  const formatDueLabel = (task: Task): string => {
+    const due = decodeToDate(task.dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs);
+    if (!due) return 'No due date';
+    return format(due, 'MMM d');
+  };
+
+  const automationSnapshot = [
+    { label: 'Tasks due today', value: tasksDueToday },
+    { label: 'Reminders pending', value: remindersDueToday.length },
+    { label: 'Chores today', value: choresDueToday.length },
+    { label: 'Routines today', value: routinesDueToday.length },
+    { label: 'Unscheduled blocks', value: unscheduledToday.length },
+  ];
+
   return (
     <Container fluid className="p-4">
       <Row>
         <Col>
-          <div className="d-flex justify-content-between align-items-center mb-3">
-            <div className="d-flex align-items-center gap-3 flex-wrap">
-              <h2 className="mb-0">Dashboard</h2>
-              <SprintSelector
-                selectedSprintId={selectedSprintId}
-                onSprintChange={(sprintId: string) => setSelectedSprintId(sprintId)}
-                className="ms-3"
-              />
-              <CompactSprintMetrics selectedSprintId={selectedSprintId} />
+          <div className="d-flex justify-content-between flex-wrap gap-3 align-items-start mb-3">
+            <div>
+              <div className="d-flex align-items-center gap-3 flex-wrap">
+                <h2 className="mb-0">Dashboard</h2>
+                <SprintSelector
+                  selectedSprintId={selectedSprintId}
+                  onSprintChange={(sprintId: string) => setSelectedSprintId(sprintId)}
+                />
+                <CompactSprintMetrics selectedSprintId={selectedSprintId} />
+                {stats.tasksUnlinked > 0 && (
+                  <Badge bg="warning" text="dark" pill>
+                    {stats.tasksUnlinked} unlinked tasks
+                  </Badge>
+                )}
+              </div>
+              <div className="text-muted small mt-2">{dailyBrief()}</div>
             </div>
-            <div className="d-flex align-items-center">
-              <small className="text-muted me-3">
-                Last updated: {lastUpdated.toLocaleTimeString()}
-              </small>
+            <div className="d-flex align-items-center gap-2">
+              <small className="text-muted">Last updated {lastUpdated.toLocaleTimeString()}</small>
               <Button variant="outline-primary" size="sm" onClick={loadDashboardData}>
                 Refresh
               </Button>
             </div>
           </div>
 
-          {/* Welcome Section */}
-          <Alert variant="info" className="mb-4">
-            <strong>Welcome back, {currentUser.displayName || 'there'}!</strong>
-            <br />
-            Currently viewing <Badge bg="primary">{currentPersona}</Badge> persona data.
-          </Alert>
-          
-          {/* Priority Banner */}
-          {priorityBanner && (
-            <Alert variant="primary" className="mb-3">
-              <strong>Priority for Today:</strong> {priorityBanner.title}
-              {priorityBanner.score ? <span className="ms-2 badge bg-light text-dark">Score {Math.round(priorityBanner.score)}</span> : null}
-            </Alert>
-          )}
-          {/* Daily Brief */}
-          <Card className="mb-3">
-            <Card.Body>
-              <strong>Daily Brief:</strong> <span className="ms-1">{dailyBrief()}</span>
-            </Card.Body>
-          </Card>
-          {/* Key Stats Row */}
-          <Row className="mb-4">
-            <Col md={6} lg={3}>
+          <Row className="g-3 mb-4">
+            <Col xl={3} md={6}>
               <Card
-                className="text-center h-100"
+                className="h-100 shadow-sm border-0"
                 role="button"
+                onClick={() => navigate('/goals')}
                 style={{ cursor: 'pointer' }}
-                onClick={handleNavigateToTasksToday}
               >
                 <Card.Body>
-                  <h3 className="text-warning">{tasksDueToday}</h3>
-                  <p className="mb-0">Tasks Due Today</p>
-                  <small className="text-muted d-block mt-1">Click to review due items</small>
+                  <div className="text-uppercase text-muted small mb-1">Goals</div>
+                  <h3 className="fw-semibold mb-1">{stats.activeGoals}</h3>
+                  <div className="text-muted small">{stats.goalsDueSoon} due in next 14 days</div>
                 </Card.Body>
               </Card>
             </Col>
-            <Col md={6} lg={3}>
+            <Col xl={3} md={6}>
               <Card
-                className="text-center h-100"
+                className="h-100 shadow-sm border-0"
                 role="button"
+                onClick={() => navigate('/stories')}
                 style={{ cursor: 'pointer' }}
-                onClick={handleNavigateToCalendarToday}
               >
                 <Card.Body>
-                  <h3 className="text-info">{todayBlocks.length}</h3>
-                  <p className="mb-0">Today's Blocks</p>
-                  <small className="text-muted d-block mt-1">Open planner for today</small>
+                  <div className="text-uppercase text-muted small mb-1">Stories</div>
+                  <h3 className="fw-semibold mb-1">{stats.activeStories}</h3>
+                  <ProgressBar now={stats.storyCompletion} variant="success" className="mb-2" />
+                  <div className="text-muted small">{stats.storyCompletion}% complete</div>
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col xl={3} md={6}>
+              <Card
+                className="h-100 shadow-sm border-0"
+                role="button"
+                onClick={() => navigate('/sprints/kanban')}
+                style={{ cursor: 'pointer' }}
+              >
+                <Card.Body>
+                  <div className="text-uppercase text-muted small mb-1">Sprint Progress</div>
+                  <h3 className="fw-semibold mb-1">{stats.sprintTasksDone}/{stats.sprintTasksTotal}</h3>
+                  <ProgressBar now={sprintProgress} variant="info" className="mb-2" />
+                  <div className="text-muted small">
+                    {hasSelectedSprint
+                      ? `${sprintRemaining} tasks remaining`
+                      : 'Select a sprint to track burndown'}
+                  </div>
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col xl={3} md={6}>
+              <Card
+                className="h-100 shadow-sm border-0"
+                role="button"
+                onClick={() => navigate('/tasks', { state: { preset: 'dueToday' } })}
+                style={{ cursor: 'pointer' }}
+              >
+                <Card.Body>
+                  <div className="text-uppercase text-muted small mb-1">Workload</div>
+                  <h3 className="fw-semibold mb-1">{stats.pendingTasks}</h3>
+                  <ul className="list-unstyled mb-0 text-muted small">
+                    <li>Upcoming deadlines: {stats.upcomingDeadlines}</li>
+                    <li>Unlinked tasks: {stats.tasksUnlinked}</li>
+                  </ul>
                 </Card.Body>
               </Card>
             </Col>
           </Row>
 
-          {/* Sprint Kanban moved to its own page (/sprints/kanban) */}
-
-          {/* 3-Column Overview: Checklist | Calendar | Theme Breakdown */}
-          <Row className="mb-4">
-            <Col lg={4} className="mb-3">
-              <Card className="h-100">
+          <Row className="g-3 mb-4">
+            <Col xl={4} md={6}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <span className="fw-semibold">Daily Priorities</span>
+                  <Button variant="link" size="sm" className="text-decoration-none" onClick={() => navigate('/tasks')}>
+                    Open tasks
+                  </Button>
+                </Card.Header>
                 <Card.Body>
-                  {unscheduledToday.length > 0 && (
-                    <Alert variant="warning" className="mb-3">
-                      <strong>Scheduling issues:</strong>
-                      <ul className="mb-0 small">
-                        {unscheduledSummary.map((item) => {
-                          const label = item.title || item.sourceId;
-                          const policyLabel = item.schedulingContext?.policyMode
-                            ? humanizePolicyMode(item.schedulingContext.policyMode)
-                            : null;
-                          return (
-                            <li key={item.id}>
-                              {item.deepLink ? (
-                                <a href={item.deepLink} target="_blank" rel="noopener noreferrer">
-                                  {label}
-                                </a>
-                              ) : (
-                                label
-                              )}
-                              {item.statusReason && <span> · {item.statusReason}</span>}
-                              {policyLabel && <span> · {policyLabel}</span>}
-                              {item.mobileCheckinUrl && (
-                                <span> · <a href={item.mobileCheckinUrl} target="_blank" rel="noopener noreferrer">Check-in</a></span>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                      {unscheduledToday.length > unscheduledSummary.length && (
-                        <div className="small text-muted mt-1">+{unscheduledToday.length - unscheduledSummary.length} more</div>
-                      )}
-                    </Alert>
+                  {priorityBanner ? (
+                    <div className="border rounded p-3 mb-3 bg-light">
+                      <div className="d-flex justify-content-between align-items-start">
+                        <div className="fw-semibold">{priorityBanner.title}</div>
+                        {priorityBanner.bucket && (
+                          <Badge bg="primary" pill>{priorityBanner.bucket}</Badge>
+                        )}
+                      </div>
+                      {priorityBanner.score ? (
+                        <div className="text-muted small mt-1">AI score {Math.round(priorityBanner.score)}</div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="text-muted">Focus recommendations will appear after reprioritisation runs.</div>
                   )}
-                  <ChecklistPanel title="Today's Checklist" compact />
-                  <div className="d-flex justify-content-end mt-3">
-                    <Button variant="outline-primary" size="sm" onClick={handleOpenChecklist}>
-                      Open Planner Checklist
-                    </Button>
-                  </div>
+
+                  <div className="text-uppercase text-muted small fw-semibold mb-2">Next up</div>
+                  {upcomingFocus.length ? (
+                    <ul className="list-unstyled mb-0">
+                      {upcomingFocus.map((task) => (
+                        <li key={task.id} className="mb-2">
+                          <div className="fw-semibold">{task.title}</div>
+                          <div className="text-muted small">{formatDueLabel(task)}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-muted small">No upcoming work detected.</div>
+                  )}
                 </Card.Body>
               </Card>
             </Col>
-            <Col lg={4} className="mb-3">
-              <Card className="h-100">
-                <Card.Header>
-                  <h5 className="mb-0">Today's Schedule</h5>
-                </Card.Header>
+            <Col xl={4} md={6}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Header className="fw-semibold">Today's Schedule</Card.Header>
                 <Card.Body>
-                  {todayBlocks.length === 0 ? (
-                    <div className="text-muted">No blocks for today</div>
+                  {todayGoogleEvents.length === 0 && todayBlocks.length === 0 ? (
+                    <div className="text-muted">No events or blocks scheduled today.</div>
                   ) : (
                     <Table size="sm" className="mb-0">
-                      <thead>
-                        <tr>
-                          <th style={{width:'30%'}}>Time</th>
-                          <th>Category</th>
-                          <th>Theme</th>
-                        </tr>
-                      </thead>
                       <tbody>
-                        {todayBlocks.map(b => (
-                          <tr key={b.id}>
-                            <td>{new Date(b.start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
-                            <td>{b.category || b.title || 'Block'}</td>
-                            <td><Badge bg="secondary">{b.theme}</Badge></td>
+                        {todayGoogleEvents.map((ev) => (
+                          <tr key={`gcal-${ev.id}`}>
+                            <td style={{ width: '35%' }}>
+                              {new Date(ev.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td>
+                              <span className="me-2">📅</span>
+                              {ev.title}
+                            </td>
+                            <td className="text-end">
+                              <Badge bg="info">Google</Badge>
+                            </td>
+                          </tr>
+                        ))}
+                        {todayBlocks.map((block) => (
+                          <tr key={`blk-${block.id}`}>
+                            <td style={{ width: '35%' }}>
+                              {new Date(block.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td>{block.category || block.title || 'Block'}</td>
+                            <td className="text-end">
+                              <Badge bg="secondary">{block.theme || 'General'}</Badge>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -602,16 +751,96 @@ const Dashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col lg={4} className="mb-3">
-              <ThemeBreakdown onThemeSelect={handleThemeSelect} />
+            <Col xl={4} md={12}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Header className="fw-semibold">Automation Snapshot</Card.Header>
+                <Card.Body>
+                  <ul className="list-unstyled mb-3">
+                    {automationSnapshot.map((item) => (
+                      <li key={item.label} className="d-flex justify-content-between align-items-center py-1">
+                        <span className="text-muted">{item.label}</span>
+                        <span className="fw-semibold">{item.value}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <Button variant="outline-primary" size="sm" onClick={handleOpenChecklist}>
+                    View planner checklist
+                  </Button>
+                </Card.Body>
+              </Card>
             </Col>
           </Row>
 
-          <Row className="mb-4">
-            <Col lg={6} className="mb-3">
-              <Card className="h-100">
+          <Row className="g-3 mb-4">
+            <Col xl={8}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Header className="fw-semibold">Today's Checklist</Card.Header>
+                <Card.Body>
+                  {unscheduledToday.length > 0 && (
+                    <Alert variant="warning" className="py-2">
+                      <div className="fw-semibold mb-1">Scheduling issues</div>
+                      <ul className="mb-0 small">
+                        {unscheduledSummary.map((item) => (
+                          <li key={item.id}>{item.title || item.sourceId}</li>
+                        ))}
+                        {unscheduledToday.length > unscheduledSummary.length && (
+                          <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
+                        )}
+                      </ul>
+                    </Alert>
+                  )}
+                  <ChecklistPanel title="" compact />
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col xl={4}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Header className="fw-semibold">Theme Breakdown</Card.Header>
+                <Card.Body>
+                  <ThemeBreakdown onThemeSelect={handleThemeSelect} />
+                </Card.Body>
+              </Card>
+              <Card className="shadow-sm border-0 mt-3">
+                <Card.Header className="fw-semibold">Finance Snapshot</Card.Header>
+                <Card.Body>
+                  {!monzoSummary ? (
+                    <div className="text-muted">Connect Monzo to surface spending insights.</div>
+                  ) : (
+                    <>
+                      <div className="d-flex justify-content-between mb-2">
+                        <span className="text-muted">Spent</span>
+                        <span className="fw-semibold">£{Number(monzoSummary.totals?.spent ?? 0).toFixed(2)}</span>
+                      </div>
+                      <div className="d-flex justify-content-between mb-2">
+                        <span className="text-muted">Budget</span>
+                        <span className="fw-semibold">£{Number(monzoSummary.totals?.budget ?? 0).toFixed(2)}</span>
+                      </div>
+                      <div className="d-flex justify-content-between mb-3">
+                        <span className="text-muted">Remaining</span>
+                        <span className="fw-semibold">£{Number(monzoSummary.totals?.remaining ?? 0).toFixed(2)}</span>
+                      </div>
+                      {monzoSummary.categories && monzoSummary.categories.length > 0 && (
+                        <ul className="list-unstyled mb-0 small text-muted">
+                          {monzoSummary.categories.map((cat, idx) => (
+                            <li key={idx} className="d-flex justify-content-between">
+                              <span>{cat.category || cat.name || 'Category'}</span>
+                              <span>£{Number(cat.spent || 0).toFixed(2)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
+
+          <Row className="g-3">
+            <Col xl={6}>
+              <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                  <h5 className="mb-0">Reminders Due Today</h5>
+                  <span className="fw-semibold">Reminders Due Today</span>
                   <Badge bg="warning" text="dark">{remindersDueToday.length}</Badge>
                 </Card.Header>
                 <Card.Body>
@@ -619,7 +848,7 @@ const Dashboard: React.FC = () => {
                     <div className="text-muted">No reminders remaining today.</div>
                   ) : (
                     <ul className="list-unstyled mb-3">
-                      {remindersDueToday.slice(0, 4).map((reminder) => (
+                      {remindersDueToday.slice(0, 6).map((reminder) => (
                         <li key={reminder.id} className="d-flex justify-content-between align-items-center py-1">
                           <span>{reminder.title}</span>
                           <small className="text-muted ms-2">
@@ -627,8 +856,8 @@ const Dashboard: React.FC = () => {
                           </small>
                         </li>
                       ))}
-                      {remindersDueToday.length > 4 && (
-                        <li className="text-muted small">+{remindersDueToday.length - 4} more</li>
+                      {remindersDueToday.length > 6 && (
+                        <li className="text-muted small">+{remindersDueToday.length - 6} more</li>
                       )}
                     </ul>
                   )}
@@ -640,20 +869,20 @@ const Dashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col lg={6} className="mb-3">
-              <Card className="h-100">
+            <Col xl={6}>
+              <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                  <h5 className="mb-0">Routines &amp; Chores Today</h5>
+                  <span className="fw-semibold">Routines &amp; Chores Today</span>
                   <Badge bg="info">{choresDueToday.length + routinesDueToday.length}</Badge>
                 </Card.Header>
                 <Card.Body>
-                  {choresDueToday.length + routinesDueToday.length === 0 ? (
+                  {(choresDueToday.length + routinesDueToday.length) === 0 ? (
                     <div className="text-muted">No routines or chores scheduled today.</div>
                   ) : (
                     <ul className="list-unstyled mb-3">
                       {[...choresDueToday, ...routinesDueToday]
                         .sort((a, b) => (a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER))
-                        .slice(0, 4)
+                        .slice(0, 6)
                         .map((item) => (
                           <li key={`${item.type}-${item.id}`} className="d-flex justify-content-between align-items-center py-1">
                             <span>
@@ -667,8 +896,8 @@ const Dashboard: React.FC = () => {
                             </small>
                           </li>
                         ))}
-                      {(choresDueToday.length + routinesDueToday.length) > 4 && (
-                        <li className="text-muted small">+{choresDueToday.length + routinesDueToday.length - 4} more</li>
+                      {(choresDueToday.length + routinesDueToday.length) > 6 && (
+                        <li className="text-muted small">+{choresDueToday.length + routinesDueToday.length - 6} more</li>
                       )}
                     </ul>
                   )}
@@ -681,6 +910,11 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
           </Row>
+
+          
+          {/* Priority Banner */}
+          {/* Daily Brief */}
+          {/* Key Stats Row */}
         </Col>
       </Row>
     </Container>

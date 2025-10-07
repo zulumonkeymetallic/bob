@@ -7,8 +7,9 @@ import { collection, onSnapshot, query, where, limit } from 'firebase/firestore'
 const IntegrationLogs: React.FC = () => {
   const { currentUser } = useAuth();
   const [logs, setLogs] = useState<any[]>([]);
-  const [logSourceFilter, setLogSourceFilter] = useState<string>('all');
+  const [integrationFilter, setIntegrationFilter] = useState<string>('all');
   const [logLevelFilter, setLogLevelFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,13 +20,13 @@ const IntegrationLogs: React.FC = () => {
       const logsQuery = query(
         collection(db, 'integration_logs'),
         where('ownerUid', '==', currentUser.uid),
-        limit(200)
+        limit(300)
       );
       const unsub = onSnapshot(logsQuery, (snap) => {
         const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         rows.sort((a: any, b: any) => {
-          const at = a.ts?.toMillis ? a.ts.toMillis() : (a.ts || 0);
-          const bt = b.ts?.toMillis ? b.ts.toMillis() : (b.ts || 0);
+          const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.ts?.toMillis ? a.ts.toMillis() : (a.ts || 0));
+          const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.ts?.toMillis ? b.ts.toMillis() : (b.ts || 0));
           return bt - at;
         });
         setLogs(rows);
@@ -38,11 +39,34 @@ const IntegrationLogs: React.FC = () => {
     }
   }, [currentUser]);
 
+  const integrations = useMemo(() => {
+    const names = new Set<string>();
+    logs.forEach((log: any) => {
+      if (log.integration) {
+        names.add(String(log.integration));
+      } else if (log.source) {
+        names.add(String(log.source));
+      }
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [logs]);
+
   const visibleLogs = useMemo(() => {
     return logs
-      .filter((l: any) => logSourceFilter === 'all' || String(l.source).toLowerCase() === logSourceFilter)
-      .filter((l: any) => logLevelFilter === 'all' || String(l.level).toLowerCase() === logLevelFilter);
-  }, [logs, logSourceFilter, logLevelFilter]);
+      .filter((l: any) => {
+        if (integrationFilter === 'all') return true;
+        const integration = String(l.integration || l.source || '').toLowerCase();
+        return integration === integrationFilter;
+      })
+      .filter((l: any) => {
+        if (logLevelFilter === 'all') return true;
+        return String(l.level || '').toLowerCase() === logLevelFilter;
+      })
+      .filter((l: any) => {
+        if (statusFilter === 'all') return true;
+        return String(l.status || '').toLowerCase() === statusFilter;
+      });
+  }, [logs, integrationFilter, logLevelFilter, statusFilter]);
 
   return (
     <div className="container py-4">
@@ -58,18 +82,27 @@ const IntegrationLogs: React.FC = () => {
 
       <Card>
         <Card.Body>
-          <div className="d-flex gap-2 align-items-center mb-2">
-            <Form.Select size="sm" style={{ maxWidth: 200 }} value={logSourceFilter} onChange={(e)=>setLogSourceFilter(e.target.value)}>
-              <option value="all">All Sources</option>
-              <option value="google">Google</option>
-              <option value="monzo">Monzo</option>
-              <option value="strava">Strava</option>
-              <option value="parkrun">Parkrun</option>
-              <option value="finance">Finance</option>
+          <div className="d-flex flex-wrap gap-2 align-items-center mb-3">
+            <Form.Select
+              size="sm"
+              style={{ maxWidth: 200 }}
+              value={integrationFilter}
+              onChange={(e) => setIntegrationFilter(e.target.value)}
+            >
+              <option value="all">All Integrations</option>
+              {integrations.map((name) => (
+                <option key={name} value={name.toLowerCase()}>{name}</option>
+              ))}
             </Form.Select>
             <Form.Select size="sm" style={{ maxWidth: 160 }} value={logLevelFilter} onChange={(e)=>setLogLevelFilter(e.target.value)}>
               <option value="all">All Levels</option>
               <option value="info">Info</option>
+              <option value="warning">Warning</option>
+              <option value="error">Error</option>
+            </Form.Select>
+            <Form.Select size="sm" style={{ maxWidth: 160 }} value={statusFilter} onChange={(e)=>setStatusFilter(e.target.value)}>
+              <option value="all">All Statuses</option>
+              <option value="success">Success</option>
               <option value="warning">Warning</option>
               <option value="error">Error</option>
             </Form.Select>
@@ -81,24 +114,30 @@ const IntegrationLogs: React.FC = () => {
               <thead>
                 <tr>
                   <th>Time</th>
-                  <th>Source</th>
+                  <th>Integration</th>
+                  <th>Status</th>
                   <th>Level</th>
-                  <th>Step</th>
                   <th>Message</th>
                 </tr>
               </thead>
               <tbody>
                 {visibleLogs.map((l: any) => (
                   <tr key={l.id}>
-                    <td>{l.ts?.toDate ? l.ts.toDate().toLocaleString() : (l.ts ? new Date(l.ts).toLocaleString() : '—')}</td>
-                    <td><Badge bg="light" text="dark">{l.source}</Badge></td>
-                    <td>{l.level}</td>
-                    <td>{l.step || '—'}</td>
+                    <td>{l.createdAt?.toDate ? l.createdAt.toDate().toLocaleString() : (l.ts?.toDate ? l.ts.toDate().toLocaleString() : (l.ts ? new Date(l.ts).toLocaleString() : '—'))}</td>
+                    <td><Badge bg="light" text="dark">{l.integration || l.source || '—'}</Badge></td>
+                    <td>{l.status || '—'}</td>
+                    <td>{l.level || 'info'}</td>
                     <td>
                       <div>{l.message || '—'}</div>
-                      {l.meta ? (
-                        <pre className="mt-1 mb-0 bg-light p-2" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(l.meta, null, 2)}</pre>
-                      ) : null}
+                      {(() => {
+                        const meta = l.metadata || l.meta;
+                        if (!meta) return null;
+                        return (
+                          <pre className="mt-1 mb-0 bg-light p-2" style={{ whiteSpace: 'pre-wrap' }}>
+                            {JSON.stringify(meta, null, 2)}
+                          </pre>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
@@ -112,4 +151,3 @@ const IntegrationLogs: React.FC = () => {
 };
 
 export default IntegrationLogs;
-

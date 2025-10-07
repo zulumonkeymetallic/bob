@@ -71,7 +71,6 @@ const EnhancedKanbanPage: React.FC = () => {
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
       orderBy('createdAt', 'desc')
     );
     
@@ -80,7 +79,7 @@ const EnhancedKanbanPage: React.FC = () => {
         id: doc.id,
         ...doc.data()
       })) as Goal[];
-      setGoals(goalsData);
+      setGoals(goalsData.filter(g => (g as any).persona == null || (g as any).persona === currentPersona));
     });
 
     // Load stories
@@ -101,8 +100,7 @@ const EnhancedKanbanPage: React.FC = () => {
     // Load tasks
     const tasksQuery = query(
       collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('ownerUid', '==', currentUser.uid)
     );
     
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
@@ -110,14 +108,13 @@ const EnhancedKanbanPage: React.FC = () => {
         id: doc.id,
         ...doc.data()
       })) as Task[];
-      setTasks(tasksData);
+      setTasks(tasksData.filter(t => (t as any).persona == null || (t as any).persona === currentPersona));
     });
 
     // Load sprints
     const sprintsQuery = query(
       collection(db, 'sprints'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
       orderBy('createdAt', 'desc')
     );
     

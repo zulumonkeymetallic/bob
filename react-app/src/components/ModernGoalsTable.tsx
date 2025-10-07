@@ -829,14 +829,13 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     const storiesQuery = query(
       collection(db, 'stories'),
       where('goalId', '==', expandedGoalId),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('ownerUid', '==', currentUser.uid)
     );
 
     console.log('📚 ModernGoalsTable: Query created, setting up listener');
 
     const unsubscribe = onSnapshot(storiesQuery, (snapshot) => {
-      const storiesData = snapshot.docs.map(doc => {
+      let storiesData = snapshot.docs.map(doc => {
         const data = doc.data();
         return {
           id: doc.id, 
@@ -846,6 +845,8 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
         };
       }) as Story[];
+      // Include unknown persona alongside current persona
+      storiesData = storiesData.filter(s => (s as any).persona == null || (s as any).persona === currentPersona);
       
       console.log(`📚 ModernGoalsTable: Query result received`);
       console.log(`📚 Stories found: ${storiesData.length}`);
@@ -877,12 +878,11 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     if (!currentUser) return;
     const q = query(
       collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('ownerUid', '==', currentUser.uid)
     );
     const unsub = onSnapshot(q, (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[];
-      setAllGoals(list);
+      setAllGoals(list.filter(g => (g as any).persona == null || (g as any).persona === currentPersona));
     }, (err) => console.warn('ModernGoalsTable: goals load failed', err));
     return unsub;
   }, [currentUser, currentPersona]);
@@ -892,14 +892,14 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     if (!currentUser) return;
     const q = query(
       collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('ownerUid', '==', currentUser.uid)
     );
     const unsub = onSnapshot(q, (snap) => {
       const counts: Record<string, number> = {};
       const sprintCounts: Record<string, number> = {};
       snap.docs.forEach(d => {
         const s = d.data() as any;
+        if ((s as any).persona && s.persona !== currentPersona) return;
         const gid = s.goalId;
         if (!gid) return;
         counts[gid] = (counts[gid] || 0) + 1;

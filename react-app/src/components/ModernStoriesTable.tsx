@@ -37,6 +37,7 @@ import StoryTasksPanel from './StoryTasksPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useSprint } from '../contexts/SprintContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 
 interface StoryTableRow extends Story {
@@ -810,6 +811,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { selectedSprintId } = useSprint();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -840,12 +842,13 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     if (!enableInlineTasks || !currentUser) return;
     const tasksQ = query(
       collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('ownerUid', '==', currentUser.uid)
     );
     const unsub = onSnapshot(tasksQ, (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[];
-      setAllTasks(list);
+      // Include unknown persona alongside current persona
+      const filtered = list.filter(t => (t as any).persona == null || (t as any).persona === currentPersona);
+      setAllTasks(filtered);
     });
     return () => unsub();
   }, [enableInlineTasks, currentUser, currentPersona]);
@@ -996,6 +999,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
   // Apply filtering and search
   const filteredRows = tableRows.filter(story => {
+    // Respect global sprint selection from context: when a sprint is chosen, enforce it
+    if (selectedSprintId && selectedSprintId !== '' && story.sprintId !== selectedSprintId) {
+      return false;
+    }
     // Search filter (searches title, description, ref, and goal title)
     if (filters.search) {
       const searchLower = filters.search.toLowerCase();
@@ -1517,6 +1524,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                                 sprints={sprints as any}
                                 onTaskCreate={async (newTask) => {
                                   const linkedGoal = goals.find(g => g.id === (story as any).goalId);
+                                  // Generate a human-readable reference for the new task and tag source
+                                  const existingRefs = allTasks.map(t => (t as any).ref).filter(Boolean) as string[];
                                   await addDoc(collection(db, 'tasks'), {
                                     title: newTask.title || '',
                                     description: newTask.description || '',
@@ -1529,6 +1538,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                                     theme: (linkedGoal as any)?.theme ?? 1,
                                     ownerUid: currentUser!.uid,
                                     persona: currentPersona,
+                                    ref: generateRef('task', existingRefs),
+                                    source: 'web',
+                                    sprintId: (story as any)?.sprintId || null,
+                                    syncState: 'clean',
                                     createdAt: serverTimestamp(),
                                     updatedAt: serverTimestamp(),
                                   } as any);

@@ -1,4 +1,5 @@
 import { collection, addDoc, doc, setDoc } from 'firebase/firestore';
+import { generateRef } from './referenceGenerator';
 import { db } from '../firebase';
 
 export interface TaskCreationOptions {
@@ -24,6 +25,9 @@ export const emergencyCreateTask = async (
       const docRef = await addDoc(collection(db, 'tasks'), {
         ...taskData,
         userId,
+        ref: taskData?.ref || generateRef('task', []),
+        source: taskData?.source || 'web',
+        syncState: taskData?.syncState || 'clean',
         createdAt: new Date(),
         updatedAt: new Date(),
         emergencyCreated: true,
@@ -55,6 +59,9 @@ export const emergencyCreateTask = async (
       await setDoc(taskRef, {
         ...taskData,
         userId,
+        ref: taskData?.ref || generateRef('task', []),
+        source: taskData?.source || 'web',
+        syncState: taskData?.syncState || 'clean',
         createdAt: new Date(),
         updatedAt: new Date(),
         emergencyCreated: true,
@@ -122,6 +129,9 @@ export const syncEmergencyTasks = async (userId: string) => {
         const { id, needsSync, ...taskData } = task;
         return await addDoc(collection(db, 'tasks'), {
           ...taskData,
+          ref: taskData?.ref || generateRef('task', []),
+          source: taskData?.source || 'web',
+          syncState: taskData?.syncState || 'clean',
           syncedAt: new Date(),
           originalLocalId: id
         });

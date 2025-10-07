@@ -29,7 +29,6 @@ const TaskListView: React.FC = () => {
     let tasksQuery = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
       orderBy('priority', 'desc'),
     );
     if (selectedSprintId) {
@@ -129,6 +128,11 @@ const TaskListView: React.FC = () => {
   // Apply filters to tasks
   const filteredTasks = tasks.filter(task => {
     if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
+    // Respect persona when present on the task
+    if (task.persona) {
+      const p = typeof task.persona === 'string' ? task.persona.toLowerCase() : String(task.persona).toLowerCase();
+      if (p && p !== currentPersona) return false;
+    }
     if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;

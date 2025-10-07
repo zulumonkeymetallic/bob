@@ -96,10 +96,24 @@ const createTransporter = async () => {
 
   let transporter;
   if (config.host) {
+    // Normalize common SMTP settings to avoid TLS handshake errors like
+    // "ssl3_get_record:wrong version number" from OpenSSL.
+    let port = config.port || (config.secure ? 465 : 587);
+    let secure = !!config.secure;
+    if (port === 587 && secure === true) {
+      // Port 587 uses STARTTLS; initial secure must be false
+      console.warn('[email] Normalizing SMTP: port 587 requires secure=false (STARTTLS).');
+      secure = false;
+    }
+    if (port === 465 && secure === false) {
+      // Port 465 requires implicit TLS
+      console.warn('[email] Normalizing SMTP: port 465 requires secure=true (implicit TLS).');
+      secure = true;
+    }
     transporter = nodemailer.createTransport({
       host: config.host,
-      port: config.port || (config.secure ? 465 : 587),
-      secure: config.secure,
+      port,
+      secure,
       auth: { user: config.user, pass: config.password },
     });
   } else {

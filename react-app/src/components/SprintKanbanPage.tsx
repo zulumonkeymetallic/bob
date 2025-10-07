@@ -80,7 +80,6 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
       const storiesQuery = query(
         collection(db, 'stories'),
         where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
         orderBy('orderIndex', 'asc')
       );
 
@@ -89,14 +88,13 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
           id: doc.id,
           ...doc.data()
         })) as Story[];
-        setStories(storiesData);
+        setStories(storiesData.filter(s => (s as any).persona == null || (s as any).persona === currentPersona));
       });
 
       // Tasks subscription
       const tasksQuery = query(
         collection(db, 'tasks'),
         where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
         orderBy('serverUpdatedAt', 'desc')
       );
 
@@ -105,14 +103,13 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
           id: doc.id,
           ...doc.data()
         })) as Task[];
-        setTasks(tasksData);
+        setTasks(tasksData.filter(t => (t as any).persona == null || (t as any).persona === currentPersona));
       });
 
       // Goals subscription
       const goalsQuery = query(
         collection(db, 'goals'),
         where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
@@ -121,7 +118,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
           id: doc.id,
           ...doc.data()
         })) as Goal[];
-        setGoals(goalsData);
+        setGoals(goalsData.filter(g => (g as any).persona == null || (g as any).persona === currentPersona));
       });
 
       // Sprints subscription

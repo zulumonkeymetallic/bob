@@ -10,6 +10,14 @@
       ]
     },
     {
+      "collectionGroup": "scheduled_instances",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "occurrenceDate", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "goals",
       "queryScope": "COLLECTION", 
       "fields": [

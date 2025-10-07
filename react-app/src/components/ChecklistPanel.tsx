@@ -11,6 +11,19 @@ import { humanizePolicyMode } from '../utils/schedulerPolicy';
 export interface ChecklistPanelProps {
   title?: string;
   compact?: boolean;
+  dailyChecklist?: DailyChecklistData | null;
+}
+
+interface DailyChecklistData {
+  items?: DailyChecklistEntry[];
+  stats?: {
+    total?: number;
+    focus?: number;
+    chores?: number;
+    routines?: number;
+    reminders?: number;
+    stories?: number;
+  } | null;
 }
 
 interface ChecklistItem {
@@ -22,6 +35,20 @@ interface ChecklistItem {
   raw?: any;
   status?: string;
   subtitle?: string;
+}
+
+interface DailyChecklistEntry {
+  key: string;
+  type: 'task' | 'chore' | 'routine' | 'story' | 'reminder' | 'habit';
+  title: string;
+  category?: string;
+  dueDisplay?: string | null;
+  reason?: string | null;
+  nextStep?: string | null;
+  bucket?: string | null;
+  ref?: string | null;
+  checkable?: boolean;
+  highlight?: boolean;
 }
 
 interface StatSummary {
@@ -61,7 +88,33 @@ interface RoutineStatRow {
   tracker?: any;
 }
 
-const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checklist", compact }) => {
+const ACTIONABLE_SOURCES = new Set(['scheduled', 'unscheduled', 'task', 'chore', 'habit', 'routine']);
+
+const toChecklistKey = (item: ChecklistItem): string | null => {
+  if (!item) return null;
+  if (item.source === 'task') {
+    const id = item.raw?.id || item.id.replace(/^task-/, '');
+    return id ? `task:${id}` : null;
+  }
+  if (item.source === 'chore') {
+    const id = item.raw?.id || item.id.replace(/^chore-/, '');
+    return id ? `chore:${id}` : null;
+  }
+  if (item.source === 'routine') {
+    const id = item.raw?.id || item.id.replace(/^routine-/, '');
+    return id ? `routine:${id}` : null;
+  }
+  if (item.source === 'habit') {
+    const id = item.raw?.id || item.id.replace(/^habit-/, '');
+    return id ? `habit:${id}` : null;
+  }
+  if (item.source === 'scheduled' || item.source === 'unscheduled') {
+    return item.id ? `${item.source}:${item.id}` : null;
+  }
+  return null;
+};
+
+const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checklist", compact, dailyChecklist }) => {
   const { currentUser } = useAuth();
   const [loadingScheduled, setLoadingScheduled] = useState(true);
   const [loadingLoose, setLoadingLoose] = useState(true);
@@ -280,6 +333,28 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
       });
   }, [scheduled]);
 
+  const keyedItems = useMemo(() => {
+    const map = new Map<string, ChecklistItem>();
+    [...scheduledItems, ...looseItems].forEach((item) => {
+      const key = toChecklistKey(item);
+      if (key) map.set(key, item);
+    });
+    return map;
+  }, [scheduledItems, looseItems]);
+
+  const summaryGroups = useMemo(() => {
+    if (!dailyChecklist || !Array.isArray(dailyChecklist.items) || !dailyChecklist.items.length) return null;
+    const groups = new Map<string, { entry: DailyChecklistEntry; item: ChecklistItem | null }[]>();
+    dailyChecklist.items.forEach((entry) => {
+      if (!entry?.key) return;
+      const item = keyedItems.get(entry.key) || null;
+      const category = entry.category || 'Today';
+      if (!groups.has(category)) groups.set(category, []);
+      groups.get(category)!.push({ entry, item });
+    });
+    return groups;
+  }, [dailyChecklist, keyedItems]);
+
   const items = useMemo(() => {
     return [...scheduledItems, ...looseItems];
   }, [scheduledItems, looseItems]);
@@ -467,16 +542,18 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         );
       }
     }
-    actions.push(
-      <button
-        key="done"
-        type="button"
-        className="btn btn-sm btn-outline-success"
-        onClick={() => markDone(item)}
-      >
-        Done
-      </button>,
-    );
+    if (ACTIONABLE_SOURCES.has(item.source)) {
+      actions.push(
+        <button
+          key="done"
+          type="button"
+          className="btn btn-sm btn-outline-success"
+          onClick={() => markDone(item)}
+        >
+          Done
+        </button>,
+      );
+    }
     return actions;
   };
 
@@ -503,7 +580,54 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
       <div className="d-flex justify-content-between align-items-center mb-2">
         <h5 className="mb-0">{title}</h5>
       </div>
-      {loading ? (
+      {summaryGroups ? (
+        <div className={compact ? 'mb-3' : 'mb-4'}>
+          {Array.from(summaryGroups.entries()).map(([category, entries]) => (
+            <div key={category} className="mb-3">
+              <h6 className="text-uppercase text-muted small mb-2">{category}</h6>
+              {entries.map(({ entry, item }) => {
+                const metaParts: string[] = [];
+                if (entry.reason) metaParts.push(entry.reason);
+                else if (item) metaParts.push(describeSource(item));
+                if (entry.dueDisplay && !(entry.reason && entry.reason.includes(entry.dueDisplay))) {
+                  metaParts.push(entry.dueDisplay);
+                }
+                const metaLine = metaParts.join(' · ');
+                const canComplete = !!item && ACTIONABLE_SOURCES.has(item.source) && entry.checkable !== false;
+                const cardClasses = ['border', 'rounded', 'p-2', 'mb-2', 'bg-white'];
+                if (entry.highlight) cardClasses.push('border-primary');
+
+                return (
+                  <div key={entry.key} className={cardClasses.join(' ')}>
+                    <div className="d-flex flex-column gap-2">
+                      <div className="d-flex align-items-start justify-content-between gap-2">
+                        <div>
+                          <div className="fw-semibold">
+                            {entry.title || item?.title || 'Item'}
+                            {entry.ref ? <span className="text-muted ms-2 small">{entry.ref}</span> : null}
+                            {entry.bucket ? <span className="badge bg-primary-subtle text-primary ms-2">{entry.bucket}</span> : null}
+                          </div>
+                          {metaLine && <div className="text-muted small">{metaLine}</div>}
+                          {entry.nextStep && <div className="small text-dark">Next: {entry.nextStep}</div>}
+                        </div>
+                        {canComplete ? (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-success"
+                            onClick={() => item && markDone(item)}
+                          >
+                            Done
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      ) : loading ? (
         <div className="text-muted small">Loading…</div>
       ) : (
         <div className={`row ${compact ? '' : 'g-3'}`}>
