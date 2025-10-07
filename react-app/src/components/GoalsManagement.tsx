@@ -192,6 +192,15 @@ const GoalsManagement: React.FC = () => {
     }
   };
 
+  // Accept search from navigation state once
+  useEffect(() => {
+    const state = ((location as unknown) as { state?: { search?: string } | null }).state ?? null;
+    if (state?.search) {
+      setSearchTerm(state.search);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location, navigate]);
+
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
     if (!matchesPersonaFilter(goal, personaFilter)) return false;

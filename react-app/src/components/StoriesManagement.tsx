@@ -318,6 +318,15 @@ const StoriesManagement: React.FC = () => {
     // The real-time listener will automatically update the stories list
   };
 
+  // Accept search from navigation state once
+  useEffect(() => {
+    const state = ((location as unknown) as { state?: { search?: string } | null }).state ?? null;
+    if (state?.search) {
+      setSearchTerm(state.search);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location, navigate]);
+
   // Apply filters to stories
   const filteredStories = stories.filter(story => {
     if (!matchesPersonaFilter(story, personaFilter)) return false;

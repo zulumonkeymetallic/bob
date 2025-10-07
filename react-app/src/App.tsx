@@ -70,6 +70,7 @@ import MonzoSettings from './components/settings/integrations/MonzoSettings';
 import StravaSettings from './components/settings/integrations/StravaSettings';
 import SteamSettings from './components/settings/integrations/SteamSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
+import TaskCleanupPage from './components/settings/TaskCleanupPage';
 
 
 // Lazy-loaded heavy routes
@@ -267,6 +268,7 @@ function AppContent() {
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
             <Route path="/settings/integrations" element={<IntegrationSettings />} />
+            <Route path="/settings/task-cleanup" element={<TaskCleanupPage />} />
             <Route path="/settings/integrations/google" element={<GoogleCalendarSettings />} />
             <Route path="/settings/integrations/monzo" element={<MonzoSettings />} />
             <Route path="/settings/integrations/strava" element={<StravaSettings />} />

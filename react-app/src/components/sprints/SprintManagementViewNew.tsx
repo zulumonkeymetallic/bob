@@ -233,11 +233,13 @@ const SprintManagementView: React.FC = () => {
         estimatedHours,
         persona: currentPersona,
         ownerUid: currentUser.uid,
+        sprintId: (selectedStory as any)?.sprintId || null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         alignedToGoal: true,
         theme: stories.find(s => s.id === selectedStory.id)?.theme || 1,
         source: 'web',
+        syncState: 'clean',
         aiLinkConfidence: 1.0
       });
 
