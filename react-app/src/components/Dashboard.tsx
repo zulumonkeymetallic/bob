@@ -15,6 +15,7 @@ import { httpsCallable } from 'firebase/functions';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import ThemeBreakdown from './ThemeBreakdown';
 import { format, startOfDay, endOfDay } from 'date-fns';
+import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 import { nextDueAt } from '../utils/recurrence';
 
@@ -93,6 +94,8 @@ const Dashboard: React.FC = () => {
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
+  const plannerRange: PlannerRange = { start: startOfDay(new Date()), end: endOfDay(new Date()) };
+  const planner = useUnifiedPlannerData(plannerRange);
 
   const decodeToDate = (value: any): Date | null => {
     if (value == null) return null;
@@ -666,25 +669,27 @@ const Dashboard: React.FC = () => {
               <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="fw-semibold">Today's Schedule</Card.Header>
                 <Card.Body>
-                  {todayBlocks.length === 0 ? (
-                    <div className="text-muted">No blocks scheduled today.</div>
-                  ) : (
-                    <Table size="sm" className="mb-0">
-                      <tbody>
-                        {todayBlocks.map((block) => (
-                          <tr key={block.id}>
-                            <td style={{ width: '35%' }}>
-                              {new Date(block.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </td>
-                            <td>{block.category || block.title || 'Block'}</td>
-                            <td className="text-end">
-                              <Badge bg="secondary">{block.theme || 'General'}</Badge>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </Table>
-                  )}
+                  {(() => {
+                    const rows: Array<{ id: string; ts: number; label: string; badge: string; variant: string }> = [];
+                    planner.externalEvents.forEach((ev) => rows.push({ id: `g-${ev.id}`, ts: ev.start.getTime(), label: ev.title, badge: 'Google', variant: 'info' }));
+                    todayBlocks.forEach((b) => rows.push({ id: `b-${b.id}`, ts: b.start, label: b.category || b.title || 'Block', badge: b.theme || 'General', variant: 'secondary' }));
+                    planner.instances.filter(i => i.plannedStart).forEach((i) => rows.push({ id: `i-${i.id}`, ts: Number(i.plannedStart), label: i.title || i.sourceId, badge: i.status || 'planned', variant: i.status === 'completed' ? 'success' : i.status === 'missed' ? 'danger' : 'primary' }));
+                    rows.sort((a,b)=>a.ts-b.ts);
+                    if (rows.length === 0) return <div className="text-muted">No events, blocks, or instances today.</div>;
+                    return (
+                      <Table size="sm" className="mb-0">
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr key={r.id}>
+                              <td style={{ width: '35%' }}>{new Date(r.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                              <td>{r.label}</td>
+                              <td className="text-end"><Badge bg={r.variant as any}>{r.badge}</Badge></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </Table>
+                    );
+                  })()}
                 </Card.Body>
               </Card>
             </Col>
