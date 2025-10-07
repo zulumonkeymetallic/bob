@@ -30,6 +30,7 @@ const SettingsEmailPage: React.FC = () => {
   const [testEmailStatus, setTestEmailStatus] = useState('');
   const [testEmailError, setTestEmailError] = useState('');
   const [testEmailRunning, setTestEmailRunning] = useState(false);
+  const isGmail = (emailService || '').toLowerCase().includes('gmail') || (emailHost || '').toLowerCase().includes('gmail');
 
   useEffect(() => {
     const loadConfig = async () => {
@@ -181,10 +182,17 @@ const SettingsEmailPage: React.FC = () => {
     setTestEmailError('');
     try {
       const callable = httpsCallable(functions, 'sendTestEmail');
-      const response: any = await callable({});
+      // Prefer sending test to the signed-in user's email; fallback to from/user fields
+      const recipient = currentUser.email || emailFromAddress || emailUser;
+      if (!recipient) {
+        setTestEmailError('No recipient email available. Please sign in with an account that has an email, or fill From Address/SMTP Username.');
+        setTestEmailRunning(false);
+        return;
+      }
+      const response: any = await callable({ email: recipient });
       const payload = response?.data ?? response;
       const messageId = payload?.messageId || payload?.result?.messageId || 'sent';
-      setTestEmailStatus(`Test email sent (message ${messageId}).`);
+      setTestEmailStatus(`Test email sent to ${recipient} (message ${messageId}).`);
     } catch (error: any) {
       console.error('[settings-email] test email failed', error);
       setTestEmailError(error?.message || 'Failed to send test email');
@@ -337,6 +345,13 @@ const SettingsEmailPage: React.FC = () => {
           </div>
         </Card.Body>
       </Card>
+
+      {/* Helpful guidance for Gmail SMTP */}
+      {isGmail && (
+        <div className="mt-3 small text-muted">
+          Tip: Gmail requires an App Password for SMTP (regular passwords are rejected with 535 errors). Create one at myaccount.google.com &gt; Security &gt; App passwords, then use it here. Use host <code>smtp.gmail.com</code> with port <code>465</code> (Use TLS/SSL on).
+        </div>
+      )}
     </div>
   );
 };

@@ -424,28 +424,24 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       const goalsQuery = query(
         collection(db, 'goals'),
         where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
       const storiesQuery = query(
         collection(db, 'stories'),
         where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
       const tasksQuery = query(
         collection(db, 'tasks'),
         where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
       const sprintsQuery = query(
         collection(db, 'sprints'),
         where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
@@ -454,7 +450,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           id: doc.id,
           ...doc.data()
         })) as Goal[];
-        setGoals(goalsData);
+        setGoals(goalsData.filter(g => (g as any).persona == null || (g as any).persona === currentPersona));
       });
 
       const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -462,7 +458,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           id: doc.id,
           ...doc.data()
         })) as Story[];
-        setStories(storiesData);
+        setStories(storiesData.filter(s => (s as any).persona == null || (s as any).persona === currentPersona));
       });
 
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
@@ -470,7 +466,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           id: doc.id,
           ...doc.data()
         })) as Task[];
-        setTasks(tasksData);
+        setTasks(tasksData.filter(t => (t as any).persona == null || (t as any).persona === currentPersona));
         setLoading(false);
       });
 

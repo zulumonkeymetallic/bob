@@ -17,6 +17,7 @@ import ThemeBreakdown from './ThemeBreakdown';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 import { nextDueAt } from '../utils/recurrence';
+import { matchesPersona } from '../utils/personaFilter';
 
 interface DashboardStats {
   activeGoals: number;
@@ -87,6 +88,7 @@ const Dashboard: React.FC = () => {
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
+  const [todayGoogleEvents, setTodayGoogleEvents] = useState<Array<{ id: string; title: string; start: number; end: number }>>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
   const [remindersDueToday, setRemindersDueToday] = useState<ReminderItem[]>([]);
@@ -138,15 +140,13 @@ const Dashboard: React.FC = () => {
     const storiesQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
       orderBy('updatedAt', 'desc'),
       limit(8)
     );
 
     const goalsQuery = query(
       collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('ownerUid', '==', currentUser.uid)
     );
     
     // Load tasks (simplified query while indexes are building)
@@ -168,10 +168,11 @@ const Dashboard: React.FC = () => {
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
         };
       }) as Story[];
-      setRecentStories(storiesData.slice(0, 5));
+      const personaStories = storiesData.filter(s => matchesPersona(s, currentPersona));
+      setRecentStories(personaStories.slice(0, 5));
 
-      const activeStories = storiesData.filter(story => !isStatus(story.status, 'done')).length;
-      const doneStories = storiesData.filter(story => isStatus(story.status, 'done')).length;
+      const activeStories = personaStories.filter(story => !isStatus(story.status, 'done')).length;
+      const doneStories = personaStories.filter(story => isStatus(story.status, 'done')).length;
 
       setStats(prev => ({
         ...prev,
@@ -191,10 +192,11 @@ const Dashboard: React.FC = () => {
         } as Goal;
       });
 
-      const activeGoals = goalData.filter(goal => !isStatus(goal.status, 'Complete')).length;
+      const personaGoals = goalData.filter(g => matchesPersona(g, currentPersona));
+      const activeGoals = personaGoals.filter(goal => !isStatus(goal.status, 'Complete')).length;
       const now = new Date();
       const soon = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-      const dueSoon = goalData.filter(goal => {
+      const dueSoon = personaGoals.filter(goal => {
         const due = decodeToDate(goal.targetDate || goal.dueDate);
         return due ? due >= now && due <= soon : false;
       }).length;
@@ -219,12 +221,13 @@ const Dashboard: React.FC = () => {
         };
       }) as Task[];
 
-      const activeTaskList = allTasks.filter(task => !isStatus(task.status, 'done'));
+      const personaTasks = allTasks.filter(t => matchesPersona(t, currentPersona));
+      const activeTaskList = personaTasks.filter(task => !isStatus(task.status, 'done'));
       const nextTasks = activeTaskList.slice(0, 5);
       setUpcomingTasks(nextTasks);
 
-      const openTasks = allTasks.filter(task => !isStatus(task.status, 'done')).length;
-      const todayCompleted = allTasks.filter(task => {
+      const openTasks = personaTasks.filter(task => !isStatus(task.status, 'done')).length;
+      const todayCompleted = personaTasks.filter(task => {
         if (!isStatus(task.status, 'done') || !task.updatedAt) return false;
         const completedDate = decodeToDate(task.updatedAt);
         if (!completedDate) return false;
@@ -232,17 +235,17 @@ const Dashboard: React.FC = () => {
         return completedDate.toDateString() === today.toDateString();
       }).length;
 
-      const unlinkedCount = allTasks.filter(task => !task.storyId).length;
+      const unlinkedCount = personaTasks.filter(task => !task.storyId).length;
       const now = new Date();
       const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-      const upcomingDeadlines = allTasks.filter(task => {
+      const upcomingDeadlines = personaTasks.filter(task => {
         const due = decodeToDate(task.dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs);
         return due ? due >= now && due <= soon : false;
       }).length;
 
       const sprintTasks = selectedSprintId
-        ? allTasks.filter(task => task.sprintId === selectedSprintId)
-        : allTasks.filter(task => task.sprintId);
+        ? personaTasks.filter(task => task.sprintId === selectedSprintId)
+        : personaTasks.filter(task => task.sprintId);
       const sprintDone = sprintTasks.filter(task => isStatus(task.status, 'done')).length;
 
       setStats(prev => ({
@@ -264,6 +267,7 @@ const Dashboard: React.FC = () => {
       await Promise.all([
         loadLLMPriority(),
         loadTodayBlocks(),
+        loadTodayGoogleEvents(),
         countTasksDueToday(),
         loadRemindersDueToday(),
         loadChecklistDueToday(),
@@ -349,6 +353,31 @@ const Dashboard: React.FC = () => {
     snap.forEach(d => blocks.push({ id: d.id, ...(d.data() || {}) }));
     blocks.sort((a,b) => a.start - b.start);
     setTodayBlocks(blocks);
+  };
+
+  const loadTodayGoogleEvents = async () => {
+    if (!currentUser) return;
+    try {
+      const callable = httpsCallable(functions, 'listUpcomingEvents');
+      const res: any = await callable({ maxResults: 50 });
+      const items: any[] = Array.isArray(res?.data?.items) ? res.data.items : [];
+      const start = new Date(); start.setHours(0,0,0,0);
+      const end = new Date(); end.setHours(23,59,59,999);
+      const events = items.map((e) => {
+        const startStr = e?.start?.dateTime || e?.start?.date;
+        const endStr = e?.end?.dateTime || e?.end?.date;
+        if (!startStr || !endStr) return null;
+        const s = new Date(startStr).getTime();
+        const ee = new Date(endStr).getTime();
+        return { id: e.id || `${e.summary}-${startStr}`, title: e.summary || 'Event', start: s, end: ee };
+      }).filter(Boolean) as Array<{ id: string; title: string; start: number; end: number }>;
+      const todays = events.filter(ev => ev.start >= start.getTime() && ev.start <= end.getTime())
+        .sort((a,b) => a.start - b.start);
+      setTodayGoogleEvents(todays);
+    } catch (e) {
+      // Non-fatal if Google not connected
+      setTodayGoogleEvents([]);
+    }
   };
 
   const countTasksDueToday = async () => {
@@ -666,13 +695,27 @@ const Dashboard: React.FC = () => {
               <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="fw-semibold">Today's Schedule</Card.Header>
                 <Card.Body>
-                  {todayBlocks.length === 0 ? (
-                    <div className="text-muted">No blocks scheduled today.</div>
+                  {todayGoogleEvents.length === 0 && todayBlocks.length === 0 ? (
+                    <div className="text-muted">No events or blocks scheduled today.</div>
                   ) : (
                     <Table size="sm" className="mb-0">
                       <tbody>
+                        {todayGoogleEvents.map((ev) => (
+                          <tr key={`gcal-${ev.id}`}>
+                            <td style={{ width: '35%' }}>
+                              {new Date(ev.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td>
+                              <span className="me-2">📅</span>
+                              {ev.title}
+                            </td>
+                            <td className="text-end">
+                              <Badge bg="info">Google</Badge>
+                            </td>
+                          </tr>
+                        ))}
                         {todayBlocks.map((block) => (
-                          <tr key={block.id}>
+                          <tr key={`blk-${block.id}`}>
                             <td style={{ width: '35%' }}>
                               {new Date(block.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </td>

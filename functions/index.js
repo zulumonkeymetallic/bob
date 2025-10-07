@@ -6145,7 +6145,27 @@ exports.saveEmailSettings = httpsV2.onCall(async (req) => {
   const db = ensureFirestore();
   const profileSnap = await db.collection('profiles').doc(uid).get();
   const profile = profileSnap.exists ? profileSnap.data() || {} : {};
-  const isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+  let isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+
+  // Bootstrap: if no admins exist yet, grant caller admin to allow first-time setup
+  if (!isAdmin) {
+    try {
+      const hasIsAdmin = await db.collection('profiles').where('isAdmin', '==', true).limit(1).get();
+      const hasLegacyAdmin = await db.collection('profiles').where('admin', '==', true).limit(1).get();
+      const hasRoleAdmin = await db.collection('profiles').where('role', '==', 'admin').limit(1).get();
+      const anyAdminExists = !hasIsAdmin.empty || !hasLegacyAdmin.empty || !hasRoleAdmin.empty;
+
+      if (!anyAdminExists) {
+        await db.collection('profiles').doc(uid).set({ isAdmin: true, role: 'admin', adminGrantedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        isAdmin = true;
+        await recordIntegrationLog(uid, 'email', 'warning', 'Bootstrap admin granted to enable first-time email settings', {});
+      }
+    } catch (e) {
+      // If bootstrap check fails, fall through to standard permission handling
+      console.warn('[saveEmailSettings] admin bootstrap check failed', e?.message || e);
+    }
+  }
+
   if (!isAdmin) {
     throw new httpsV2.HttpsError('permission-denied', 'Only admins can update email settings');
   }

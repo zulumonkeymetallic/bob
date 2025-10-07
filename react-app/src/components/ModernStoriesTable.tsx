@@ -842,12 +842,13 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     if (!enableInlineTasks || !currentUser) return;
     const tasksQ = query(
       collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('ownerUid', '==', currentUser.uid)
     );
     const unsub = onSnapshot(tasksQ, (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[];
-      setAllTasks(list);
+      // Include unknown persona alongside current persona
+      const filtered = list.filter(t => (t as any).persona == null || (t as any).persona === currentPersona);
+      setAllTasks(filtered);
     });
     return () => unsub();
   }, [enableInlineTasks, currentUser, currentPersona]);

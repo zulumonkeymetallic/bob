@@ -68,8 +68,7 @@ const SprintManagementView = () => {
       // Load goals with error handling
       const goalsQuery = query(
         collection(db, 'goals'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona)
+        where('ownerUid', '==', currentUser.uid)
       );
       
       unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
@@ -77,7 +76,7 @@ const SprintManagementView = () => {
           id: doc.id,
           ...doc.data()
         })) as Goal[];
-        setGoals(goalsData);
+        setGoals(goalsData.filter(g => (g as any).persona == null || (g as any).persona === currentPersona));
       }, (error) => {
         console.error('Goals subscription error:', error);
       });
@@ -85,8 +84,7 @@ const SprintManagementView = () => {
       // Load stories with simplified query
       const storiesQuery = query(
         collection(db, 'stories'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona)
+        where('ownerUid', '==', currentUser.uid)
       );
       
       unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -94,7 +92,7 @@ const SprintManagementView = () => {
           id: doc.id,
           ...doc.data()
         })) as Story[];
-        setStories(storiesData);
+        setStories(storiesData.filter(s => (s as any).persona == null || (s as any).persona === currentPersona));
       }, (error) => {
         console.error('Stories subscription error:', error);
       });
@@ -102,8 +100,7 @@ const SprintManagementView = () => {
       // Load tasks with simplified query
       const tasksQuery = query(
         collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona)
+        where('ownerUid', '==', currentUser.uid)
       );
       
       unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
@@ -111,7 +108,7 @@ const SprintManagementView = () => {
           id: doc.id,
           ...doc.data()
         })) as Task[];
-        setTasks(tasksData);
+        setTasks(tasksData.filter(t => (t as any).persona == null || (t as any).persona === currentPersona));
       }, (error) => {
         console.error('Tasks subscription error:', error);
       });
