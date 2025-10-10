@@ -14,7 +14,6 @@ import { isStatus, getThemeName } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
-import { matchesPersonaFilter, type PersonaFilter } from '../utils/personaFilter';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -33,7 +32,6 @@ const GoalsManagement: React.FC = () => {
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
-  const [personaFilter, setPersonaFilter] = useState<PersonaFilter>('all');
 
   useEffect(() => {
     if (!currentUser) return;
@@ -49,6 +47,7 @@ const GoalsManagement: React.FC = () => {
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
       orderBy('createdAt', 'desc')
     );
     
@@ -114,19 +113,19 @@ const GoalsManagement: React.FC = () => {
     }
     const storiesQ = query(
       collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
     );
     const unsub = onSnapshot(storiesQ, (snap) => {
       const setIds = new Set<string>();
       snap.docs.forEach(d => {
         const s = d.data() as any;
-        if (!matchesPersonaFilter(s, personaFilter)) return;
         if (s.sprintId === sprintId && s.goalId) setIds.add(s.goalId);
       });
       setActiveSprintGoalIds(setIds);
     });
     return unsub;
-  }, [currentUser, currentPersona, selectedSprintId, activeSprintId, personaFilter]);
+  }, [currentUser, currentPersona, selectedSprintId, activeSprintId]);
 
   // Handler functions for ModernGoalsTable
   const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
@@ -192,18 +191,8 @@ const GoalsManagement: React.FC = () => {
     }
   };
 
-  // Accept search from navigation state once
-  useEffect(() => {
-    const state = ((location as unknown) as { state?: { search?: string } | null }).state ?? null;
-    if (state?.search) {
-      setSearchTerm(state.search);
-      navigate(location.pathname, { replace: true, state: null });
-    }
-  }, [location, navigate]);
-
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    if (!matchesPersonaFilter(goal, personaFilter)) return false;
     // If 'All Sprints' is selected (empty string), do NOT fall back to activeSprintId
     const sprintFilterId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
     if (applyActiveSprintFilter && sprintFilterId) {
@@ -410,16 +399,6 @@ const GoalsManagement: React.FC = () => {
                       onSprintChange={(id) => setSelectedSprintId(id)}
                     />
                   </div>
-                </Form.Group>
-              </Col>
-              <Col md={3}>
-                <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Persona</Form.Label>
-                  <Form.Select value={personaFilter} onChange={(e)=>setPersonaFilter(e.target.value as PersonaFilter)}>
-                    <option value="all">All</option>
-                    <option value="personal">Personal</option>
-                    <option value="work">Work</option>
-                  </Form.Select>
                 </Form.Group>
               </Col>
             </Row>

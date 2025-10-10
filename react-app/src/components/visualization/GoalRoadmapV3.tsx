@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, ButtonGroup, Modal, Form, Badge, Dropdown } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
@@ -10,7 +11,7 @@ import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Activity } from 'lucide-react';
+import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Calendar as CalendarIcon } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
@@ -25,6 +26,7 @@ const GoalRoadmapV3: React.FC = () => {
   const { theme } = useTheme();
   const { selectedSprintId } = useSprint();
   const { showSidebar } = useSidebar();
+  const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
 
   const [zoom, setZoom] = useState<Zoom>('quarters');
@@ -35,16 +37,13 @@ const GoalRoadmapV3: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
-  const [activityItems, setActivityItems] = useState<any[]>([]);
+  // Embedded activity feed removed in favor of global sidebar stream
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [lastNotes, setLastNotes] = useState<Record<string, string>>({});
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
   const [storyDoneCounts, setStoryDoneCounts] = useState<Record<string, number>>({});
-  const [showGlobalActivity, setShowGlobalActivity] = useState(false);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
-  const [globalActivityItems, setGlobalActivityItems] = useState<any[]>([]);
   const [showSprints, setShowSprints] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [showEmptyThemes, setShowEmptyThemes] = useState(false);
@@ -66,6 +65,7 @@ const GoalRoadmapV3: React.FC = () => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [financeOnTrack, setFinanceOnTrack] = useState<boolean|null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [schedulingId, setSchedulingId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -255,27 +255,7 @@ const GoalRoadmapV3: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid]);
 
-  // Activity stream subscription per selected goal
-  useEffect(() => {
-    if (!activityGoalId) return;
-    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems);
-    return () => unsub();
-  }, [activityGoalId]);
-
-  // Global activity stream subscription when modal open
-  useEffect(() => {
-    if (!showGlobalActivity || !currentUser?.uid) return;
-    const q = query(
-      collection(db, 'activity_stream'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('timestamp', 'desc')
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setGlobalActivityItems(list as any[]);
-    });
-    return () => unsub();
-  }, [showGlobalActivity, currentUser?.uid]);
+  // Embedded activity subscriptions removed. Use global sidebar stream.
 
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
@@ -299,14 +279,16 @@ const GoalRoadmapV3: React.FC = () => {
     const cursor = new Date(timeRange.start); cursor.setDate(1);
     while (cursor <= timeRange.end) {
       let label = '';
-      if (zoom === 'weeks' || zoom === 'months') label = `${cursor.toLocaleString('default',{month:'short'})} ${cursor.getFullYear()}`;
-      else if (zoom === 'quarters') label = `Q${Math.floor(cursor.getMonth()/3)+1} ${cursor.getFullYear()}`;
-      else label = `${cursor.getFullYear()}`;
+      if (zoom === 'quarters') {
+        label = `Q${Math.floor(cursor.getMonth()/3)+1} ${cursor.getFullYear()}`;
+      } else {
+        // For weeks/months/years, render month labels so 1y view shows months as requested
+        const month = cursor.toLocaleString('default',{month:'short'});
+        label = `${month}${cursor.getMonth()===0 ? ' ' + cursor.getFullYear() : ''}`;
+      }
       out.push({ label, x: xFromDate(new Date(cursor)) });
-      if (zoom === 'weeks') cursor.setMonth(cursor.getMonth()+1);
-      else if (zoom === 'months') cursor.setMonth(cursor.getMonth()+1);
-      else if (zoom === 'quarters') cursor.setMonth(cursor.getMonth()+3);
-      else cursor.setFullYear(cursor.getFullYear()+1);
+      if (zoom === 'quarters') cursor.setMonth(cursor.getMonth()+3);
+      else cursor.setMonth(cursor.getMonth()+1);
     }
     return out;
   }, [timeRange, xFromDate, zoom]);
@@ -474,7 +456,33 @@ const GoalRoadmapV3: React.FC = () => {
   const handleGenerateStories = useCallback(async (goalId: string) => {
     try { const callable = httpsCallable(functions, 'generateStoriesForGoal'); await callable({ goalId }); }
     catch (e:any) { alert('AI story generation failed: ' + (e?.message || 'unknown')); }
-  }, []);
+  }, [functions]);
+
+  const handleAiOrchestrate = useCallback(async (goalId: string) => {
+    try {
+      const callable = httpsCallable(functions, 'orchestrateGoalPlanning');
+      await callable({ goalId });
+      alert('AI research, stories, and schedule created. Check your email for the research brief.');
+    } catch (error: any) {
+      alert('AI Orchestrate failed: ' + (error?.message || 'Unknown error'));
+    }
+  }, [functions]);
+
+  const scheduleGoalAI = useCallback(async (g: Goal) => {
+    try {
+      if (!currentUser?.uid) return;
+      setSchedulingId(g.id);
+      const planCalendar = httpsCallable(functions, 'planCalendar');
+      const minutes = Math.min(Math.max(60, (g.timeToMasterHours || 2) * 60), 300);
+      const result = await planCalendar({ persona: 'personal', focusGoalId: g.id, goalTimeRequest: minutes });
+      const data = result.data as any;
+      window.alert(`AI scheduled ${data?.blocksCreated || 0} time blocks for "${g.title}"`);
+    } catch (err:any) {
+      window.alert('Failed to schedule via AI: ' + (err?.message || 'unknown'));
+    } finally {
+      setSchedulingId(null);
+    }
+  }, [currentUser?.uid]);
 
   const handleAddNote = useCallback(async () => {
     if (!noteGoalId || !currentUser?.uid || !noteDraft.trim()) return;
@@ -567,15 +575,7 @@ const GoalRoadmapV3: React.FC = () => {
             setZoom('years');
           }
         }} aria-label="Fit All"><Maximize2 size={14} /></Button>
-        <Button
-          size="sm"
-          variant="outline-secondary"
-          className="ms-2"
-          onClick={() => setShowGlobalActivity(true)}
-        >
-          <Activity size={14} className="me-1" />
-          Activity Feed
-        </Button>
+        {/* Global activity feed button removed; open per-goal Activity Stream from the goal actions. */}
         <Button size="sm" variant="outline-secondary" onClick={() => { 
           // Zoom to Month around today and filter to goals with stories in selected sprint
           setCustomRange(null);
@@ -713,8 +713,25 @@ const GoalRoadmapV3: React.FC = () => {
                     onKeyDown={(e) => onKeyNudge(e, g)}
                     onMouseEnter={() => setHoveredId(g.id)}
                     onMouseLeave={() => setHoveredId(null)}
-                    onDoubleClick={() => setShowGlobalActivity(true)}
+                    onDoubleClick={() => showSidebar(g as any, 'goal')}
                   >
+                    {/* Compact % badge overlay (moved to top-left) */}
+                    <div
+                      aria-label={`Completion ${pct}%`}
+                      style={{
+                        position: 'absolute',
+                        top: 6,
+                        left: 8,
+                        padding: '2px 6px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        background: 'rgba(255,255,255,.82)',
+                        color: '#111827'
+                      }}
+                    >
+                      {pct}%
+                    </div>
                     <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
 
@@ -733,9 +750,17 @@ const GoalRoadmapV3: React.FC = () => {
                             <Wand2 size={14} className="me-2" />
                             Generate Stories
                           </Dropdown.Item>
+                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); handleAiOrchestrate(g.id); }}>
+                            <Wand2 size={14} className="me-2" />
+                            AI Orchestrate (Research + Plan)
+                          </Dropdown.Item>
                           <Dropdown.Item onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}>
                             <ListIcon size={14} className="me-2" />
                             Open Activity Stream
+                          </Dropdown.Item>
+                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); scheduleGoalAI(g); }}>
+                            <CalendarIcon size={14} className="me-2" />
+                            AI Schedule Time
                           </Dropdown.Item>
                           <Dropdown.Item onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}>
                             <MessageSquareText size={14} className="me-2" />
@@ -769,17 +794,32 @@ const GoalRoadmapV3: React.FC = () => {
 
                     <div className="grv3-title">{g.title}</div>
                     <div className="grv3-meta">{g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} – {g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}{typeof storyCounts[g.id] === 'number' ? ` • ${storyCounts[g.id]} stories` : ''}</div>
-                    {typeof storyCounts[g.id] === 'number' && storyCounts[g.id] > 0 && (
+                    {(zoom === 'weeks' || zoom === 'months') && (
                       <div className="mt-1" style={{ width: '100%' }}>
                         <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,.3)', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${Math.round(((storyDoneCounts[g.id]||0) / storyCounts[g.id]) * 100)}%`, background: 'rgba(255,255,255,.9)' }} />
+                          <div style={{ height: '100%', width: `${pct}%`, background: 'rgba(255,255,255,.9)' }} />
                         </div>
-                        <div className="grv3-meta">{Math.round(((storyDoneCounts[g.id]||0) / storyCounts[g.id]) * 100)}%</div>
                       </div>
                     )}
                     {(zoom === 'weeks' || zoom === 'months') && (lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote) && (
                       <div className="grv3-meta">📝 {lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote}</div>
                     )}
+
+                    {/* Hover actions under card (icon + text for clarity) */}
+                    <div className="grv3-hover-actions" onClick={(e) => e.stopPropagation()}>
+                      <button className="icon-btn" title="Edit Goal" onClick={() => setEditGoal(g)}>
+                        <Edit3 size={14} /> Edit
+                      </button>
+                      <button className="icon-btn" title="Generate Stories" onClick={() => handleGenerateStories(g.id)}>
+                        <Wand2 size={14} /> Stories
+                      </button>
+                      <button className="icon-btn" title="AI Schedule Time" onClick={() => scheduleGoalAI(g)}>
+                        <CalendarIcon size={14} /> {schedulingId === g.id ? 'Planning…' : 'AI Plan'}
+                      </button>
+                      <button className="icon-btn" title="Open Activity Stream" onClick={() => showSidebar(g as any, 'goal')}>
+                        <ListIcon size={14} /> Activity
+                      </button>
+                    </div>
                   </div>
                   );
                 })}
@@ -793,36 +833,7 @@ const GoalRoadmapV3: React.FC = () => {
       {/* Tooltip for drag */}
       <div ref={tooltipRef} className="grv3-tooltip" style={{ display: 'none' }} />
 
-      {/* Activity Modal */}
-      {/* Activity modal header adopts the goal theme color */}
-      <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
-        {(() => {
-          const g = goals.find(x => x.id === activityGoalId);
-          const themeId = migrateThemeValue(g?.theme ?? 0);
-          const themeDef = getThemeDefinition(themeId);
-          const colorVar = themeDef.color || '#6c757d';
-          const overlay = theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
-          return (
-            <Modal.Header closeButton style={{ ['--modal-color' as any]: String(colorVar), background: `linear-gradient(135deg, var(--modal-color) 0%, ${overlay} 100%)`, color: '#fff' }}>
-              <Modal.Title>Activity Stream</Modal.Title>
-            </Modal.Header>
-          );
-        })()}
-        <Modal.Body>
-          {activityItems.length === 0 ? (
-            <div className="text-muted">No activity yet.</div>
-          ) : (
-            <ul className="list-group">
-              {activityItems.map(a => (
-                <li key={a.id} className="list-group-item">
-                  <div className="small text-muted">{a.timestamp?.toDate?.().toLocaleString?.() || ''}</div>
-                  <div>{a.description || a.activityType}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Modal.Body>
-      </Modal>
+      {/* Activity modal removed in favor of global sidebar (Open Activity Stream) */}
 
       {/* Add Note Modal */}
       <Modal show={!!noteGoalId} onHide={() => setNoteGoalId(null)}>
@@ -839,26 +850,7 @@ const GoalRoadmapV3: React.FC = () => {
         </Modal.Footer>
       </Modal>
 
-      {/* Global Activity Modal */}
-      <Modal show={showGlobalActivity} onHide={() => setShowGlobalActivity(false)} size="lg">
-        <Modal.Header closeButton>
-          <Modal.Title>Global Activity</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          {globalActivityItems.length === 0 ? (
-            <div className="text-muted">No activity yet.</div>
-          ) : (
-            <ul className="list-group">
-              {globalActivityItems.slice(0, 200).map(a => (
-                <li key={a.id} className="list-group-item">
-                  <div className="small text-muted">{a.timestamp?.toDate?.().toLocaleString?.() || ''}</div>
-                  <div>{a.description || `${a.activityType} on ${a.entityType}`}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Modal.Body>
-      </Modal>
+      {/* Global activity modal removed */}
 
       {/* Edit Goal Modal */}
       {editGoal && (

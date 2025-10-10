@@ -229,7 +229,7 @@ interface Task {
   // === AI & INTEGRATION ===
   alignedToGoal: boolean;        // Goal alignment flag
   theme?: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home';
-  source: 'ios_reminder' | 'web' | 'ai' | 'gmail' | 'sheets';
+  source: 'ios_reminder' | 'MacApp' | 'web' | 'ai' | 'gmail' | 'sheets';
   sourceRef?: string;            // Source system reference ID
   aiSuggestedLinks?: Array<{     // AI-generated suggestions
     goalId: string;              // Suggested goal link

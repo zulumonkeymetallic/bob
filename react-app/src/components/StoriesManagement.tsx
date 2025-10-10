@@ -19,8 +19,6 @@ import { themeVars } from '../utils/themeVars';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { matchesPersonaFilter, type PersonaFilter } from '../utils/personaFilter';
-import { useSprint } from '../contexts/SprintContext';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -44,8 +42,6 @@ const StoriesManagement: React.FC = () => {
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const location = useLocation();
   const navigate = useNavigate();
-  const [personaFilter, setPersonaFilter] = useState<PersonaFilter>('all');
-  const { selectedSprintId } = useSprint();
 
   // 📍 PAGE TRACKING
   useEffect(() => {
@@ -90,19 +86,22 @@ const StoriesManagement: React.FC = () => {
     // Load stories data - simplified query to avoid index requirements
     const storiesQuery = query(
       collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
     );
     
     // Load goals data for relationships
     const goalsQuery = query(
       collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
     );
 
     // Load tasks for selected story panels and consistency
     const tasksQuery = query(
       collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
     );
     
     // Subscribe to real-time updates
@@ -282,9 +281,7 @@ const StoriesManagement: React.FC = () => {
         theme: storyData.theme || 1, // 1=Health
         points: storyData.points || 1,
         wipLimit: storyData.wipLimit || 3,
-        orderIndex: storyData.orderIndex ?? (maxOrderIndex + 1000),
-        // If a sprint is selected globally, default new story into that sprint so it remains visible
-        sprintId: (selectedSprintId && selectedSprintId !== '') ? selectedSprintId : (storyData as any).sprintId || null
+        orderIndex: storyData.orderIndex ?? (maxOrderIndex + 1000)
       };
 
       console.log('💾 Story data being saved:', newStory);
@@ -318,25 +315,9 @@ const StoriesManagement: React.FC = () => {
     // The real-time listener will automatically update the stories list
   };
 
-  // Accept search from navigation state once
-  useEffect(() => {
-    const state = ((location as unknown) as { state?: { search?: string } | null }).state ?? null;
-    if (state?.search) {
-      setSearchTerm(state.search);
-      navigate(location.pathname, { replace: true, state: null });
-    }
-  }, [location, navigate]);
-
   // Apply filters to stories
   const filteredStories = stories.filter(story => {
-    if (!matchesPersonaFilter(story, personaFilter)) return false;
-    // Respect global sprint selector if set; otherwise fall back to active sprint filter (existing behaviour)
-    if (selectedSprintId !== undefined) {
-      // '' means All Sprints
-      if (selectedSprintId !== '' && story.sprintId !== selectedSprintId) return false;
-    } else if (applyActiveSprintFilter && activeSprintId && story.sprintId !== activeSprintId) {
-      return false;
-    }
+    if (applyActiveSprintFilter && activeSprintId && story.sprintId !== activeSprintId) return false;
     if (filterStatus !== 'all' && !isStatus(story.status, filterStatus)) return false;
     if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
     if (filterTheme !== 'all' && String(story.theme ?? '') !== filterTheme) return false;
@@ -554,16 +535,6 @@ const StoriesManagement: React.FC = () => {
               </Col>
             </Row>
             <Row style={{ marginTop: '16px' }}>
-              <Col md={3}>
-                <Form.Group>
-                  <Form.Label>Persona</Form.Label>
-                  <Form.Select value={personaFilter} onChange={(e)=>setPersonaFilter(e.target.value as PersonaFilter)}>
-                    <option value="all">All</option>
-                    <option value="personal">Personal</option>
-                    <option value="work">Work</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
               <Col>
                 {filterTheme !== 'all' && (
                   <div className="mb-2">
@@ -583,7 +554,6 @@ const StoriesManagement: React.FC = () => {
                     setFilterGoalInput('');
                     setSearchTerm('');
                     setFilterTheme('all');
-                    setPersonaFilter('all');
                   }}
                   style={{ borderColor: themeVars.border as string }}
                 >
@@ -668,7 +638,9 @@ const StoriesManagement: React.FC = () => {
                 onTaskCreate={async (newTask) => {
                   // Inherit theme from linked goal
                   const linkedGoal = goals.find(g => g.id === selectedStory.goalId);
+                  const ref = generateRef('task', []);
                   await addDoc(collection(db, 'tasks'), {
+                    ref,
                     title: newTask.title,
                     description: newTask.description || '',
                     parentType: 'story',

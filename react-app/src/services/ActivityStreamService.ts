@@ -218,7 +218,16 @@ export class ActivityStreamService {
     return onSnapshot(q, (snapshot) => {
       const raw = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
       // Filter out non-CRUD/noise events (viewed/clicked/imported/exported) and misclassified view notes
-      const allowed = new Set(['created','updated','deleted','note_added','status_changed','sprint_changed','priority_changed']);
+      const allowed = new Set([
+        'created',
+        'updated',
+        'deleted',
+        'note_added',
+        'status_changed',
+        'sprint_changed',
+        'priority_changed',
+        'task_to_story_conversion',
+      ]);
       const activities = raw.filter((a) => {
         const t = String(a.activityType || '').toLowerCase();
         if (!allowed.has(t)) return false;

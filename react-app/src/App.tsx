@@ -60,6 +60,9 @@ import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboard from './components/FinanceDashboard';
+import MerchantMappings from './components/finance/MerchantMappings';
+import CategoriesBuckets from './components/finance/CategoriesBuckets';
+import BudgetsPage from './components/finance/BudgetsPage';
 import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
@@ -71,6 +74,10 @@ import StravaSettings from './components/settings/integrations/StravaSettings';
 import SteamSettings from './components/settings/integrations/SteamSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
 import TaskCleanupPage from './components/settings/TaskCleanupPage';
+import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
+import DeepLinkTask from './components/routes/DeepLinkTask';
+import DeepLinkStory from './components/routes/DeepLinkStory';
+import DeepLinkGoal from './components/routes/DeepLinkGoal';
 
 
 // Lazy-loaded heavy routes
@@ -201,6 +208,7 @@ function AppContent() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/tasks" element={<TaskListView />} />
+              <Route path="/tasks/:id" element={<DeepLinkTask />} />
               <Route path="/task" element={<Navigate to="/tasks" replace />} />
               <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
@@ -227,14 +235,17 @@ function AppContent() {
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<HabitsManagement />} />
+            <Route path="/routines" element={<RoutinesChoresManager />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />
             <Route path="/stories" element={<StoriesManagement />} />
+            <Route path="/stories/:id" element={<DeepLinkStory />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
             <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
+            <Route path="/goals/:id" element={<DeepLinkGoal />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
             {/* Legacy V2 removed; no preview route retained */}
@@ -264,11 +275,14 @@ function AppContent() {
             <Route path="/running-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/finance" element={<FinanceDashboard />} />
+            <Route path="/finance/merchants" element={<MerchantMappings />} />
+            <Route path="/finance/categories" element={<CategoriesBuckets />} />
+            <Route path="/finance/budgets" element={<BudgetsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
-            <Route path="/settings/integrations" element={<IntegrationSettings />} />
             <Route path="/settings/task-cleanup" element={<TaskCleanupPage />} />
+            <Route path="/settings/integrations" element={<IntegrationSettings />} />
             <Route path="/settings/integrations/google" element={<GoogleCalendarSettings />} />
             <Route path="/settings/integrations/monzo" element={<MonzoSettings />} />
             <Route path="/settings/integrations/strava" element={<StravaSettings />} />

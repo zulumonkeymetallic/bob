@@ -140,22 +140,8 @@ class AIUsageLogger {
   estimateCost(aiService, model, usage) {
     if (!usage) return 0;
     
-    // OpenAI pricing (as of Sept 2024)
+    // Gemini pricing (approximate; adjust as needed)
     const pricing = {
-      openai: {
-        'gpt-4o-mini': {
-          prompt: 0.00015 / 1000,  // $0.15 per 1M tokens
-          completion: 0.0006 / 1000 // $0.60 per 1M tokens
-        },
-        'gpt-4o': {
-          prompt: 0.005 / 1000,    // $5.00 per 1M tokens  
-          completion: 0.015 / 1000  // $15.00 per 1M tokens
-        },
-        'gpt-4': {
-          prompt: 0.03 / 1000,     // $30.00 per 1M tokens
-          completion: 0.06 / 1000   // $60.00 per 1M tokens
-        }
-      },
       gemini: {
         'gemini-flash': {
           prompt: 0.00015 / 1000,   // Estimated

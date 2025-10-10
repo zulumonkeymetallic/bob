@@ -316,12 +316,7 @@ const TasksList: React.FC = () => {
         taskData.sprintId = derivedSprint;
       }
 
-      await addDoc(collection(db, 'tasks'), {
-        ...taskData,
-        ref: generateRef('task', tasks.map(t => (t as any).ref).filter(Boolean) as string[]),
-        source: 'web',
-        syncState: 'clean',
-      });
+      await addDoc(collection(db, 'tasks'), taskData);
 
       setNewTask({
         title: '',

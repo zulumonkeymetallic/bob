@@ -115,7 +115,7 @@ export interface Task {
   attachments?: Array<{name: string; url: string}>;
   alignedToGoal: boolean;
   theme?: number; // 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
-  source: 'ios_reminder' | 'web' | 'ai' | 'gmail' | 'sheets';
+  source: 'ios_reminder' | 'MacApp' | 'web' | 'ai' | 'gmail' | 'sheets';
   sourceRef?: string;
   aiSuggestedLinks?: Array<{goalId: string; storyId?: string; confidence: number; rationale: string}>;
   aiLinkConfidence: number;
