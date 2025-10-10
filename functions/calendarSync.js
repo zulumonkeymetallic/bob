@@ -1,6 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { google } = require('googleapis');
+const { loadThemesForUser, mapThemeIdToLabel, getGoogleColorForThemeId } = require('./services/themeManager');
 
 // Enhanced calendar block sync function
 exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
@@ -49,8 +50,11 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
     switch (action) {
       case 'create':
         // Create new Google Calendar event
+        const themes = await loadThemesForUser(uid);
+        const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
+        const activityName = block.title || block.category || 'BOB Block';
         const event = {
-          summary: `${block.theme}: ${block.category}`,
+          summary: `[${themeLabel}] – ${activityName}`,
           description: block.rationale || 'BOB calendar block',
           start: {
             dateTime: new Date(block.start).toISOString(),
@@ -60,12 +64,13 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
             dateTime: new Date(block.end).toISOString(),
             timeZone: 'UTC',
           },
-          colorId: getColorForTheme(block.theme),
+          colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
           extendedProperties: {
             private: {
               'bob-block-id': blockId,
               'bob-persona': block.persona,
-              'bob-theme': block.theme,
+              'bob-theme': themeLabel,
+              'bob-theme-id': block.theme_id || null,
               'bob-category': block.category,
               'bob-flexibility': block.flexibility
             }
@@ -92,8 +97,11 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
           throw new functions.https.HttpsError('failed-precondition', 'Block not yet synced to Google Calendar');
         }
 
+        const themes = await loadThemesForUser(uid);
+        const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
+        const activityName = block.title || block.category || 'BOB Block';
         const updateEvent = {
-          summary: `${block.theme}: ${block.category}`,
+          summary: `[${themeLabel}] – ${activityName}`,
           description: block.rationale || 'BOB calendar block',
           start: {
             dateTime: new Date(block.start).toISOString(),
@@ -103,7 +111,7 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
             dateTime: new Date(block.end).toISOString(),
             timeZone: 'UTC',
           },
-          colorId: getColorForTheme(block.theme),
+          colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
         };
 
         await calendar.events.update({

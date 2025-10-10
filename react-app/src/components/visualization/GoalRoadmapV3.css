@@ -59,3 +59,34 @@
 
 /* Hide action buttons during active drag to prevent mis-clicks */
 .grv3-bar.dragging .grv3-actions { display: none; }
+
+/* Hover action row shown under each card */
+.grv3-hover-actions {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -26px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity .15s ease, transform .15s ease;
+}
+.grv3-bar:hover .grv3-hover-actions { opacity: 1; pointer-events: auto; transform: translateY(0); }
+.grv3-hover-actions .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(255,255,255,0.92);
+  color: #111827;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  font-size: 12px;
+}
+.grv3-hover-actions .icon-btn:hover { background: #fff; }

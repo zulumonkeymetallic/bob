@@ -11,7 +11,6 @@ import { getThemeClass, getThemeName, getStatusName, getPriorityName } from '../
 import { getDeadlineInfo } from '../utils/deadlineUtils';
 import ModernTaskTable from './ModernTaskTable';
 import { useSprint } from '../contexts/SprintContext';
-import { matchesPersona } from '../utils/personaFilter';
 
 interface DashboardModernTaskTableProps {
   maxTasks?: number;
@@ -52,11 +51,13 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
         ? query(
             collection(db, 'tasks'),
             where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
             where('sprintId', '==', selectedSprintId)
           )
         : query(
             collection(db, 'tasks'),
             where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona)
           );
       
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
@@ -65,9 +66,7 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
           ...doc.data()
         })) as Task[];
         
-        let filteredTasks = tasksData
-          .filter(task => !task.deleted)
-          .filter(task => matchesPersona(task, currentPersona));
+        let filteredTasks = tasksData.filter(task => !task.deleted);
         
         if (showDueToday) {
           const today = new Date();
@@ -109,7 +108,8 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
       // Stories subscription
       const storiesQuery = query(
         collection(db, 'stories'),
-        where('ownerUid', '==', currentUser.uid)
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona)
       );
       
       const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -117,13 +117,14 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
           id: doc.id,
           ...doc.data()
         })) as Story[];
-        setStories(storiesData.filter(story => !(story as any).deleted).filter(story => matchesPersona(story, currentPersona)));
+        setStories(storiesData.filter(story => !(story as any).deleted));
       });
 
       // Goals subscription
       const goalsQuery = query(
         collection(db, 'goals'),
-        where('ownerUid', '==', currentUser.uid)
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona)
       );
       
       const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
@@ -131,13 +132,14 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
           id: doc.id,
           ...doc.data()
         })) as Goal[];
-        setGoals(goalsData.filter(goal => !(goal as any).deleted).filter(goal => matchesPersona(goal, currentPersona)));
+        setGoals(goalsData.filter(goal => !(goal as any).deleted));
       });
 
       // Sprints subscription
       const sprintsQuery = query(
         collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid)
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona)
       );
       
       const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
@@ -252,9 +254,6 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
         theme: 0, // default
         ownerUid: currentUser.uid,
         persona: currentPersona,
-        sprintId: selectedSprintId || null,
-        source: 'web',
-        syncState: 'clean',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         deleted: false

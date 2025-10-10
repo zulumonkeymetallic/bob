@@ -9,7 +9,6 @@ import ModernTaskTable from './ModernTaskTable';
 import { useSidebar } from '../contexts/SidebarContext';
 import { BookOpen, Target, Calendar, Plus, Filter, Search, Upload } from 'lucide-react';
 import ImportModal from './ImportModal';
-import { useSprint } from '../contexts/SprintContext';
 
 const TasksManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -31,19 +30,16 @@ const TasksManagement: React.FC = () => {
   const [initializedSprintDefault, setInitializedSprintDefault] = useState<boolean>(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
-  const { selectedSprintId } = useSprint();
-  // Local persona filter: 'all' shows everything; 'personal'/'work' show matching tasks but also include tasks with unknown persona
-  const [personaFilter, setPersonaFilter] = useState<'all' | 'personal' | 'work'>('all');
 
   useEffect(() => {
     if (!currentUser) return;
 
     const setupSubscriptions = () => {
       // Tasks subscription
-      // Load all tasks for the owner (do not constrain by persona so that unknown persona tasks are included by default)
       const tasksQuery = query(
         collection(db, 'tasks'),
         where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
         orderBy('serverUpdatedAt', 'desc')
       );
 
@@ -125,19 +121,9 @@ const TasksManagement: React.FC = () => {
 
   // Filter tasks based on story/goal/sprint relationships
   const filteredTasks = tasks.filter(task => {
-    // Persona filter: include unknown persona by default
-    if (personaFilter !== 'all') {
-      const p = (task as any).persona;
-      if (p && p !== personaFilter) return false;
-    }
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     if (filterStatus !== 'all' && (task.status !== undefined ? task.status : 0).toString() !== filterStatus) return false;
-    // Sprint filtering: prefer global selector if present; otherwise use local page filter
-    if (selectedSprintId !== undefined) {
-      if (selectedSprintId !== '' && task.sprintId !== selectedSprintId) return false;
-    } else if (filterSprint !== 'all' && task.sprintId !== filterSprint) {
-      return false;
-    }
+    if (filterSprint !== 'all' && task.sprintId !== filterSprint) return false;
     
     // Filter by story
     if (filterStory !== 'all') {
@@ -336,22 +322,6 @@ const TasksManagement: React.FC = () => {
                 <Col md={2}>
                   <Form.Group>
                     <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
-                      Persona
-                    </Form.Label>
-                    <Form.Select
-                      value={personaFilter}
-                      onChange={(e) => setPersonaFilter(e.target.value as 'all' | 'personal' | 'work')}
-                      size="sm"
-                    >
-                      <option value="all">All</option>
-                      <option value="personal">Personal</option>
-                      <option value="work">Work</option>
-                    </Form.Select>
-                  </Form.Group>
-                </Col>
-                <Col md={2}>
-                  <Form.Group>
-                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
                       <BookOpen size={14} style={{ marginRight: '6px' }} />
                       Story
                     </Form.Label>
@@ -442,7 +412,6 @@ const TasksManagement: React.FC = () => {
                         setFilterSprint('all');
                         setFilterStatus('all');
                         setSearchTerm('');
-                        setPersonaFilter('all');
                       }}
                     >
                       Clear Filters

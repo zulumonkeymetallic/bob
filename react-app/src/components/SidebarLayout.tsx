@@ -8,7 +8,6 @@ import VersionDisplay from './VersionDisplay';
 import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
 import CompactSprintMetrics from './CompactSprintMetrics';
-import GlobalSearchBar from './GlobalSearchBar';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -68,7 +67,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Finance',
       icon: 'piggy-bank',
       items: [
-        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' }
+        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
+        { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
+        { label: 'Categories', path: '/finance/categories', icon: 'tags' },
+        { label: 'Merchants', path: '/finance/merchants', icon: 'store' }
       ]
     },
     {
@@ -114,6 +116,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Routines',
       icon: 'check-circle',
       items: [
+        { label: 'Routines & Chores', path: '/routines', icon: 'clipboard-check' },
         { label: 'Daily Habits', path: '/habits', icon: 'check' },
         { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
         { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
@@ -533,10 +536,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
             <div className="d-flex justify-content-end align-items-center gap-3">
-              {/* Search, metrics, and sprint selector */}
-              <GlobalSearchBar />
+              {/* Metrics first, then selector so metrics appear to the left of the selector */}
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
-              <SprintSelector selectedSprintId={globalSprintId} onSprintChange={setGlobalSprintId} />
+              <SprintSelector
+                selectedSprintId={globalSprintId}
+                onSprintChange={setGlobalSprintId}
+              />
             </div>
           </div>
         </div>

@@ -30,10 +30,13 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
+import { deriveTaskSprint, sprintNameForId } from '../utils/taskSprintHelpers';
+import { useActivityTracking } from '../hooks/useActivityTracking';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import { DnDMutationHandler } from '../utils/dndMutations';
-import { themeVars, rgbaCard, domainThemePrimaryVar } from '../utils/themeVars';
+import { themeVars, rgbaCard } from '../utils/themeVars';
+import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 
 interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
@@ -310,6 +313,11 @@ const SortableTaskCard: React.FC<{
               <Badge bg="outline-secondary" style={{ fontSize: '9px', color: themeVars.muted, backgroundColor: 'transparent', border: `1px solid ${themeVars.border}` }}>
                 {task.effort}
               </Badge>
+              {task.source && (
+                <Badge bg="light" text="dark" style={{ fontSize: '9px', border: `1px solid ${themeVars.border}` }}>
+                  {String(task.source).replace('ios_reminder','iOS').replace('MacApp','Mac').replace('web','Web').replace('ai','AI').toUpperCase()}
+                </Badge>
+              )}
             </div>
             <span style={{ fontSize: '10px', color: themeVars.muted }}>
               {task.estimateMin}min
@@ -326,6 +334,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const { currentPersona } = usePersona();
   const { showSidebar, setUpdateHandler } = useSidebar();
   const { selectedSprintId } = useSprint();
+  const { trackFieldChange, addNote } = useActivityTracking();
   
   // Data state
   const [stories, setStories] = useState<Story[]>([]);
@@ -361,6 +370,34 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     })
   );
 
+  // Wire sidebar inline editor to Firestore updates
+  useEffect(() => {
+    const handler = async (item: Story | Task, type: 'story' | 'task', updates: any) => {
+      const col = type === 'story' ? 'stories' : 'tasks';
+      const docRef = doc(db, col, (item as any).id);
+      let payload: any = { ...updates, updatedAt: serverTimestamp() };
+      if (type === 'task' && 'dueDate' in updates) {
+        try {
+          const existing = tasks.find(t => t.id === (item as any).id);
+          if (existing) {
+            const derivation = deriveTaskSprint({ task: existing, updates, stories, sprints });
+            if (derivation.sprintId && derivation.sprintId !== (existing as any).sprintId) {
+              payload.sprintId = derivation.sprintId;
+              const sprintName = sprintNameForId(sprints, derivation.sprintId) || derivation.sprintId;
+              const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0,10) : 'unknown';
+              try {
+                await addNote(existing.id, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.`, (existing as any).ref);
+                await trackFieldChange(existing.id, 'task', 'sprintId', String((existing as any).sprintId || ''), String(derivation.sprintId || ''), (existing as any).ref);
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+      await updateDoc(docRef, payload);
+    };
+    setUpdateHandler(handler);
+  }, [setUpdateHandler, tasks, stories, sprints, addNote, trackFieldChange]);
+
   // Swim lanes configuration
   const swimLanes = [
     { id: 'backlog', title: 'Backlog', status: 'backlog', color: themeVars.muted },
@@ -368,13 +405,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     { id: 'done', title: 'Done', status: 'done', color: 'var(--green)' },
   ];
 
-  // Theme colors (simplified for demo)
-  const themeColors: Record<string, string> = {
-    Health: domainThemePrimaryVar('Health'),
-    Growth: domainThemePrimaryVar('Growth'),
-    Wealth: domainThemePrimaryVar('Wealth'),
-    Tribe: domainThemePrimaryVar('Tribe'),
-    Home: domainThemePrimaryVar('Home'),
+  // Resolve theme color from goal's theme id or name consistently
+  const themeColorForGoal = (goal?: Goal): string => {
+    if (!goal) return themeVars.muted as string;
+    const themeId = migrateThemeValue((goal as any).theme);
+    return getThemeById(Number(themeId)).color || (themeVars.muted as string);
   };
 
   // Helper functions
@@ -400,8 +435,49 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const storiesInScope = resolvedSprintId
     ? stories.filter(s => (s as any).sprintId === resolvedSprintId)
     : stories;
+
+  const resolvedSprint = resolvedSprintId
+    ? sprints.find(s => (s as any).id === resolvedSprintId)
+    : undefined;
+
+  const sprintStartMs = (() => {
+    const v = resolvedSprint?.startDate as any;
+    if (!v) return null;
+    if (typeof v === 'number') return v;
+    if (v?.toDate) return v.toDate().getTime();
+    const parsed = Date.parse(String(v));
+    return Number.isNaN(parsed) ? null : parsed;
+  })();
+
+  const sprintEndMs = (() => {
+    const v = resolvedSprint?.endDate as any;
+    if (!v) return null;
+    if (typeof v === 'number') return v;
+    if (v?.toDate) return v.toDate().getTime();
+    const parsed = Date.parse(String(v));
+    return Number.isNaN(parsed) ? null : parsed;
+  })();
+
+  const isDueDateInSprint = (task: Task): boolean => {
+    if (!resolvedSprintId || !sprintStartMs || !sprintEndMs) return false;
+    const raw = (task as any).dueDate ?? (task as any).dueDateMs ?? (task as any).targetDate ?? null;
+    if (!raw) return false;
+    let ms: number | null = null;
+    if (typeof raw === 'number') ms = raw;
+    else if ((raw as any)?.toDate) ms = (raw as any).toDate().getTime();
+    else {
+      const parsed = Date.parse(String(raw));
+      ms = Number.isNaN(parsed) ? null : parsed;
+    }
+    if (!ms) return false;
+    return ms >= sprintStartMs && ms <= sprintEndMs;
+  };
+
   const tasksInScope = resolvedSprintId
-    ? tasks.filter(t => (t as any).sprintId === resolvedSprintId)
+    ? tasks.filter(t => {
+        const explicit = (t as any).sprintId === resolvedSprintId;
+        return explicit || isDueDateInSprint(t);
+      })
     : tasks;
 
   const getStoriesForLane = (status: string): Story[] => {
@@ -409,8 +485,17 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   };
 
   const getTasksForLane = (status: string): Task[] => {
-    const taskStatus = status === 'active' ? 'in-progress' : status;
-    return tasksInScope.filter(task => isStatus(task.status, taskStatus));
+    return tasksInScope.filter((task) => {
+      const s: any = (task as any).status;
+      if (typeof s === 'number') {
+        if (status === 'backlog') return s === 0; // todo/planned
+        if (status === 'active') return s === 1;  // in progress
+        if (status === 'done') return s === 2;    // complete
+        return false;
+      }
+      const mapped = status === 'active' ? 'in-progress' : status;
+      return String(s).toLowerCase() === mapped;
+    });
   };
 
   // Data loading effect
@@ -424,24 +509,28 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       const goalsQuery = query(
         collection(db, 'goals'),
         where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
       const storiesQuery = query(
         collection(db, 'stories'),
         where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
       const tasksQuery = query(
         collection(db, 'tasks'),
         where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
       const sprintsQuery = query(
         collection(db, 'sprints'),
         where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
 
@@ -450,7 +539,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           id: doc.id,
           ...doc.data()
         })) as Goal[];
-        setGoals(goalsData.filter(g => (g as any).persona == null || (g as any).persona === currentPersona));
+        setGoals(goalsData);
       });
 
       const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -458,7 +547,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           id: doc.id,
           ...doc.data()
         })) as Story[];
-        setStories(storiesData.filter(s => (s as any).persona == null || (s as any).persona === currentPersona));
+        setStories(storiesData);
       });
 
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
@@ -466,7 +555,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           id: doc.id,
           ...doc.data()
         })) as Task[];
-        setTasks(tasksData.filter(t => (t as any).persona == null || (t as any).persona === currentPersona));
+        setTasks(tasksData);
         setLoading(false);
       });
 
@@ -528,13 +617,18 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           });
         }
       } else if (itemType === 'tasks') {
-        const taskStatus = newStatus === 'active' ? 'in-progress' : newStatus;
         const task = tasks.find(t => t.id === activeId);
-        if (task && !isStatus(task.status, taskStatus)) {
-          await updateDoc(doc(db, 'tasks', activeId), {
-            status: taskStatus,
-            updatedAt: serverTimestamp()
-          });
+        if (task) {
+          const taskStatus = newStatus === 'active' ? (typeof task.status === 'number' ? 1 : 'in-progress') : (newStatus === 'backlog' ? (typeof task.status === 'number' ? 0 : 'backlog') : (typeof task.status === 'number' ? 2 : 'done'));
+          const changed = typeof task.status === 'number' ? task.status !== taskStatus : !isStatus(task.status, String(taskStatus));
+          if (changed) {
+            await updateDoc(doc(db, 'tasks', activeId), { status: taskStatus, updatedAt: serverTimestamp() });
+            try {
+              const oldLabel = typeof task.status === 'number' ? String(task.status) : String(task.status || '');
+              const newLabel = String(taskStatus);
+              await trackFieldChange(task.id, 'task', 'status', oldLabel, newLabel, (task as any).ref);
+            } catch {}
+          }
         }
       }
     } catch (error) {
@@ -579,10 +673,31 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
     try {
       const collection_name = selectedType === 'story' ? 'stories' : 'tasks';
-      await updateDoc(doc(db, collection_name, selectedItem.id), {
-        ...editForm,
-        updatedAt: serverTimestamp()
-      });
+      const docRef = doc(db, collection_name, selectedItem.id);
+      let payload: any = { ...editForm, updatedAt: serverTimestamp() };
+
+      if (selectedType === 'task') {
+        const existing = tasks.find(t => t.id === selectedItem.id);
+        if (existing) {
+          const updates: any = {};
+          if ('dueDate' in editForm) updates.dueDate = (editForm as any).dueDate;
+          if (Object.keys(updates).length) {
+            const derivation = deriveTaskSprint({ task: existing, updates, stories, sprints });
+            if (derivation.sprintId && derivation.sprintId !== (existing as any).sprintId) {
+              payload.sprintId = derivation.sprintId;
+              // log alignment reason
+              const sprintName = sprintNameForId(sprints, derivation.sprintId) || derivation.sprintId;
+              const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0,10) : 'unknown';
+              try {
+                await addNote(existing.id, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.` , (existing as any).ref);
+                await trackFieldChange(existing.id, 'task', 'sprintId', String((existing as any).sprintId || ''), String(derivation.sprintId), (existing as any).ref);
+              } catch {}
+            }
+          }
+        }
+      }
+
+      await updateDoc(docRef, payload);
       setShowEditModal(false);
     } catch (error) {
       console.error('Error updating item:', error);
@@ -745,7 +860,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                         {getStoriesForLane(lane.status).map((story) => {
                           const goal = getGoalForStory(story.id);
                           const taskCount = getTasksForStory(story.id).length;
-                          const themeColor = goal?.theme ? themeColors[goal.theme] : themeVars.muted;
+                          const themeColor = themeColorForGoal(goal);
                           
                           return (
                             <SortableStoryCard
@@ -777,7 +892,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                         {getTasksForLane(lane.status).map((task) => {
                           const story = getStoryForTask(task.id);
                           const goal = story ? getGoalForStory(story.id) : undefined;
-                          const themeColor = goal?.theme ? themeColors[goal.theme] : themeVars.muted;
+                          const themeColor = themeColorForGoal(goal);
                           
                           return (
                             <SortableTaskCard
@@ -849,6 +964,48 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                     onChange={(e) => setEditForm({ ...(editForm as any), description: e.target.value })}
                   />
                 </Form.Group>
+                <Row>
+                  <Col md={4}>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Status</Form.Label>
+                      <Form.Select
+                        value={(editForm as any).status ?? ''}
+                        onChange={(e) => setEditForm({ ...(editForm as any), status: (typeof (selectedItem as any).status === 'number') ? Number(e.target.value) : e.target.value })}
+                      >
+                        {typeof (selectedItem as any).status === 'number' ? (
+                          <>
+                            <option value={0}>Todo</option>
+                            <option value={1}>In Progress</option>
+                            <option value={2}>Done</option>
+                            <option value={3}>Blocked</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value={'backlog'}>Backlog</option>
+                            <option value={'in-progress'}>In Progress</option>
+                            <option value={'done'}>Done</option>
+                          </>
+                        )}
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={4}>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Due Date</Form.Label>
+                      <Form.Control
+                        type="date"
+                        value={(editForm as any).dueDate ? new Date((editForm as any).dueDate).toISOString().slice(0,10) : ''}
+                        onChange={(e) => setEditForm({ ...(editForm as any), dueDate: e.target.value ? new Date(e.target.value).getTime() : null })}
+                      />
+                    </Form.Group>
+                  </Col>
+                  <Col md={4}>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Source</Form.Label>
+                      <Form.Control value={(selectedItem as any).source || 'web'} readOnly />
+                    </Form.Group>
+                  </Col>
+                </Row>
               </Form>
             )}
           </Modal.Body>

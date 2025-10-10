@@ -1,5 +1,7 @@
 const admin = require('firebase-admin');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { defineSecret } = require('firebase-functions/params');
+const { sendEmail } = require('./lib/email');
 const aiUsageLogger = require('./utils/aiUsageLogger');
 
 /**
@@ -10,11 +12,12 @@ exports.generateDailyDigest = onSchedule({
   schedule: '30 6 * * *', // Daily at 06:30
   timeZone: 'Europe/London',
   memory: '512MiB',
-  timeoutSeconds: 300
+  timeoutSeconds: 300,
+  secrets: [defineSecret('NYLAS_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')]
 }, async (event) => {
   console.log('🌅 Starting daily digest generation at 06:30');
   
-  const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
+  const aiWrapper = aiUsageLogger.wrapAICall('google-ai-studio', 'gemini-1.5-flash');
   
   try {
     const db = admin.firestore();
@@ -182,14 +185,9 @@ async function gatherUserData(db, userId, today) {
 }
 
 /**
- * Generate AI insights using OpenAI
+ * Generate AI insights using Google AI Studio (Gemini)
  */
 async function generateAIInsights(userData) {
-  const OpenAI = require('openai');
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-  });
-  
   const prompt = `As an AI productivity coach, analyze this user's day and provide insights:
 
 **Tasks Due Today (${userData.tasksDueToday.length}):**
@@ -217,21 +215,30 @@ Please provide:
 
 Keep it concise, actionable, and encouraging. Write in second person ("you should...").`;
 
-  return await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      {
-        role: 'system',
-        content: 'You are an expert productivity coach who provides concise, actionable daily guidance. Focus on priorities, time management, and motivation.'
-      },
-      {
-        role: 'user',
-        content: prompt
-      }
+  const apiKey = process.env.GOOGLEAISTUDIOAPIKEY;
+  if (!apiKey) {
+    return { choices: [{ message: { content: 'Gemini key not configured.' } }] };
+  }
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const body = {
+    contents: [
+      { role: 'user', parts: [{ text: 'You are an expert productivity coach who provides concise, actionable daily guidance. Focus on priorities, time management, and motivation.' }] },
+      { role: 'user', parts: [{ text: prompt }] }
     ],
-    max_tokens: 500,
-    temperature: 0.7
+    generationConfig: { temperature: 0.7, maxOutputTokens: 500 }
+  };
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Gemini HTTP ${resp.status}: ${text}`);
+  }
+  const json = await resp.json();
+  const textOut = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  return { choices: [{ message: { content: textOut } }] };
 }
 
 /**
@@ -361,12 +368,10 @@ async function createDigestHTML(userData, aiInsights) {
  * Send digest email (placeholder - integrate with your email service)
  */
 async function sendDigestEmail(email, htmlContent, userData) {
-  console.log(`📧 Would send digest email to: ${email}`);
-  console.log(`📊 Email metrics: ${userData.tasksDueToday.length} tasks, ${userData.focusStories.length} stories`);
-  
-  // TODO: Integrate with email service (SendGrid, Mailgun, etc.)
-  // For now, just log that email would be sent
-  // In production, implement actual email sending here
-  
-  return Promise.resolve();
+  if (!email) return;
+  await sendEmail({
+    to: email,
+    subject: `BOB Daily Digest – ${userData?.date || new Date().toLocaleDateString()}`,
+    html: htmlContent,
+  });
 }

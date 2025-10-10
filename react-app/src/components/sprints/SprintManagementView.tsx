@@ -68,7 +68,8 @@ const SprintManagementView = () => {
       // Load goals with error handling
       const goalsQuery = query(
         collection(db, 'goals'),
-        where('ownerUid', '==', currentUser.uid)
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona)
       );
       
       unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
@@ -76,7 +77,7 @@ const SprintManagementView = () => {
           id: doc.id,
           ...doc.data()
         })) as Goal[];
-        setGoals(goalsData.filter(g => (g as any).persona == null || (g as any).persona === currentPersona));
+        setGoals(goalsData);
       }, (error) => {
         console.error('Goals subscription error:', error);
       });
@@ -84,7 +85,8 @@ const SprintManagementView = () => {
       // Load stories with simplified query
       const storiesQuery = query(
         collection(db, 'stories'),
-        where('ownerUid', '==', currentUser.uid)
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona)
       );
       
       unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -92,7 +94,7 @@ const SprintManagementView = () => {
           id: doc.id,
           ...doc.data()
         })) as Story[];
-        setStories(storiesData.filter(s => (s as any).persona == null || (s as any).persona === currentPersona));
+        setStories(storiesData);
       }, (error) => {
         console.error('Stories subscription error:', error);
       });
@@ -100,7 +102,8 @@ const SprintManagementView = () => {
       // Load tasks with simplified query
       const tasksQuery = query(
         collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid)
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona)
       );
       
       unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
@@ -108,7 +111,7 @@ const SprintManagementView = () => {
           id: doc.id,
           ...doc.data()
         })) as Task[];
-        setTasks(tasksData.filter(t => (t as any).persona == null || (t as any).persona === currentPersona));
+        setTasks(tasksData);
       }, (error) => {
         console.error('Tasks subscription error:', error);
       });
@@ -228,9 +231,6 @@ const SprintManagementView = () => {
         estimatedHours,
         persona: currentPersona,
         ownerUid: currentUser.uid,
-        sprintId: (selectedStory as any)?.sprintId || null,
-        source: 'web',
-        syncState: 'clean',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         alignedToGoal: true,

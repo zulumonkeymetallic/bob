@@ -6,8 +6,9 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal } from '../types';
-import { getThemeName, getStatusName } from '../utils/statusHelpers';
-import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
+import { getStatusName } from '../utils/statusHelpers';
+import { themeVars } from '../utils/themeVars';
+import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceMigration } from '../config/migration';
@@ -37,14 +38,11 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
   const [latestActivities, setLatestActivities] = useState<{ [storyId: string]: any }>({});
 
-  // Theme colors mapping (matching Goals)
-  const themeColors = {
-    Health: domainThemePrimaryVar('Health'),
-    Growth: domainThemePrimaryVar('Growth'),
-    Wealth: domainThemePrimaryVar('Wealth'),
-    Tribe: domainThemePrimaryVar('Tribe'),
-    Home: domainThemePrimaryVar('Home')
-  } as const;
+  const themeColorForGoal = (goal?: Goal): string => {
+    if (!goal) return 'var(--muted)';
+    const themeId = migrateThemeValue((goal as any).theme);
+    return getThemeById(Number(themeId)).color || 'var(--muted)';
+  };
 
   // Status colors for stories
   const statusColors = {
@@ -68,11 +66,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
 
   const getThemeColorForStory = (story: Story): string => {
     const parentGoal = getGoalForStory(story.goalId);
-    if (parentGoal) {
-      const themeName = getThemeName(parentGoal.theme);
-    return themeColors[themeName as keyof typeof themeColors] || 'var(--muted)';
-    }
-  return 'var(--muted)';
+    return themeColorForGoal(parentGoal);
   };
 
   const loadLatestActivityForStory = async (storyId: string) => {
@@ -315,7 +309,10 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         color: 'var(--muted)', 
                         marginTop: '2px'
                       }}>
-                        {getThemeName(parentGoal.theme)} • {getStatusName(parentGoal.status)}
+                        {(() => {
+                          const themeId = migrateThemeValue((parentGoal as any).theme);
+                          return `${getThemeById(Number(themeId)).label} • ${getStatusName((parentGoal as any).status)}`;
+                        })()}
                       </div>
                     </div>
                   )}
@@ -326,13 +323,13 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       marginBottom: '16px',
                       padding: '12px',
                       backgroundColor: 'rgba(var(--card-rgb), 0.1)',
-                      border: `1px solid ${(() => { const g = getGoalForStory(story.goalId); const tn = g ? getThemeName(g.theme) : undefined; return (tn && themeColors[tn as keyof typeof themeColors]) || themeVars.border; })()}`,
+                      border: `1px solid ${(() => { const g = getGoalForStory(story.goalId); return themeColorForGoal(g) || themeVars.border; })()}`,
                       borderRadius: '6px'
                     }}>
                       <div style={{ 
                         fontSize: '11px', 
                         fontWeight: '600', 
-                        color: (() => { const g = getGoalForStory(story.goalId); const tn = g ? getThemeName(g.theme) : undefined; return (tn && themeColors[tn as keyof typeof themeColors]) || 'var(--brand)'; })(), 
+                        color: (() => { const g = getGoalForStory(story.goalId); return themeColorForGoal(g) || 'var(--brand)'; })(), 
                         marginBottom: '6px',
                         textTransform: 'uppercase',
                         letterSpacing: '0.5px'

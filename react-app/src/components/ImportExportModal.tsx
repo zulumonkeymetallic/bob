@@ -3,7 +3,6 @@ import { Modal, Button, Tabs, Tab, Form, Alert, Badge } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, addDoc, doc, setDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import { generateRef } from '../utils/referenceGenerator';
 import { usePersona } from '../contexts/PersonaContext';
 
 interface ImportExportModalProps {
@@ -271,7 +270,6 @@ const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) =
           hasGoal: true,
           alignedToGoal: true,
           source: 'template',
-          ref: generateRef('task', []),
           syncState: 'clean',
           createdAt: new Date(),
           updatedAt: new Date()
