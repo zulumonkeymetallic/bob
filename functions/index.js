@@ -58,7 +58,7 @@ const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 const NYLAS_API_KEY = defineSecret('NYLAS_API_KEY');
-const GITHUB_TOKEN = defineSecret('GITHUB_TOKEN');
+// const GITHUB_TOKEN = defineSecret('GITHUB_TOKEN'); // optional; not required for deploy
 
 // Scheduler utils (deterministic id + day key)
 function makePlanId(userId, date) {
@@ -963,7 +963,7 @@ exports.approvePlanningJob = httpsV2.onRequest({ invoker: 'public' }, async (req
 });
 
 // Optional: callable to create a tracking GitHub issue for this feature
-exports.createTrackingIssue = httpsV2.onCall({ secrets: [GITHUB_TOKEN] }, async (req) => {
+exports.createTrackingIssue = httpsV2.onCall({}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const repo = process.env.GITHUB_REPO || null; if (!repo) throw new httpsV2.HttpsError('failed-precondition', 'GITHUB_REPO not configured');
   const title = String(req?.data?.title || 'BOB: Goal Orchestration & Nightly Planning Approvals');
@@ -987,7 +987,9 @@ exports.createTrackingIssue = httpsV2.onCall({ secrets: [GITHUB_TOKEN] }, async 
 - Add UI badges for pending plan approvals
 - Optional: audio interface for goal chat
 `);
-  const resApi = await createGithubIssue({ token: process.env.GITHUB_TOKEN, repo, title, body });
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new httpsV2.HttpsError('failed-precondition', 'GITHUB_TOKEN not configured');
+  const resApi = await createGithubIssue({ token, repo, title, body });
   return { ok: true, issue: { number: resApi.number, url: resApi.html_url } };
 });
 
@@ -2489,7 +2491,7 @@ Generate a plan as JSON with:
 }
 
 // Orchestrated Goal Planning: research → stories/tasks → schedule → (optional) GitHub issues
-exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY, GITHUB_TOKEN] }, async (req) => {
+exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '').trim();

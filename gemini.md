@@ -473,7 +473,7 @@ Here’s a **consolidated `gemini.md`** that merges the strengths of both specs 
 
 # BOB Productivity Tool – Requirements Specification (Gemini.md)
 
-**Project Codename:** Gemini
+**Project Codename:** Gemini  
 **Last Updated:** 27 August 2025
 **Owner:** Jim Donnelly
 
@@ -1158,3 +1158,15 @@ transactions: {
 ## 📎 Changelog (append as we go)
 
 * **2025‑08‑27**: Added Smart Calendaring (web‑managed to Google Calendar), Kanban Story detail with Tasks Table, Goals nested Stories→Tasks view, validator rules, models for planning and calendar blocks, acceptance criteria.
+## Deployment Cheatsheet (Agent Quick Ref)
+
+- Primary deploy (prod): `./scripts/deploy.sh`
+  - Builds CRA, installs Functions deps, deploys `functions,hosting` to project `bob20250810`.
+- Full deploy (rules + functions + hosting): `./scripts/deploy-full.sh`
+- GitHub Actions prod: `.github/workflows/deploy-prod.yml` (manual dispatch on `main`).
+- Secrets (Firebase): `firebase functions:secrets:set GOOGLEAISTUDIOAPIKEY`, `NYLAS_API_KEY`, etc.
+
+Issue Locations
+- GitHub Issues: https://github.com/zulumonkeymetallic/bob/issues
+- Local issues directory: `issues/` (numbered markdown files)
+- Templates/seeds: `.gh-issue-bodies/`, `.gh-issue-comments/`, `.gh-new-issues/`

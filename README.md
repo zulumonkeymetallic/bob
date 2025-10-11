@@ -19,6 +19,11 @@
 - **Issues:** [https://github.com/zulumonkeymetallic/bob/issues](https://github.com/zulumonkeymetallic/bob/issues)
 - **Pull Requests:** [https://github.com/zulumonkeymetallic/bob/pulls](https://github.com/zulumonkeymetallic/bob/pulls)
 
+### **Local Issue Files (in repo)**
+- Markdown issues: `issues/` (e.g., `issues/192-task-sprint-alignment.md`)
+- Issue templates/seeds: `.gh-issue-bodies/`, `.gh-issue-comments/`, `.gh-new-issues/`
+- Backlog snapshot: `issues.json`
+
 ## 🚀 Quick Start
 
 ### Using the Live Application
@@ -35,6 +40,7 @@
 ## 📚 Documentation Navigation
 
 - Requirements & Guides: `Business Analyst AI/`
+- Agent Guide: `AGENTS.md`
 - Integrations (n8n): `docs/integrations/n8n/`
 - Gaps & TODOs: `docs/ROADMAP_GAPS.md`
 - Action Plan: `CRITICAL_ACTION_PLAN.md`
@@ -77,9 +83,18 @@
 
 ### 📁 Documentation Structure
 - Requirements & Guides: `Business Analyst AI/`
+- Product requirements: `gemini.md`
 - Integrations (n8n): `docs/integrations/n8n/`
 - Gaps & TODOs: `docs/ROADMAP_GAPS.md`
 - Archives & Logs: `archive/`, `deployment-logs/`
+
+## 🔼 Deployment
+
+- One‑liner (prod): `./scripts/deploy.sh`
+  - Builds CRA, prepares Functions, deploys to project `bob20250810`.
+- Full deploy (rules + functions + hosting): `./scripts/deploy-full.sh`
+- GitHub Actions (manual): Run workflow `.github/workflows/deploy-prod.yml` on branch `main`.
+
 
 ## 🆕 **What's New in Version 3.5.2**
 
