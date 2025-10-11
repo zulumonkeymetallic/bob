@@ -38,7 +38,6 @@ import ModernStoriesTable from '../../components/ModernStoriesTable';
 import { Goal, Sprint, Story, Task } from '../../types';
 import './EnhancedGanttChart.css';
 import logger from '../../utils/logger';
-import ThemeRoadmap from './ThemeRoadmap';
 import { useRoadmapStore, useTimelineScale } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
@@ -87,8 +86,7 @@ const EnhancedGanttChart: React.FC = () => {
   const { theme } = useTheme();
   const { showSidebar } = useSidebar();
   
-  // View mode toggle (timeline vs roadmap)
-  const [viewMode, setViewMode] = useState<'timeline' | 'roadmap'>('timeline');
+  // Roadmap V3 is handled by its own route; this component renders the timeline only
 
   // Core data
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -1166,9 +1164,7 @@ const EnhancedGanttChart: React.FC = () => {
     if (e.touches.length < 2) pinchRef.current = null;
   };
 
-  if (viewMode === 'roadmap') {
-    return <ThemeRoadmap onBackToTimeline={() => setViewMode('timeline')} />;
-  }
+  // No roadmap toggle here (V3 lives at /goals/roadmap)
 
   if (loading) {
     return (
@@ -1200,15 +1196,7 @@ const EnhancedGanttChart: React.FC = () => {
             </Col>
             <Col md={6} className="text-end">
               <div className="d-flex align-items-center justify-content-end gap-2">
-                <Button
-                  variant="outline-secondary"
-                  size="sm"
-                  onClick={openActivitySidebar}
-                  disabled={goals.length === 0}
-                >
-                  <Activity size={16} className="me-1" />
-                  Activity
-                </Button>
+                {/* Activity feed removed for focused timeline UI */}
                 <Button
                   variant="outline-secondary"
                   size="sm"

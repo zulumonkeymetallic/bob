@@ -937,28 +937,108 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID], invo
 
 // Public approval endpoint for planning jobs (email CTA)
 exports.approvePlanningJob = httpsV2.onRequest({ invoker: 'public' }, async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
   try {
     const db = ensureFirestore();
     const jobId = String(req.query.jobId || '');
     const uid = String(req.query.uid || '');
     const token = String(req.query.token || '');
-    if (!jobId || !uid || !token) return res.status(400).send('Missing parameters');
+    if (!jobId || !uid || !token) return res.status(400).json({ error: 'Missing parameters' });
+
     const ref = db.collection('planning_jobs').doc(jobId);
     const snap = await ref.get();
-    if (!snap.exists) return res.status(404).send('Job not found');
+    if (!snap.exists) return res.status(404).json({ error: 'Job not found' });
     const job = snap.data() || {};
-    if (job.userId !== uid) return res.status(403).send('Forbidden');
-    if (job.status !== 'proposed') return res.status(400).send('Job not in proposed state');
-    if (!job.approvalToken || job.approvalToken !== token) return res.status(403).send('Invalid token');
+    if (job.userId !== uid) return res.status(403).json({ error: 'Forbidden' });
+    if (!job.approvalToken || job.approvalToken !== token) return res.status(403).json({ error: 'Invalid token' });
 
-    const blocks = Array.isArray(job.proposedBlocks) ? job.proposedBlocks : [];
-    const applied = await applyCalendarBlocks(uid, 'personal', blocks.map((b) => ({ ...b, entry_method: 'calendar_ai', confidence_score: (job.validator?.score || 0.8) })));
-    await ref.set({ status: 'approved', appliedBlocks: applied, approvedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    const timezone = job?.preview?.timezone || profile.timezone || 'UTC';
+    const proposedBlocks = Array.isArray(job.proposedBlocks) ? job.proposedBlocks : [];
+    let previewBlocks = Array.isArray(job?.preview?.blocks) ? job.preview.blocks : null;
+    if (!previewBlocks || previewBlocks.length === 0) {
+      previewBlocks = await buildBlockPreviews(uid, proposedBlocks, { timezone });
+    }
 
-    return res.status(200).send(`Plan applied: ${applied} blocks`);
+    const validator = job.validator || null;
+
+    const sendPreview = (statusCode = 200) => {
+      return res.status(statusCode).json({
+        status: job.status || 'unknown',
+        jobId,
+        timezone,
+        proposedCount: proposedBlocks.length,
+        validator,
+        preview: {
+          timezone,
+          blocks: previewBlocks,
+        },
+        appliedBlocks: job.appliedBlocks || 0,
+        approvedAt: job.approvedAt || null,
+      });
+    };
+
+    const queryApprove = String(req.query.approve || '').toLowerCase();
+    const queryAction = String(req.query.action || '').toLowerCase();
+    const approveRequested = req.method === 'POST' || queryApprove === '1' || queryApprove === 'true' || queryAction === 'approve';
+    const previewRequested = req.method === 'GET' && !approveRequested;
+
+    if (!approveRequested || previewRequested || String(req.query.preview || '').toLowerCase() === 'true') {
+      return sendPreview();
+    }
+
+    if (job.status !== 'proposed') {
+      return sendPreview();
+    }
+
+    const applied = await applyCalendarBlocks(
+      uid,
+      'personal',
+      proposedBlocks.map((b) => ({
+        ...b,
+        entry_method: 'calendar_ai',
+        confidence_score: (validator?.score || 0.8),
+      })),
+    );
+    await ref.set(
+      {
+        status: 'approved',
+        appliedBlocks: applied,
+        approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+        preview: {
+          timezone,
+          blocks: previewBlocks,
+        },
+      },
+      { merge: true },
+    );
+
+    if (req.method === 'GET') {
+      const origin = process.env.APP_BASE_URL || 'https://bob20250810.web.app';
+      const html = `
+        <html>
+          <head><title>Plan Applied</title></head>
+          <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 32px;">
+            <h2>✅ Plan Applied</h2>
+            <p>${applied} block${applied === 1 ? '' : 's'} were added to your calendar.</p>
+            <p><a href="${origin}/calendar/integration">Open calendar view in BOB</a></p>
+          </body>
+        </html>`;
+      return res.status(200).send(html);
+    }
+
+    return res.status(200).json({ ok: true, status: 'approved', appliedBlocks: applied });
   } catch (e) {
     console.error('[approvePlanningJob] failed', e);
-    return res.status(500).send('Server error');
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -2671,10 +2751,22 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   const msgRef = threadRef.collection('messages').doc();
   await msgRef.set({ id: msgRef.id, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
 
-  const system = 'You are a goal planning assistant. Ask concise clarifying questions and propose next steps. Keep answers under 120 words. Return strict JSON: {"reply":"...","suggested_tasks":[{"title":"...","estimateMin":30}] }';
-  const user = `Goal: ${goalSnap.data().title}\nUser: ${message}`;
+  const system = [
+    'You are a goal planning assistant. Keep answers under 120 words.',
+    'Return STRICT JSON with this shape only:',
+    '{',
+    '  "reply": string,',
+    '  "suggested_tasks": [{"title": string, "estimateMin": number}] ,',
+    '  "actions": {',
+    '     "orchestrate": boolean,',
+    '     "create_story"?: {"title": string, "description"?: string},',
+    '     "plan_minutes"?: number',
+    '  }',
+    '}',
+  ].join('\n');
+  const user = `Goal: ${goalSnap.data().title}\nKnown theme: ${goalSnap.data().theme || 'Growth'}\nUser: ${message}`;
   const raw = await callLLMJson({ system, user, purpose: 'goalChat', userId: uid, expectJson: true, temperature: 0.2 });
-  let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { reply: raw, suggested_tasks: [] }; }
+  let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { reply: raw, suggested_tasks: [], actions: {} }; }
   const reply = String(parsed?.reply || '').slice(0, 1200);
   await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: reply, createdAt: admin.firestore.FieldValue.serverTimestamp() });
 
@@ -2683,6 +2775,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   const created = [];
   for (const t of tasks.slice(0, 5)) {
     const taskRef = db.collection('tasks').doc();
+    const est = Number(t?.estimateMin || 30);
     await taskRef.set({
       id: taskRef.id,
       ownerUid: uid,
@@ -2692,17 +2785,23 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
       status: 0,
       priority: 2,
       effort: 'S',
-      estimated_duration: Number(t?.estimateMin || 30),
+      estimated_duration: est,
       entry_method: 'ai_chat',
       task_type: 'task',
       theme: goalSnap.data().theme || 'Growth',
       goalId,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      ...(est <= 240 ? {
+        reminderSyncDirective: 'upsert',
+        reminderTitle: `[${goalSnap.data().theme || 'Growth'}] – ${String(t?.title || 'Follow-up')}`,
+        reminderNote: `Goal: ${goalSnap.data().title || goalId}`
+      } : {}),
     }, { merge: true });
     created.push(taskRef.id);
   }
-  return { ok: true, reply, tasksCreated: created.length };
+  const actions = parsed?.actions && typeof parsed.actions === 'object' ? parsed.actions : {};
+  return { ok: true, reply, tasksCreated: created.length, actions };
 });
 
 async function validateCalendarBlocks(blocks, context) {
@@ -2937,6 +3036,102 @@ async function applyCalendarBlocks(uid, persona, blocks) {
 
   await batch.commit();
   return createdCount;
+}
+
+async function buildBlockPreviews(uid, blocks, { timezone = 'UTC' } = {}) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return [];
+  const db = ensureFirestore();
+  const taskIds = new Set();
+  const storyIds = new Set();
+  const goalIds = new Set();
+
+  for (const block of blocks) {
+    if (block?.taskId) taskIds.add(String(block.taskId));
+    if (block?.storyId) storyIds.add(String(block.storyId));
+    if (block?.goalId) goalIds.add(String(block.goalId));
+  }
+
+  const fetchDocs = async (collectionName, ids) => {
+    if (ids.size === 0) return new Map();
+    const snapshots = await Promise.all(
+      Array.from(ids).map(async (id) => {
+        try {
+          return await db.collection(collectionName).doc(id).get();
+        } catch (err) {
+          console.warn(`[buildBlockPreviews] failed to load ${collectionName}/${id}`, err?.message || err);
+          return null;
+        }
+      })
+    );
+    const map = new Map();
+    snapshots.forEach((snap) => {
+      if (snap && snap.exists) {
+        map.set(snap.id, snap.data());
+      }
+    });
+    return map;
+  };
+
+  const [taskMap, storyMap, goalMap] = await Promise.all([
+    fetchDocs('tasks', taskIds),
+    fetchDocs('stories', storyIds),
+    fetchDocs('goals', goalIds),
+  ]);
+
+  const makeDeepLink = ({ taskId, storyId, goalId }) => {
+    if (taskId) return `/tasks?taskId=${taskId}`;
+    if (storyId) return `/stories?storyId=${storyId}`;
+    if (goalId) return `/goals/roadmap?goalId=${goalId}`;
+    return null;
+  };
+
+  const zone = coerceZone(timezone || 'UTC');
+  return blocks.map((block) => {
+    const task = block?.taskId ? taskMap.get(String(block.taskId)) : null;
+    const story = block?.storyId ? storyMap.get(String(block.storyId)) : null;
+    const goal = block?.goalId ? goalMap.get(String(block.goalId)) : null;
+    const theme = block?.theme || goal?.theme || story?.theme || task?.theme || 'Growth';
+
+    const start = typeof block?.start === 'number' ? DateTime.fromMillis(block.start, { zone }) : null;
+    const end = typeof block?.end === 'number' ? DateTime.fromMillis(block.end, { zone }) : null;
+    const durationMinutes = start && end ? Math.max(15, Math.round(end.diff(start, 'minutes').minutes)) : null;
+
+    return {
+      title: block?.title || task?.title || story?.title || (goal ? `Goal: ${goal.title}` : 'Scheduled Block'),
+      theme,
+      start: block?.start || null,
+      end: block?.end || null,
+      displayStart: start && start.isValid ? start.toLocaleString(DateTime.DATETIME_MED) : null,
+      displayEnd: end && end.isValid ? end.toLocaleString(DateTime.DATETIME_MED) : null,
+      durationMinutes,
+      goal: goal
+        ? {
+            id: String(block.goalId),
+            title: goal.title || goal.name || 'Goal',
+            ref: goal.ref || null,
+          }
+        : null,
+      story: story
+        ? {
+            id: String(block.storyId),
+            title: story.title || 'Story',
+            ref: story.ref || null,
+          }
+        : null,
+      task: task
+        ? {
+            id: String(block.taskId),
+            title: task.title || 'Task',
+            ref: task.ref || null,
+          }
+        : null,
+      deepLink: makeDeepLink({
+        taskId: block?.taskId ? String(block.taskId) : null,
+        storyId: block?.storyId ? String(block.storyId) : null,
+        goalId: block?.goalId ? String(block.goalId) : null,
+      }),
+    };
+  });
 }
 
 function getDefaultPlanningPrefs() {
@@ -6124,6 +6319,9 @@ exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZ
       context.userId = uid;
       const aiResponse = await generateAIPlan(context, {});
       const validation = await validateCalendarBlocks(aiResponse.blocks || [], context);
+      const proposedBlocks = Array.isArray(aiResponse.blocks) ? aiResponse.blocks : [];
+      const timezone = profile.timezone || context?.prefs?.timezone || 'UTC';
+      const previewBlocks = await buildBlockPreviews(uid, proposedBlocks, { timezone });
       const approvalRequired = profile.calendarPlannerApprovalRequired === true;
       if (approvalRequired) {
         // Save proposal and email summary with approve link
@@ -6140,28 +6338,83 @@ exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZ
           source: 'daily_planner',
           approvalToken: token,
           proposedBlocks: aiResponse.blocks || [],
+          preview: {
+            timezone,
+            blocks: previewBlocks,
+          },
         };
         await db.collection('planning_jobs').doc(runId).set(jobDoc, { merge: true });
+        const origin = process.env.APP_BASE_URL || 'https://bob20250810.web.app';
+        const approveUrl = `${origin}/planning/approval?jobId=${encodeURIComponent(runId)}&uid=${encodeURIComponent(uid)}&token=${encodeURIComponent(token)}`;
+
         try {
-          const profileSnap = await db.collection('profiles').doc(uid).get();
-          const email = profileSnap.exists ? (profileSnap.data() || {}).email : null;
+          const email = profile.email || null;
           if (email) {
-            const origin = process.env.APP_BASE_URL || 'https://bob20250810.web.app';
-            const approveUrl = `${origin}/api/approve-planning?jobId=${encodeURIComponent(runId)}&uid=${encodeURIComponent(uid)}&token=${encodeURIComponent(token)}`;
+            const directApproveUrl = `${origin}/api/approve-planning?jobId=${encodeURIComponent(runId)}&uid=${encodeURIComponent(uid)}&token=${encodeURIComponent(token)}&approve=1`;
+            const blockRows = previewBlocks.slice(0, 10).map((block) => {
+              const label = block.displayStart && block.displayEnd
+                ? `${block.displayStart} → ${block.displayEnd}`
+                : block.displayStart || 'Scheduled block';
+              const detailParts = [
+                block.title,
+                block.theme ? `Theme: ${block.theme}` : null,
+                block.task?.title ? `Task: ${block.task.title}` : null,
+                block.goal?.title ? `Goal: ${block.goal.title}` : null,
+              ].filter(Boolean);
+              return `<li><strong>${escapeHtml(label)}</strong><br/>${detailParts.map(escapeHtml).join(' · ')}</li>`;
+            }).join('');
+            const totalBlocks = previewBlocks.length;
+            const blockCountLine = totalBlocks
+              ? `<p><strong>${totalBlocks}</strong> block${totalBlocks === 1 ? '' : 's'} proposed for ${timezone}.</p>`
+              : '<p>No blocks proposed.</p>';
             const html = `
               <h2>BOB · Daily Plan Proposal</h2>
               <p>We prepared a plan for your calendar. Validation score: ${(validation.score || 0).toFixed(2)}</p>
-              <p>Blocks proposed: ${(aiResponse.blocks || []).length}</p>
-              <p><a href="${approveUrl}"><strong>Approve & Apply</strong></a></p>
+              ${blockCountLine}
+              ${blockRows ? `<ul>${blockRows}</ul>` : ''}
+              <p>
+                <a href="${approveUrl}" style="display:inline-block;padding:12px 20px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;">
+                  Review & Approve in BOB
+                </a>
+              </p>
+              <p>If you prefer to approve directly, <a href="${directApproveUrl}">use this quick link</a>.</p>
               <p>This will add the proposed time blocks to your calendar.</p>`;
             await sendEmail({ to: email, subject: 'BOB · Daily Plan Proposal (Approval Needed)', html });
           }
         } catch (e) { console.warn('[dailyPlanningJob] email proposal failed', e?.message || e); }
+
+        try {
+          const goalSummaries = new Map();
+          previewBlocks.forEach((block) => {
+            const goalId = block?.goal?.id;
+            if (!goalId) return;
+            if (!goalSummaries.has(goalId)) goalSummaries.set(goalId, []);
+            goalSummaries.get(goalId).push(block);
+          });
+          const nowTs = admin.firestore.FieldValue.serverTimestamp();
+          for (const [goalId, blocksForGoal] of goalSummaries.entries()) {
+            const sentences = blocksForGoal.slice(0, 3).map((block) => {
+              const when = block.displayStart ? block.displayStart : 'Upcoming';
+              return `• ${when}: ${block.title}`;
+            }).join('\n');
+            const content = `Nightly planner prepared ${blocksForGoal.length} session${blocksForGoal.length === 1 ? '' : 's'} for this goal.\n${sentences}\n\nApprove: ${approveUrl}`;
+            await db.collection('goal_chats').doc(goalId).collection('messages').add({
+              ownerUid: uid,
+              role: 'assistant',
+              content,
+              createdAt: nowTs,
+              jobId: runId,
+              type: 'planning_proposal',
+            });
+          }
+        } catch (chatErr) {
+          console.warn('[dailyPlanningJob] goal chat notification failed', chatErr?.message || chatErr);
+        }
       } else {
         let applied = 0;
         if (validation.errors.length === 0) {
           // attach confidence score to each block
-          const blocks = (aiResponse.blocks || []).map(b => ({ ...b, confidence_score: validation.score, entry_method: 'calendar_ai' }));
+          const blocks = proposedBlocks.map(b => ({ ...b, confidence_score: validation.score, entry_method: 'calendar_ai' }));
           applied = await applyCalendarBlocks(uid, persona, blocks);
         }
         await db.collection('planning_jobs').doc(runId).set({
@@ -6174,6 +6427,10 @@ exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZ
           validator: validation,
           rationale: aiResponse.rationale || null,
           source: 'daily_planner',
+          preview: {
+            timezone,
+            blocks: previewBlocks,
+          },
         }, { merge: true });
       }
     } catch (error) {

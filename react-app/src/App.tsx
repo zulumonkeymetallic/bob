@@ -8,6 +8,7 @@ import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
+import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
@@ -239,6 +240,7 @@ function AppContent() {
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />
+            <Route path="/planning/approval" element={<PlanningApprovalPage />} />
             <Route path="/stories" element={<StoriesManagement />} />
             <Route path="/stories/:id" element={<DeepLinkStory />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
