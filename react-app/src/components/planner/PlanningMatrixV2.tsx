@@ -3,7 +3,7 @@ import { Card, Badge, Button, Form, Alert, Spinner } from 'react-bootstrap';
 import { addDays, eachDayOfInterval, format } from 'date-fns';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSprint } from '../../contexts/SprintContext';
-import { collection, doc, getDoc, onSnapshot, orderBy, query, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import { db } from '../../firebase';
 import type { Sprint, Story } from '../../types';
 import ApprovalsPanel from './ApprovalsPanel';
@@ -39,8 +39,14 @@ const PlanningMatrixV2: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [instancesByDay, setInstancesByDay] = useState<Record<IsoDate, Array<{ id: string; sourceType: 'task'|'story'; sourceId: string; durationMinutes: number }>>>({});
   const [taskPointsById, setTaskPointsById] = useState<Record<string, number>>({});
+  const [taskGoalById, setTaskGoalById] = useState<Record<string, string | undefined>>({});
+  const [taskThemeById, setTaskThemeById] = useState<Record<string, number | undefined>>({});
   const [storyPointsById, setStoryPointsById] = useState<Record<string, number>>({});
+  const [storyGoalById, setStoryGoalById] = useState<Record<string, string | undefined>>({});
+  const [storyThemeById, setStoryThemeById] = useState<Record<string, number | undefined>>({});
   const [loadingInstances, setLoadingInstances] = useState<boolean>(false);
+  const [breakdown, setBreakdown] = useState<'none'|'theme'|'goal'>('none');
+  const [unscheduledList, setUnscheduledList] = useState<Array<{ id: string; title?: string; sourceType: 'task'|'story'; sourceId: string; day: IsoDate; reason?: string }>>([]);
 
   // Load selected sprint (or pick active if none selected)
   useEffect(() => {
@@ -105,11 +111,17 @@ const PlanningMatrixV2: React.FC = () => {
   // Track story points in map for quick lookup
   useEffect(() => {
     const mapping: Record<string, number> = {};
+    const themeMap: Record<string, number | undefined> = {};
+    const goalMap: Record<string, string | undefined> = {};
     for (const s of stories) {
       const pts = Number((s as any).points || 0);
       if (pts > 0) mapping[s.id] = pts;
+      themeMap[s.id] = (s as any).theme;
+      goalMap[s.id] = (s as any).goalId;
     }
     setStoryPointsById(mapping);
+    setStoryThemeById(themeMap);
+    setStoryGoalById(goalMap);
   }, [stories]);
 
   // Capacity storage (per sprint, per user)
@@ -154,6 +166,7 @@ const PlanningMatrixV2: React.FC = () => {
       async (snap) => {
         const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
         const byDay: Record<IsoDate, Array<{ id: string; sourceType: 'task'|'story'; sourceId: string; durationMinutes: number }>> = {};
+        const unscheduled: Array<{ id: string; title?: string; sourceType: 'task'|'story'; sourceId: string; day: IsoDate; reason?: string }> = [];
         const taskIds = new Set<string>();
         const storyIds = new Set<string>();
         for (const r of rows) {
@@ -161,14 +174,22 @@ const PlanningMatrixV2: React.FC = () => {
           if (!byDay[day]) byDay[day] = [];
           const srcType = String(r.sourceType || 'task');
           const srcId = String(r.sourceId || '');
-          byDay[day].push({ id: r.id, sourceType: srcType === 'story' ? 'story' : 'task', sourceId: srcId, durationMinutes: Number(r.durationMinutes || 0) });
+          const src: 'task'|'story' = srcType === 'story' ? 'story' : 'task';
+          if (String(r.status || '').toLowerCase() === 'unscheduled') {
+            unscheduled.push({ id: r.id, title: r.title, sourceType: src, sourceId: srcId, day, reason: r.statusReason });
+          } else {
+            byDay[day].push({ id: r.id, sourceType: src, sourceId: srcId, durationMinutes: Number(r.durationMinutes || 0) });
+          }
           if (srcType === 'story') storyIds.add(srcId); else taskIds.add(srcId);
         }
         setInstancesByDay(byDay);
+        setUnscheduledList(unscheduled);
         // Fetch points for tasks not seen yet
         const missingTaskIds = Array.from(taskIds).filter(id => !(id in taskPointsById));
         if (missingTaskIds.length > 0) {
           const updates: Record<string, number> = {};
+          const goalUpd: Record<string, string | undefined> = {};
+          const themeUpd: Record<string, number | undefined> = {};
           await Promise.all(missingTaskIds.map(async (id) => {
             try {
               const snap = await getDoc(doc(collection(db, 'tasks'), id));
@@ -176,10 +197,14 @@ const PlanningMatrixV2: React.FC = () => {
                 const t = snap.data() as any;
                 const pts = Number(t.points || 0) || effortToPoints(t.effort);
                 updates[id] = pts;
+                goalUpd[id] = t.goalId;
+                themeUpd[id] = t.theme;
               }
             } catch {}
           }));
           if (Object.keys(updates).length > 0) setTaskPointsById(prev => ({ ...prev, ...updates }));
+          if (Object.keys(goalUpd).length > 0) setTaskGoalById(prev => ({ ...prev, ...goalUpd }));
+          if (Object.keys(themeUpd).length > 0) setTaskThemeById(prev => ({ ...prev, ...themeUpd }));
         }
         // Story points mapping already tracked from sprint subscribe; nothing extra needed here
         setLoadingInstances(false);
@@ -217,6 +242,64 @@ const PlanningMatrixV2: React.FC = () => {
     return result;
   }, [instancesByDay, storyPointsById, taskPointsById]);
 
+  const plannedPointsByDayAndTheme = useMemo(() => {
+    const result: Record<IsoDate, Record<number, number>> = {};
+    const counts: Record<string, number> = {};
+    for (const list of Object.values(instancesByDay)) {
+      for (const inst of list) {
+        const key = `${inst.sourceType}:${inst.sourceId}`;
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    }
+    for (const [day, list] of Object.entries(instancesByDay)) {
+      const m: Record<number, number> = {};
+      for (const inst of list) {
+        const splits = counts[`${inst.sourceType}:${inst.sourceId}`] || 1;
+        if (inst.sourceType === 'story') {
+          const pts = storyPointsById[inst.sourceId] || 0;
+          const theme = storyThemeById[inst.sourceId];
+          if (typeof theme === 'number' && pts > 0) m[theme] = (m[theme] || 0) + (pts / splits);
+        } else {
+          const pts = taskPointsById[inst.sourceId] || 0;
+          const theme = taskThemeById[inst.sourceId];
+          if (typeof theme === 'number' && pts > 0) m[theme] = (m[theme] || 0) + (pts / splits);
+        }
+      }
+      Object.keys(m).forEach((k) => { m[Number(k)] = Math.round(m[Number(k)] * 10) / 10; });
+      result[day] = m;
+    }
+    return result;
+  }, [instancesByDay, storyPointsById, taskPointsById, storyThemeById, taskThemeById]);
+
+  const plannedPointsByDayAndGoal = useMemo(() => {
+    const result: Record<IsoDate, Record<string, number>> = {};
+    const counts: Record<string, number> = {};
+    for (const list of Object.values(instancesByDay)) {
+      for (const inst of list) {
+        const key = `${inst.sourceType}:${inst.sourceId}`;
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    }
+    for (const [day, list] of Object.entries(instancesByDay)) {
+      const m: Record<string, number> = {};
+      for (const inst of list) {
+        const splits = counts[`${inst.sourceType}:${inst.sourceId}`] || 1;
+        if (inst.sourceType === 'story') {
+          const pts = storyPointsById[inst.sourceId] || 0;
+          const goal = storyGoalById[inst.sourceId];
+          if (goal && pts > 0) m[goal] = (m[goal] || 0) + (pts / splits);
+        } else {
+          const pts = taskPointsById[inst.sourceId] || 0;
+          const goal = taskGoalById[inst.sourceId];
+          if (goal && pts > 0) m[goal] = (m[goal] || 0) + (pts / splits);
+        }
+      }
+      Object.keys(m).forEach((k) => { m[k] = Math.round(m[k] * 10) / 10; });
+      result[day] = m;
+    }
+    return result;
+  }, [instancesByDay, storyPointsById, taskPointsById, storyGoalById, taskGoalById]);
+
   return (
     <div className="container py-3">
       <div className="d-flex align-items-center justify-content-between mb-3">
@@ -248,6 +331,11 @@ const PlanningMatrixV2: React.FC = () => {
               </Badge>
               <Badge bg="secondary">Days: {days.length || 0}</Badge>
               <Badge bg="info">Per‑day: {capacityPerDay || 0} pts</Badge>
+              <div className="d-flex align-items-center gap-1">
+                <Button size="sm" variant={breakdown==='none'?'primary':'outline-primary'} onClick={() => setBreakdown('none')}>No Breakdown</Button>
+                <Button size="sm" variant={breakdown==='theme'?'primary':'outline-primary'} onClick={() => setBreakdown('theme')}>By Theme</Button>
+                <Button size="sm" variant={breakdown==='goal'?'primary':'outline-primary'} onClick={() => setBreakdown('goal')}>By Goal</Button>
+              </div>
               <Form className="d-flex align-items-center gap-1">
                 <Form.Label className="mb-0" style={{ fontSize: 12 }}>Capacity</Form.Label>
                 <Form.Control
@@ -292,6 +380,30 @@ const PlanningMatrixV2: React.FC = () => {
                       <span className="text-muted" style={{ fontSize: 12 }}>Planned</span>
                       <Badge bg={warn ? 'danger' : 'secondary'}>{planned} pts</Badge>
                     </div>
+                    {breakdown !== 'none' && (
+                      <div className="mt-2" style={{ fontSize: 12 }}>
+                        {breakdown === 'theme' && (
+                          <div className="d-flex flex-column" style={{ gap: 4 }}>
+                            {Object.entries(plannedPointsByDayAndTheme[dayKey] || {}).map(([themeId, pts]) => (
+                              <div key={themeId} className="d-flex align-items-center justify-content-between">
+                                <span>Theme {themeId}</span>
+                                <Badge bg="light" text="dark">{pts} pts</Badge>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {breakdown === 'goal' && (
+                          <div className="d-flex flex-column" style={{ gap: 4 }}>
+                            {Object.entries(plannedPointsByDayAndGoal[dayKey] || {}).map(([goalId, pts]) => (
+                              <div key={goalId} className="d-flex align-items-center justify-content-between">
+                                <span>Goal {goalId.slice(0,6)}…</span>
+                                <Badge bg="light" text="dark">{pts} pts</Badge>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </Card.Body>
                 </Card>
                 <div className="text-muted" style={{ fontSize: 12 }}>
@@ -323,6 +435,7 @@ const PlanningMatrixV2: React.FC = () => {
                   alert(e?.message || 'Failed to trigger planner');
                 }
               }}>Generate Sprint Proposal</Button>
+              <Button size="sm" variant="outline-primary" onClick={() => window.location.assign('/sprints/kanban')}>Open Kanban</Button>
             </div>
           </div>
         </Card.Body>
@@ -330,6 +443,72 @@ const PlanningMatrixV2: React.FC = () => {
 
       {/* Approvals panel */}
       <ApprovalsPanel />
+
+      {/* Quick Points Editor for stories missing points */}
+      <Card className="mt-3">
+        <Card.Body>
+          <div className="d-flex align-items-center justify-content-between mb-2">
+            <div className="fw-semibold">Story Points — Quick Editor</div>
+          </div>
+          {stories.filter(s => !(Number((s as any).points) > 0)).length === 0 ? (
+            <div className="text-muted" style={{ fontSize: 13 }}>All sprint stories have points.</div>
+          ) : (
+            <div className="d-flex flex-column" style={{ gap: 6 }}>
+              {stories.filter(s => !(Number((s as any).points) > 0)).map((s) => (
+                <div key={s.id} className="d-flex align-items-center justify-content-between border rounded p-2">
+                  <div style={{ maxWidth: '70%' }}>
+                    <div className="fw-semibold" style={{ fontSize: 13 }}>{(s as any).title}</div>
+                    <div className="text-muted" style={{ fontSize: 12 }}>Goal {(s as any).goalId || '—'}</div>
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Form.Control size="sm" type="number" min={0} placeholder="pts"
+                      style={{ width: 80 }}
+                      onBlur={async (e) => {
+                        const val = Number(e.currentTarget.value || 0);
+                        if (!(val > 0)) return;
+                        try {
+                          await updateDoc(doc(collection(db, 'stories'), s.id), { points: val, updatedAt: Date.now() });
+                          e.currentTarget.value = '';
+                        } catch (err) {
+                          alert('Failed to update points');
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card.Body>
+      </Card>
+
+      {/* Carryover Forecast — unscheduled instances in window */}
+      <Card className="mt-3">
+        <Card.Body>
+          <div className="d-flex align-items-center justify-content-between mb-2">
+            <div className="fw-semibold">Carryover Forecast</div>
+            <Badge bg={unscheduledList.length > 0 ? 'warning' : 'secondary'}>{unscheduledList.length} unscheduled</Badge>
+          </div>
+          {unscheduledList.length === 0 ? (
+            <div className="text-muted" style={{ fontSize: 13 }}>No unscheduled items in the sprint window.</div>
+          ) : (
+            <div className="d-flex flex-column" style={{ gap: 6 }}>
+              {unscheduledList.slice(0, 20).map((u) => (
+                <div key={u.id} className="d-flex align-items-center justify-content-between border rounded p-2">
+                  <div>
+                    <div className="fw-semibold" style={{ fontSize: 13 }}>{u.title || (u.sourceType === 'story' ? 'Story' : 'Task')}</div>
+                    <div className="text-muted" style={{ fontSize: 12 }}>{u.day} · {u.reason || 'No window'}</div>
+                  </div>
+                  <Badge bg="secondary">{u.sourceType}</Badge>
+                </div>
+              ))}
+              {unscheduledList.length > 20 && (
+                <div className="text-muted" style={{ fontSize: 12 }}>+{unscheduledList.length - 20} more…</div>
+              )}
+            </div>
+          )}
+        </Card.Body>
+      </Card>
     </div>
   );
 };
