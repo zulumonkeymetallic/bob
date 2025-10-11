@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
-import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare } from 'lucide-react';
+import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2 } from 'lucide-react';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -36,6 +37,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [showAddNote, setShowAddNote] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [showChat, setShowChat] = useState(false);
+  const [orchestrating, setOrchestrating] = useState(false);
+  const functions = React.useMemo(() => getFunctions(), []);
 
   // Ensure status labels/variants match each entity’s board semantics
   const getStatusDisplay = (
@@ -537,6 +540,29 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   >
                     <MessageCircle size={16} />
                   </Button>
+                  {selectedType === 'story' && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                      onClick={async () => {
+                        if (!selectedItem?.id) return;
+                        setOrchestrating(true);
+                        try {
+                          const callable = httpsCallable(functions, 'orchestrateStoryPlanning');
+                          await callable({ storyId: (selectedItem as any).id });
+                          alert('AI story planning complete: tasks created and time scheduled.');
+                        } catch (e: any) {
+                          alert(e?.message || 'Failed to orchestrate story');
+                        } finally {
+                          setOrchestrating(false);
+                        }
+                      }}
+                      title="AI Orchestrate Story"
+                    >
+                      <Wand2 size={16} />
+                    </Button>
+                  )}
                   {selectedType === 'goal' && (
                     <Button
                       variant="link"

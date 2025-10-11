@@ -2721,6 +2721,118 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
   return { ok: true, researchDocId: researchRef.id, storyId: storyRef.id, tasksCreated: createdTasks.length, appliedBlocks, github: ghResults };
 });
 
+// Orchestrated Story Planning: (optional) brief research → tasks → schedule
+exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY, GITHUB_TOKEN] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const storyId = String(req?.data?.storyId || '').trim();
+  const research = req?.data?.research === true; // optional lightweight research
+  const researchOnly = req?.data?.researchOnly === true; // generate/update research doc only
+  if (!storyId) throw new httpsV2.HttpsError('invalid-argument', 'storyId is required');
+
+  const db = ensureFirestore();
+  const storySnap = await db.collection('stories').doc(storyId).get();
+  if (!storySnap.exists) throw new httpsV2.HttpsError('not-found', 'Story not found');
+  const story = storySnap.data() || {};
+  if (story.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your story');
+  const goalId = story.goalId || null;
+
+  // 1) Optional: Lightweight research brief for the story
+  let researchDocId = null;
+  if (research || researchOnly) {
+    const systemR = 'You are an expert assistant. Compose a short research brief in Markdown (<= 500 words) for the given story with: context, assumptions, quick sources to check, and next actions (3–6 bullets).';
+    const userR = `Story: ${story.title}\nDescription: ${story.description || ''}\nGoal: ${goalId || '(none)'}`;
+    const docMd = await callLLMJson({ system: systemR, user: userR, purpose: 'storyResearchDoc', userId: uid, expectJson: false, temperature: 0.3 });
+    const ref = db.collection('research_docs').doc();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set({
+      id: ref.id,
+      ownerUid: uid,
+      storyId,
+      goalId: goalId || null,
+      title: `Research: ${story.title}`,
+      docMd,
+      createdAt: now,
+      updatedAt: now,
+    });
+    researchDocId = ref.id;
+    // Email optional
+    try {
+      const profileSnap = await db.collection('profiles').doc(uid).get();
+      const email = profileSnap.exists ? (profileSnap.data() || {}).email : null;
+      if (email) {
+        const html = `<h2>Research Brief: ${escapeHtml(story.title)}</h2>`+
+          `<div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(docMd)}</div>`+
+          `<p style="margin-top:16px;">Open in BOB: <a href="/stories?storyId=${storyId}">/stories?storyId=${storyId}</a></p>`;
+        await sendEmail({ to: email, subject: `Research Brief · ${story.title}`, html });
+      }
+    } catch (e) { console.warn('[orchestrateStoryPlanning] email send failed', e?.message || e); }
+  }
+  if (researchOnly) {
+    return { ok: true, researchDocId };
+  }
+
+  // 2) Generate tasks for this story
+  const system = [
+    'You are a planning assistant. Return STRICT JSON only.',
+    '{',
+    '  "tasks": [{"title": string, "estimated_minutes": number, "priority": "P1"|"P2"|"P3" }],',
+    '  "notes"?: string',
+    '}',
+  ].join('\n');
+  const user = `Story: ${story.title}\nDescription: ${story.description || ''}\nTheme: ${story.theme || ''}\nGoal: ${goalId || ''}\nPlease propose 3–8 concrete tasks.`;
+  const raw = await callLLMJson({ system, user, purpose: 'storyTasks', userId: uid, expectJson: true, temperature: 0.2 });
+  let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { tasks: [] }; }
+  const tasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
+
+  const createdTasks = [];
+  for (const t of tasks.slice(0, 12)) {
+    const tref = db.collection('tasks').doc();
+    await tref.set({
+      id: tref.id,
+      ownerUid: uid,
+      persona: story.persona || 'personal',
+      title: String(t?.title || 'Next step'),
+      description: 'AI-generated from story orchestration',
+      storyId,
+      status: 0,
+      priority: (String(t?.priority || 'P2')), // safe as string; UI maps variants
+      effort: 'S',
+      estimated_duration: Number(t?.estimated_minutes || 30),
+      entry_method: 'ai_story_orchestration',
+      task_type: 'task',
+      theme: story.theme || 'Growth',
+      goalId: goalId || null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+    createdTasks.push(tref.id);
+  }
+
+  // 3) Schedule blocks with focus on the parent goal (if available)
+  // Use a short horizon and requested minutes from tasks
+  const context = await assemblePlanningContext(uid, story.persona || 'personal', 2);
+  context.userId = uid;
+  let goalTimeRequest = 0;
+  for (const t of tasks) { goalTimeRequest += Number(t?.estimated_minutes || 30); }
+  if (!goalTimeRequest) goalTimeRequest = 120;
+  const aiPlan = await generateAIPlan(context, { focusGoalId: goalId || null, goalTimeRequest });
+  const validation = await validateCalendarBlocks(aiPlan.blocks || [], context);
+  let appliedBlocks = 0;
+  if (validation.errors.length === 0) {
+    appliedBlocks = await applyCalendarBlocks(uid, story.persona || 'personal', (aiPlan.blocks || []).map(b => ({ ...b, storyId, entry_method: 'calendar_ai', confidence_score: validation.score })));
+  }
+
+  await recordAiLog(uid, 'orchestrateStoryPlanning', 'success', 'Story tasks generated and schedule applied', {
+    storyId,
+    tasks: createdTasks.length,
+    researchDocId,
+    appliedBlocks,
+  });
+
+  return { ok: true, storyId, tasksCreated: createdTasks.length, appliedBlocks, researchDocId };
+});
+
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
 }
