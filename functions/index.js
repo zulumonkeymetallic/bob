@@ -2573,6 +2573,7 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '').trim();
+  const researchOnly = req?.data?.researchOnly === true;
   if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
 
   const db = ensureFirestore();
@@ -2635,6 +2636,10 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     }
   } catch (e) {
     console.warn('[orchestrateGoalPlanning] email send failed', e?.message || e);
+  }
+
+  if (researchOnly) {
+    return { ok: true, researchDocId: researchRef.id };
   }
 
   // 3) Create a primary Research story and tasks

@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
 import { validateRef } from '../utils/referenceGenerator';
 import GoalChatModal from './GoalChatModal';
+import ResearchDocModal from './ResearchDocModal';
 import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 
 interface GlobalSidebarProps {
@@ -37,6 +38,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [showAddNote, setShowAddNote] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [showChat, setShowChat] = useState(false);
+  const [showResearch, setShowResearch] = useState(false);
   const [orchestrating, setOrchestrating] = useState(false);
   const functions = React.useMemo(() => getFunctions(), []);
 
@@ -540,6 +542,17 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   >
                     <MessageCircle size={16} />
                   </Button>
+                  {(selectedType === 'goal' || selectedType === 'story') && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                      onClick={() => setShowResearch(true)}
+                      title="Open Research"
+                    >
+                      <BookOpen size={16} />
+                    </Button>
+                  )}
                   {selectedType === 'story' && (
                     <Button
                       variant="link"
@@ -955,6 +968,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       {/* Goal Chat Modal */}
       {selectedType === 'goal' && (
         <GoalChatModal goalId={(selectedItem as any).id} show={showChat} onHide={() => setShowChat(false)} />
+      )}
+
+      {/* Research Modal (goal or story) */}
+      {showResearch && (
+        <ResearchDocModal
+          show={showResearch}
+          onHide={() => setShowResearch(false)}
+          goalId={selectedType === 'goal' ? (selectedItem as any)?.id : undefined}
+          storyId={selectedType === 'story' ? (selectedItem as any)?.id : undefined}
+        />
       )}
     </>
   );
