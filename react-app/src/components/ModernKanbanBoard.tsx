@@ -93,6 +93,16 @@ const SortableStoryCard: React.FC<{
     opacity: isDragging ? 0.8 : 1,
   };
 
+  // Resolve theme label like goal cards
+  const themeLabel = (() => {
+    try {
+      if (!goal || (goal as any).theme === undefined || (goal as any).theme === null) return '';
+      const id = migrateThemeValue((goal as any).theme);
+      const t = getThemeById(Number(id));
+      return t?.label || t?.name || String((goal as any).theme);
+    } catch { return String((goal as any).theme || ''); }
+  })();
+
   return (
     <div
       ref={setNodeRef}
@@ -102,12 +112,13 @@ const SortableStoryCard: React.FC<{
     >
       <Card 
         style={{ 
-          border: `2px solid ${themeColor}`,
+          border: `1px solid ${themeColor}`,
           borderRadius: '8px',
           boxShadow: isDragging ? '0 8px 16px rgba(0,0,0,0.15)' : '0 2px 4px rgba(0,0,0,0.1)',
           cursor: 'pointer',
           transition: 'all 0.2s ease',
-          marginBottom: '12px'
+          marginBottom: '12px',
+          borderLeft: `6px solid ${themeColor}`
         }}
         // Disable opening activity on card click to preserve drag behavior
       >
@@ -193,7 +204,7 @@ const SortableStoryCard: React.FC<{
                     fontSize: '10px'
                   }}
                 >
-                  {goal.theme}
+                  {themeLabel}
                 </Badge>
               )}
             </div>
