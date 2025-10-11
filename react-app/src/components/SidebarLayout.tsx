@@ -38,130 +38,127 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
 
   const navigationGroups: NavigationGroup[] = [
-    {
-      label: 'Dashboards',
-      icon: 'chart-bar',
-      items: [
-        { label: 'Overview', path: '/dashboard', icon: 'home' },
-        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
-      ]
-    },
-    // Health
-    {
-      label: 'Health',
-      icon: 'heartbeat',
-      items: [
-        { label: 'Running Results', path: '/running-results', icon: 'running' }
-      ]
-    },
-    {
-      label: 'Goals',
-      icon: 'target',
-      items: [
-        { label: 'Goals List', path: '/goals', icon: 'list' },
-        { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'project-diagram' },
-        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
-      ]
-    },
-    {
-      label: 'Finance',
-      icon: 'piggy-bank',
-      items: [
-        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
-        { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
-        { label: 'Categories', path: '/finance/categories', icon: 'tags' },
-        { label: 'Merchants', path: '/finance/merchants', icon: 'store' }
-      ]
-    },
-    {
-      label: 'Stories',
-      icon: 'book',
-      items: [
-        { label: 'Stories List', path: '/stories', icon: 'list' },
-        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' }
-      ]
-    },
-    {
-      label: 'Backlog',
-      icon: 'clipboard-list',
-      items: [
-        { label: 'Games', path: '/games-backlog', icon: 'gamepad' }
-      ]
-    },
-    {
-      label: 'Tasks',
-      icon: 'list-check',
-      items: [
-        { label: 'Tasks List', path: '/tasks', icon: 'list' }
-      ]
-    },
-    {
-      label: 'Sprints',
-      icon: 'calendar-alt',
-      items: [
-        { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
-        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' }
-      ]
-    },
-    {
-      label: 'Calendar',
-      icon: 'calendar',
-      items: [
-        { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
-        { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
-      ]
-    },
-    {
-      label: 'Routines',
-      icon: 'check-circle',
-      items: [
-        { label: 'Routines & Chores', path: '/routines', icon: 'clipboard-check' },
-        { label: 'Daily Habits', path: '/habits', icon: 'check' },
-        { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
-        { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
-      ]
-    },
-    {
-      label: 'Travel',
-      icon: 'globe',
-      items: [
-        { label: 'Travel Map', path: '/travel', icon: 'map' }
-      ]
-    },
-    {
-      label: 'Planning & AI',
-      icon: 'cpu',
-      items: [
-        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' }
-      ]
-    },
-    // (Removed Data Management per request)
-    {
-      label: 'Settings',
-      icon: 'cog',
-      items: [
-        { label: 'Overview', path: '/settings', icon: 'sliders-h' },
-        { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
-        { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
-        { label: 'Task Cleanup', path: '/settings/task-cleanup', icon: 'broom' },
-        { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
-        { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
-        { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
-        { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
-        { label: 'Trakt', path: '/settings/integrations/trakt', icon: 'film' }
-      ]
-    },
-    {
-      label: 'Logs',
-      icon: 'stream',
-      items: [
-        { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
-        { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' }
-      ]
-    },
-    // Removed duplicate Health group at bottom
-  ];
+  {
+    label: 'Goals',
+    icon: 'target',
+    items: [
+      { label: 'Goals List', path: '/goals', icon: 'list' },
+      { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'project-diagram' },
+      { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
+    ]
+  },
+  {
+    label: 'Stories',
+    icon: 'book',
+    items: [
+      { label: 'Stories List', path: '/stories', icon: 'list' },
+      { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' }
+    ]
+  },
+  {
+    label: 'Tasks',
+    icon: 'list-check',
+    items: [
+      { label: 'Tasks List', path: '/tasks', icon: 'list' }
+    ]
+  },
+  {
+    label: 'Sprints',
+    icon: 'calendar-alt',
+    items: [
+      { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
+      { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
+      { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' }
+    ]
+  },
+  {
+    label: 'Health',
+    icon: 'heartbeat',
+    items: [
+      { label: 'Running Results', path: '/running-results', icon: 'running' }
+    ]
+  },
+  {
+    label: 'Finance',
+    icon: 'piggy-bank',
+    items: [
+      { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
+      { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
+      { label: 'Categories', path: '/finance/categories', icon: 'tags' },
+      { label: 'Merchants', path: '/finance/merchants', icon: 'store' }
+    ]
+  },
+  {
+    label: 'Dashboards',
+    icon: 'chart-bar',
+    items: [
+      { label: 'Overview', path: '/dashboard', icon: 'home' }
+    ]
+  },
+  {
+    label: 'Backlog',
+    icon: 'clipboard-list',
+    items: [
+      { label: 'Games', path: '/games-backlog', icon: 'gamepad' }
+    ]
+  },
+  {
+    label: 'Calendar',
+    icon: 'calendar',
+    items: [
+      { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
+      { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
+    ]
+  },
+  {
+    label: 'Routines',
+    icon: 'check-circle',
+    items: [
+      { label: 'Routines & Chores', path: '/routines', icon: 'clipboard-check' },
+      { label: 'Daily Habits', path: '/habits', icon: 'check' },
+      { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
+    ]
+  },
+  {
+    label: 'Travel',
+    icon: 'globe',
+    items: [
+      { label: 'Travel Map', path: '/travel', icon: 'map' }
+    ]
+  },
+  {
+    label: 'Planning & AI',
+    icon: 'cpu',
+    items: [
+      { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' }
+    ]
+  },
+  {
+    label: 'Settings',
+    icon: 'cog',
+    items: [
+      { label: 'Overview', path: '/settings', icon: 'sliders-h' },
+      { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
+      { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
+      { label: 'Diagnostics', path: '/settings/diagnostics', icon: 'stethoscope' },
+      { label: 'Task Cleanup', path: '/settings/task-cleanup', icon: 'broom' },
+      { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
+      { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
+      { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
+      { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
+      { label: 'Trakt', path: '/settings/integrations/trakt', icon: 'film' }
+    ]
+  },
+  {
+    label: 'Logs',
+    icon: 'stream',
+    items: [
+      { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
+      { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' }
+    ]
+  }
+];
+
 
   const handleNavigation = (path: string) => {
     navigate(path);

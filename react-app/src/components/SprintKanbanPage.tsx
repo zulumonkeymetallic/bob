@@ -298,6 +298,15 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
               </Dropdown>
 
               <Button
+                variant="outline-primary"
+                size="sm"
+                href="/sprints/planning"
+                style={{ padding: '6px 12px' }}
+              >
+                Open Matrix
+              </Button>
+
+              <Button
                 variant="outline-secondary"
                 size="sm"
                 onClick={handleNextSprint}

@@ -5,6 +5,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { collection, doc, getDoc, onSnapshot, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import { db } from '../../firebase';
+import { useGlobalThemes } from '../../hooks/useGlobalThemes';
+import { usePersona } from '../../contexts/PersonaContext';
 import type { Sprint, Story } from '../../types';
 import ApprovalsPanel from './ApprovalsPanel';
 
@@ -47,6 +49,9 @@ const PlanningMatrixV2: React.FC = () => {
   const [loadingInstances, setLoadingInstances] = useState<boolean>(false);
   const [breakdown, setBreakdown] = useState<'none'|'theme'|'goal'>('none');
   const [unscheduledList, setUnscheduledList] = useState<Array<{ id: string; title?: string; sourceType: 'task'|'story'; sourceId: string; day: IsoDate; reason?: string }>>([]);
+  const [includeBlocks, setIncludeBlocks] = useState<boolean>(true);
+  const [blocksByDay, setBlocksByDay] = useState<Record<IsoDate, Array<{ id: string; storyId?: string; taskId?: string; theme?: number }>>>({});
+  const [goalTitleById, setGoalTitleById] = useState<Record<string, string>>({});
 
   // Load selected sprint (or pick active if none selected)
   useEffect(() => {
@@ -213,6 +218,47 @@ const PlanningMatrixV2: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid, days.map(d => d.getTime()).join('|')]);
 
+  // Optionally include calendar_blocks during sprint window
+  useEffect(() => {
+    if (!currentUser?.uid || days.length === 0) { setBlocksByDay({}); return; }
+    const startMs = days[0].setHours(0,0,0,0);
+    const endMs = (() => { const d = new Date(days[days.length - 1]); d.setHours(23,59,59,999); return d.getTime(); })();
+    const unsub = onSnapshot(
+      query(
+        collection(db, 'calendar_blocks'),
+        where('ownerUid', '==', currentUser.uid),
+        where('start', '>=', startMs),
+        where('start', '<=', endMs),
+        orderBy('start', 'asc')
+      ),
+      (snap) => {
+        const by: Record<IsoDate, Array<{ id: string; storyId?: string; taskId?: string; theme?: number }>> = {};
+        const missingTasks = new Set<string>();
+        const missingStories = new Set<string>();
+        snap.docs.forEach(d => {
+          const b: any = d.data();
+          const dayKey = toDayKey(new Date(Number(b.start)));
+          if (!by[dayKey]) by[dayKey] = [];
+          const row = { id: d.id, storyId: b.storyId, taskId: b.taskId, theme: typeof b.theme === 'number' ? b.theme : undefined };
+          by[dayKey].push(row);
+          if (row.taskId && !(row.taskId in taskPointsById)) missingTasks.add(row.taskId);
+          if (row.storyId && !(row.storyId in storyPointsById)) missingStories.add(row.storyId);
+        });
+        setBlocksByDay(by);
+        // hydrate missing ids
+        Promise.all([
+          ...Array.from(missingTasks).map(async (id) => {
+            try { const s = await getDoc(doc(collection(db, 'tasks'), id)); if (s.exists()) { const t:any = s.data(); const pts = Number(t.points||0) || effortToPoints(t.effort); setTaskPointsById(prev => ({...prev, [id]: pts})); if (t.goalId) setTaskGoalById(prev=>({...prev, [id]: t.goalId})); if (typeof t.theme==='number') setTaskThemeById(prev=>({...prev, [id]: t.theme})); } } catch {}
+          }),
+          ...Array.from(missingStories).map(async (id) => {
+            try { const s = await getDoc(doc(collection(db, 'stories'), id)); if (s.exists()) { const st:any = s.data(); const pts = Number(st.points||0); if (pts>0) setStoryPointsById(prev=>({...prev, [id]: pts})); if (st.goalId) setStoryGoalById(prev=>({...prev, [id]: st.goalId})); if (typeof st.theme==='number') setStoryThemeById(prev=>({...prev, [id]: st.theme})); } } catch {}
+          })
+        ]).then(()=>{});
+      }
+    );
+    return () => unsub();
+  }, [currentUser?.uid, days.map(d => d.getTime()).join('|'), storyPointsById, taskPointsById]);
+
   const plannedPointsByDay = useMemo(() => {
     // Distribute points proportionally by instances per source across the range
     const result: Record<IsoDate, number> = {};
@@ -237,10 +283,17 @@ const PlanningMatrixV2: React.FC = () => {
           sum += pts > 0 ? (pts / splits) : 0;
         }
       }
+      // Include blocks if enabled (only those linked to story/task contribute points)
+      if (includeBlocks) {
+        const blocks = blocksByDay[day] || [];
+        for (const b of blocks) {
+          if (b.storyId) sum += storyPointsById[b.storyId] || 0; else if (b.taskId) sum += taskPointsById[b.taskId] || 0;
+        }
+      }
       result[day] = Math.round(sum * 10) / 10;
     }
     return result;
-  }, [instancesByDay, storyPointsById, taskPointsById]);
+  }, [instancesByDay, storyPointsById, taskPointsById, includeBlocks, blocksByDay]);
 
   const plannedPointsByDayAndTheme = useMemo(() => {
     const result: Record<IsoDate, Record<number, number>> = {};
@@ -265,11 +318,24 @@ const PlanningMatrixV2: React.FC = () => {
           if (typeof theme === 'number' && pts > 0) m[theme] = (m[theme] || 0) + (pts / splits);
         }
       }
+      if (includeBlocks) {
+        const blocks = blocksByDay[day] || [];
+        for (const b of blocks) {
+          const theme = b.theme;
+          if (b.storyId) {
+            const pts = storyPointsById[b.storyId] || 0;
+            if (theme && pts>0) m[theme] = (m[theme] || 0) + pts;
+          } else if (b.taskId) {
+            const pts = taskPointsById[b.taskId] || 0;
+            if (theme && pts>0) m[theme] = (m[theme] || 0) + pts;
+          }
+        }
+      }
       Object.keys(m).forEach((k) => { m[Number(k)] = Math.round(m[Number(k)] * 10) / 10; });
       result[day] = m;
     }
     return result;
-  }, [instancesByDay, storyPointsById, taskPointsById, storyThemeById, taskThemeById]);
+  }, [instancesByDay, storyPointsById, taskPointsById, storyThemeById, taskThemeById, includeBlocks, blocksByDay]);
 
   const plannedPointsByDayAndGoal = useMemo(() => {
     const result: Record<IsoDate, Record<string, number>> = {};
@@ -294,11 +360,42 @@ const PlanningMatrixV2: React.FC = () => {
           if (goal && pts > 0) m[goal] = (m[goal] || 0) + (pts / splits);
         }
       }
+      if (includeBlocks) {
+        const blocks = blocksByDay[day] || [];
+        for (const b of blocks) {
+          const goal = b.storyId ? storyGoalById[b.storyId] : (b.taskId ? taskGoalById[b.taskId] : undefined);
+          if (goal) {
+            const pts = b.storyId ? (storyPointsById[b.storyId] || 0) : (b.taskId ? (taskPointsById[b.taskId] || 0) : 0);
+            if (pts>0) m[goal] = (m[goal] || 0) + pts;
+          }
+        }
+      }
       Object.keys(m).forEach((k) => { m[k] = Math.round(m[k] * 10) / 10; });
       result[day] = m;
     }
     return result;
-  }, [instancesByDay, storyPointsById, taskPointsById, storyGoalById, taskGoalById]);
+  }, [instancesByDay, storyPointsById, taskPointsById, storyGoalById, taskGoalById, includeBlocks, blocksByDay]);
+
+  // Load goal titles for breakdown display
+  const { currentPersona } = usePersona();
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona));
+    const unsub = onSnapshot(q, (snap) => {
+      const map: Record<string, string> = {};
+      snap.docs.forEach(d => { const g:any = d.data(); map[d.id] = g.title || d.id; });
+      setGoalTitleById(map);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
+
+  // Theme label map
+  const { themes: globalThemes } = useGlobalThemes();
+  const themeLabelById = useMemo(() => {
+    const m = new Map<number, string>();
+    globalThemes.forEach(t => { if (typeof t.id === 'number') m.set(t.id, t.label || t.name || String(t.id)); });
+    return m;
+  }, [globalThemes]);
 
   return (
     <div className="container py-3">
@@ -325,17 +422,24 @@ const PlanningMatrixV2: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="d-flex align-items-center gap-2">
-              <Badge bg={overBy > 0 ? 'danger' : 'success'}>
-                Planned: {totalPoints} pts
-              </Badge>
-              <Badge bg="secondary">Days: {days.length || 0}</Badge>
-              <Badge bg="info">Per‑day: {capacityPerDay || 0} pts</Badge>
-              <div className="d-flex align-items-center gap-1">
-                <Button size="sm" variant={breakdown==='none'?'primary':'outline-primary'} onClick={() => setBreakdown('none')}>No Breakdown</Button>
-                <Button size="sm" variant={breakdown==='theme'?'primary':'outline-primary'} onClick={() => setBreakdown('theme')}>By Theme</Button>
-                <Button size="sm" variant={breakdown==='goal'?'primary':'outline-primary'} onClick={() => setBreakdown('goal')}>By Goal</Button>
-              </div>
+              <div className="d-flex align-items-center gap-2">
+                <Badge bg={overBy > 0 ? 'danger' : 'success'}>
+                  Planned: {totalPoints} pts
+                </Badge>
+                <Badge bg="secondary">Days: {days.length || 0}</Badge>
+                <Badge bg="info">Per‑day: {capacityPerDay || 0} pts</Badge>
+                <Form.Check
+                  type="switch"
+                  id="include-blocks-switch"
+                  label="Include Calendar Blocks"
+                  checked={includeBlocks}
+                  onChange={(e) => setIncludeBlocks(e.currentTarget.checked)}
+                />
+                <div className="d-flex align-items-center gap-1">
+                  <Button size="sm" variant={breakdown==='none'?'primary':'outline-primary'} onClick={() => setBreakdown('none')}>No Breakdown</Button>
+                  <Button size="sm" variant={breakdown==='theme'?'primary':'outline-primary'} onClick={() => setBreakdown('theme')}>By Theme</Button>
+                  <Button size="sm" variant={breakdown==='goal'?'primary':'outline-primary'} onClick={() => setBreakdown('goal')}>By Goal</Button>
+                </div>
               <Form className="d-flex align-items-center gap-1">
                 <Form.Label className="mb-0" style={{ fontSize: 12 }}>Capacity</Form.Label>
                 <Form.Control
@@ -386,7 +490,7 @@ const PlanningMatrixV2: React.FC = () => {
                           <div className="d-flex flex-column" style={{ gap: 4 }}>
                             {Object.entries(plannedPointsByDayAndTheme[dayKey] || {}).map(([themeId, pts]) => (
                               <div key={themeId} className="d-flex align-items-center justify-content-between">
-                                <span>Theme {themeId}</span>
+                                <span>{themeLabelById.get(Number(themeId)) || `Theme ${themeId}`}</span>
                                 <Badge bg="light" text="dark">{pts} pts</Badge>
                               </div>
                             ))}
@@ -396,7 +500,7 @@ const PlanningMatrixV2: React.FC = () => {
                           <div className="d-flex flex-column" style={{ gap: 4 }}>
                             {Object.entries(plannedPointsByDayAndGoal[dayKey] || {}).map(([goalId, pts]) => (
                               <div key={goalId} className="d-flex align-items-center justify-content-between">
-                                <span>Goal {goalId.slice(0,6)}…</span>
+                                <span>{goalTitleById[goalId] || `Goal ${goalId.slice(0,6)}…`}</span>
                                 <Badge bg="light" text="dark">{pts} pts</Badge>
                               </div>
                             ))}

@@ -229,6 +229,7 @@ function AppContent() {
             {/* Restore dedicated Management page */}
             <Route path="/sprints/management" element={<SprintManagementView />} />
             <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
+            <Route path="/sprints/planning" element={<PlanningMatrixV2 />} />
             <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
             

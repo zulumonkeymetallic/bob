@@ -102,6 +102,8 @@ export interface Task {
   status: number; // 0=To Do, 1=In Progress, 2=Done, 3=Blocked
   priority: number; // 1=High, 2=Medium, 3=Low
   effort: 'S' | 'M' | 'L';
+  /** Optional story-point style estimate (if present, used in Matrix v2) */
+  points?: number;
   estimateMin: number;
   estimatedHours?: number;
   startDate?: number;
