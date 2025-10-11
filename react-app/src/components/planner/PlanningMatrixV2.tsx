@@ -52,6 +52,7 @@ const PlanningMatrixV2: React.FC = () => {
   const [includeBlocks, setIncludeBlocks] = useState<boolean>(true);
   const [blocksByDay, setBlocksByDay] = useState<Record<IsoDate, Array<{ id: string; storyId?: string; taskId?: string; theme?: number }>>>({});
   const [goalTitleById, setGoalTitleById] = useState<Record<string, string>>({});
+  const [goalThemeById, setGoalThemeById] = useState<Record<string, number | undefined>>({});
   const [activeDay, setActiveDay] = useState<IsoDate | null>(null);
 
   // Theme label map and goal title map for display
@@ -62,14 +63,39 @@ const PlanningMatrixV2: React.FC = () => {
     return m;
   }, [globalThemes]);
 
+  const themeColorById = useMemo(() => {
+    const m = new Map<number, { bg: string; text: string }>();
+    // Default fallback palette
+    const fallback: Record<number, { bg: string; text: string }> = {
+      1: { bg: '#22c55e', text: '#ffffff' }, // Health
+      2: { bg: '#3b82f6', text: '#ffffff' }, // Growth
+      3: { bg: '#eab308', text: '#111827' }, // Wealth
+      4: { bg: '#8b5cf6', text: '#ffffff' }, // Tribe
+      5: { bg: '#f97316', text: '#111827' }, // Home
+    };
+    globalThemes.forEach(t => {
+      const id = (t as any).id;
+      if (typeof id === 'number') {
+        const bg = (t as any).color || (fallback[id]?.bg) || '#0ea5e9';
+        const text = (t as any).textColor || '#ffffff';
+        m.set(id, { bg, text });
+      }
+    });
+    // Ensure fallbacks present
+    Object.entries(fallback).forEach(([k,v]) => { const id = Number(k); if (!m.has(id)) m.set(id, v); });
+    return m;
+  }, [globalThemes]);
+
   const { currentPersona } = usePersona();
   useEffect(() => {
     if (!currentUser?.uid) return;
     const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona));
     const unsub = onSnapshot(q, (snap) => {
-      const map: Record<string, string> = {};
-      snap.docs.forEach(d => { const g:any = d.data(); map[d.id] = g.title || d.id; });
-      setGoalTitleById(map);
+      const titleMap: Record<string, string> = {};
+      const themeMap: Record<string, number | undefined> = {};
+      snap.docs.forEach(d => { const g:any = d.data(); titleMap[d.id] = g.title || d.id; themeMap[d.id] = typeof g.theme === 'number' ? g.theme : undefined; });
+      setGoalTitleById(titleMap);
+      setGoalThemeById(themeMap);
     });
     return () => unsub();
   }, [currentUser?.uid, currentPersona]);
@@ -560,23 +586,35 @@ const PlanningMatrixV2: React.FC = () => {
                     {breakdown !== 'none' && (
                       <div className="mt-2" style={{ fontSize: 12 }}>
                         {breakdown === 'theme' && (
-                          <div className="d-flex flex-column" style={{ gap: 4 }}>
-                            {Object.entries(plannedPointsByDayAndTheme[dayKey] || {}).map(([themeId, pts]) => (
-                              <div key={themeId} className="d-flex align-items-center justify-content-between">
-                                <span>{themeLabelById.get(Number(themeId)) || `Theme ${themeId}`}</span>
-                                <Badge bg="light" text="dark">{pts} pts</Badge>
-                              </div>
-                            ))}
+                          <div className="d-flex flex-column" style={{ gap: 6 }}>
+                            {Object.entries(plannedPointsByDayAndTheme[dayKey] || {}).map(([themeId, pts]) => {
+                              const idNum = Number(themeId);
+                              const label = themeLabelById.get(idNum) || `Theme ${themeId}`;
+                              const colors = themeColorById.get(idNum) || { bg: '#0ea5e9', text: '#ffffff' };
+                              return (
+                                <div key={themeId} className="d-flex align-items-center justify-content-between">
+                                  <span style={{ background: colors.bg, color: colors.text, borderRadius: 8, padding: '2px 8px', fontSize: 12 }}>{label}</span>
+                                  <Badge bg="light" text="dark">{pts} pts</Badge>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                         {breakdown === 'goal' && (
                           <div className="d-flex flex-column" style={{ gap: 4 }}>
-                            {Object.entries(plannedPointsByDayAndGoal[dayKey] || {}).map(([goalId, pts]) => (
-                              <div key={goalId} className="d-flex align-items-center justify-content-between">
-                                <span>{goalTitleById[goalId] || `Goal ${goalId.slice(0,6)}…`}</span>
-                                <Badge bg="light" text="dark">{pts} pts</Badge>
-                              </div>
-                            ))}
+                            {Object.entries(plannedPointsByDayAndGoal[dayKey] || {}).map(([goalId, pts]) => {
+                              const themeId = goalThemeById[goalId];
+                              const colors = (typeof themeId === 'number' && themeColorById.get(themeId)) || { bg: '#0ea5e9', text: '#ffffff' };
+                              return (
+                                <div key={goalId} className="d-flex align-items-center justify-content-between">
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ width: 10, height: 10, background: colors.bg, borderRadius: 999 }} />
+                                    <span>{goalTitleById[goalId] || `Goal ${goalId.slice(0,6)}…`}</span>
+                                  </span>
+                                  <Badge bg="light" text="dark">{pts} pts</Badge>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -632,7 +670,8 @@ const PlanningMatrixV2: React.FC = () => {
           ) : (
             <ListGroup>
               {dayDetails.map((r, idx) => (
-                <ListGroup.Item key={r.key + idx} className="d-flex align-items-center justify-content-between">
+                <ListGroup.Item key={r.key + idx} className="d-flex align-items-center justify-content-between"
+                  style={{ borderLeft: r.themeLabel ? '4px solid var(--bs-border-color)' : undefined }}>
                   <div>
                     <div className="fw-semibold" style={{ fontSize: 13 }}>{r.title}</div>
                     <div className="text-muted" style={{ fontSize: 12 }}>{r.label}{r.goal ? ` · ${r.goal}` : ''}{r.themeLabel ? ` · ${r.themeLabel}` : ''}</div>
