@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Button, Form, Spinner } from 'react-bootstrap';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { db } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
 const AssistantChatModal: React.FC<{ show: boolean; onHide: () => void }> = ({ show, onHide }) => {
@@ -10,7 +10,7 @@ const AssistantChatModal: React.FC<{ show: boolean; onHide: () => void }> = ({ s
   const [messages, setMessages] = useState<Array<{ id?: string; role: 'user'|'assistant'; content: string }>>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const functions = useMemo(() => getFunctions(), []);
+  // Use pre-configured functions for europe-west2
 
   useEffect(() => {
     if (!currentUser?.uid || !show) return;
@@ -73,4 +73,3 @@ const AssistantChatModal: React.FC<{ show: boolean; onHide: () => void }> = ({ s
 };
 
 export default AssistantChatModal;
-

@@ -4,7 +4,8 @@ import { addDays, eachDayOfInterval, format } from 'date-fns';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { collection, doc, getDoc, onSnapshot, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../../firebase';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { usePersona } from '../../contexts/PersonaContext';
 import type { Sprint, Story } from '../../types';
@@ -737,14 +738,12 @@ const PlanningMatrixV2: React.FC = () => {
             <div className="ms-auto d-flex align-items-center gap-2">
               <Button size="sm" variant="outline-secondary" onClick={async () => {
                 try {
-                  // Generate proposal for sprint window
-                  const callable = (await import('firebase/functions')).httpsCallable;
-                  const getFns = (await import('firebase/functions')).getFunctions;
-                  const fns = getFns();
+                  // Generate proposal for sprint window (europe-west2)
                   const horizonDays = Math.max(1, days.length || 1);
-                  await callable(fns, 'planCalendar')({ persona: 'personal', horizonDays });
+                  await httpsCallable(functions, 'planCalendar')({ persona: 'personal', horizonDays });
                   alert('Planner triggered. Check Approvals for proposals.');
                 } catch (e: any) {
+                  console.error('planCalendar error', e);
                   alert(e?.message || 'Failed to trigger planner');
                 }
               }}>Generate Sprint Proposal</Button>
