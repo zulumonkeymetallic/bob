@@ -605,6 +605,15 @@ const GoalRoadmapV3: React.FC = () => {
         ref={containerRef}
         className={`grv3-container ${isPanning ? 'panning' : ''}`}
         style={{ height: '72vh' }}
+        onWheel={(e) => {
+          const el = containerRef.current; if (!el) return;
+          // Shift+wheel pans horizontally; also map vertical-only wheels to horizontal to aid navigation
+          const useHorizontal = e.shiftKey || (Math.abs(e.deltaX) < Math.abs(e.deltaY));
+          if (useHorizontal) {
+            el.scrollLeft += e.deltaY;
+            e.preventDefault();
+          }
+        }}
         onMouseDown={(e) => {
           // Enable background click-and-drag panning when not starting a bar drag
           const target = e.target as HTMLElement;
