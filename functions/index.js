@@ -2684,6 +2684,23 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     createdTasks.push(tRef.id);
   }
 
+  // 3b) Optional: auto-assign to active sprint if profile flag enabled
+  try {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const flags = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    if (flags.autoAssignAiWorkToSprint === true) {
+      const sprintId = await getPreferredSprintId(uid);
+      if (sprintId) {
+        await storyRef.set({ sprintId, entry_method: 'ai_orchestration' }, { merge: true });
+        for (const taskId of createdTasks) {
+          await db.collection('tasks').doc(taskId).set({ sprintId, entry_method: 'ai_orchestration' }, { merge: true });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[orchestrateGoalPlanning] sprint auto-assign failed', e?.message || e);
+  }
+
   // Optional: create GitHub issues for Dev tasks
   const ghToken = process.env.GITHUB_TOKEN || null;
   const ghRepo = process.env.GITHUB_REPO || null; // e.g., "owner/repo"
@@ -2812,6 +2829,23 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
       updatedAt: Date.now(),
     }, { merge: true });
     createdTasks.push(tref.id);
+  }
+
+  // Auto-assign tasks (and story) to active sprint if enabled
+  try {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const flags = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    if (flags.autoAssignAiWorkToSprint === true) {
+      const sprintId = await getPreferredSprintId(uid);
+      if (sprintId) {
+        await storySnap.ref.set({ sprintId, entry_method: 'ai_story_orchestration' }, { merge: true });
+        for (const taskId of createdTasks) {
+          await db.collection('tasks').doc(taskId).set({ sprintId, entry_method: 'ai_story_orchestration' }, { merge: true });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[orchestrateStoryPlanning] sprint auto-assign failed', e?.message || e);
   }
 
   // 3) Schedule blocks with focus on the parent goal (if available)
@@ -3163,6 +3197,31 @@ async function applyCalendarBlocks(uid, persona, blocks) {
 
   await batch.commit();
   return createdCount;
+}
+
+async function getPreferredSprintId(uid) {
+  try {
+    const db = admin.firestore();
+    // Try active sprint first
+    let snap = await db.collection('sprints')
+      .where('ownerUid', '==', uid)
+      .where('status', 'in', ['active', 1])
+      .orderBy('startDate', 'desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) return snap.docs[0].id;
+    // Then planned
+    snap = await db.collection('sprints')
+      .where('ownerUid', '==', uid)
+      .where('status', 'in', ['planned', 0])
+      .orderBy('startDate', 'desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) return snap.docs[0].id;
+  } catch (e) {
+    console.warn('[getPreferredSprintId] failed', e?.message || e);
+  }
+  return null;
 }
 
 async function buildBlockPreviews(uid, blocks, { timezone = 'UTC' } = {}) {
