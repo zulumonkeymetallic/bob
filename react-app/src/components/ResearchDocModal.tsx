@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Button, Spinner, ListGroup, Badge } from 'react-bootstrap';
+import { Modal, Button, Spinner, ListGroup, Badge, Form } from 'react-bootstrap';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { db } from '../firebase';
@@ -23,6 +23,8 @@ const ResearchDocModal: React.FC<ResearchDocModalProps> = ({ show, onHide, goalI
   const [docs, setDocs] = useState<ResearchDoc[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [provider, setProvider] = useState<'gemini'|'openai'>('gemini');
+  const [model, setModel] = useState<string>('gemini-1.5-flash');
   const functions = useMemo(() => getFunctions(), []);
 
   useEffect(() => {
@@ -47,13 +49,26 @@ const ResearchDocModal: React.FC<ResearchDocModalProps> = ({ show, onHide, goalI
       setRunning(true);
       if (goalId) {
         const callable = httpsCallable(functions, 'orchestrateGoalPlanning');
-        await callable({ goalId, researchOnly: true });
+        await callable({ goalId, researchOnly: true, researchProvider: provider, researchModel: model });
       } else if (storyId) {
         const callable = httpsCallable(functions, 'orchestrateStoryPlanning');
-        await callable({ storyId, researchOnly: true });
+        await callable({ storyId, researchOnly: true, researchProvider: provider, researchModel: model });
       }
     } catch (e: any) {
       alert(e?.message || 'Failed to run research');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const generate = async () => {
+    try {
+      setRunning(true);
+      const callable = httpsCallable(functions, 'generateStoriesFromResearch');
+      await callable({ goalId, storyId, researchDocId: selectedId, generationProvider: provider, generationModel: model });
+      alert('Generated stories/tasks from research');
+    } catch (e: any) {
+      alert(e?.message || 'Failed to generate from research');
     } finally {
       setRunning(false);
     }
@@ -67,6 +82,33 @@ const ResearchDocModal: React.FC<ResearchDocModalProps> = ({ show, onHide, goalI
       <Modal.Body>
         <div className="d-flex" style={{ gap: 16, minHeight: '50vh' }}>
           <div style={{ width: 260, flexShrink: 0 }}>
+            <div className="mb-2">
+              <Form.Label>LLM Provider</Form.Label>
+              <Form.Select value={provider} onChange={(e) => {
+                const p = e.target.value as 'gemini'|'openai';
+                setProvider(p);
+                setModel(p==='gemini' ? 'gemini-1.5-flash' : 'gpt-4o-mini');
+              }}>
+                <option value="gemini">Gemini</option>
+                <option value="openai">OpenAI</option>
+              </Form.Select>
+            </div>
+            <div className="mb-2">
+              <Form.Label>Model</Form.Label>
+              <Form.Select value={model} onChange={(e) => setModel(e.target.value)}>
+                {provider === 'gemini' ? (
+                  <>
+                    <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                    <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="gpt-4o-mini">gpt-4o-mini</option>
+                    <option value="gpt-4o">gpt-4o</option>
+                  </>
+                )}
+              </Form.Select>
+            </div>
             <div className="d-flex justify-content-between align-items-center mb-2">
               <strong>Documents</strong>
               <Badge bg="secondary">{docs.length}</Badge>
@@ -101,8 +143,11 @@ const ResearchDocModal: React.FC<ResearchDocModalProps> = ({ show, onHide, goalI
       </Modal.Body>
       <Modal.Footer>
         <Button variant="secondary" onClick={onHide}>Close</Button>
-        <Button variant="primary" onClick={rerun} disabled={running || (!goalId && !storyId)}>
+        <Button variant="outline-primary" onClick={rerun} disabled={running || (!goalId && !storyId)}>
           {running ? <Spinner animation="border" size="sm" /> : 'Re-run Research'}
+        </Button>
+        <Button variant="primary" onClick={generate} disabled={running || (!goalId && !storyId) || !selectedId}>
+          {running ? <Spinner animation="border" size="sm" /> : 'Generate Stories & Tasks'}
         </Button>
       </Modal.Footer>
     </Modal>

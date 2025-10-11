@@ -805,19 +805,19 @@ const GoalRoadmapV3: React.FC = () => {
                       <div className="grv3-meta">📝 {lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote}</div>
                     )}
 
-                    {/* Hover actions under card (icon + text for clarity) */}
-                    <div className="grv3-hover-actions" onClick={(e) => e.stopPropagation()}>
+                    {/* Hover actions under card (icons only) */}
+                    <div className="grv3-hover-actions icons-only" onClick={(e) => e.stopPropagation()}>
                       <button className="icon-btn" title="Edit Goal" onClick={() => setEditGoal(g)}>
-                        <Edit3 size={14} /> Edit
+                        <Edit3 size={14} />
                       </button>
                       <button className="icon-btn" title="Generate Stories" onClick={() => handleGenerateStories(g.id)}>
-                        <Wand2 size={14} /> Stories
+                        <Wand2 size={14} />
                       </button>
                       <button className="icon-btn" title="AI Schedule Time" onClick={() => scheduleGoalAI(g)}>
-                        <CalendarIcon size={14} /> {schedulingId === g.id ? 'Planning…' : 'AI Plan'}
+                        <CalendarIcon size={14} />
                       </button>
                       <button className="icon-btn" title="Open Activity Stream" onClick={() => showSidebar(g as any, 'goal')}>
-                        <ListIcon size={14} /> Activity
+                        <ListIcon size={14} />
                       </button>
                     </div>
                   </div>

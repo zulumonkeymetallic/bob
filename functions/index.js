@@ -58,7 +58,6 @@ const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 const NYLAS_API_KEY = defineSecret('NYLAS_API_KEY');
-const GITHUB_TOKEN = defineSecret('GITHUB_TOKEN');
 
 // Scheduler utils (deterministic id + day key)
 function makePlanId(userId, date) {
@@ -1043,7 +1042,7 @@ exports.approvePlanningJob = httpsV2.onRequest({ invoker: 'public' }, async (req
 });
 
 // Optional: callable to create a tracking GitHub issue for this feature
-exports.createTrackingIssue = httpsV2.onCall({ secrets: [GITHUB_TOKEN] }, async (req) => {
+exports.createTrackingIssue = httpsV2.onCall({}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const repo = process.env.GITHUB_REPO || null; if (!repo) throw new httpsV2.HttpsError('failed-precondition', 'GITHUB_REPO not configured');
   const title = String(req?.data?.title || 'BOB: Goal Orchestration & Nightly Planning Approvals');
@@ -1067,9 +1066,178 @@ exports.createTrackingIssue = httpsV2.onCall({ secrets: [GITHUB_TOKEN] }, async 
 - Add UI badges for pending plan approvals
 - Optional: audio interface for goal chat
 `);
-  const resApi = await createGithubIssue({ token: process.env.GITHUB_TOKEN, repo, title, body });
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new httpsV2.HttpsError('failed-precondition', 'GITHUB_TOKEN not configured');
+  const resApi = await createGithubIssue({ token, repo, title, body });
   return { ok: true, issue: { number: resApi.number, url: resApi.html_url } };
 });
+
+// Diagnostics (no secrets required): report environment flags only
+exports.diagnosticsStatus = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  return {
+    hasGemini: !!process.env.GOOGLEAISTUDIOAPIKEY,
+    hasNylas: !!process.env.NYLAS_API_KEY,
+    hasOpenAI: !!process.env.OPENAI_API_KEY,
+    appBaseUrl: process.env.APP_BASE_URL || null,
+  };
+});
+
+// Diagnostics: test LLM (Gemini) round-trip
+exports.testLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const raw = await callLLMJson({ system: 'Return JSON {"ok":true}', user: 'ping', purpose: 'diagnostics', userId: uid, expectJson: true, temperature: 0 });
+  return { ok: true, model: 'gemini', response: raw.slice(0, 200) };
+});
+
+// Diagnostics: send test email via Nylas
+exports.sendTestEmail = httpsV2.onCall({ secrets: [NYLAS_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const snap = await db.collection('profiles').doc(uid).get();
+  const email = snap.exists ? (snap.data() || {}).email : null;
+  if (!email) throw new httpsV2.HttpsError('failed-precondition', 'Profile email not set');
+  await sendEmail({ to: email, subject: 'BOB · Test Email', html: '<p>This is a test email from BOB diagnostics.</p>' });
+  return { ok: true, to: email };
+});
+
+// Assistant Chat: aggregates calendar + backlog + goals to provide insights and suggested actions
+exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const message = String(req?.data?.message || '').trim();
+  const persona = String(req?.data?.persona || 'personal');
+  if (!message) throw new httpsV2.HttpsError('invalid-argument', 'message is required');
+
+  const db = ensureFirestore();
+  const horizonDays = Number(req?.data?.days || 2);
+  const context = await assemblePlanningContext(uid, persona, horizonDays);
+  context.userId = uid;
+
+  // Load stories (active/backlog, top by priority/order)
+  let stories = [];
+  try {
+    const snap = await db.collection('stories')
+      .where('ownerUid', '==', uid)
+      .where('persona', '==', persona)
+      .limit(50)
+      .get();
+    stories = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  } catch {}
+
+  // Compute proposed approvals count
+  let approvals = 0;
+  try {
+    const ps = await db.collection('planning_jobs')
+      .where('userId', '==', uid)
+      .where('status', '==', 'proposed')
+      .get();
+    approvals = ps.size;
+  } catch {}
+
+  // Build condensed context for LLM
+  const topTasks = (context.tasks || [])
+    .filter(t => ['todo', 'planned', 'in-progress', 0, 1].includes(t.status))
+    .slice(0, 20)
+    .map(t => ({ id: t.id, title: t.title, priority: t.priority, theme: t.theme || null, goalId: t.goalId || null, estimated: t.estimated_duration || null }));
+  const topGoals = (context.goals || []).slice(0, 10).map(g => ({ id: g.id, title: g.title, theme: g.theme, priority: g.priority }));
+  const todayEvents = (context.gcalEvents || []).slice(0, 20).map(e => ({ title: e.summary, start: e.start, end: e.end }));
+  const plannedBlocks = (context.existingBlocks || []).slice(0, 20);
+
+  // Persist user message
+  const threadRef = db.collection('assistant_chats').doc(uid);
+  if (isUnsafeMessage(message)) {
+    await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: 'Sorry — I can\'t assist with that request.', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    return { ok: false, reply: 'Content blocked by safety policy', insights: { priorities: [], warnings: [] }, suggested_actions: [] };
+  }
+  await threadRef.collection('messages').add({ id: undefined, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  const latestSummary = await getLatestSummary(threadRef);
+  const recent = await getRecentMessages(threadRef, 10);
+  const system = [
+    'You are BOB, a concise productivity assistant. Keep replies under 120 words.',
+    'Use the provided context to identify priorities for the next 1–2 days.',
+    'RETURN STRICT JSON ONLY with the shape:',
+    '{',
+    '  "reply": string,',
+    '  "insights": { "priorities": string[], "warnings": string[] },',
+    '  "suggested_actions": [',
+    '     { "type": "plan_today" | "open_approvals" | "create_task" | "open_goal",',
+    '       "title"?: string, "estimateMin"?: number, "goalId"?: string }',
+    '  ]',
+    '}',
+  ].join('\n');
+  const user = JSON.stringify({
+    approvals,
+    horizonDays,
+    goals: topGoals,
+    tasks: topTasks,
+    todayEvents: todayEvents.map(e => ({ title: e.title, start: e.start, end: e.end })),
+    plannedBlocks: plannedBlocks.map(b => ({ title: b.title, start: b.start, end: b.end, theme: b.theme || null })),
+    summary: latestSummary || null,
+    recent: recent.map(m => ({ role: m.role, content: m.content })),
+    note: message,
+  });
+
+  let parsed = { reply: 'OK', insights: { priorities: [], warnings: [] }, suggested_actions: [] };
+  try {
+    const raw = await callLLMJson({ system, user, purpose: 'assistantChat', userId: uid, expectJson: true, temperature: 0.2 });
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    // fallback minimal response
+  }
+
+  const reply = String(parsed?.reply || '').slice(0, 1200);
+  await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: reply, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  return {
+    ok: true,
+    reply,
+    insights: parsed?.insights || { priorities: [], warnings: [] },
+    suggested_actions: Array.isArray(parsed?.suggested_actions) ? parsed.suggested_actions.slice(0, 6) : [],
+  };
+});
+
+function isUnsafeMessage(text) {
+  const s = String(text || '').toLowerCase();
+  const banned = [/suicide/, /self\-harm/, /bomb/, /kill\b/, /abuse/, /terror/];
+  return banned.some(re => re.test(s));
+}
+
+async function getLatestSummary(threadRef) {
+  try {
+    const snap = await threadRef.collection('summaries').orderBy('createdAt', 'desc').limit(1).get();
+    if (!snap.empty) {
+      return String((snap.docs[0].data() || {}).content || '');
+    }
+  } catch {}
+  return null;
+}
+
+async function getRecentMessages(threadRef, n = 10) {
+  try {
+    const snap = await threadRef.collection('messages').orderBy('createdAt', 'desc').limit(n).get();
+    const rows = snap.docs.map(d => d.data());
+    return rows.reverse().map(r => ({ role: r.role, content: String(r.content || '').slice(0, 500) }));
+  } catch {
+    return [];
+  }
+}
+
+async function maybeSummarizeThread(threadRef, uid) {
+  try {
+    const recent = await getRecentMessages(threadRef, 40);
+    if (recent.length < 20) return; // only summarize when long enough
+    // Check last summary age
+    const latest = await threadRef.collection('summaries').orderBy('createdAt', 'desc').limit(1).get();
+    const shouldSummarize = latest.empty;
+    if (!shouldSummarize) return;
+    const convo = recent.map(m => `${m.role}: ${m.content}`).join('\n');
+    const system = 'Summarize the following conversation into 5-8 bullets capturing decisions, open questions, and next steps. Keep under 120 words.';
+    const user = convo;
+    const summary = await callLLMJson({ system, user, purpose: 'chatSummary', userId: uid, expectJson: false, temperature: 0.2 });
+    await threadRef.collection('summaries').add({ content: String(summary).slice(0, 2000), createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  } catch {}
+}
 
 // ===== OAuth: callback
 exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
@@ -2465,7 +2633,7 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
 }
 
 async function generateAIPlan(context, options = {}) {
-  const { focusGoalId, goalTimeRequest } = options;
+  const { focusGoalId, goalTimeRequest, llmProvider = 'gemini', llmModel = 'gemini-1.5-flash' } = options;
   
   let systemPrompt = `You are an AI planning assistant for BOB, a personal productivity system.
 
@@ -2558,7 +2726,9 @@ Generate a plan as JSON with:
     purpose: 'planCalendar',
     userId: context.userId,
     expectJson: true,
-    temperature: 0.3
+    temperature: 0.3,
+    provider: llmProvider,
+    model: llmModel
   });
 
   try {
@@ -2569,7 +2739,7 @@ Generate a plan as JSON with:
 }
 
 // Orchestrated Goal Planning: research → stories/tasks → schedule → (optional) GitHub issues
-exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY, GITHUB_TOKEN] }, async (req) => {
+exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '').trim();
@@ -2582,6 +2752,14 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
   const goal = goalSnap.data() || {};
   if (goal.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
 
+  // Apply LLM preferences (optional overrides)
+  const researchProvider = String(req?.data?.researchProvider || 'gemini');
+  const researchModel = String(req?.data?.researchModel || 'gemini-1.5-flash');
+  const generationProvider = String(req?.data?.generationProvider || researchProvider);
+  const generationModel = String(req?.data?.generationModel || researchModel);
+  const planningProvider = String(req?.data?.planningProvider || researchProvider);
+  const planningModel = String(req?.data?.planningModel || researchModel);
+
   // 1) Generate research package (prompt, questions, outline, next actions, doc)
   const researchPlanJson = await callLLMJson({
     system: 'You are a research planning agent. Return strict JSON only. Design a short research plan for the provided goal, including a research_prompt to dig deep, key_questions (max 5), a concise outline list, and initial_next_actions (3-7 items) each with title and estimated_minutes. Do not add prose or Markdown outside the JSON.',
@@ -2589,6 +2767,8 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     purpose: 'goalResearchPlan',
     userId: uid,
     expectJson: true,
+    provider: researchProvider,
+    model: researchModel,
   });
   let researchPlan;
   try { researchPlan = JSON.parse(researchPlanJson); } catch (e) { throw new httpsV2.HttpsError('internal', 'AI failed to produce research plan JSON'); }
@@ -2604,6 +2784,8 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     userId: uid,
     expectJson: false,
     temperature: 0.3,
+    provider: researchProvider,
+    model: researchModel,
   });
 
   // 2) Persist research doc and email it
@@ -2701,30 +2883,11 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     console.warn('[orchestrateGoalPlanning] sprint auto-assign failed', e?.message || e);
   }
 
-  // Optional: create GitHub issues for Dev tasks
-  const ghToken = process.env.GITHUB_TOKEN || null;
-  const ghRepo = process.env.GITHUB_REPO || null; // e.g., "owner/repo"
-  let ghResults = [];
-  if (ghToken && ghRepo) {
-    for (const taskId of createdTasks) {
-      const t = await db.collection('tasks').doc(taskId).get();
-      const td = t.data() || {};
-      const themeName = String(td.theme || baseTheme).toLowerCase();
-      if (themeName.includes('dev')) {
-        try {
-          const res = await createGithubIssue({ token: ghToken, repo: ghRepo, title: td.title, body: `Goal: ${goal.title}\nStory: ${storyRef.id}\nTask: ${taskId}` });
-          ghResults.push({ taskId, issueNumber: res.number });
-          await t.ref.set({ githubIssue: res.number }, { merge: true });
-        } catch (err) {
-          console.warn('[orchestrateGoalPlanning] github issue failed', err?.message || err);
-        }
-      }
-    }
-  }
+  // (GitHub issue creation disabled per configuration)
 
   // 4) Schedule into calendar/backlog via AI plan (short horizon, high score)
   const context = await assemblePlanningContext(uid, 'personal', 2);
-  const aiBlocks = await generateAIPlan(context, {});
+  const aiBlocks = await generateAIPlan(context, { llmProvider: planningProvider, llmModel: planningModel });
   const validation = await validateCalendarBlocks(aiBlocks.blocks || [], context);
   let appliedBlocks = 0;
   if (validation.errors.length === 0) {
@@ -2737,19 +2900,25 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     storyId: storyRef.id,
     tasks: createdTasks.length,
     appliedBlocks,
-    githubCreated: ghResults.length,
+    githubCreated: 0,
   });
 
-  return { ok: true, researchDocId: researchRef.id, storyId: storyRef.id, tasksCreated: createdTasks.length, appliedBlocks, github: ghResults };
+  return { ok: true, researchDocId: researchRef.id, storyId: storyRef.id, tasksCreated: createdTasks.length, appliedBlocks };
 });
 
 // Orchestrated Story Planning: (optional) brief research → tasks → schedule
-exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY, GITHUB_TOKEN] }, async (req) => {
+exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const storyId = String(req?.data?.storyId || '').trim();
   const research = req?.data?.research === true; // optional lightweight research
   const researchOnly = req?.data?.researchOnly === true; // generate/update research doc only
+  const researchProvider = String(req?.data?.researchProvider || 'gemini');
+  const researchModel = String(req?.data?.researchModel || 'gemini-1.5-flash');
+  const generationProvider = String(req?.data?.generationProvider || researchProvider);
+  const generationModel = String(req?.data?.generationModel || researchModel);
+  const planningProvider = String(req?.data?.planningProvider || researchProvider);
+  const planningModel = String(req?.data?.planningModel || researchModel);
   if (!storyId) throw new httpsV2.HttpsError('invalid-argument', 'storyId is required');
 
   const db = ensureFirestore();
@@ -2764,7 +2933,7 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
   if (research || researchOnly) {
     const systemR = 'You are an expert assistant. Compose a short research brief in Markdown (<= 500 words) for the given story with: context, assumptions, quick sources to check, and next actions (3–6 bullets).';
     const userR = `Story: ${story.title}\nDescription: ${story.description || ''}\nGoal: ${goalId || '(none)'}`;
-    const docMd = await callLLMJson({ system: systemR, user: userR, purpose: 'storyResearchDoc', userId: uid, expectJson: false, temperature: 0.3 });
+    const docMd = await callLLMJson({ system: systemR, user: userR, purpose: 'storyResearchDoc', userId: uid, expectJson: false, temperature: 0.3, provider: researchProvider, model: researchModel });
     const ref = db.collection('research_docs').doc();
     const now = admin.firestore.FieldValue.serverTimestamp();
     await ref.set({
@@ -2798,24 +2967,32 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
   const system = [
     'You are a planning assistant. Return STRICT JSON only.',
     '{',
-    '  "tasks": [{"title": string, "estimated_minutes": number, "priority": "P1"|"P2"|"P3" }],',
+    '  "tasks": [{',
+    '     "title": string,',
+    '     "estimated_minutes": number,',
+    '     "priority": "P1"|"P2"|"P3",',
+    '     "acceptance_criteria"?: string[]',
+    '  }],',
     '  "notes"?: string',
     '}',
+    'Acceptance criteria should be testable bullet points.',
   ].join('\n');
   const user = `Story: ${story.title}\nDescription: ${story.description || ''}\nTheme: ${story.theme || ''}\nGoal: ${goalId || ''}\nPlease propose 3–8 concrete tasks.`;
-  const raw = await callLLMJson({ system, user, purpose: 'storyTasks', userId: uid, expectJson: true, temperature: 0.2 });
+  const raw = await callLLMJson({ system, user, purpose: 'storyTasks', userId: uid, expectJson: true, temperature: 0.2, provider: generationProvider, model: generationModel });
   let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { tasks: [] }; }
   const tasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
 
   const createdTasks = [];
   for (const t of tasks.slice(0, 12)) {
     const tref = db.collection('tasks').doc();
+    const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x)=>String(x)).slice(0, 12) : [];
+    const desc = 'AI-generated from story orchestration' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
     await tref.set({
       id: tref.id,
       ownerUid: uid,
       persona: story.persona || 'personal',
       title: String(t?.title || 'Next step'),
-      description: 'AI-generated from story orchestration',
+      description: desc,
       storyId,
       status: 0,
       priority: (String(t?.priority || 'P2')), // safe as string; UI maps variants
@@ -2825,6 +3002,7 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
       task_type: 'task',
       theme: story.theme || 'Growth',
       goalId: goalId || null,
+      acceptanceCriteria: ac,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }, { merge: true });
@@ -2855,7 +3033,7 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
   let goalTimeRequest = 0;
   for (const t of tasks) { goalTimeRequest += Number(t?.estimated_minutes || 30); }
   if (!goalTimeRequest) goalTimeRequest = 120;
-  const aiPlan = await generateAIPlan(context, { focusGoalId: goalId || null, goalTimeRequest });
+  const aiPlan = await generateAIPlan(context, { focusGoalId: goalId || null, goalTimeRequest, llmProvider: planningProvider, llmModel: planningModel });
   const validation = await validateCalendarBlocks(aiPlan.blocks || [], context);
   let appliedBlocks = 0;
   if (validation.errors.length === 0) {
@@ -2876,16 +3054,103 @@ function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
 }
 
-async function createGithubIssue({ token, repo, title, body }) {
-  const url = `https://api.github.com/repos/${repo}/issues`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, body }),
-  });
-  if (!res.ok) throw new Error(`GitHub issue create failed: ${res.status}`);
-  return await res.json();
-}
+// (GitHub helper removed)
+
+// Generate stories/tasks from an existing research doc using a chosen model
+exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '').trim() || null;
+  const storyId = String(req?.data?.storyId || '').trim() || null;
+  const researchDocId = String(req?.data?.researchDocId || '').trim();
+  const generationProvider = String(req?.data?.generationProvider || 'gemini');
+  const generationModel = String(req?.data?.generationModel || 'gemini-1.5-flash');
+  if (!researchDocId) throw new httpsV2.HttpsError('invalid-argument', 'researchDocId required');
+
+  const db = ensureFirestore();
+  const docSnap = await db.collection('research_docs').doc(researchDocId).get();
+  if (!docSnap.exists) throw new httpsV2.HttpsError('not-found', 'Research doc not found');
+  const r = docSnap.data() || {};
+  if (r.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your doc');
+
+  const baseTitle = r.title || 'Research';
+  const brief = r.docMd || '';
+  const scope = goalId ? 'goal' : 'story';
+
+  // Ask model to derive story/tasks from the brief
+  const system = [
+    'You are a planning assistant. Return STRICT JSON only with this shape:',
+    '{',
+    '  "story": {',
+    '     "title": string,',
+    '     "description": string,',
+    '     "acceptance_criteria"?: string[]',
+    '  },',
+    '  "tasks": [',
+    '     {',
+    '       "title": string,',
+    '       "estimated_minutes": number,',
+    '       "priority": "P1"|"P2"|"P3",',
+    '       "acceptance_criteria"?: string[]',
+    '     }',
+    '  ]',
+    '}',
+    'Acceptance criteria should be testable bullet points (Given/When/Then or equivalent).',
+  ].join('\n');
+  const user = `Brief: ${brief}\nContext: ${scope.toUpperCase()} ${goalId || storyId || ''}`;
+  let parsed = { story: { title: baseTitle, description: 'Derived from research' }, tasks: [] };
+  try {
+    const raw = await callLLMJson({ system, user, purpose: 'deriveFromResearch', userId: uid, expectJson: true, temperature: 0.2, provider: generationProvider, model: generationModel });
+    parsed = JSON.parse(raw);
+  } catch {}
+
+  const persona = 'personal';
+  let newStoryId = storyId;
+  if (!newStoryId) {
+    const sref = db.collection('stories').doc();
+    await sref.set({
+      id: sref.id,
+      ownerUid: uid,
+      persona,
+      goalId: goalId || null,
+      title: parsed?.story?.title || baseTitle,
+      description: parsed?.story?.description || 'Derived from research',
+      status: 'backlog',
+      priority: 'P2',
+      theme: r.theme || 'Growth',
+      entry_method: 'ai_research_derive',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+    newStoryId = sref.id;
+  }
+
+  let created = 0;
+  for (const t of (parsed?.tasks || []).slice(0, 12)) {
+    const tref = db.collection('tasks').doc();
+    const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x) => String(x)).slice(0, 12) : [];
+    const desc = 'Derived from research' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
+    await tref.set({
+      id: tref.id,
+      ownerUid: uid,
+      persona,
+      goalId: goalId || null,
+      storyId: newStoryId,
+      title: String(t?.title || 'Next step'),
+      description: desc,
+      status: 0,
+      priority: String(t?.priority || 'P2'),
+      effort: 'S',
+      estimated_duration: Number(t?.estimated_minutes || 30),
+      entry_method: 'ai_research_derive',
+      acceptanceCriteria: ac,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+    created += 1;
+  }
+
+  return { ok: true, storyId: newStoryId, tasksCreated: created };
+});
 
 // Minimal goal chat: store message and respond with clarifying Q/A
 exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
@@ -2899,9 +3164,15 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   if (goalSnap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
 
   const threadRef = db.collection('goal_chats').doc(goalId);
+  if (isUnsafeMessage(message)) {
+    await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: 'Sorry — I can\'t assist with that request.', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    return { ok: false, reply: 'Content blocked by safety policy', tasksCreated: 0, actions: {} };
+  }
   const msgRef = threadRef.collection('messages').doc();
   await msgRef.set({ id: msgRef.id, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
 
+  const latestSummary = await getLatestSummary(threadRef);
+  const recent = await getRecentMessages(threadRef, 10);
   const system = [
     'You are a goal planning assistant. Keep answers under 120 words.',
     'Return STRICT JSON with this shape only:',
@@ -2915,7 +3186,13 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
     '  }',
     '}',
   ].join('\n');
-  const user = `Goal: ${goalSnap.data().title}\nKnown theme: ${goalSnap.data().theme || 'Growth'}\nUser: ${message}`;
+  const user = [
+    `Goal: ${goalSnap.data().title}`,
+    latestSummary ? `Conversation summary: ${latestSummary}` : null,
+    recent.length ? `Recent exchanges:\n${recent.map(m=>`${m.role}: ${m.content}`).join('\n')}` : null,
+    `Known theme: ${goalSnap.data().theme || 'Growth'}`,
+    `User: ${message}`
+  ].filter(Boolean).join('\n');
   const raw = await callLLMJson({ system, user, purpose: 'goalChat', userId: uid, expectJson: true, temperature: 0.2 });
   let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { reply: raw, suggested_tasks: [], actions: {} }; }
   const reply = String(parsed?.reply || '').slice(0, 1200);
@@ -2951,6 +3228,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
     }, { merge: true });
     created.push(taskRef.id);
   }
+  try { await maybeSummarizeThread(threadRef, uid); } catch {}
   const actions = parsed?.actions && typeof parsed.actions === 'object' ? parsed.actions : {};
   return { ok: true, reply, tasksCreated: created.length, actions };
 });
@@ -4500,12 +4778,17 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
 });
 
 // ===== LLM Provider Helpers (Gemini-only)
-async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2 }) {
+async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = 'gemini-1.5-flash' }) {
   const attempts = 3; // initial + 2 retries
   let lastErr = null;
   for (let i = 0; i < attempts; i++) {
     try {
-      const text = await callGemini({ system, user, expectJson, temperature });
+      let text;
+      if (provider === 'openai') {
+        text = await callOpenAIChat({ system, user, model, expectJson, temperature });
+      } else {
+        text = await callGemini({ system, user, model, expectJson, temperature });
+      }
       // lightweight usage log
       const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', 'gemini-1.5-flash');
       await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
@@ -4519,10 +4802,11 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
   throw lastErr || new Error('LLM unavailable');
 }
 
-async function callGemini({ system, user, expectJson, temperature }) {
+async function callGemini({ system, user, model = 'gemini-1.5-flash', expectJson, temperature }) {
   const apiKey = process.env.GOOGLEAISTUDIOAPIKEY;
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const mdl = model || 'gemini-1.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mdl)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
     contents: [{ role: 'user', parts: [{ text: `${system}\n\n${user}` }] }],
     generationConfig: Object.assign({}, expectJson ? { responseMimeType: 'application/json' } : {}, { temperature: temperature ?? 0.2 })
@@ -4533,6 +4817,27 @@ async function callGemini({ system, user, expectJson, temperature }) {
   const parts = data?.candidates?.[0]?.content?.parts || [];
   const text = parts.map(p => p.text).join('');
   if (!text) throw new Error('Empty response from Gemini');
+  return text;
+}
+
+async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson, temperature }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
+  const url = 'https://api.openai.com/v1/chat/completions';
+  const body = {
+    model,
+    temperature: temperature ?? 0.2,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    ...(expectJson ? { response_format: { type: 'json_object' } } : {}),
+  };
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content || '';
+  if (!text) throw new Error('Empty response from OpenAI');
   return text;
 }
 

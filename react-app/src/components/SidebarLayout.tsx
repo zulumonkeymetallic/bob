@@ -8,6 +8,7 @@ import VersionDisplay from './VersionDisplay';
 import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
 import CompactSprintMetrics from './CompactSprintMetrics';
+import AssistantDock from './AssistantDock';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -36,6 +37,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance', 'Settings', 'Logs']);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   const navigationGroups: NavigationGroup[] = [
     {
@@ -144,6 +146,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Overview', path: '/settings', icon: 'sliders-h' },
         { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
         { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
+        { label: 'Diagnostics', path: '/settings/diagnostics', icon: 'stethoscope' },
         { label: 'Task Cleanup', path: '/settings/task-cleanup', icon: 'broom' },
         { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
         { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
@@ -542,6 +545,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 const ApprovalsBadge = require('./planner/ApprovalsBadge').default;
                 return <ApprovalsBadge />;
               })()}
+              <Button size="sm" variant="outline-primary" onClick={() => setAssistantOpen(v => !v)}>
+                {assistantOpen ? 'Hide Assistant' : 'Assistant'}
+              </Button>
               {/* Metrics first, then selector so metrics appear to the left of the selector */}
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
               <SprintSelector
@@ -555,6 +561,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         <main className="h-100">
           {children}
         </main>
+        <AssistantDock open={assistantOpen} onClose={() => setAssistantOpen(false)} />
       </div>
     </div>
   );
