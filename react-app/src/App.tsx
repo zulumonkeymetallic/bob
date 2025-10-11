@@ -17,9 +17,12 @@ import GamesBacklog from './components/GamesBacklog';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
+import FloatingAssistantButton from './components/FloatingAssistantButton';
+import AssistantChatModal from './components/AssistantChatModal';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
 import SettingsPage from './components/SettingsPage';
+import SettingsDiagnostics from './components/settings/SettingsDiagnostics';
 import LoginPage from './components/LoginPage';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
@@ -108,6 +111,7 @@ function AppContent() {
   const deviceInfo = useDeviceInfo();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(false);
   const [forceRender, setForceRender] = useState(0);
   
   // Data for the global sidebar
@@ -282,6 +286,7 @@ function AppContent() {
             <Route path="/finance/categories" element={<CategoriesBuckets />} />
             <Route path="/finance/budgets" element={<BudgetsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/diagnostics" element={<SettingsDiagnostics />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
             <Route path="/settings/task-cleanup" element={<TaskCleanupPage />} />
@@ -298,6 +303,10 @@ function AppContent() {
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
+
+        {/* Assistant */}
+        <FloatingAssistantButton onClick={() => setShowAssistant(true)} />
+        <AssistantChatModal show={showAssistant} onHide={() => setShowAssistant(false)} />
 
         {/* Floating Action Button for quick adds */}
         <FloatingActionButton onImportClick={() => setShowImportModal(true)} />

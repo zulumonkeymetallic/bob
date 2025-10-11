@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Badge, Button, Form, Alert, Spinner, Modal, ListGroup } from 'react-bootstrap';
+import { Card, Badge, Button, Form, Alert, Spinner, Modal, ListGroup, Row, Col } from 'react-bootstrap';
 import { addDays, eachDayOfInterval, format } from 'date-fns';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSprint } from '../../contexts/SprintContext';
@@ -54,6 +54,8 @@ const PlanningMatrixV2: React.FC = () => {
   const [goalTitleById, setGoalTitleById] = useState<Record<string, string>>({});
   const [goalThemeById, setGoalThemeById] = useState<Record<string, number | undefined>>({});
   const [activeDay, setActiveDay] = useState<IsoDate | null>(null);
+  const [filterThemeId, setFilterThemeId] = useState<number | null>(null);
+  const [filterGoalId, setFilterGoalId] = useState<string | null>(null);
 
   // Theme label map and goal title map for display
   const { themes: globalThemes } = useGlobalThemes();
@@ -324,23 +326,53 @@ const PlanningMatrixV2: React.FC = () => {
         const splits = counts[key] || 1;
         if (inst.sourceType === 'story') {
           const pts = storyPointsById[inst.sourceId] || 0;
-          sum += pts > 0 ? (pts / splits) : 0;
+          if (pts > 0) {
+            const goalId = storyGoalById[inst.sourceId];
+            const theme = storyThemeById[inst.sourceId];
+            const themeOk = filterThemeId ? theme === filterThemeId : true;
+            const goalOk = filterGoalId ? goalId === filterGoalId : true;
+            if (themeOk && goalOk) sum += (pts / splits);
+          }
         } else {
           const pts = taskPointsById[inst.sourceId] || 0;
-          sum += pts > 0 ? (pts / splits) : 0;
+          if (pts > 0) {
+            const goalId = taskGoalById[inst.sourceId];
+            const theme = taskThemeById[inst.sourceId];
+            const themeOk = filterThemeId ? theme === filterThemeId : true;
+            const goalOk = filterGoalId ? goalId === filterGoalId : true;
+            if (themeOk && goalOk) sum += (pts / splits);
+          }
         }
       }
       // Include blocks if enabled (only those linked to story/task contribute points)
       if (includeBlocks) {
         const blocks = blocksByDay[day] || [];
         for (const b of blocks) {
-          if (b.storyId) sum += storyPointsById[b.storyId] || 0; else if (b.taskId) sum += taskPointsById[b.taskId] || 0;
+          if (b.storyId) {
+            const pts = storyPointsById[b.storyId] || 0;
+            if (pts>0) {
+              const goalId = storyGoalById[b.storyId];
+              const theme = storyThemeById[b.storyId];
+              const themeOk = filterThemeId ? theme === filterThemeId : true;
+              const goalOk = filterGoalId ? goalId === filterGoalId : true;
+              if (themeOk && goalOk) sum += pts;
+            }
+          } else if (b.taskId) {
+            const pts = taskPointsById[b.taskId] || 0;
+            if (pts>0) {
+              const goalId = taskGoalById[b.taskId];
+              const theme = taskThemeById[b.taskId];
+              const themeOk = filterThemeId ? theme === filterThemeId : true;
+              const goalOk = filterGoalId ? goalId === filterGoalId : true;
+              if (themeOk && goalOk) sum += pts;
+            }
+          }
         }
       }
       result[day] = Math.round(sum * 10) / 10;
     }
     return result;
-  }, [instancesByDay, storyPointsById, taskPointsById, includeBlocks, blocksByDay]);
+  }, [instancesByDay, storyPointsById, taskPointsById, includeBlocks, blocksByDay, filterThemeId, filterGoalId, storyGoalById, taskGoalById, storyThemeById, taskThemeById]);
 
   const plannedPointsByDayAndTheme = useMemo(() => {
     const result: Record<IsoDate, Record<number, number>> = {};
@@ -358,11 +390,23 @@ const PlanningMatrixV2: React.FC = () => {
         if (inst.sourceType === 'story') {
           const pts = storyPointsById[inst.sourceId] || 0;
           const theme = storyThemeById[inst.sourceId];
-          if (typeof theme === 'number' && pts > 0) m[theme] = (m[theme] || 0) + (pts / splits);
+          if (typeof theme === 'number' && pts > 0) {
+            if (!filterThemeId || theme === filterThemeId) {
+              if (!filterGoalId || storyGoalById[inst.sourceId] === filterGoalId) {
+                m[theme] = (m[theme] || 0) + (pts / splits);
+              }
+            }
+          }
         } else {
           const pts = taskPointsById[inst.sourceId] || 0;
           const theme = taskThemeById[inst.sourceId];
-          if (typeof theme === 'number' && pts > 0) m[theme] = (m[theme] || 0) + (pts / splits);
+          if (typeof theme === 'number' && pts > 0) {
+            if (!filterThemeId || theme === filterThemeId) {
+              if (!filterGoalId || taskGoalById[inst.sourceId] === filterGoalId) {
+                m[theme] = (m[theme] || 0) + (pts / splits);
+              }
+            }
+          }
         }
       }
       if (includeBlocks) {
@@ -371,10 +415,18 @@ const PlanningMatrixV2: React.FC = () => {
           const theme = b.theme;
           if (b.storyId) {
             const pts = storyPointsById[b.storyId] || 0;
-            if (theme && pts>0) m[theme] = (m[theme] || 0) + pts;
+            if (theme && pts>0) {
+              const okT = !filterThemeId || theme === filterThemeId;
+              const okG = !filterGoalId || storyGoalById[b.storyId] === filterGoalId;
+              if (okT && okG) m[theme] = (m[theme] || 0) + pts;
+            }
           } else if (b.taskId) {
             const pts = taskPointsById[b.taskId] || 0;
-            if (theme && pts>0) m[theme] = (m[theme] || 0) + pts;
+            if (theme && pts>0) {
+              const okT = !filterThemeId || theme === filterThemeId;
+              const okG = !filterGoalId || taskGoalById[b.taskId] === filterGoalId;
+              if (okT && okG) m[theme] = (m[theme] || 0) + pts;
+            }
           }
         }
       }
@@ -382,7 +434,7 @@ const PlanningMatrixV2: React.FC = () => {
       result[day] = m;
     }
     return result;
-  }, [instancesByDay, storyPointsById, taskPointsById, storyThemeById, taskThemeById, includeBlocks, blocksByDay]);
+  }, [instancesByDay, storyPointsById, taskPointsById, storyThemeById, taskThemeById, includeBlocks, blocksByDay, filterThemeId, filterGoalId, storyGoalById, taskGoalById]);
 
   const plannedPointsByDayAndGoal = useMemo(() => {
     const result: Record<IsoDate, Record<string, number>> = {};
@@ -400,11 +452,19 @@ const PlanningMatrixV2: React.FC = () => {
         if (inst.sourceType === 'story') {
           const pts = storyPointsById[inst.sourceId] || 0;
           const goal = storyGoalById[inst.sourceId];
-          if (goal && pts > 0) m[goal] = (m[goal] || 0) + (pts / splits);
+          if (goal && pts > 0) {
+            const okT = !filterThemeId || storyThemeById[inst.sourceId] === filterThemeId;
+            const okG = !filterGoalId || goal === filterGoalId;
+            if (okT && okG) m[goal] = (m[goal] || 0) + (pts / splits);
+          }
         } else {
           const pts = taskPointsById[inst.sourceId] || 0;
           const goal = taskGoalById[inst.sourceId];
-          if (goal && pts > 0) m[goal] = (m[goal] || 0) + (pts / splits);
+          if (goal && pts > 0) {
+            const okT = !filterThemeId || taskThemeById[inst.sourceId] === filterThemeId;
+            const okG = !filterGoalId || goal === filterGoalId;
+            if (okT && okG) m[goal] = (m[goal] || 0) + (pts / splits);
+          }
         }
       }
       if (includeBlocks) {
@@ -413,7 +473,11 @@ const PlanningMatrixV2: React.FC = () => {
           const goal = b.storyId ? storyGoalById[b.storyId] : (b.taskId ? taskGoalById[b.taskId] : undefined);
           if (goal) {
             const pts = b.storyId ? (storyPointsById[b.storyId] || 0) : (b.taskId ? (taskPointsById[b.taskId] || 0) : 0);
-            if (pts>0) m[goal] = (m[goal] || 0) + pts;
+            if (pts>0) {
+              const okT = !filterThemeId || (b.storyId ? storyThemeById[b.storyId] : taskThemeById[b.taskId!]) === filterThemeId;
+              const okG = !filterGoalId || goal === filterGoalId;
+              if (okT && okG) m[goal] = (m[goal] || 0) + pts;
+            }
           }
         }
       }
@@ -421,7 +485,7 @@ const PlanningMatrixV2: React.FC = () => {
       result[day] = m;
     }
     return result;
-  }, [instancesByDay, storyPointsById, taskPointsById, storyGoalById, taskGoalById, includeBlocks, blocksByDay]);
+  }, [instancesByDay, storyPointsById, taskPointsById, storyGoalById, taskGoalById, includeBlocks, blocksByDay, filterThemeId, filterGoalId, storyThemeById, taskThemeById]);
 
   // Precompute occurrence counts across sprint window for fair split in details modal
   const occurrenceCounts = useMemo(() => {
@@ -507,6 +571,40 @@ const PlanningMatrixV2: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/* Filters */}
+      <Card className="mb-3">
+        <Card.Body>
+          <Row className="g-3 align-items-end">
+            <Col md={4} sm={6} xs={12}>
+              <Form.Label>Filter by Theme</Form.Label>
+              <Form.Select value={filterThemeId ?? ''} onChange={(e) => setFilterThemeId(e.currentTarget.value ? Number(e.currentTarget.value) : null)}>
+                <option value="">All Themes</option>
+                {Array.from(new Set([...Object.values(storyThemeById).filter(Boolean) as number[], ...Object.values(taskThemeById).filter(Boolean) as number[]]))
+                  .sort((a,b)=>a-b)
+                  .map(id => (
+                    <option key={id} value={id}>{themeLabelById.get(id) || `Theme ${id}`}</option>
+                  ))}
+              </Form.Select>
+            </Col>
+            <Col md={6} sm={6} xs={12}>
+              <Form.Label>Filter by Goal</Form.Label>
+              <Form.Select value={filterGoalId ?? ''} onChange={(e) => setFilterGoalId(e.currentTarget.value || null)}>
+                <option value="">All Goals</option>
+                {stories
+                  .map(s => s.goalId)
+                  .filter((v, i, arr) => !!v && arr.indexOf(v) === i)
+                  .map(gid => (
+                    <option key={gid!} value={gid!}>{goalTitleById[gid!] || gid}</option>
+                  ))}
+              </Form.Select>
+            </Col>
+            <Col md={2} sm={12} xs={12}>
+              <Button variant="outline-secondary" onClick={() => { setFilterThemeId(null); setFilterGoalId(null); }}>Clear</Button>
+            </Col>
+          </Row>
+        </Card.Body>
+      </Card>
 
       <Card>
         <Card.Body>
