@@ -536,6 +536,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
             <div className="d-flex justify-content-end align-items-center gap-3">
+              {/* Pending approvals badge */}
+              {/* Lightweight import to avoid heavy planner deps here */}
+              {(() => {
+                const ApprovalsBadge = require('./planner/ApprovalsBadge').default;
+                return <ApprovalsBadge />;
+              })()}
               {/* Metrics first, then selector so metrics appear to the left of the selector */}
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
               <SprintSelector
