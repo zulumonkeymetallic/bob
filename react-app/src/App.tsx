@@ -9,6 +9,7 @@ import ModernKanbanPage from './components/ModernKanbanPage';
 import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import PlanningMatrixV2 from './components/planner/PlanningMatrixV2';
+import SprintPlanningMatrixGrid from './components/planner/SprintPlanningMatrixGrid';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
@@ -233,7 +234,7 @@ function AppContent() {
             {/* Restore dedicated Management page */}
             <Route path="/sprints/management" element={<SprintManagementView />} />
             <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
-            <Route path="/sprints/planning" element={<PlanningMatrixV2 />} />
+            <Route path="/sprints/planning" element={<SprintPlanningMatrixGrid />} />
             <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
             
