@@ -8,6 +8,8 @@ import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
+import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
+import ApprovalsCenter from './components/planner/ApprovalsCenter';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
@@ -16,6 +18,8 @@ import GamesBacklog from './components/GamesBacklog';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
+import FloatingAssistantButton from './components/FloatingAssistantButton';
+import AssistantChatModal from './components/AssistantChatModal';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
 import SettingsPage from './components/SettingsPage';
@@ -67,6 +71,7 @@ import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
 import SettingsPlannerPage from './components/settings/SettingsPlannerPage';
+import SettingsDiagnostics from './components/settings/SettingsDiagnostics';
 import AiDiagnosticsLogs from './components/logs/AiDiagnosticsLogs';
 import GoogleCalendarSettings from './components/settings/integrations/GoogleCalendarSettings';
 import MonzoSettings from './components/settings/integrations/MonzoSettings';
@@ -107,6 +112,7 @@ function AppContent() {
   const deviceInfo = useDeviceInfo();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(false);
   const [forceRender, setForceRender] = useState(0);
   
   // Data for the global sidebar
@@ -239,6 +245,8 @@ function AppContent() {
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />
+            <Route path="/planning/approvals" element={<ApprovalsCenter />} />
+            <Route path="/planning/approval" element={<PlanningApprovalPage />} />
             <Route path="/stories" element={<StoriesManagement />} />
             <Route path="/stories/:id" element={<DeepLinkStory />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
@@ -281,6 +289,7 @@ function AppContent() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
+            <Route path="/settings/diagnostics" element={<SettingsDiagnostics />} />
             <Route path="/settings/task-cleanup" element={<TaskCleanupPage />} />
             <Route path="/settings/integrations" element={<IntegrationSettings />} />
             <Route path="/settings/integrations/google" element={<GoogleCalendarSettings />} />
@@ -295,6 +304,10 @@ function AppContent() {
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
+
+        {/* Assistant (floating, near FAB but separate) */}
+        <FloatingAssistantButton onClick={() => setShowAssistant(true)} />
+        <AssistantChatModal show={showAssistant} onHide={() => setShowAssistant(false)} />
 
         {/* Floating Action Button for quick adds */}
         <FloatingActionButton onImportClick={() => setShowImportModal(true)} />
