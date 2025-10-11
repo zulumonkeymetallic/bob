@@ -1,14 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Badge, Button } from 'react-bootstrap';
+import { Card, Badge, Button, Form } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { collection, onSnapshot, orderBy, query, updateDoc, where, doc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import type { Goal, Sprint, Story } from '../../types';
-import { DndContext, DragEndEvent } from '@dnd-kit/core';
+import { DndContext, DragEndEvent, useDroppable } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { migrateThemeValue, getThemeById } from '../../constants/globalThemes';
+import { useSidebar } from '../../contexts/SidebarContext';
+import EditStoryModal from '../../components/EditStoryModal';
+import EditGoalModal from '../../components/EditGoalModal';
+import { functions } from '../../firebase';
+import { httpsCallable } from 'firebase/functions';
 
 type CellId = string; // `${sprintId||'backlog'}|${goalId}`
 
@@ -19,6 +24,12 @@ const SprintPlanningMatrixGrid: React.FC = () => {
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
+  const [editStory, setEditStory] = useState<Story | null>(null);
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [filterThemeId, setFilterThemeId] = useState<number | ''>('');
+  const [filterGoalId, setFilterGoalId] = useState<string | ''>('');
+  const [planningMsg, setPlanningMsg] = useState<string | null>(null);
+  const { showSidebar } = useSidebar();
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -38,7 +49,10 @@ const SprintPlanningMatrixGrid: React.FC = () => {
   }, [currentUser?.uid, currentPersona]);
 
   const columns = useMemo(() => [{ id: 'backlog', name: 'Backlog' }, ...sprints.map(s => ({ id: s.id, name: s.name || s.id }))], [sprints]);
-  const goalsSorted = useMemo(() => [...goals].sort((a,b) => (a.orderIndex??0) - (b.orderIndex??0)), [goals]);
+  const goalsSorted = useMemo(() => {
+    const sorted = [...goals].sort((a,b) => (a.orderIndex??0) - (b.orderIndex??0));
+    return sorted.filter(g => (filterThemeId ? migrateThemeValue((g as any).theme) === filterThemeId : true) && (filterGoalId ? g.id === filterGoalId : true));
+  }, [goals, filterThemeId, filterGoalId]);
 
   const cellId = (sprintId: string | null, goalId: string): CellId => `${sprintId || 'backlog'}|${goalId}`;
 
@@ -51,6 +65,10 @@ const SprintPlanningMatrixGrid: React.FC = () => {
       const sid = (st as any).sprintId || null;
       const gid = (st as any).goalId || null;
       if (!gid) continue; // only show stories linked to a goal
+      // Apply filters to stories
+      const th = (goals.find(x => x.id === gid) as any)?.theme;
+      if (filterThemeId && migrateThemeValue(th) !== filterThemeId) continue;
+      if (filterGoalId && gid !== filterGoalId) continue;
       const id = cellId(sid, gid);
       if (!map.has(id)) map.set(id, []);
       map.get(id)!.push(st);
@@ -93,20 +111,51 @@ const SprintPlanningMatrixGrid: React.FC = () => {
     }
   };
 
+  const themeOptions = useMemo(() => {
+    const ids = new Set<number>();
+    goals.forEach(g => { const id = migrateThemeValue((g as any).theme); if (id) ids.add(id); });
+    return Array.from(ids).sort((a,b)=>a-b).map(id => ({ id, label: getThemeById(Number(id)).label || getThemeById(Number(id)).name || String(id) }));
+  }, [goals]);
+
+  const planSprintWindow = async () => {
+    try {
+      setPlanningMsg(null);
+      await httpsCallable(functions, 'planCalendar')({ persona: 'personal', horizonDays: 14 });
+      setPlanningMsg('Planner triggered. Check Approvals to apply.');
+    } catch (e: any) {
+      console.error('planCalendar error', e);
+      setPlanningMsg(e?.message || 'Failed to trigger planner');
+    }
+  };
+
   return (
     <div className="container-fluid py-3">
       <div className="d-flex align-items-center justify-content-between mb-3">
         <h1 className="h5 mb-0">Sprint Planning Matrix</h1>
-        <div className="text-muted" style={{ fontSize: 12 }}>Drag stories across sprints and goals</div>
+        <div className="d-flex align-items-center gap-2">
+          <Form.Select value={filterThemeId} onChange={(e) => setFilterThemeId(e.currentTarget.value ? Number(e.currentTarget.value) : '')} size="sm" style={{ width: 200 }}>
+            <option value="">All Themes</option>
+            {themeOptions.map(t => (
+              <option key={t.id} value={t.id}>{t.label}</option>
+            ))}
+          </Form.Select>
+          <Form.Select value={filterGoalId} onChange={(e) => setFilterGoalId(e.currentTarget.value)} size="sm" style={{ width: 240 }}>
+            <option value="">All Goals</option>
+            {goals.map(g => (<option key={g.id} value={g.id}>{g.title}</option>))}
+          </Form.Select>
+          <Button size="sm" variant="outline-secondary" onClick={() => { setFilterThemeId(''); setFilterGoalId(''); }}>Clear</Button>
+          <Button size="sm" variant="outline-primary" onClick={planSprintWindow}>Generate Sprint Proposal</Button>
+        </div>
       </div>
+      {planningMsg && <div className="mb-2"><Badge bg="info">{planningMsg}</Badge></div>}
 
       <div className="mb-2" style={{ overflowX: 'auto' }}>
-        <table className="table table-sm" style={{ minWidth: Math.max(860, columns.length * 260) }}>
-          <thead>
+        <table className="table table-sm" style={{ minWidth: Math.max(860, columns.length * 260), position: 'relative' }}>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 5, background: 'var(--bs-body-bg)' }}>
             <tr>
-              <th style={{ width: 260 }}>Goal</th>
+              <th style={{ width: 260, position: 'sticky', left: 0, zIndex: 6, background: 'var(--bs-body-bg)', borderRight: '1px solid var(--bs-border-color)' }}>Goal</th>
               {columns.map((c) => (
-                <th key={c.id} style={{ minWidth: 240 }}>{c.name}</th>
+                <th key={c.id} style={{ minWidth: 240, background: 'var(--bs-body-bg)', borderBottom: '1px solid var(--bs-border-color)' }}>{c.name}</th>
               ))}
             </tr>
           </thead>
@@ -116,10 +165,11 @@ const SprintPlanningMatrixGrid: React.FC = () => {
                 const themeCol = themeColorForGoal(g);
                 return (
                   <tr key={g.id}>
-                    <td style={{ verticalAlign: 'top' }}>
+                    <td style={{ verticalAlign: 'top', position: 'sticky', left: 0, zIndex: 4, background: 'var(--bs-body-bg)', borderRight: '1px solid var(--bs-border-color)' }}>
                       <div className="d-flex align-items-center gap-2">
                         <span style={{ width: 10, height: 10, borderRadius: 999, background: themeCol }} />
                         <strong>{g.title}</strong>
+                        <Button size="sm" variant="link" style={{ padding: 0 }} onClick={() => setEditGoal(g)}>Edit</Button>
                       </div>
                     </td>
                     {columns.map((c) => {
@@ -127,17 +177,13 @@ const SprintPlanningMatrixGrid: React.FC = () => {
                       const items = byCell.get(cell) || [];
                       return (
                         <td key={c.id} style={{ verticalAlign: 'top' }}>
-                          <div
-                            id={`cell-${cell}`}
-                            data-droppable
-                            style={{ minHeight: 120, border: '1px dashed var(--bs-border-color)', borderRadius: 8, padding: 8 }}
-                          >
+                          <DroppableCell id={`cell:${cell}`}>
                             <SortableContext items={items.map(s => `story:${s.id}`)} strategy={verticalListSortingStrategy}>
                               {items.map((s) => (
-                                <StoryCard key={s.id} story={s} goal={g} />
+                                <StoryCard key={s.id} story={s} goal={g} onEdit={() => setEditStory(s)} onActivity={() => showSidebar(s as any, 'story')} />
                               ))}
                             </SortableContext>
-                          </div>
+                          </DroppableCell>
                         </td>
                       );
                     })}
@@ -148,11 +194,19 @@ const SprintPlanningMatrixGrid: React.FC = () => {
           </DndContext>
         </table>
       </div>
+
+      {/* Edit modals */}
+      {editStory && (
+        <EditStoryModal show={!!editStory} onHide={() => setEditStory(null)} story={editStory as any} goals={goals} onStoryUpdated={() => setEditStory(null)} />
+      )}
+      {editGoal && (
+        <EditGoalModal show={!!editGoal} onClose={() => setEditGoal(null)} goal={editGoal as any} currentUserId={currentUser?.uid || ''} />
+      )}
     </div>
   );
 };
 
-const StoryCard: React.FC<{ story: Story; goal: Goal }> = ({ story, goal }) => {
+const StoryCard: React.FC<{ story: Story; goal: Goal; onEdit: () => void; onActivity: () => void }> = ({ story, goal, onEdit, onActivity }) => {
   const {
     attributes,
     listeners,
@@ -176,7 +230,11 @@ const StoryCard: React.FC<{ story: Story; goal: Goal }> = ({ story, goal }) => {
         <Card.Body style={{ padding: 10 }}>
           <div className="d-flex align-items-center justify-content-between">
             <div style={{ fontWeight: 600, fontSize: 13 }}>{(story as any).title}</div>
-            <Badge bg="light" text="dark" style={{ fontSize: 10 }}>{(story as any).points || 0} pts</Badge>
+            <div className="d-flex align-items-center gap-2">
+              <Badge bg="light" text="dark" style={{ fontSize: 10 }}>{(story as any).points || 0} pts</Badge>
+              <Button size="sm" variant="link" style={{ padding: 0 }} onClick={onActivity} title="Activity">🛈</Button>
+              <Button size="sm" variant="link" style={{ padding: 0 }} onClick={onEdit} title="Edit">✎</Button>
+            </div>
           </div>
           {(story as any).description && <div className="text-muted" style={{ fontSize: 11 }}>{String((story as any).description).slice(0, 80)}</div>}
         </Card.Body>
@@ -185,5 +243,13 @@ const StoryCard: React.FC<{ story: Story; goal: Goal }> = ({ story, goal }) => {
   );
 };
 
-export default SprintPlanningMatrixGrid;
+const DroppableCell: React.FC<{ id: string; children: React.ReactNode }> = ({ id, children }) => {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div ref={setNodeRef} style={{ minHeight: 120, border: `1px dashed ${isOver ? 'var(--bs-primary)' : 'var(--bs-border-color)'}`, borderRadius: 8, padding: 8, background: isOver ? 'rgba(13,110,253,0.04)' : undefined }}>
+      {children}
+    </div>
+  );
+};
 
+export default SprintPlanningMatrixGrid;
