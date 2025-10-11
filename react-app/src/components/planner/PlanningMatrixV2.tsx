@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Badge, Button, Form, Alert, Spinner } from 'react-bootstrap';
+import { Card, Badge, Button, Form, Alert, Spinner, Modal, ListGroup } from 'react-bootstrap';
 import { addDays, eachDayOfInterval, format } from 'date-fns';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSprint } from '../../contexts/SprintContext';
@@ -52,6 +52,27 @@ const PlanningMatrixV2: React.FC = () => {
   const [includeBlocks, setIncludeBlocks] = useState<boolean>(true);
   const [blocksByDay, setBlocksByDay] = useState<Record<IsoDate, Array<{ id: string; storyId?: string; taskId?: string; theme?: number }>>>({});
   const [goalTitleById, setGoalTitleById] = useState<Record<string, string>>({});
+  const [activeDay, setActiveDay] = useState<IsoDate | null>(null);
+
+  // Theme label map and goal title map for display
+  const { themes: globalThemes } = useGlobalThemes();
+  const themeLabelById = useMemo(() => {
+    const m = new Map<number, string>();
+    globalThemes.forEach(t => { if (typeof t.id === 'number') m.set(t.id, t.label || t.name || String(t.id)); });
+    return m;
+  }, [globalThemes]);
+
+  const { currentPersona } = usePersona();
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona));
+    const unsub = onSnapshot(q, (snap) => {
+      const map: Record<string, string> = {};
+      snap.docs.forEach(d => { const g:any = d.data(); map[d.id] = g.title || d.id; });
+      setGoalTitleById(map);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
 
   // Load selected sprint (or pick active if none selected)
   useEffect(() => {
@@ -376,26 +397,77 @@ const PlanningMatrixV2: React.FC = () => {
     return result;
   }, [instancesByDay, storyPointsById, taskPointsById, storyGoalById, taskGoalById, includeBlocks, blocksByDay]);
 
-  // Load goal titles for breakdown display
-  const { currentPersona } = usePersona();
-  useEffect(() => {
-    if (!currentUser?.uid) return;
-    const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona));
-    const unsub = onSnapshot(q, (snap) => {
-      const map: Record<string, string> = {};
-      snap.docs.forEach(d => { const g:any = d.data(); map[d.id] = g.title || d.id; });
-      setGoalTitleById(map);
-    });
-    return () => unsub();
-  }, [currentUser?.uid, currentPersona]);
+  // Precompute occurrence counts across sprint window for fair split in details modal
+  const occurrenceCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const list of Object.values(instancesByDay)) {
+      for (const inst of list) {
+        const key = `${inst.sourceType}:${inst.sourceId}`;
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [instancesByDay]);
 
-  // Theme label map
-  const { themes: globalThemes } = useGlobalThemes();
-  const themeLabelById = useMemo(() => {
-    const m = new Map<number, string>();
-    globalThemes.forEach(t => { if (typeof t.id === 'number') m.set(t.id, t.label || t.name || String(t.id)); });
-    return m;
-  }, [globalThemes]);
+  const dayDetails = useMemo(() => {
+    if (!activeDay) return [] as Array<{ key: string; label: string; title: string; pts: number; goal?: string; themeLabel?: string; href?: string }>;
+    const rows: Array<{ key: string; label: string; title: string; pts: number; goal?: string; themeLabel?: string; href?: string }> = [];
+    const list = instancesByDay[activeDay] || [];
+    for (const inst of list) {
+      const key = `${inst.sourceType}:${inst.sourceId}`;
+      const splits = occurrenceCounts[key] || 1;
+      let pts = 0;
+      let title = inst.sourceId;
+      let goal: string | undefined;
+      let themeLabel: string | undefined;
+      if (inst.sourceType === 'story') {
+        pts = (storyPointsById[inst.sourceId] || 0) / splits;
+        const story = stories.find(s => s.id === inst.sourceId) as any;
+        if (story) {
+          title = story.title || title;
+          if (story.goalId) goal = goalTitleById[story.goalId] || story.goalId;
+          if (typeof story.theme === 'number') themeLabel = themeLabelById.get(story.theme) || String(story.theme);
+        }
+      } else {
+        pts = (taskPointsById[inst.sourceId] || 0) / splits;
+        // lazy load task title omitted; keep id
+        const goalId = taskGoalById[inst.sourceId];
+        if (goalId) goal = goalTitleById[goalId] || goalId;
+        const th = taskThemeById[inst.sourceId];
+        if (typeof th === 'number') themeLabel = themeLabelById.get(th) || String(th);
+      }
+      rows.push({ key, label: inst.sourceType === 'story' ? 'Story' : 'Task', title, pts: Math.round(pts * 10) / 10, goal, themeLabel, href: inst.sourceType === 'story' ? `/stories/${inst.sourceId}` : undefined });
+    }
+    if (includeBlocks) {
+      const blocks = blocksByDay[activeDay] || [];
+      for (const b of blocks) {
+        let pts = 0;
+        let title = b.storyId || b.taskId || b.id;
+        let goal: string | undefined;
+        let themeLabel: string | undefined;
+        if (b.storyId) {
+          pts = storyPointsById[b.storyId] || 0;
+          const story = stories.find(s => s.id === b.storyId) as any;
+          if (story) {
+            title = story.title || title;
+            if (story.goalId) goal = goalTitleById[story.goalId] || story.goalId;
+            if (typeof story.theme === 'number') themeLabel = themeLabelById.get(story.theme) || String(story.theme);
+          }
+          rows.push({ key: `block:story:${b.storyId}`, label: 'Block', title, pts, goal, themeLabel, href: `/stories/${b.storyId}` });
+        } else if (b.taskId) {
+          pts = taskPointsById[b.taskId] || 0;
+          const gid = taskGoalById[b.taskId];
+          if (gid) goal = goalTitleById[gid] || gid;
+          const th = taskThemeById[b.taskId];
+          if (typeof th === 'number') themeLabel = themeLabelById.get(th) || String(th);
+          rows.push({ key: `block:task:${b.taskId}`, label: 'Block', title, pts, goal, themeLabel });
+        }
+      }
+    }
+    return rows.sort((a,b) => b.pts - a.pts);
+  }, [activeDay, instancesByDay, blocksByDay, includeBlocks, occurrenceCounts, storyPointsById, taskPointsById, stories, goalTitleById, themeLabelById, taskGoalById, taskThemeById]);
+
+  
 
   return (
     <div className="container py-3">
@@ -473,13 +545,14 @@ const PlanningMatrixV2: React.FC = () => {
               const dayKey = toDayKey(d);
               const planned = plannedPointsByDay[dayKey] || 0;
               const warn = capacityPerDay > 0 && planned > capacityPerDay;
+              const colStyle: React.CSSProperties = warn ? { background: 'rgba(220,53,69,0.06)', borderRadius: 6, padding: 4 } : {};
               return (
-              <div key={d.toISOString()} style={{ minWidth: 140 }}>
+              <div key={d.toISOString()} style={{ minWidth: 140, ...colStyle }}>
                 <div className="mb-2" style={{ fontWeight: 600 }}>
                   {format(d, 'EEE dd MMM')}
                 </div>
                 <Card className="mb-2">
-                  <Card.Body className="p-2">
+                  <Card.Body className="p-2" style={{ cursor: 'pointer' }} onClick={() => setActiveDay(dayKey)}>
                     <div className="d-flex align-items-center justify-content-between">
                       <span className="text-muted" style={{ fontSize: 12 }}>Planned</span>
                       <Badge bg={warn ? 'danger' : 'secondary'}>{planned} pts</Badge>
@@ -547,6 +620,39 @@ const PlanningMatrixV2: React.FC = () => {
 
       {/* Approvals panel */}
       <ApprovalsPanel />
+
+      {/* Day details modal */}
+      <Modal show={!!activeDay} onHide={() => setActiveDay(null)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Planned on {activeDay}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {dayDetails.length === 0 ? (
+            <div className="text-muted" style={{ fontSize: 13 }}>No planned items for this day.</div>
+          ) : (
+            <ListGroup>
+              {dayDetails.map((r, idx) => (
+                <ListGroup.Item key={r.key + idx} className="d-flex align-items-center justify-content-between">
+                  <div>
+                    <div className="fw-semibold" style={{ fontSize: 13 }}>{r.title}</div>
+                    <div className="text-muted" style={{ fontSize: 12 }}>{r.label}{r.goal ? ` · ${r.goal}` : ''}{r.themeLabel ? ` · ${r.themeLabel}` : ''}</div>
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Badge bg="light" text="dark">{r.pts} pts</Badge>
+                    {r.href && (
+                      <Button size="sm" variant="outline-secondary" onClick={() => window.location.assign(r.href!)}>Open</Button>
+                    )}
+                  </div>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setActiveDay(null)}>Close</Button>
+          <Button variant="primary" onClick={() => window.location.assign('/calendar')}>Open Planner</Button>
+        </Modal.Footer>
+      </Modal>
 
       {/* Quick Points Editor for stories missing points */}
       <Card className="mt-3">
