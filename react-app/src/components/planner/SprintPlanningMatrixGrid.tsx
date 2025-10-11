@@ -24,6 +24,7 @@ const SprintPlanningMatrixGrid: React.FC = () => {
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
+  const [capacityBySprint, setCapacityBySprint] = useState<Record<string, number>>({});
   const [editStory, setEditStory] = useState<Story | null>(null);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [filterThemeId, setFilterThemeId] = useState<number | ''>('');
@@ -45,7 +46,15 @@ const SprintPlanningMatrixGrid: React.FC = () => {
       query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona)),
       (snap) => setStories(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[])
     );
-    return () => { unsubSprints(); unsubGoals(); unsubStories(); };
+    const unsubCaps = onSnapshot(
+      query(collection(db, 'sprint_capacity'), where('ownerUid', '==', currentUser.uid)),
+      (snap) => {
+        const map: Record<string, number> = {};
+        snap.docs.forEach(d => { const v = d.data() as any; if (v && v.sprintId) map[v.sprintId] = Number(v.pointsCapacity || 0) || 0; });
+        setCapacityBySprint(map);
+      }
+    );
+    return () => { unsubSprints(); unsubGoals(); unsubStories(); unsubCaps(); };
   }, [currentUser?.uid, currentPersona]);
 
   const columns = useMemo(() => [{ id: 'backlog', name: 'Backlog' }, ...sprints.map(s => ({ id: s.id, name: s.name || s.id }))], [sprints]);
@@ -128,6 +137,42 @@ const SprintPlanningMatrixGrid: React.FC = () => {
     }
   };
 
+  const autoAssignByCapacity = async () => {
+    try {
+      // compute current used points per sprint
+      const used: Record<string, number> = {};
+      stories.forEach((s:any) => {
+        const sid = s.sprintId; const pts = Number(s.points || 0) || 0;
+        if (sid) used[sid] = (used[sid] || 0) + pts;
+      });
+      // backlog stories (no sprint), sorted by priority then points desc
+      const backlog = stories
+        .filter((s:any) => !s.sprintId)
+        .sort((a:any,b:any) => (Number(a.priority||3) - Number(b.priority||3)) || (Number(b.points||0) - Number(a.points||0)));
+      // iterate sprints by start date order
+      const sprintIds = sprints.map(s => s.id);
+      const batch: Array<Promise<any>> = [];
+      backlog.forEach((s:any) => {
+        const pts = Number(s.points || 0) || 0;
+        for (const sid of sprintIds) {
+          const cap = capacityBySprint[sid] || 0;
+          const curr = used[sid] || 0;
+          if (cap === 0) continue; // skip sprints without set capacity
+          if (curr + pts <= cap) {
+            used[sid] = curr + pts;
+            batch.push(updateDoc(doc(db, 'stories', s.id), { sprintId: sid, updatedAt: Date.now() }));
+            break;
+          }
+        }
+      });
+      await Promise.all(batch);
+      setPlanningMsg('Auto-assigned stories to sprints up to capacity.');
+    } catch (e:any) {
+      console.error('autoAssignByCapacity error', e);
+      setPlanningMsg(e?.message || 'Auto-assign failed');
+    }
+  };
+
   return (
     <div className="container-fluid py-3">
       <div className="d-flex align-items-center justify-content-between mb-3">
@@ -145,6 +190,7 @@ const SprintPlanningMatrixGrid: React.FC = () => {
           </Form.Select>
           <Button size="sm" variant="outline-secondary" onClick={() => { setFilterThemeId(''); setFilterGoalId(''); }}>Clear</Button>
           <Button size="sm" variant="outline-primary" onClick={planSprintWindow}>Generate Sprint Proposal</Button>
+          <Button size="sm" variant="primary" onClick={autoAssignByCapacity}>Auto-Assign by Capacity</Button>
         </div>
       </div>
       {planningMsg && <div className="mb-2"><Badge bg="info">{planningMsg}</Badge></div>}
