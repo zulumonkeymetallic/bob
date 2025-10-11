@@ -20,7 +20,7 @@ interface PlanningPreviewResponse {
   jobId: string;
   timezone: string;
   proposedCount: number;
-  validator?: { score?: number } | null;
+  validator?: { score?: number; errors?: string[]; warnings?: string[]; blockAnnotations?: Array<{ errors?: string[]; warnings?: string[] }> } | null;
   preview?: {
     timezone?: string;
     blocks?: BlockPreview[];
@@ -108,6 +108,7 @@ const PlanningApprovalPage: React.FC = () => {
   }, [fetchPreview]);
 
   const blocks = useMemo(() => job?.preview?.blocks || [], [job]);
+  const blockAnn = useMemo(() => job?.validator?.blockAnnotations || [], [job]);
   const uniqueGoals = useMemo(() => {
     const map = new Map<string, { title: string; deepLink?: string | null }>();
     for (const block of blocks) {
@@ -179,6 +180,12 @@ const PlanningApprovalPage: React.FC = () => {
                       {typeof job.validator?.score === 'number' && (
                         <> · Validation score: {job.validator.score.toFixed(2)}</>
                       )}
+                      {(Array.isArray(job.validator?.errors) && job.validator!.errors!.length > 0) && (
+                        <> · Errors: {job.validator!.errors!.length}</>
+                      )}
+                      {(Array.isArray(job.validator?.warnings) && job.validator!.warnings!.length > 0) && (
+                        <> · Warnings: {job.validator!.warnings!.length}</>
+                      )}
                     </div>
                   </div>
                   <div className="d-flex gap-2">
@@ -201,6 +208,21 @@ const PlanningApprovalPage: React.FC = () => {
                 </div>
               </Card.Body>
             </Card>
+
+            {(job.validator?.errors?.length || job.validator?.warnings?.length) ? (
+              <Card className="mb-3">
+                <Card.Body>
+                  <h6 className="mb-2">Validation Notes</h6>
+                  {job.validator?.errors?.length ? (
+                    <div className="mb-1" style={{ color: '#b91c1c' }}>Errors: {job.validator.errors.length}</div>
+                  ) : null}
+                  {job.validator?.warnings?.length ? (
+                    <div className="mb-2" style={{ color: '#92400e' }}>Warnings: {job.validator.warnings.length}</div>
+                  ) : null}
+                  <div className="text-muted" style={{ fontSize: 12 }}>Issues are also indicated per block below.</div>
+                </Card.Body>
+              </Card>
+            ) : null}
 
             {uniqueGoals.length > 0 && (
               <Card className="mb-3">
@@ -254,11 +276,16 @@ const PlanningApprovalPage: React.FC = () => {
                         <th style={{ minWidth: 220 }}>When</th>
                         <th>Title</th>
                         <th>Theme</th>
+                        <th>Issues</th>
                         <th>Links</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {blocks.map((block, idx) => (
+                      {blocks.map((block, idx) => {
+                        const ann = blockAnn?.[idx] || {};
+                        const eCount = Array.isArray(ann.errors) ? ann.errors.length : 0;
+                        const wCount = Array.isArray(ann.warnings) ? ann.warnings.length : 0;
+                        return (
                         <tr key={idx}>
                           <td>
                             <div>{block.displayStart || '—'}</div>
@@ -291,6 +318,11 @@ const PlanningApprovalPage: React.FC = () => {
                             {block.theme ? <Badge bg="info">{block.theme}</Badge> : <span className="text-muted">—</span>}
                           </td>
                           <td>
+                            {eCount === 0 && wCount === 0 && <span className="text-muted">—</span>}
+                            {eCount > 0 && <Badge bg="danger" className="me-1">{eCount} error{eCount>1?'s':''}</Badge>}
+                            {wCount > 0 && <Badge bg="warning" text="dark">{wCount} warn</Badge>}
+                          </td>
+                          <td>
                             {block.deepLink ? (
                               <a href={block.deepLink} target="_blank" rel="noreferrer">
                                 Open
@@ -300,7 +332,8 @@ const PlanningApprovalPage: React.FC = () => {
                             )}
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </Table>
                 )}

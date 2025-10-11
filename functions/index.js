@@ -2924,50 +2924,60 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
 async function validateCalendarBlocks(blocks, context) {
   const errors = [];
   const warnings = [];
+  const blockAnnotations = (blocks || []).map(() => ({ errors: [], warnings: [] }));
   let score = 1.0;
-  
-  // Check for conflicts with existing events
-  for (const block of blocks) {
-    // Check Google Calendar conflicts
+
+  for (let i = 0; i < (blocks || []).length; i++) {
+    const block = blocks[i];
+    if (!block) continue;
+    // Conflicts with Google Calendar events
     for (const event of context.gcalEvents) {
       if (isTimeOverlap(block.start, block.end, event.start.getTime(), event.end.getTime())) {
-        errors.push(`Block conflicts with Google Calendar event: ${event.summary}`);
+        const msg = `Block conflicts with Google Calendar event: ${event.summary}`;
+        errors.push(msg);
+        blockAnnotations[i].errors.push(msg);
         score -= 0.2;
       }
     }
-    
-    // Check existing blocks
+
+    // Conflicts with existing AI calendar blocks
     for (const existing of context.existingBlocks) {
       if (isTimeOverlap(block.start, block.end, existing.start, existing.end)) {
-        errors.push(`Block conflicts with existing calendar block`);
+        const msg = `Block conflicts with existing calendar block`;
+        errors.push(msg);
+        blockAnnotations[i].errors.push(msg);
         score -= 0.1;
       }
     }
-    
-    // Check time constraints
+
+    // Time constraints: wake/sleep
     const blockDate = new Date(block.start);
     const hour = blockDate.getHours();
     const minute = blockDate.getMinutes();
     const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-    
+
     const wakeTime = context.prefs.wakeTime || '07:00';
     const sleepTime = context.prefs.sleepTime || '23:00';
-    
+
     if (timeStr < wakeTime || timeStr > sleepTime) {
-      errors.push(`Block outside wake/sleep hours: ${timeStr}`);
+      const msg = `Outside wake/sleep hours: ${timeStr}`;
+      errors.push(`Block ${msg}`);
+      blockAnnotations[i].errors.push(msg);
       score -= 0.1;
     }
-    
-    // Check quiet hours
+
+    // Quiet hours warnings
     for (const quietPeriod of context.prefs.quietHours || []) {
       if (timeStr >= quietPeriod.start && timeStr <= quietPeriod.end) {
-        warnings.push(`Block during quiet hours: ${timeStr}`);
+        const msg = `During quiet hours: ${timeStr}`;
+        warnings.push(`Block ${msg}`);
+        blockAnnotations[i].warnings.push(msg);
         score -= 0.05;
       }
     }
   }
-  
-  return { errors, warnings, score: Math.max(0, score) };
+
+  return { errors, warnings, score: Math.max(0, score), blockAnnotations };
 }
 
 // Map numeric theme to canonical label
