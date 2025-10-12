@@ -25,6 +25,7 @@ const DAY_MS = 86400000;
 const YEAR_MS = DAY_MS * 365.25;
 const AXIS_ROW_HEIGHT = 28;
 const TRACK_VERTICAL_PADDING = 28;
+const AXIS_GAP_PX = 12;
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
 
@@ -705,6 +706,7 @@ const GoalRoadmapV3: React.FC = () => {
     const total = themeRows.reduce((sum, row) => sum + row.totalHeight, 0);
     return Math.max(laneHeight + 48, total);
   }, [laneHeight, themeRows]);
+  const overlayHeight = contentHeight + AXIS_GAP_PX;
 
   return (
     <div className={`grv3 ${zoomClass}`} style={axisCssVars}>
@@ -835,18 +837,18 @@ const GoalRoadmapV3: React.FC = () => {
         </div>
 
         {/* Grid lines */}
-        <div className="grv3-grid" style={{ width: totalWidth, height: contentHeight }}>
+        <div className="grv3-grid" style={{ width: totalWidth, height: overlayHeight }}>
           {axis.minor.map((x, i) => (<div key={`minor-${i}`} className="grv3-grid-line minor" style={{ left: x }} />))}
           {axis.secondary.map((x, i) => (<div key={`secondary-${i}`} className="grv3-grid-line secondary" style={{ left: x }} />))}
           {axis.major.map((x, i) => (<div key={`major-${i}`} className="grv3-grid-line major" style={{ left: x }} />))}
         </div>
 
         {/* Today line */}
-        <div className="grv3-today-line" style={{ left: 260 + xFromDate(new Date()), height: contentHeight }} />
+        <div className="grv3-today-line" style={{ left: 260 + xFromDate(new Date()), height: overlayHeight }} />
 
         {/* Snap guides during drag */}
         {guideXs.length > 0 && (
-          <div className="grv3-guides" style={{ width: totalWidth, height: contentHeight }}>
+          <div className="grv3-guides" style={{ width: totalWidth, height: overlayHeight }}>
             {guideXs.map((x, i) => (
               <div key={i} className={`grv3-guide ${activeGuideX === x ? 'active' : ''}`} style={{ left: x }} />
             ))}
@@ -857,7 +859,7 @@ const GoalRoadmapV3: React.FC = () => {
         {showSprints && (zoom === 'weeks' || zoom === 'months') && (
           <>
             {sprintOverlays.map((s, i) => (
-              <div key={`band-${i}`} className="grv3-sprint-band" style={{ left: 260 + s.left, width: s.width, height: contentHeight }} />
+              <div key={`band-${i}`} className="grv3-sprint-band" style={{ left: 260 + s.left, width: s.width, height: overlayHeight }} />
             ))}
             <div className="grv3-sprints" style={{ width: totalWidth }}>
               {sprintOverlays.map((s, i) => (
