@@ -58,6 +58,8 @@ const GoalRoadmapV3: React.FC = () => {
   const [filterHasStories, setFilterHasStories] = useState(false);
   const [filterInSelectedSprint, setFilterInSelectedSprint] = useState(false);
   const [filterOverlapSelectedSprint, setFilterOverlapSelectedSprint] = useState(false);
+  const [themeDropCandidate, setThemeDropCandidate] = useState<number | null>(null);
+  const themeDropCandidateRef = useRef<number | null>(null);
 
   const datasetRange = useMemo(() => {
     if (!goals || goals.length === 0) return null;
@@ -102,6 +104,7 @@ const GoalRoadmapV3: React.FC = () => {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const themeRowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const timeRange = useMemo(() => {
     if (customRange) {
@@ -352,7 +355,7 @@ const GoalRoadmapV3: React.FC = () => {
   }, [filterHasStories, filterInSelectedSprint, filterOverlapSelectedSprint, selectedSprintId, sprints, storyCounts]);
 
   // Drag+resize implementation
-  const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|null; startX: number; origStart: Date; origEnd: Date }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() });
+  const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|null; startX: number; origStart: Date; origEnd: Date; goal: Goal | null }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null });
   const [guideXs, setGuideXs] = useState<number[]>([]);
   const [activeGuideX, setActiveGuideX] = useState<number | null>(null);
   const pointerMove = useCallback((ev: PointerEvent) => {
@@ -372,12 +375,32 @@ const GoalRoadmapV3: React.FC = () => {
       for (let i=1;i<guideXs.length;i++){ const d = Math.abs(guideXs[i]-sx); if (d < bd) { bd = d; best = guideXs[i]; } }
       setActiveGuideX(best);
     }
+    if (s.type === 'move' && s.goal) {
+      const currentThemeId = migrateThemeValue(s.goal.theme);
+      let dropThemeId: number | null = null;
+      for (const [themeId, rowEl] of themeRowRefs.current.entries()) {
+        if (!rowEl) continue;
+        const rect = rowEl.getBoundingClientRect();
+        if (ev.clientY >= rect.top && ev.clientY <= rect.bottom) { dropThemeId = themeId; break; }
+      }
+      if (dropThemeId === currentThemeId) dropThemeId = null;
+      if (themeDropCandidateRef.current !== dropThemeId) {
+        themeDropCandidateRef.current = dropThemeId;
+        setThemeDropCandidate(dropThemeId);
+      }
+    }
   }, [pxPerDay, xFromDate, guideXs]);
 
   const pointerUp = useCallback(async (ev: PointerEvent) => {
     const s = dragState.current; if (!s.id || !s.type) return; ev.preventDefault();
     document.removeEventListener('pointermove', pointerMove); document.removeEventListener('pointerup', pointerUp);
-    const el = document.querySelector(`[data-grv3-goal="${s.id}"]`) as HTMLElement | null; if (!el) { dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() }; return; }
+    const el = document.querySelector(`[data-grv3-goal="${s.id}"]`) as HTMLElement | null;
+    if (!el) {
+      dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null };
+      setThemeDropCandidate(null);
+      themeDropCandidateRef.current = null;
+      return;
+    }
     const left = parseFloat(el.style.left || '0'); const width = parseFloat(el.style.width || '0');
     let newStart = dateFromX(left); let newEnd = dateFromX(left+width);
     // Optional snapping strategy on drop
@@ -398,15 +421,47 @@ const GoalRoadmapV3: React.FC = () => {
       if (currentUser?.uid) {
         await ActivityStreamService.logFieldChange(s.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${s.origStart.toDateString()} – ${s.origEnd.toDateString()}`, `${newStart.toDateString()} – ${newEnd.toDateString()}`, 'personal', s.id, 'human');
       }
+      const candidateTheme = themeDropCandidateRef.current;
+      if (candidateTheme != null && s.goal) {
+        const originalThemeId = migrateThemeValue(s.goal.theme);
+        if (candidateTheme !== originalThemeId) {
+          await updateDoc(doc(db, 'goals', s.id), { theme: candidateTheme, updatedAt: Date.now() });
+          if (currentUser?.uid) {
+            const fromTheme = getThemeDefinition(originalThemeId);
+            const toTheme = getThemeDefinition(candidateTheme);
+            await ActivityStreamService.logFieldChange(
+              s.id,
+              'goal',
+              currentUser.uid,
+              currentUser.email || '',
+              'theme',
+              fromTheme?.name || String(originalThemeId),
+              toTheme?.name || String(candidateTheme),
+              'personal',
+              s.id,
+              'human'
+            );
+          }
+        }
+      }
     } catch (e) { console.error('Failed to update goal dates', e); }
-    finally { const tip = tooltipRef.current; if (tip) tip.style.display='none'; setGuideXs([]); setActiveGuideX(null); dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() }; setDraggingId(null); }
-  }, [dateFromX, pointerMove, currentUser?.uid, snapEnabled, zoom]);
+    finally {
+      const tip = tooltipRef.current; if (tip) tip.style.display='none';
+      setGuideXs([]); setActiveGuideX(null);
+      dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null };
+      setDraggingId(null);
+      setThemeDropCandidate(null);
+      themeDropCandidateRef.current = null;
+    }
+  }, [dateFromX, pointerMove, currentUser?.uid, snapEnabled, zoom, getThemeDefinition]);
 
   const startDrag = useCallback((ev: React.PointerEvent, goal: Goal, type: 'move'|'start'|'end') => {
     ev.preventDefault();
     const startDate = goal.startDate ? new Date(goal.startDate) : new Date();
     const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now()+90*DAY_MS));
-    dragState.current = { id: goal.id, type, startX: ev.clientX, origStart: startDate, origEnd: endDate };
+    dragState.current = { id: goal.id, type, startX: ev.clientX, origStart: startDate, origEnd: endDate, goal };
+    setThemeDropCandidate(null);
+    themeDropCandidateRef.current = null;
     setDraggingId(goal.id);
     document.addEventListener('pointermove', pointerMove, { passive: false }); document.addEventListener('pointerup', pointerUp, { passive: false });
     // Build snap guides for current zoom
@@ -877,7 +932,15 @@ const GoalRoadmapV3: React.FC = () => {
             const laneH = laneHeight;
             const isEmpty = row.visibleGoals.length === 0;
             return (
-            <div key={row.theme.id} className={`grv3-theme-row${isEmpty ? ' grv3-theme-row-empty' : ''}`} style={{ minHeight: row.totalHeight }}>
+            <div
+              key={row.theme.id}
+              ref={(el) => {
+                if (el) themeRowRefs.current.set(row.theme.id, el);
+                else themeRowRefs.current.delete(row.theme.id);
+              }}
+              className={`grv3-theme-row${isEmpty ? ' grv3-theme-row-empty' : ''}${themeDropCandidate === row.theme.id ? ' grv3-theme-row-drop-target' : ''}`}
+              style={{ minHeight: row.totalHeight }}
+            >
               <div className="grv3-label d-flex align-items-center gap-2" style={{ color: row.theme.color }}>
                 <span style={{ width: 10, height: 10, borderRadius: 9999, background: 'currentColor' }} />
                 <span>{row.theme.name}</span>
