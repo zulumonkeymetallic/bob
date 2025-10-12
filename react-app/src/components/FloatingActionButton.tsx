@@ -9,6 +9,7 @@ import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import '../styles/MaterialDesign.css';
 import BulkCreateModal from './BulkCreateModal';
+import GoalChatModal from './GoalChatModal';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -46,6 +47,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [showIntake, setShowIntake] = useState(false);
+  const [intakeTitle, setIntakeTitle] = useState('');
+  const [intakeTheme, setIntakeTheme] = useState('Growth');
+  const [chatGoalId, setChatGoalId] = useState<string | null>(null);
+  const [showChat, setShowChat] = useState(false);
 
   const themes = GLOBAL_THEMES.map(theme => theme.name);
   const efforts = [
@@ -318,6 +324,16 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         <div className="md-fab-menu">
           <button
             className="md-fab-mini"
+            onClick={() => {
+              setShowIntake(true);
+              setShowMenu(false);
+            }}
+            title="AI Goal Intake (Chat)"
+          >
+            A
+          </button>
+          <button
+            className="md-fab-mini"
             onClick={onImportClick}
             title="Import & Templates"
           >
@@ -377,6 +393,65 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       >
         {showMenu ? '×' : '+'}
       </button>
+
+      {/* AI Intake Modal */}
+      <Modal show={showIntake} onHide={() => setShowIntake(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>AI Goal Intake</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Goal Title</Form.Label>
+              <Form.Control
+                type="text"
+                value={intakeTitle}
+                onChange={(e) => setIntakeTitle(e.target.value)}
+                placeholder="e.g., Make £10k off-grid; terrarium business"
+                autoFocus
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Theme</Form.Label>
+              <Form.Select value={intakeTheme} onChange={(e) => setIntakeTheme(e.target.value)}>
+                {themes.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowIntake(false)}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={!intakeTitle.trim() || !currentUser}
+            onClick={async () => {
+              if (!currentUser) return;
+              try {
+                const ref = await addDoc(collection(db, 'goals'), {
+                  ownerUid: currentUser.uid,
+                  persona: currentPersona,
+                  title: intakeTitle.trim(),
+                  description: 'Created via AI Goal Intake',
+                  theme: intakeTheme,
+                  status: 'new',
+                  priority: 2,
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                });
+                setChatGoalId(ref.id);
+                setShowIntake(false);
+                setShowChat(true);
+              } catch (e: any) {
+                alert(e?.message || 'Failed to create goal');
+              }
+            }}
+          >
+            Continue to Chat
+          </Button>
+        </Modal.Footer>
+      </Modal>
 
       {/* Quick Add Modal */}
       <Modal show={showQuickAdd} onHide={() => setShowQuickAdd(false)} centered>
@@ -560,6 +635,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         show={showBulkCreate}
         onHide={() => setShowBulkCreate(false)}
       />
+
+      {/* Inline Chat Modal for Intake */}
+      {chatGoalId && (
+        <GoalChatModal goalId={chatGoalId} show={showChat} onHide={() => setShowChat(false)} />
+      )}
     </>
   );
 };

@@ -38,7 +38,6 @@ import ModernStoriesTable from '../../components/ModernStoriesTable';
 import { Goal, Sprint, Story, Task } from '../../types';
 import './EnhancedGanttChart.css';
 import logger from '../../utils/logger';
-import ThemeRoadmap from './ThemeRoadmap';
 import { useRoadmapStore, useTimelineScale } from '../../stores/roadmapStore';
 import RoadmapAxis from './RoadmapAxis';
 import VirtualThemeLane from './VirtualThemeLane';
@@ -87,8 +86,7 @@ const EnhancedGanttChart: React.FC = () => {
   const { theme } = useTheme();
   const { showSidebar } = useSidebar();
   
-  // View mode toggle (timeline vs roadmap)
-  const [viewMode, setViewMode] = useState<'timeline' | 'roadmap'>('timeline');
+  // Roadmap V3 is handled by its own route; this component renders the timeline only
 
   // Core data
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -1166,9 +1164,7 @@ const EnhancedGanttChart: React.FC = () => {
     if (e.touches.length < 2) pinchRef.current = null;
   };
 
-  if (viewMode === 'roadmap') {
-    return <ThemeRoadmap onBackToTimeline={() => setViewMode('timeline')} />;
-  }
+  // No roadmap toggle here (V3 lives at /goals/roadmap)
 
   if (loading) {
     return (
@@ -1200,15 +1196,7 @@ const EnhancedGanttChart: React.FC = () => {
             </Col>
             <Col md={6} className="text-end">
               <div className="d-flex align-items-center justify-content-end gap-2">
-                <Button
-                  variant="outline-secondary"
-                  size="sm"
-                  onClick={openActivitySidebar}
-                  disabled={goals.length === 0}
-                >
-                  <Activity size={16} className="me-1" />
-                  Activity
-                </Button>
+                {/* Activity feed removed for focused timeline UI */}
                 <Button
                   variant="outline-secondary"
                   size="sm"
@@ -1390,8 +1378,30 @@ const EnhancedGanttChart: React.FC = () => {
                   />
                 ))}
               </div>
+              {/* Years band (small, above months) */}
+              <div className="position-absolute" style={{ left: 0, right: 0, top: 0, height: 14, zIndex: 22, background: 'var(--bs-body-bg)' }}>
+                {(() => {
+                  const items: any[] = [];
+                  const start = useRoadmapStore.getState().start;
+                  const end = useRoadmapStore.getState().end;
+                  const cur = new Date(start.getFullYear(), 0, 1);
+                  while (cur <= end) {
+                    const next = new Date(cur.getFullYear() + 1, 0, 1);
+                    const left = getDatePosition(cur);
+                    const width = getDatePosition(next) - getDatePosition(cur);
+                    items.push(
+                      <div key={`y-${cur.getFullYear()}`} className="position-absolute text-center" style={{ left, width, top: 0, bottom: 0, color: 'var(--bs-secondary-color)', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {cur.getFullYear()}
+                      </div>
+                    );
+                    cur.setFullYear(cur.getFullYear() + 1);
+                  }
+                  return items;
+                })()}
+              </div>
+
               {/* Months band */}
-              <div className="position-absolute" style={{ left: 0, right: 0, top: 0, height: 24, zIndex: 21, background: 'var(--bs-body-bg)', borderBottom: '1px solid var(--line)' }}>
+              <div className="position-absolute" style={{ left: 0, right: 0, top: 14, height: 26, zIndex: 21, background: 'var(--bs-body-bg)', borderBottom: '1px solid var(--line)' }}>
                 {(() => {
                   const items: any[] = [];
                   const start = useRoadmapStore.getState().start;
@@ -1403,7 +1413,7 @@ const EnhancedGanttChart: React.FC = () => {
                     const width = getDatePosition(next) - getDatePosition(cur);
                     items.push(
                       <div key={`m-${cur.getFullYear()}-${cur.getMonth()}`} className="position-absolute text-center" style={{ left, width, top: 0, bottom: 0, borderRight: '1px solid var(--line)', color: 'var(--bs-body-color)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        {cur.toLocaleDateString('en-US', { month: 'long' })} {cur.getMonth() === 0 ? cur.getFullYear() : ''}
+                        {cur.toLocaleDateString('en-US', { month: 'short' })}
                       </div>
                     );
                     cur.setMonth(cur.getMonth() + 1);
