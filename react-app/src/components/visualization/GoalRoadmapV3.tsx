@@ -58,6 +58,30 @@ const GoalRoadmapV3: React.FC = () => {
   const [filterInSelectedSprint, setFilterInSelectedSprint] = useState(false);
   const [filterOverlapSelectedSprint, setFilterOverlapSelectedSprint] = useState(false);
 
+  const datasetRange = useMemo(() => {
+    if (!goals || goals.length === 0) return null;
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const goal of goals) {
+      const startMs = goal.startDate ?? goal.targetDate ?? null;
+      const endMs = goal.endDate ?? goal.targetDate ?? null;
+      if (typeof startMs === 'number' && !Number.isNaN(startMs)) {
+        min = Math.min(min, startMs);
+      }
+      if (typeof endMs === 'number' && !Number.isNaN(endMs)) {
+        max = Math.max(max, endMs);
+      }
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    if (min === max) max = min + 90 * DAY_MS;
+    const pad = Math.max(21 * DAY_MS, Math.round((max - min) * 0.05));
+    const start = new Date(min - pad);
+    const end = new Date(max + pad);
+    start.setHours(0,0,0,0);
+    end.setHours(0,0,0,0);
+    return { start, end };
+  }, [goals]);
+
   const themePalette = useMemo(() => (globalThemes && globalThemes.length ? globalThemes : GLOBAL_THEMES), [globalThemes]);
   const themeMap = useMemo(() => {
     const map = new Map<number, GlobalTheme>();
@@ -110,8 +134,17 @@ const GoalRoadmapV3: React.FC = () => {
       end = new Date(start.getFullYear() + yearSpan, 0, 1); end.setDate(end.getDate() - 1);
     }
     start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+    if (datasetRange) {
+      const unionStart = Math.min(start.getTime(), datasetRange.start.getTime());
+      const unionEnd = Math.max(end.getTime(), datasetRange.end.getTime());
+      const maxSpan = 10 * YEAR_MS;
+      const span = Math.min(Math.max(unionEnd - unionStart, DAY_MS * 90), maxSpan);
+      start = new Date(unionStart);
+      end = new Date(unionStart + span);
+      start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+    }
     return { start, end };
-  }, [zoom, yearSpan, customRange]);
+  }, [zoom, yearSpan, customRange, datasetRange]);
 
   const pxPerDay = useMemo(() => {
     if (zoom === 'weeks') return 16;
@@ -430,10 +463,16 @@ const GoalRoadmapV3: React.FC = () => {
     // V2-inspired subtle gradient using theme color
     const bgStart = hexToRgba(themeColor, theme === 'dark' ? 0.24 : 0.18);
     const bgEnd = hexToRgba(themeColor, theme === 'dark' ? 0.12 : 0.08);
+    const preferredLightText = 'rgba(17, 24, 39, 0.92)';
+    const computedText = theme === 'dark'
+      ? (themeDef.textColor || '#fff')
+      : (themeDef.textColor && themeDef.textColor.toLowerCase() !== '#ffffff' && themeDef.textColor.toLowerCase() !== '#fff'
+        ? themeDef.textColor
+        : preferredLightText);
     return {
       background: `linear-gradient(180deg, ${bgStart}, ${bgEnd})`,
       border: `2px solid ${themeColor}`,
-      color: themeDef.textColor || '#fff'
+      color: computedText
     } as React.CSSProperties;
   };
 
