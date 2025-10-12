@@ -94,6 +94,8 @@ const Dashboard: React.FC = () => {
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
+  const [dailySummaryText, setDailySummaryText] = useState<string>('');
+  const [storiesDueToday, setStoriesDueToday] = useState<number>(0);
   const plannerRange: PlannerRange = { start: startOfDay(new Date()), end: endOfDay(new Date()) };
   const planner = useUnifiedPlannerData(plannerRange);
 
@@ -115,10 +117,12 @@ const Dashboard: React.FC = () => {
   };
   const dailyBrief = () => {
     const parts: string[] = [];
-    if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
+    if (tasksDueToday > 0) parts.push(`${tasksDueToday} tasks due today`);
+    if (storiesDueToday > 0) parts.push(`${storiesDueToday} stories due today`);
     if (todayBlocks.length > 0) parts.push(`${todayBlocks.length} blocks scheduled`);
     if (priorityBanner?.title) parts.push(`Focus: ${priorityBanner.title}`);
-    return parts.length ? parts.join(' · ') : 'No urgent items. Plan or review your goals.';
+    const base = parts.length ? parts.join(' · ') : 'No urgent items. Plan or review your goals.';
+    return dailySummaryText ? `${base} · ${dailySummaryText}` : base;
   };
 
   useEffect(() => {
@@ -268,9 +272,11 @@ const Dashboard: React.FC = () => {
         loadLLMPriority(),
         loadTodayBlocks(),
         countTasksDueToday(),
+        countStoriesDueToday(),
         loadRemindersDueToday(),
         loadChecklistDueToday(),
-        loadMonzoSummary()
+        loadMonzoSummary(),
+        loadDailySummary()
       ]);
     } catch {}
 
@@ -509,6 +515,45 @@ const Dashboard: React.FC = () => {
 
   const handleOpenChecklist = () => {
     navigate('/calendar', { state: { focus: 'checklist' } });
+  };
+
+  const countStoriesDueToday = async () => {
+    if (!currentUser) { setStoriesDueToday(0); return; }
+    try {
+      const start = startOfDay(new Date()).getTime();
+      const end = endOfDay(new Date()).getTime();
+      const snap = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
+      let count = 0;
+      snap.forEach((d) => {
+        const s: any = d.data();
+        const due = s.dueDate || s.sprintDueDate || s.targetDate || null;
+        const n = typeof due === 'number' ? due : (due && due.toDate ? due.toDate().getTime() : null);
+        if (n && n >= start && n <= end && !isStatus(s.status, 'done')) count++;
+      });
+      setStoriesDueToday(count);
+    } catch { setStoriesDueToday(0); }
+  };
+
+  const loadDailySummary = async () => {
+    if (!currentUser) { setDailySummaryText(''); return; }
+    try {
+      // Try stored summary first
+      const todayIso = format(new Date(), 'yyyy-MM-dd');
+      const docId = `${currentUser.uid}_${todayIso}`;
+      const snap = await getDoc(doc(db, 'dailysummary', docId));
+      if (snap.exists()) {
+        const data: any = snap.data() || {};
+        const brief = data?.summary?.brief;
+        if (typeof brief === 'string' && brief.trim()) { setDailySummaryText(brief.trim()); return; }
+      }
+      // Fallback to preview callable (no store)
+      try {
+        const callable = httpsCallable(functions, 'previewDailySummary');
+        const res: any = await callable({});
+        const maybe = res?.data?.summary?.dailyBriefing || '';
+        if (maybe) setDailySummaryText(String(maybe));
+      } catch {}
+    } catch { setDailySummaryText(''); }
   };
 
   const handleThemeSelect = (themeId: string) => {

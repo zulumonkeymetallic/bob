@@ -11,7 +11,7 @@ import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Calendar as CalendarIcon } from 'lucide-react';
+import { Wand2, Activity as ActivityIcon, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Calendar as CalendarIcon } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
@@ -274,17 +274,23 @@ const GoalRoadmapV3: React.FC = () => {
     return () => { el.removeEventListener('scroll', update); window.removeEventListener('resize', update); };
   }, []);
 
+  const formatDateLabel = (date: Date, showYear: boolean) => {
+    const month = date.toLocaleString('default', { month: 'short' });
+    const year = `'${String(date.getFullYear()).slice(-2)}`;
+    return showYear ? `${month} ${year}` : month;
+  };
+
   const gridLines = useMemo(() => {
     const out: { label: string; x: number }[] = [];
     const cursor = new Date(timeRange.start); cursor.setDate(1);
     while (cursor <= timeRange.end) {
       let label = '';
       if (zoom === 'quarters') {
-        label = `Q${Math.floor(cursor.getMonth()/3)+1} ${cursor.getFullYear()}`;
+        const quarter = Math.floor(cursor.getMonth()/3) + 1;
+        label = `Q${quarter} '${String(cursor.getFullYear()).slice(-2)}`;
       } else {
-        // For weeks/months/years, render month labels so 1y view shows months as requested
-        const month = cursor.toLocaleString('default',{month:'short'});
-        label = `${month}${cursor.getMonth()===0 ? ' ' + cursor.getFullYear() : ''}`;
+        const isNewYear = cursor.getMonth() === 0;
+        label = formatDateLabel(cursor, isNewYear || zoom === 'years');
       }
       out.push({ label, x: xFromDate(new Date(cursor)) });
       if (zoom === 'quarters') cursor.setMonth(cursor.getMonth()+3);
@@ -764,7 +770,7 @@ const GoalRoadmapV3: React.FC = () => {
                             AI Orchestrate (Research + Plan)
                           </Dropdown.Item>
                           <Dropdown.Item onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}>
-                            <ListIcon size={14} className="me-2" />
+                            <ActivityIcon size={14} className="me-2" />
                             Open Activity Stream
                           </Dropdown.Item>
                           <Dropdown.Item onClick={(e) => { e.stopPropagation(); scheduleGoalAI(g); }}>
@@ -802,7 +808,15 @@ const GoalRoadmapV3: React.FC = () => {
                     </div>
 
                     <div className="grv3-title">{g.title}</div>
-                    <div className="grv3-meta">{g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} – {g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}{typeof storyCounts[g.id] === 'number' ? ` • ${storyCounts[g.id]} stories` : ''}</div>
+                    <div className="grv3-meta">
+                      {(() => {
+                        const start = g.startDate ? new Date(g.startDate) : null;
+                        const end = g.endDate ? new Date(g.endDate) : null;
+                        const format = (d: Date | null) => d ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBD';
+                        const storiesLabel = typeof storyCounts[g.id] === 'number' ? ` • ${storyCounts[g.id]} stories` : '';
+                        return `${format(start)} → ${format(end)}${storiesLabel}`;
+                      })()}
+                    </div>
                     {(zoom === 'weeks' || zoom === 'months') && (
                       <div className="mt-1" style={{ width: '100%' }}>
                         <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,.3)', overflow: 'hidden' }}>
@@ -826,7 +840,7 @@ const GoalRoadmapV3: React.FC = () => {
                         <CalendarIcon size={14} /> {schedulingId === g.id ? 'Planning…' : 'AI Plan'}
                       </button>
                       <button className="icon-btn" title="Open Activity Stream" onClick={() => showSidebar(g as any, 'goal')}>
-                        <ListIcon size={14} /> Activity
+                        <ActivityIcon size={14} /> Activity
                       </button>
                     </div>
                   </div>

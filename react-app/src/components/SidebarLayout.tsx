@@ -39,6 +39,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
   const navigationGroups: NavigationGroup[] = [
   {
+    label: 'Dashboards',
+    icon: 'chart-bar',
+    items: [
+      { label: 'Overview', path: '/dashboard', icon: 'home' },
+      { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' }
+    ]
+  },
+  {
     label: 'Goals',
     icon: 'target',
     items: [
@@ -59,7 +67,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     label: 'Tasks',
     icon: 'list-check',
     items: [
-      { label: 'Tasks List', path: '/tasks', icon: 'list' }
+      { label: 'Tasks List', path: '/tasks', icon: 'list' },
+      { label: 'Tasks Cards', path: '/tasks/cards', icon: 'th' }
     ]
   },
   {
@@ -86,13 +95,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
       { label: 'Categories', path: '/finance/categories', icon: 'tags' },
       { label: 'Merchants', path: '/finance/merchants', icon: 'store' }
-    ]
-  },
-  {
-    label: 'Dashboards',
-    icon: 'chart-bar',
-    items: [
-      { label: 'Overview', path: '/dashboard', icon: 'home' }
     ]
   },
   {

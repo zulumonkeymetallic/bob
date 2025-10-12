@@ -62,6 +62,7 @@ import GoalVizPage from './components/visualization/GoalVizPage';
 import GoalRoadmapV3 from './components/visualization/GoalRoadmapV3';
 import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
+import TasksCardView from './components/TasksCardView';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboard from './components/FinanceDashboard';
@@ -213,7 +214,8 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/tasks" element={<TaskListView />} />
+            <Route path="/tasks" element={<TaskListView />} />
+            <Route path="/tasks/cards" element={<TasksCardView />} />
               <Route path="/tasks/:id" element={<DeepLinkTask />} />
               <Route path="/task" element={<Navigate to="/tasks" replace />} />
               <Route path="/task-list" element={<Navigate to="/tasks" replace />} />

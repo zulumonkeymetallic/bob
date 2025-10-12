@@ -21,9 +21,11 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Settings, Plus, Edit3, Trash2, User, Calendar, Target, BookOpen, AlertCircle, Activity } from 'lucide-react';
+import { Settings, Plus, Edit3, Trash2, User, Calendar, Target, BookOpen, AlertCircle, Activity, Wand2, GripVertical } from 'lucide-react';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -108,7 +110,6 @@ const SortableStoryCard: React.FC<{
       ref={setNodeRef}
       style={style}
       {...attributes}
-      {...listeners}
     >
       <Card 
         style={{ 
@@ -126,6 +127,9 @@ const SortableStoryCard: React.FC<{
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <span title="Drag" aria-label="Drag" style={{ cursor: 'grab', display:'inline-flex', alignItems:'center' }} {...(listeners as any)}>
+                  <GripVertical size={12} />
+                </span>
                 <span style={{ fontSize: '12px', fontWeight: '600', color: themeColor }}>
                   {(() => {
                     const shortRef = (story as any).referenceNumber || story.ref;
@@ -159,6 +163,24 @@ const SortableStoryCard: React.FC<{
                 }}
               >
                 <Activity size={12} />
+              </Button>
+              <Button
+                variant="link"
+                size="sm"
+                style={{ padding: '2px', color: themeVars.muted }}
+                title="AI: generate tasks"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    const callable = httpsCallable(functions, 'generateTasksForStory');
+                    await callable({ storyId: story.id });
+                    alert('AI: generating tasks for story…');
+                  } catch (err: any) {
+                    alert(err?.message || 'AI task generation not available yet');
+                  }
+                }}
+              >
+                <Wand2 size={12} />
               </Button>
               <Button
                 variant="link"
@@ -253,7 +275,6 @@ const SortableTaskCard: React.FC<{
       ref={setNodeRef}
       style={style}
       {...attributes}
-      {...listeners}
     >
       <Card 
         style={{ 
@@ -270,6 +291,9 @@ const SortableTaskCard: React.FC<{
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                <span title="Drag" aria-label="Drag" style={{ cursor: 'grab', display:'inline-flex', alignItems:'center' }} {...(listeners as any)}>
+                  <GripVertical size={10} />
+                </span>
                 <span style={{ fontSize: '11px', fontWeight: '600', color: themeColor }}>
                   {task.ref || `TASK-${task.id.slice(-3).toUpperCase()}`}
                 </span>

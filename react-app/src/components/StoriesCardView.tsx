@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Row, Col, Badge, Button, Dropdown, Alert } from 'react-bootstrap';
 import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, Plus, Clock, ArrowRight } from 'lucide-react';
 import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
@@ -37,6 +37,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   const { showSidebar } = useSidebar();
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
   const [latestActivities, setLatestActivities] = useState<{ [storyId: string]: any }>({});
+  const [sprints, setSprints] = useState<any[]>([]);
 
   const themeColorForGoal = (goal?: Goal): string => {
     if (!goal) return 'var(--muted)';
@@ -110,6 +111,25 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
     });
   }, [stories, currentUser]);
 
+  useEffect(() => {
+    if (!currentUser) return;
+    (async () => {
+      try {
+        const snap = await getDocs(query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid), orderBy('startDate', 'asc')));
+        const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+        setSprints(rows);
+      } catch (e) {
+        setSprints([]);
+      }
+    })();
+  }, [currentUser]);
+
+  const nextThreeSprints = useMemo(() => {
+    const now = Date.now();
+    const upcoming = sprints.filter(s => Number(s.endDate || 0) >= now);
+    return upcoming.slice(0, 3);
+  }, [sprints]);
+
   const handleViewActivityStream = (story: Story, event: React.MouseEvent) => {
     event.stopPropagation();
     console.log('📖 Opening story activity stream:', story.id);
@@ -138,7 +158,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
           const themeColor = getThemeColorForStory(story);
           
           return (
-            <Col md={6} lg={4} key={story.id} className="mb-4">
+            <Col md={6} lg={3} xl={3} key={story.id} className="mb-4">
               <Card 
                 style={{ 
                   minHeight: '380px',
@@ -232,7 +252,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       >
                         <ChevronDown size={16} />
                       </Dropdown.Toggle>
-                      <Dropdown.Menu>
+                      <Dropdown.Menu style={{ zIndex: 2000 }}>
                         <Dropdown.Item 
                           onClick={() => onEditStory(story)}
                         >
@@ -251,16 +271,15 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                           Done
                         </Dropdown.Item>
                         <Dropdown.Divider />
-                        <Dropdown.Header>Change Priority</Dropdown.Header>
-                        <Dropdown.Item onClick={() => handlePriorityChange(story.id, 1)}>
-                          High Priority (1)
-                        </Dropdown.Item>
-                        <Dropdown.Item onClick={() => handlePriorityChange(story.id, 2)}>
-                          Medium Priority (2)
-                        </Dropdown.Item>
-                        <Dropdown.Item onClick={() => handlePriorityChange(story.id, 3)}>
-                          Low Priority (3)
-                        </Dropdown.Item>
+                        <Dropdown.Header>Move to Sprint</Dropdown.Header>
+                        {nextThreeSprints.length === 0 && (
+                          <Dropdown.Item disabled>No upcoming sprints</Dropdown.Item>
+                        )}
+                        {nextThreeSprints.map((sp) => (
+                          <Dropdown.Item key={sp.id} onClick={() => onStoryUpdate(story.id, { sprintId: sp.id })}>
+                            {sp.name || sp.id}
+                          </Dropdown.Item>
+                        ))}
                         <Dropdown.Divider />
                         <Dropdown.Item 
                           className="text-danger"

@@ -80,6 +80,120 @@ function makeAssignmentId({ planId, itemType, itemId }) {
   return h.toString(36);
 }
 
+async function logActivity({
+  db,
+  userId,
+  entityId,
+  entityType,
+  activityType,
+  description,
+  metadata = {},
+  actor = 'AI',
+  source = null,
+}) {
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      ownerUid: userId,
+      userId,
+      entityId,
+      entityType,
+      activityType,
+      actor,
+      source,
+      description,
+      metadata,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (err) {
+    console.warn('[activity-log] failed', activityType, err?.message || err);
+  }
+}
+
+function goalWindow(goal) {
+  const start = toMillis(goal?.startDate ?? goal?.plannedStartDate ?? goal?.targetDate);
+  const endCandidates = [goal?.endDate, goal?.plannedEndDate, goal?.targetDate, goal?.startDate];
+  let end = null;
+  for (const candidate of endCandidates) {
+    const val = toMillis(candidate);
+    if (val != null) { end = val; break; }
+  }
+  return {
+    start,
+    end: end != null ? end : start,
+  };
+}
+
+function sprintWindow(sprint) {
+  return {
+    start: toMillis(sprint?.startDate),
+    end: toMillis(sprint?.endDate),
+  };
+}
+
+function goalOverlapsSprintWindow(goal, sprint) {
+  if (!goal || !sprint) return true;
+  const { start: gsRaw, end: geRaw } = goalWindow(goal);
+  const { start: ss, end: se } = sprintWindow(sprint);
+  if (gsRaw == null && geRaw == null) return true;
+  if (ss == null || se == null) return true;
+  const gs = gsRaw ?? ss;
+  const ge = geRaw ?? se;
+  return gs <= se && ge >= ss;
+}
+
+// --- Compatibility stubs for existing prod endpoints ---
+exports.diagnosticsStatus = httpsV2.onCall(async (req) => {
+  const db = ensureFirestore();
+  const uid = req?.auth?.uid || null;
+  const hasGemini = !!process.env.GOOGLE_AI_STUDIO_API_KEY;
+  const hasNylas = !!process.env.NYLAS_API_KEY;
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  let appBaseUrl = null;
+  try {
+    if (uid) {
+      const profile = await db.collection('profiles').doc(uid).get();
+      appBaseUrl = (profile.exists && (profile.data() || {}).appBaseUrl) || null;
+    }
+  } catch {}
+  return { ok: true, hasGemini, hasNylas, hasOpenAI, appBaseUrl };
+});
+
+exports.testLLM = httpsV2.onCall(async () => {
+  return { ok: true, message: 'LLM test stub success' };
+});
+
+exports.sendAssistantMessage = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const message = String(req?.data?.message || '').trim();
+  if (!message) throw new httpsV2.HttpsError('invalid-argument', 'message is required');
+  const db = ensureFirestore();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const base = db.collection('assistant_chats').doc(uid).collection('messages');
+  const userMsg = await base.add({ role: 'user', content: message, createdAt: now });
+  await base.add({ role: 'assistant', content: `Noted: ${message}`, createdAt: now, replyTo: userMsg.id });
+  return { ok: true };
+});
+
+exports.generateStoriesFromResearch = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '').trim();
+  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
+  return { ok: true, accepted: true };
+});
+
+exports.orchestrateStoryPlanning = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '').trim();
+  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
+  return { ok: true, redirect: 'orchestrateGoalPlanning' };
+});
+
 const MS_IN_MINUTE = 60 * 1000;
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const CHORE_LOOKAHEAD_DAYS = 90;
@@ -2167,6 +2281,7 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
     const batch = db.batch();
     const now = Date.now();
     let created = 0;
+    const storyIds = [];
     for (const s of stories) {
       if (!s?.title) continue;
       const ref = db.collection('stories').doc();
@@ -2191,9 +2306,20 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
         aiGenerated: true
       });
       created += 1;
+      storyIds.push(ref.id);
     }
     if (created > 0) {
       await batch.commit();
+      await logActivity({
+        db,
+        userId: uid,
+        entityId: goalId,
+        entityType: 'goal',
+        activityType: 'generate_stories_for_goal',
+        description: `Generated ${created} stories for goal`,
+        metadata: { storyIds },
+        source: 'generateStoriesForGoal',
+      });
     }
 
     return { created };
@@ -2201,6 +2327,80 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
     console.error('generateStoriesForGoal error:', error);
     throw new functionsV2.https.HttpsError('internal', error.message);
   }
+});
+
+// Generate tasks for a story via LLM
+exports.generateTasksForStory = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const storyId = String(req?.data?.storyId || '').trim();
+  if (!storyId) throw new httpsV2.HttpsError('invalid-argument', 'storyId is required');
+
+  const db = ensureFirestore();
+  const storySnap = await db.collection('stories').doc(storyId).get();
+  if (!storySnap.exists) throw new httpsV2.HttpsError('not-found', 'Story not found');
+  const story = storySnap.data() || {};
+  if (story.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your story');
+
+  const goalSnap = story.goalId ? await db.collection('goals').doc(story.goalId).get() : null;
+  const goal = goalSnap && goalSnap.exists ? (goalSnap.data() || {}) : null;
+
+  const system = 'You create concise, actionable tasks from a user story. Return strict JSON only.';
+  const user = [
+    `Story: ${story.title || story.ref || storyId}`,
+    story.description ? `Description: ${String(story.description).slice(0, 800)}` : '',
+    goal ? `Goal: ${goal.title}` : '',
+    'Return JSON {"tasks":[{"title":string,"description":string,"estimate_minutes":number}]}, 3-7 items.'
+  ].filter(Boolean).join('\n');
+  const raw = await callLLMJson({ system, user, purpose: 'generateTasksForStory', userId: uid, expectJson: true, temperature: 0.2 });
+  let parsed = { tasks: [] };
+  try { parsed = JSON.parse(raw); } catch (e) {
+    throw new httpsV2.HttpsError('internal', 'LLM JSON parse failed');
+  }
+  const tasks = Array.isArray(parsed.tasks) ? parsed.tasks.slice(0, 7) : [];
+  if (!tasks.length) return { ok: true, created: 0 };
+
+  const batch = db.batch();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  let created = 0;
+  const taskIds = [];
+  for (const t of tasks) {
+    const tRef = db.collection('tasks').doc();
+    const estimate = Number(t.estimate_minutes || t.estimate || 30) || 30;
+    batch.set(tRef, {
+      id: tRef.id,
+      ownerUid: uid,
+      persona: story.persona || 'personal',
+      title: String(t.title || 'Task').slice(0, 200),
+      description: String(t.description || '').slice(0, 2000),
+      estimateMin: estimate,
+      parentType: 'story',
+      parentId: storyId,
+      storyId,
+      goalId: story.goalId || null,
+      theme: story.theme || (goal && goal.theme) || 'General',
+      status: 0,
+      priority: 2,
+      entry_method: 'ai_generate_from_story',
+      createdAt: now,
+      updatedAt: now,
+    }, { merge: true });
+    created++;
+    taskIds.push(tRef.id);
+  }
+  await batch.commit();
+  await recordAiLog(uid, 'generateTasksForStory', 'success', `Created ${created} tasks from story`, { storyId, created });
+  await logActivity({
+    db,
+    userId: uid,
+    entityId: storyId,
+    entityType: 'story',
+    activityType: 'generate_tasks_for_story',
+    description: `Generated ${created} tasks from story`,
+    metadata: { taskIds },
+    source: 'generateTasksForStory',
+  });
+  return { ok: true, created };
 });
 
 // ===== Story Acceptance Criteria Generation (AI)
@@ -2576,6 +2776,16 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     createdAt: now,
     updatedAt: now,
   });
+  await logActivity({
+    db,
+    userId: uid,
+    entityId: storyRef.id,
+    entityType: 'story',
+    activityType: 'create_story',
+    description: `AI created research story for goal ${goal.title}`,
+    metadata: { goalId },
+    source: 'orchestrateGoalPlanning',
+  });
 
   const createdTasks = [];
   for (const a of nextActions.slice(0, 12)) {
@@ -2599,6 +2809,16 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
       updatedAt: Date.now(),
     }, { merge: true });
     createdTasks.push(tRef.id);
+    await logActivity({
+      db,
+      userId: uid,
+      entityId: tRef.id,
+      entityType: 'task',
+      activityType: 'generate_tasks',
+      description: `AI created task from orchestrateGoalPlanning`,
+      metadata: { goalId, storyId: storyRef.id, title: String(a?.title || 'Task') },
+      source: 'orchestrateGoalPlanning',
+    });
   }
 
   // Optional: create GitHub issues for Dev tasks
@@ -6448,6 +6668,27 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
     runContext,
   });
 
+  // Mirror to simplified collection for UI: dailysummary
+  try {
+    const docId = `${userId}_${summaryData.metadata.dayIso}`;
+    await db.collection('dailysummary').doc(docId).set({
+      userId,
+      dayIso: summaryData.metadata.dayIso,
+      summary: {
+        brief: summaryData.dailyBriefing || null,
+        priorities: summaryData.priorities || null,
+        counts: {
+          tasksDue: Array.isArray(summaryData.tasksDue) ? summaryData.tasksDue.length : null,
+          choresDue: Array.isArray(summaryData.choresDue) ? summaryData.choresDue.length : null,
+          routinesDue: Array.isArray(summaryData.routinesDue) ? summaryData.routinesDue.length : null,
+        },
+      },
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (e) {
+    console.warn('[daily-summary] mirror to dailysummary failed', e?.message || e);
+  }
+
   return { skipped: false, dayIso: summaryData.metadata.dayIso };
 }
 
@@ -7212,6 +7453,103 @@ exports.ensureEntityRefs = schedulerV2.onSchedule({ schedule: 'every 2 hours', t
     }
     await batch.commit();
     await activityBatch.commit();
+  }
+});
+
+// Nightly auto-allocate backlog stories to upcoming sprints by capacity
+exports.nightlyAutoAllocateBacklog = schedulerV2.onSchedule({ schedule: '0 2 * * *', timeZone: 'UTC', memory: '512MiB' }, async () => {
+  const db = ensureFirestore();
+  const profilesSnap = await db.collection('profiles').get();
+  for (const prof of profilesSnap.docs) {
+    const uid = prof.id;
+    try {
+      // Load sprints (ascending by start)
+      const sprintsSnap = await db.collection('sprints').where('ownerUid', '==', uid).orderBy('startDate', 'asc').get();
+      const sprints = sprintsSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+      if (!sprints.length) continue;
+
+      const goalsSnap = await db.collection('goals').where('ownerUid', '==', uid).get();
+      const goals = goalsSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+
+      // Load capacity
+      const capsSnap = await db.collection('sprint_capacity').where('ownerUid', '==', uid).get();
+      const capById = new Map();
+      capsSnap.forEach(d => { const v = d.data() || {}; if (v.sprintId) capById.set(v.sprintId, Number(v.pointsCapacity || 0) || 0); });
+
+      // Load stories
+      const storiesSnap = await db.collection('stories').where('ownerUid', '==', uid).get();
+      const allStories = storiesSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+      const backlog = allStories.filter(s => !s.sprintId);
+      if (!backlog.length) continue;
+
+      // Compute currently used points per sprint
+      const used = {}; // sprintId -> used points
+      for (const s of allStories) {
+        if (s.sprintId) used[s.sprintId] = (used[s.sprintId] || 0) + (Number(s.points || 0) || 0);
+      }
+
+      // Ask AI to prioritize backlog
+      let ordered = backlog;
+      try {
+        const payload = {
+          items: backlog.map((s) => ({ id: s.id, title: s.title || s.ref || s.id, points: Number(s.points||0)||0, priority: Number(s.priority||3)||3 })),
+        };
+        const system = 'You prioritize backlog stories concisely. Return strict JSON with {"items":[{"id":string}]}, ordered best-first.';
+        const user = `Backlog: ${JSON.stringify(payload.items).slice(0, 6000)}`;
+        const raw = await callLLMJson({ system, user, purpose: 'autoAllocateBacklog', userId: uid, expectJson: true, temperature: 0.2 });
+        const parsed = JSON.parse(raw);
+        const orderMap = new Map();
+        if (Array.isArray(parsed?.items)) parsed.items.forEach((x, i) => orderMap.set(String(x.id), i));
+        ordered = [...backlog].sort((a,b) => (orderMap.get(a.id) ?? 9999) - (orderMap.get(b.id) ?? 9999));
+      } catch (e) {
+        // fallback by priority then points
+        ordered = [...backlog].sort((a,b) => (Number(a.priority||3) - Number(b.priority||3)) || (Number(b.points||0) - Number(a.points||0)));
+      }
+
+      const sprintIds = sprints.map(s => s.id);
+      const batch = db.batch();
+      let moved = 0;
+      const moves = [];
+      for (const st of ordered) {
+        const pts = Number(st.points || 0) || 0;
+        const goal = st.goalId ? goals.find(g => g.id === st.goalId) : null;
+        for (const sid of sprintIds) {
+          const cap = capById.get(sid) || 0;
+          if (cap <= 0) continue;
+          const curr = used[sid] || 0;
+          const sprint = sprints.find(sp => sp.id === sid);
+          if (goal && sprint && !goalOverlapsSprintWindow(goal, sprint)) continue;
+          if (curr + pts <= cap) {
+            used[sid] = curr + pts;
+            batch.set(db.collection('stories').doc(st.id), {
+              sprintId: sid,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              autoAllocatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            moved++;
+            moves.push({ storyId: st.id, sprintId: sid, points: pts, title: st.title || st.ref || st.id });
+            break;
+          }
+        }
+      }
+      if (moved > 0) {
+        await batch.commit();
+        await logActivity({
+          db,
+          userId: uid,
+          entityId: `stories_${uid}`,
+          entityType: 'story',
+          activityType: 'auto_allocate_backlog',
+          description: `AI allocated ${moved} backlog stories to sprints`,
+          metadata: { moves },
+          source: 'nightlyAutoAllocateBacklog',
+        });
+      }
+      await recordAiLog(uid, 'nightlyAutoAllocateBacklog', 'success', `Auto-allocated ${moved} backlog stories`, { moved });
+    } catch (e) {
+      console.warn('[nightlyAutoAllocateBacklog] user failed', uid, e?.message || e);
+      try { await recordAiLog(uid, 'nightlyAutoAllocateBacklog', 'error', e?.message || 'allocation failed'); } catch {}
+    }
   }
 });
 
