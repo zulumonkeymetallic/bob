@@ -393,15 +393,19 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   };
 
   // Sprint-aware filtering
-  // When "All Sprints" is selected (selectedSprintId === ''), do not filter by sprint.
-  // Only use active sprint fallback when no explicit selection is present (undefined/null).
-  const resolvedSprintId = (selectedSprintId === '' ? undefined : selectedSprintId) 
-    ?? (sprints.find(s => isStatus(s.status, 'active'))?.id);
+  // When "All Sprints" (empty string) is selected, show everything. Otherwise respect explicit selection.
+  const resolvedSprintId = selectedSprintId && selectedSprintId !== '' ? selectedSprintId : undefined;
   const storiesInScope = resolvedSprintId
     ? stories.filter(s => (s as any).sprintId === resolvedSprintId)
     : stories;
+  const storyIdsInScope = resolvedSprintId ? new Set(storiesInScope.map(s => s.id)) : undefined;
   const tasksInScope = resolvedSprintId
-    ? tasks.filter(t => (t as any).sprintId === resolvedSprintId)
+    ? tasks.filter(t => {
+        const taskSprintId = (t as any).sprintId;
+        if (taskSprintId && taskSprintId === resolvedSprintId) return true;
+        if (storyIdsInScope?.has(t.parentId)) return true;
+        return false;
+      })
     : tasks;
 
   const getStoriesForLane = (status: string): Story[] => {

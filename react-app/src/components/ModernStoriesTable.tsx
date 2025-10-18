@@ -122,6 +122,14 @@ const defaultColumns: Column[] = [
     options: ['low', 'medium', 'high', 'critical']
   },
   { 
+    key: 'points',
+    label: 'Points',
+    width: '8%',
+    visible: true,
+    editable: true,
+    type: 'number'
+  },
+  { 
     key: 'effort', 
     label: 'Effort', 
     width: '8%', 
