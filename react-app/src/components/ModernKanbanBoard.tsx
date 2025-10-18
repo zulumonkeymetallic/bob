@@ -21,7 +21,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Settings, Plus, Edit3, Trash2, User, Calendar, Target, BookOpen, AlertCircle, Activity } from 'lucide-react';
+import { Settings, Plus, Edit3, Trash2, User, Calendar, Target, BookOpen, AlertCircle, Activity, GripVertical } from 'lucide-react';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -43,19 +43,23 @@ interface ModernKanbanBoardProps {
 const DroppableArea: React.FC<{ 
   id: string; 
   children: React.ReactNode; 
-  style?: React.CSSProperties 
-}> = ({ id, children, style }) => {
+  style?: React.CSSProperties;
+  isActive?: boolean;
+}> = ({ id, children, style, isActive = false }) => {
   const { setNodeRef, isOver } = useDroppable({ id });
+  const highlight = isOver || isActive;
 
   return (
     <div 
       ref={setNodeRef}
       style={{
         minHeight: '100px',
-        backgroundColor: isOver ? rgbaCard(0.06) : 'transparent',
-        borderRadius: '6px',
+        backgroundColor: highlight ? rgbaCard(0.16) : 'transparent',
+        borderRadius: '8px',
         padding: '8px',
-        transition: 'background-color 0.2s ease',
+        border: highlight ? '2px solid rgba(37, 99, 235, 0.65)' : '2px dashed transparent',
+        boxShadow: highlight ? '0 0 0 3px rgba(37, 99, 235, 0.28)' : 'none',
+        transition: 'background-color 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease',
         ...style
       }}
     >
@@ -84,35 +88,63 @@ const SortableStoryCard: React.FC<{
     isDragging,
   } = useSortable({ id: story.id });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.8 : 1,
-  };
-
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.85 : 1,
+      }}
     >
-      <Card 
-        style={{ 
-          border: `2px solid ${themeColor}`,
+      <Card
+        style={{
+          border: `1px solid ${isDragging ? themeColor : themeVars.border}`,
           borderRadius: '8px',
-          boxShadow: isDragging ? '0 8px 16px rgba(0,0,0,0.15)' : '0 2px 4px rgba(0,0,0,0.1)',
-          cursor: 'pointer',
-          transition: 'all 0.2s ease',
-          marginBottom: '12px'
+          boxShadow: isDragging ? '0 8px 16px rgba(0,0,0,0.18)' : '0 1px 4px rgba(0,0,0,0.08)',
+          cursor: 'default',
+          transition: 'all 0.18s ease',
+          marginBottom: '8px',
+          backgroundColor: isDragging ? rgbaCard(0.12) : themeVars.panel,
         }}
-        // Disable opening activity on card click to preserve drag behavior
+        onMouseEnter={(e) => {
+          if (!isDragging) (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 12px rgba(0,0,0,0.16)';
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.boxShadow = isDragging ? '0 8px 16px rgba(0,0,0,0.18)' : '0 2px 6px rgba(0,0,0,0.08)';
+        }}
+        onClick={(e) => {
+          if (!(e.target instanceof HTMLElement && e.target.closest('[data-drag-handle="true"]'))) {
+            onItemClick(story);
+          }
+        }}
       >
-        <Card.Body style={{ padding: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                <span style={{ fontSize: '12px', fontWeight: '600', color: themeColor }}>
+        <Card.Body style={{ padding: '8px 10px 10px 10px' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
+            <div
+              style={{
+                width: '22px',
+                minHeight: '28px',
+                borderRadius: '6px',
+                border: `1px dashed ${isDragging ? themeColor : rgbaCard(0.2)}`,
+                background: rgbaCard(0.06),
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'grab',
+                transition: 'border-color 0.15s ease, background-color 0.15s ease',
+              }}
+              data-drag-handle="true"
+              {...attributes}
+              {...listeners}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <GripVertical size={12} color={isDragging ? themeColor : themeVars.muted} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', gap: '8px' }}>
+                <span style={{ fontSize: '10px', fontWeight: 600, color: themeColor }}>
                   {(() => {
                     const shortRef = (story as any).referenceNumber || story.ref;
                     return shortRef && validateRef(shortRef, 'story')
@@ -120,20 +152,19 @@ const SortableStoryCard: React.FC<{
                       : displayRefForEntity('story', story.id);
                   })()}
                 </span>
-                <h6 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: themeVars.text }}>
-                  {story.title}
-                </h6>
+                <span style={{ fontSize: '9px', color: themeVars.muted }}>{taskCount} tasks</span>
               </div>
-              {goal && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '8px' }}>
-                  <Target size={12} color={themeColor} />
-                  <span style={{ fontSize: '12px', color: themeVars.muted }}>
-                    {goal.title}
-                  </span>
-                </div>
+              <div style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: themeVars.text, lineHeight: 1.25 }}>
+                {story.title}
+              </div>
+              {story.description && (
+                <p style={{ margin: '4px 0 0 0', fontSize: '9px', color: themeVars.muted, lineHeight: 1.35 }}>
+                  {story.description.substring(0, 80)}
+                  {story.description.length > 80 ? '…' : ''}
+                </p>
               )}
             </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <Button
                 variant="link"
                 size="sm"
@@ -144,7 +175,7 @@ const SortableStoryCard: React.FC<{
                   showSidebar(story, 'story');
                 }}
               >
-                <Activity size={12} />
+                <Activity size={10} />
               </Button>
               <Button
                 variant="link"
@@ -155,7 +186,7 @@ const SortableStoryCard: React.FC<{
                   onEdit(story);
                 }}
               >
-                <Edit3 size={12} />
+                <Edit3 size={10} />
               </Button>
               <Button
                 variant="link"
@@ -166,58 +197,56 @@ const SortableStoryCard: React.FC<{
                   onDelete(story);
                 }}
               >
-                <Trash2 size={12} />
+                <Trash2 size={10} />
               </Button>
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <Badge 
-                bg={isPriority(story.priority, 'High') ? 'danger' : isPriority(story.priority, 'Medium') ? 'warning' : 'secondary'}
-                style={{ fontSize: '10px' }}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', marginBottom: goal ? '6px' : 0 }}>
+            <Badge
+              bg={isPriority(story.priority, 'High') ? 'danger' : isPriority(story.priority, 'Medium') ? 'warning' : 'secondary'}
+              style={{ fontSize: '9px' }}
+            >
+              {story.priority}
+            </Badge>
+            <Badge bg="info" style={{ fontSize: '8px' }}>
+              {story.points} pts
+            </Badge>
+            {goal?.theme && (
+              <Badge
+                style={{
+                  backgroundColor: themeColor,
+                  color: themeVars.onAccent,
+                  fontSize: '8px',
+                }}
               >
-                {story.priority}
+                {goal.theme}
               </Badge>
-              <Badge bg="info" style={{ fontSize: '10px' }}>
-                {story.points} pts
-              </Badge>
-              {goal?.theme && (
-                <Badge 
-                  style={{ 
-                    backgroundColor: themeColor, 
-                    color: themeVars.onAccent,
-                    fontSize: '10px'
-                  }}
-                >
-                  {goal.theme}
-                </Badge>
-              )}
-            </div>
-            <span style={{ fontSize: '11px', color: themeVars.muted }}>
-              {taskCount} tasks
-            </span>
+            )}
           </div>
 
-          {story.description && (
-            <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: themeVars.muted, lineHeight: '1.4' }}>
-              {story.description.substring(0, 80)}{story.description.length > 80 ? '...' : ''}
-            </p>
+          {goal && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '4px' }}>
+              <Target size={10} color={themeColor} />
+              <span style={{ fontSize: '10px', color: themeVars.muted }}>
+                {goal.title}
+              </span>
+            </div>
           )}
         </Card.Body>
       </Card>
     </div>
   );
 };
-
 // Sortable Task Card Component
 const SortableTaskCard: React.FC<{ 
   task: Task; 
   story?: Story;
+  goal?: Goal;
   themeColor: string;
   onEdit: (task: Task) => void;
   onItemClick: (task: Task) => void;
-}> = ({ task, story, themeColor, onEdit, onItemClick }) => {
+}> = ({ task, story, goal, themeColor, onEdit, onItemClick }) => {
   const { showSidebar } = useSidebar();
   const {
     attributes,
@@ -228,51 +257,77 @@ const SortableTaskCard: React.FC<{
     isDragging,
   } = useSortable({ id: task.id });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.8 : 1,
-  };
-
   return (
     <div
       ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.85 : 1,
+      }}
     >
-      <Card 
-        style={{ 
-          border: `1px solid ${themeColor}`,
-          borderRadius: '6px',
-          boxShadow: isDragging ? '0 4px 8px rgba(0,0,0,0.15)' : '0 1px 3px rgba(0,0,0,0.1)',
-          cursor: 'pointer',
-          transition: 'all 0.2s ease',
-          marginBottom: '8px'
+      <Card
+        style={{
+          border: `1px solid ${isDragging ? themeColor : themeVars.border}`,
+          borderRadius: '8px',
+          boxShadow: isDragging ? '0 6px 12px rgba(0,0,0,0.16)' : '0 2px 4px rgba(0,0,0,0.08)',
+          cursor: 'default',
+          transition: 'all 0.18s ease',
+          marginBottom: '6px',
+          backgroundColor: isDragging ? rgbaCard(0.12) : themeVars.card,
         }}
-        // Disable opening activity on card click to preserve drag behavior
+        onMouseEnter={(e) => {
+          if (!isDragging) (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 12px rgba(0,0,0,0.16)';
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.boxShadow = isDragging ? '0 6px 12px rgba(0,0,0,0.16)' : '0 2px 4px rgba(0,0,0,0.08)';
+        }}
+        onClick={(e) => {
+          if (!(e.target instanceof HTMLElement && e.target.closest('[data-drag-handle="true"]'))) {
+            onItemClick(task);
+          }
+        }}
       >
-        <Card.Body style={{ padding: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                <span style={{ fontSize: '11px', fontWeight: '600', color: themeColor }}>
-                  {task.ref || `TASK-${task.id.slice(-3).toUpperCase()}`}
-                </span>
-                <h6 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: themeVars.text }}>
-                  {task.title}
-                </h6>
+        <Card.Body style={{ padding: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+              <div
+                style={{
+                  width: '22px',
+                  minHeight: '28px',
+                  borderRadius: '6px',
+                  border: `1px dashed ${isDragging ? themeColor : rgbaCard(0.2)}`,
+                  background: rgbaCard(0.06),
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'grab',
+                  transition: 'border-color 0.15s ease, background-color 0.15s ease',
+                }}
+                data-drag-handle="true"
+                {...attributes}
+                {...listeners}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <GripVertical size={11} color={isDragging ? themeColor : themeVars.muted} />
               </div>
-              {story && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <BookOpen size={10} color={themeColor} />
-                  <span style={{ fontSize: '10px', color: themeVars.muted }}>
-                    {story.title}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '2px' }}>
+                  <span style={{ fontSize: '10px', fontWeight: 600, color: themeColor }}>
+                    {task.ref || `TASK-${task.id.slice(-4).toUpperCase()}`}
                   </span>
+                  <h6 style={{ margin: 0, fontSize: '11px', fontWeight: 600, color: themeVars.text }}>{task.title}</h6>
                 </div>
-              )}
+                {story && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <BookOpen size={10} color={themeColor} />
+                    <span style={{ fontSize: '9px', color: themeVars.muted }}>{story.title}</span>
+                  </div>
+                )}
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <Button
                 variant="link"
                 size="sm"
@@ -283,7 +338,7 @@ const SortableTaskCard: React.FC<{
                   showSidebar(task, 'task');
                 }}
               >
-                <Activity size={10} />
+                <Activity size={9} />
               </Button>
               <Button
                 variant="link"
@@ -294,32 +349,56 @@ const SortableTaskCard: React.FC<{
                   onEdit(task);
                 }}
               >
-                <Edit3 size={10} />
+                <Edit3 size={9} />
               </Button>
             </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-              <Badge 
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <Badge
                 bg={isPriority(task.priority, 'high') ? 'danger' : isPriority(task.priority, 'med') ? 'warning' : 'secondary'}
-                style={{ fontSize: '9px' }}
+                style={{ fontSize: '8px' }}
               >
                 {task.priority}
               </Badge>
-              <Badge bg="outline-secondary" style={{ fontSize: '9px', color: themeVars.muted, backgroundColor: 'transparent', border: `1px solid ${themeVars.border}` }}>
+              <Badge
+                bg="outline-secondary"
+                style={{ fontSize: '8px', color: themeVars.muted, backgroundColor: 'transparent', border: `1px solid ${themeVars.border}` }}
+              >
                 {task.effort}
               </Badge>
+              {typeof (task as any).points === 'number' && (
+                <Badge bg="info" style={{ fontSize: '8px' }}>
+                  {(task as any).points} pts
+                </Badge>
+              )}
+              {task.source && (
+                <Badge bg="light" text="dark" style={{ fontSize: '9px', border: `1px solid ${themeVars.border}` }}>
+                  {String(task.source)
+                    .replace('ios_reminder', 'iOS')
+                    .replace('MacApp', 'Mac')
+                    .replace('web', 'Web')
+                    .replace('ai', 'AI')
+                    .toUpperCase()}
+                </Badge>
+              )}
             </div>
-            <span style={{ fontSize: '10px', color: themeVars.muted }}>
-              {task.estimateMin}min
-            </span>
+            <span style={{ fontSize: '10px', color: themeVars.muted }}>{task.estimateMin}min</span>
           </div>
+
+          {goal && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '6px' }}>
+              <Target size={10} color={themeColor} />
+              <span style={{ fontSize: '10px', color: themeVars.muted }}>{goal.title}</span>
+            </div>
+          )}
         </Card.Body>
       </Card>
     </div>
   );
 };
+
 
 const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) => {
   const { currentUser } = useAuth();
@@ -344,6 +423,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   // DnD state
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
   const [activeDragItem, setActiveDragItem] = useState<Story | Task | null>(null);
+  const [activeDropLane, setActiveDropLane] = useState<string | null>(null);
 
   // Form states
   const [editForm, setEditForm] = useState<any>({});
@@ -388,9 +468,97 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     return task ? stories.find(s => s.id === task.parentId) : undefined;
   };
 
-  const getTasksForStory = (storyId: string): Task[] => {
-    return tasks.filter(task => task.parentId === storyId);
-  };
+const getTasksForStory = (storyId: string): Task[] => {
+  return tasks.filter(task => task.parentId === storyId);
+};
+
+const storyLaneForStatus = (story: Story): 'backlog' | 'in-progress' | 'done' => {
+  const rawStatus = (story as any).status;
+  if (typeof rawStatus === 'number') {
+    if (rawStatus <= 1) return 'backlog';
+    if (rawStatus === 2) return 'in-progress';
+    return 'done';
+  }
+  const normalized = String(rawStatus || '').toLowerCase();
+  if (['in-progress', 'in progress', 'active', 'doing', 'testing', 'qa', 'review'].includes(normalized)) {
+    return 'in-progress';
+  }
+  if (['done', 'complete', 'completed', 'finished'].includes(normalized)) {
+    return 'done';
+  }
+  return 'backlog';
+};
+
+const taskLaneForStatus = (task: Task): 'backlog' | 'in-progress' | 'done' => {
+  const rawStatus = (task as any).status;
+  if (typeof rawStatus === 'number') {
+    if (rawStatus <= 0) return 'backlog';
+    if (rawStatus === 1) return 'in-progress';
+    return 'done';
+  }
+  const normalized = String(rawStatus || '').toLowerCase();
+  if (['in-progress', 'in progress', 'active', 'doing'].includes(normalized)) return 'in-progress';
+  if (['done', 'complete', 'completed', 'finished'].includes(normalized)) return 'done';
+  return 'backlog';
+};
+
+const nextStoryStatusForLane = (story: Story, lane: 'backlog' | 'in-progress' | 'done'): number | string => {
+  const numeric = typeof story.status === 'number';
+  if (numeric) {
+    if (lane === 'backlog') return 0;
+    if (lane === 'in-progress') return 2;
+    return 4;
+  }
+  if (lane === 'backlog') return 'backlog';
+  if (lane === 'in-progress') return 'in-progress';
+  return 'done';
+};
+
+const dropLaneKey = (status: string, targetType: 'stories' | 'tasks') => `${status}-${targetType}`;
+
+const parseDroppableId = (
+  id: string
+): { newStatus: string; targetType: 'stories' | 'tasks' } | null => {
+  const storySuffix = '-stories';
+  const taskSuffix = '-tasks';
+  if (id.endsWith(storySuffix)) {
+    const status = id.slice(0, -storySuffix.length);
+    if (status === 'backlog' || status === 'in-progress' || status === 'done') {
+      return { newStatus: status, targetType: 'stories' };
+    }
+  }
+  if (id.endsWith(taskSuffix)) {
+    const status = id.slice(0, -taskSuffix.length);
+    if (status === 'backlog' || status === 'in-progress' || status === 'done') {
+      return { newStatus: status, targetType: 'tasks' };
+    }
+  }
+  return null;
+};
+
+const resolveDropTarget = (
+  overId: string,
+  activeId?: string
+): { newStatus: string; targetType: 'stories' | 'tasks' } | null => {
+  const direct = parseDroppableId(overId);
+  if (direct) return direct;
+
+  const story = stories.find((s) => s.id === overId);
+  if (story) {
+    const activeIsTask = activeId ? tasks.some((t) => t.id === activeId) : false;
+    if (activeIsTask) return null;
+    return { newStatus: storyLaneForStatus(story), targetType: 'stories' };
+  }
+
+  const task = tasks.find((t) => t.id === overId);
+  if (task) {
+    const activeIsStory = activeId ? stories.some((s) => s.id === activeId) : false;
+    if (activeIsStory) return null;
+    return { newStatus: taskLaneForStatus(task), targetType: 'tasks' };
+  }
+
+  return null;
+};
 
   // Sprint-aware filtering
   // When "All Sprints" (empty string) is selected, show everything. Otherwise respect explicit selection.
@@ -408,14 +576,13 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       })
     : tasks;
 
-  const getStoriesForLane = (status: string): Story[] => {
-    return storiesInScope.filter(story => isStatus(story.status, status));
-  };
+const getStoriesForLane = (status: string): Story[] => {
+  return storiesInScope.filter((story) => storyLaneForStatus(story) === status);
+};
 
-  const getTasksForLane = (status: string): Task[] => {
-    const taskStatus = status === 'active' ? 'in-progress' : status;
-    return tasksInScope.filter(task => isStatus(task.status, taskStatus));
-  };
+const getTasksForLane = (status: string): Task[] => {
+  return tasksInScope.filter((task) => taskLaneForStatus(task) === status);
+};
 
   // Data loading effect
   useEffect(() => {
@@ -499,50 +666,80 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
   // DnD handlers
   const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(event.active.id);
-    
-    const story = stories.find(s => s.id === event.active.id);
-    const task = tasks.find(t => t.id === event.active.id);
-    
+    const activeKey = String(event.active.id);
+    setActiveId(activeKey);
+
+    const story = stories.find((s) => s.id === activeKey);
+    const task = tasks.find((t) => t.id === activeKey);
     setActiveDragItem(story || task || null);
+
+    if (story) {
+      setActiveDropLane(dropLaneKey(storyLaneForStatus(story), 'stories'));
+    } else if (task) {
+      setActiveDropLane(dropLaneKey(taskLaneForStatus(task), 'tasks'));
+    } else {
+      setActiveDropLane(null);
+    }
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    const activeKey = String(event.active.id);
+    setActiveId(activeKey);
+
+    const overId = event.over ? String(event.over.id) : null;
+    if (!overId) {
+      setActiveDropLane(null);
+      return;
+    }
+
+    const target = resolveDropTarget(overId, activeKey);
+    setActiveDropLane(target ? dropLaneKey(target.newStatus, target.targetType) : null);
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    
+
     setActiveId(null);
     setActiveDragItem(null);
+    setActiveDropLane(null);
 
     if (!over) return;
-    
-    const activeId = active.id as string;
-    const overId = over.id as string;
 
-    // Parse the droppable zone ID to get status and type
-    const overParts = overId.split('-');
-    
-    if (overParts.length < 2) return;
-    
-    const newStatus = overParts[0];
-    const itemType = overParts[1]; // 'stories' or 'tasks'
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    const target = resolveDropTarget(overId, activeId);
+    if (!target) return;
+
+    const { newStatus, targetType } = target;
 
     try {
-      if (itemType === 'stories') {
-        const story = stories.find(s => s.id === activeId);
-        if (story && !isStatus(story.status, newStatus)) {
-          await updateDoc(doc(db, 'stories', activeId), {
-            status: newStatus,
-            updatedAt: serverTimestamp()
-          });
-        }
-      } else if (itemType === 'tasks') {
-        const taskStatus = newStatus === 'active' ? 'in-progress' : newStatus;
-        const task = tasks.find(t => t.id === activeId);
-        if (task && !isStatus(task.status, taskStatus)) {
-          await updateDoc(doc(db, 'tasks', activeId), {
-            status: taskStatus,
-            updatedAt: serverTimestamp()
-          });
+    if (targetType === 'stories') {
+      const story = stories.find((s) => s.id === activeId);
+      if (story && !isStatus(story.status, newStatus)) {
+        await updateDoc(doc(db, 'stories', activeId), {
+          status: nextStoryStatusForLane(story, newStatus as 'backlog' | 'in-progress' | 'done'),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      } else if (targetType === 'tasks') {
+        const task = tasks.find((t) => t.id === activeId);
+        if (task) {
+          const numericStatus = typeof task.status === 'number';
+          const mappedStatus = (() => {
+            if (newStatus === 'backlog') return numericStatus ? 0 : 'backlog';
+            if (newStatus === 'in-progress') return numericStatus ? 1 : 'in-progress';
+            if (newStatus === 'done') return numericStatus ? 2 : 'done';
+            return task.status;
+          })();
+          const changed = numericStatus
+            ? task.status !== mappedStatus
+            : String(task.status || '').toLowerCase() !== String(mappedStatus).toLowerCase();
+          if (changed) {
+            await updateDoc(doc(db, 'tasks', activeId), {
+              status: mappedStatus,
+              updatedAt: serverTimestamp(),
+            });
+          }
         }
       }
     } catch (error) {
@@ -723,6 +920,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         sensors={sensors} 
         collisionDetection={closestCenter}
         onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
         <Row style={{ minHeight: '600px' }}>
@@ -745,31 +943,48 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                     <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
                       Stories
                     </h6>
-                    <DroppableArea id={`${lane.status}-stories`}>
-                      <SortableContext 
-                        items={getStoriesForLane(lane.status).map(story => story.id)}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        {getStoriesForLane(lane.status).map((story) => {
-                          const goal = getGoalForStory(story.id);
-                          const taskCount = getTasksForStory(story.id).length;
-                          const themeColor = goal?.theme ? themeColors[goal.theme] : themeVars.muted;
-                          
-                          return (
-                            <SortableStoryCard
-                              key={story.id}
-                              story={story}
-                              goal={goal}
-                              taskCount={taskCount}
-                              themeColor={themeColor}
-                              onEdit={(story) => handleEdit(story, 'story')}
-                              onDelete={(story) => handleDelete(story, 'story')}
-                              onItemClick={(story) => handleItemClick(story, 'story')}
-                            />
-                          );
-                        })}
-                      </SortableContext>
-                    </DroppableArea>
+                    <DroppableArea 
+                    id={`${lane.status}-stories`}
+                    isActive={activeDropLane === dropLaneKey(lane.status, 'stories')}
+                  >
+                    {(() => {
+                      const laneStories = getStoriesForLane(lane.status);
+                      const baseIds = laneStories.map(story => story.id);
+                      const isTaskDrag = activeDragItem && 'parentType' in (activeDragItem as any);
+                      const activeStoryId = activeDragItem && !isTaskDrag
+                        ? (activeDragItem as Story).id
+                        : null;
+                      const sortableIds = activeStoryId 
+                        && activeDropLane === dropLaneKey(lane.status, 'stories')
+                        && !baseIds.includes(activeStoryId)
+                        ? [...baseIds, activeStoryId]
+                        : baseIds;
+                      return (
+                        <SortableContext 
+                          items={sortableIds}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          {laneStories.map((story) => {
+                            const goal = getGoalForStory(story.id);
+                            const taskCount = getTasksForStory(story.id).length;
+                            const themeColor = goal?.theme ? themeColors[goal.theme] : themeVars.muted;
+                            return (
+                              <SortableStoryCard
+                                key={story.id}
+                                story={story}
+                                goal={goal}
+                                taskCount={taskCount}
+                                themeColor={themeColor}
+                                onEdit={(story) => handleEdit(story, 'story')}
+                                onDelete={(story) => handleDelete(story, 'story')}
+                                onItemClick={(story) => handleItemClick(story, 'story')}
+                              />
+                            );
+                          })}
+                        </SortableContext>
+                      );
+                    })()}
+                  </DroppableArea>
                   </div>
 
                   {/* Tasks Section */}
@@ -777,29 +992,47 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                     <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
                       Tasks
                     </h6>
-                    <DroppableArea id={`${lane.status}-tasks`}>
-                      <SortableContext 
-                        items={getTasksForLane(lane.status).map(task => task.id)}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        {getTasksForLane(lane.status).map((task) => {
-                          const story = getStoryForTask(task.id);
-                          const goal = story ? getGoalForStory(story.id) : undefined;
-                          const themeColor = goal?.theme ? themeColors[goal.theme] : themeVars.muted;
-                          
-                          return (
-                            <SortableTaskCard
-                              key={task.id}
-                              task={task}
-                              story={story}
-                              themeColor={themeColor}
-                              onEdit={(task) => handleEdit(task, 'task')}
-                              onItemClick={(task) => handleItemClick(task, 'task')}
-                            />
-                          );
-                        })}
-                      </SortableContext>
-                    </DroppableArea>
+                    <DroppableArea 
+                    id={`${lane.status}-tasks`}
+                    isActive={activeDropLane === dropLaneKey(lane.status, 'tasks')}
+                  >
+                    {(() => {
+                      const laneTasks = getTasksForLane(lane.status);
+                      const baseIds = laneTasks.map(task => task.id);
+                      const isTaskDrag = activeDragItem && 'parentType' in (activeDragItem as any);
+                      const activeTaskId = activeDragItem && isTaskDrag
+                        ? (activeDragItem as Task).id
+                        : null;
+                      const sortableIds = activeTaskId 
+                        && activeDropLane === dropLaneKey(lane.status, 'tasks')
+                        && !baseIds.includes(activeTaskId)
+                        ? [...baseIds, activeTaskId]
+                        : baseIds;
+                      return (
+                        <SortableContext 
+                          items={sortableIds}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          {laneTasks.map((task) => {
+                            const story = getStoryForTask(task.id);
+                            const goal = story ? getGoalForStory(story.id) : undefined;
+                            const themeColor = goal?.theme ? themeColors[goal.theme] : themeVars.muted;
+                            return (
+                              <SortableTaskCard
+                                key={task.id}
+                                task={task}
+                                story={story}
+                                goal={goal}
+                                themeColor={themeColor}
+                                onEdit={(task) => handleEdit(task, 'task')}
+                                onItemClick={(task) => handleItemClick(task, 'task')}
+                              />
+                            );
+                          })}
+                        </SortableContext>
+                      );
+                    })()}
+                  </DroppableArea>
                   </div>
                 </Card.Body>
               </Card>
@@ -810,11 +1043,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         {/* Drag Overlay */}
         <DragOverlay>
           {activeDragItem && (
-            <div style={{ opacity: 0.8 }}>
-              {'points' in activeDragItem ? (
-                <div>Story: {activeDragItem.title}</div>
+            <div style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: themeVars.panel, boxShadow: '0 4px 12px rgba(0,0,0,0.18)' }}>
+              {'parentType' in (activeDragItem as any) ? (
+                <div style={{ fontSize: '12px', fontWeight: 600 }}>Task: {activeDragItem.title}</div>
               ) : (
-                <div>Task: {activeDragItem.title}</div>
+                <div style={{ fontSize: '12px', fontWeight: 600 }}>Story: {activeDragItem.title}</div>
               )}
             </div>
           )}
