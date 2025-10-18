@@ -11,6 +11,7 @@ import ModernTaskTable from './ModernTaskTable';
 import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3 } from 'lucide-react';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
+import { isStatus } from '../utils/statusHelpers';
 
 interface SprintKanbanPageProps {
   showSidebar?: boolean;
@@ -176,13 +177,22 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
 
   // Sprint metrics
   const getSprintMetrics = () => {
+    const storyCompleted = (story: Story) => {
+      const status = (story as any).status;
+      return isStatus(status, 'done') || isStatus(status, 'Complete');
+    };
+    const taskCompleted = (task: Task) => {
+      const status = (task as any).status;
+      return isStatus(status, 'done') || isStatus(status, 'Complete');
+    };
+
     const totalStories = sprintStories.length;
-    const completedStories = sprintStories.filter(s => s.status === 4).length; // Done
+    const completedStories = sprintStories.filter(storyCompleted).length;
     const totalTasks = sprintTasks.length;
-    const completedTasks = sprintTasks.filter(t => t.status === 2).length; // Done
+    const completedTasks = sprintTasks.filter(taskCompleted).length;
     const totalPoints = sprintStories.reduce((sum, story) => sum + (story.points || 0), 0);
     const completedPoints = sprintStories
-      .filter(s => s.status === 4)
+      .filter(storyCompleted)
       .reduce((sum, story) => sum + (story.points || 0), 0);
 
     return {
@@ -367,7 +377,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
                         {metrics.completedStories}/{metrics.totalStories}
                       </div>
                       <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Stories Completed
+                        Stories Done
                       </div>
                       <div style={{ marginTop: '4px' }}>
                         <Badge bg="success" style={{ fontSize: '11px' }}>

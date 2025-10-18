@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, ButtonGroup, Modal, Form, Badge, Dropdown } from 'react-bootstrap';
+import { Button, ButtonGroup, Modal, Form, Badge } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -8,10 +8,10 @@ import { useSidebar } from '../../contexts/SidebarContext';
 import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
-import { Goal, Sprint, Story } from '../../types';
+import { Goal, Sprint, Story, Task } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Calendar as CalendarIcon } from 'lucide-react';
+import { Wand2, List as ListIcon, Edit3, ZoomIn, ZoomOut, Home, Maximize2, Minimize2, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Star } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
@@ -23,11 +23,14 @@ type AxisRow = { id: 'year' | 'half' | 'quarter' | 'month'; labels: AxisLabel[] 
 type ThemeDescriptor = { id: number; name: string; color: string; textColor?: string };
 const DAY_MS = 86400000;
 const YEAR_MS = DAY_MS * 365.25;
+const MILESTONE_THRESHOLD_MS = DAY_MS * 7 * 28;
 const AXIS_ROW_HEIGHT = 28;
-const TRACK_VERTICAL_PADDING = 28;
+const TRACK_VERTICAL_PADDING = 18;
 const AXIS_GAP_PX = 12;
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
+
+const pluralize = (word: string, count: number) => (count === 1 ? word : `${word}s`);
 
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
@@ -51,6 +54,10 @@ const GoalRoadmapV3: React.FC = () => {
   const [lastNotes, setLastNotes] = useState<Record<string, string>>({});
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
   const [storyDoneCounts, setStoryDoneCounts] = useState<Record<string, number>>({});
+  const [storySprintCounts, setStorySprintCounts] = useState<Record<string, number>>({});
+  const [storyMeta, setStoryMeta] = useState<Record<string, { goalId?: string; sprintId?: string }>>({});
+  const [taskCounts, setTaskCounts] = useState<Record<string, number>>({});
+  const [taskSprintCounts, setTaskSprintCounts] = useState<Record<string, number>>({});
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [showSprints, setShowSprints] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -94,17 +101,48 @@ const GoalRoadmapV3: React.FC = () => {
   const themesList = useMemo(() => themePalette.map(t => ({ id: t.id, name: t.name || t.label, color: t.color, textColor: t.textColor })), [themePalette]);
   const getThemeDefinition = useCallback((id: number) => themeMap.get(id) || themePalette[0] || GLOBAL_THEMES[0], [themeMap, themePalette]);
 
+  const goalIndex = useMemo(() => {
+    const map = new Map<string, Goal>();
+    goals.forEach((g) => map.set(g.id, g));
+    return map;
+  }, [goals]);
+
+  const wouldCreateCycle = useCallback((sourceId: string, targetId: string | null | undefined) => {
+    if (!targetId) return false;
+    if (sourceId === targetId) return true;
+    const visited = new Set<string>();
+    let currentId: string | null | undefined = targetId;
+    while (currentId) {
+      if (currentId === sourceId) return true;
+      if (visited.has(currentId)) break;
+      visited.add(currentId);
+      currentId = goalIndex.get(currentId)?.parentGoalId || null;
+    }
+    return false;
+  }, [goalIndex]);
+
   // Viewport culling state
   const [viewport, setViewport] = useState<{ left: number; width: number }>({ left: 0, width: 1200 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [linkHoverGoalId, setLinkHoverGoalId] = useState<string | null>(null);
+  const linkHoverGoalRef = useRef<string | null>(null);
   const [financeOnTrack, setFinanceOnTrack] = useState<boolean|null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const themeRowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   const timeRange = useMemo(() => {
     if (customRange) {
@@ -242,22 +280,58 @@ const GoalRoadmapV3: React.FC = () => {
     const unsub = onSnapshot(q, (snap) => {
       const counts: Record<string, number> = {};
       const doneCounts: Record<string, number> = {};
+      const sprintCounts: Record<string, number> = {};
+      const metaMap: Record<string, { goalId?: string; sprintId?: string }> = {};
       const inSprint = new Set<string>();
       for (const d of snap.docs) {
         const story = d.data() as Story;
         const gid = story.goalId as string | undefined;
+        const storySprintId = (story as any).sprintId as string | undefined;
+        metaMap[d.id] = { goalId: gid, sprintId: storySprintId };
         if (gid) {
           counts[gid] = (counts[gid] || 0) + 1;
           if (isStatus(story.status as any, 'done')) doneCounts[gid] = (doneCounts[gid] || 0) + 1;
         }
-        if (selectedSprintId && story.sprintId === selectedSprintId && gid) inSprint.add(gid);
+        if (selectedSprintId && gid && storySprintId === selectedSprintId) {
+          sprintCounts[gid] = (sprintCounts[gid] || 0) + 1;
+          inSprint.add(gid);
+        }
       }
       setStoryCounts(counts);
       setStoryDoneCounts(doneCounts);
+      setStorySprintCounts(sprintCounts);
+      setStoryMeta(metaMap);
       goalsInSprint.current = inSprint;
     });
     return () => unsub();
   }, [currentUser?.uid, selectedSprintId]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(q, snap => {
+      const totals: Record<string, number> = {};
+      const sprintTotals: Record<string, number> = {};
+      snap.docs.forEach((docSnap) => {
+        const task = docSnap.data() as Task;
+        const parentId = task.parentId;
+        const meta = storyMeta[parentId];
+        const goalId = meta?.goalId;
+        if (!goalId) return;
+        totals[goalId] = (totals[goalId] || 0) + 1;
+        if (selectedSprintId) {
+          const taskSprintId = (task as any).sprintId as string | undefined;
+          const storySprintId = meta?.sprintId;
+          if ((taskSprintId && taskSprintId === selectedSprintId) || (storySprintId && storySprintId === selectedSprintId)) {
+            sprintTotals[goalId] = (sprintTotals[goalId] || 0) + 1;
+          }
+        }
+      });
+      setTaskCounts(totals);
+      setTaskSprintCounts(sprintTotals);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, storyMeta, selectedSprintId]);
 
   // Subscribe to sprints (for overlay labels & bands) – used on weeks/months views
   useEffect(() => {
@@ -355,11 +429,12 @@ const GoalRoadmapV3: React.FC = () => {
   }, [filterHasStories, filterInSelectedSprint, filterOverlapSelectedSprint, selectedSprintId, sprints, storyCounts]);
 
   // Drag+resize implementation
-  const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|null; startX: number; origStart: Date; origEnd: Date; goal: Goal | null }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null });
+  const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|'link'|null; startX: number; origStart: Date; origEnd: Date; goal: Goal | null }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null });
   const [guideXs, setGuideXs] = useState<number[]>([]);
   const [activeGuideX, setActiveGuideX] = useState<number | null>(null);
   const pointerMove = useCallback((ev: PointerEvent) => {
     const s = dragState.current; if (!s.id || !s.type) return; ev.preventDefault();
+    if (s.type === 'link') return;
     const dx = ev.clientX - s.startX; const deltaDays = Math.round(dx / pxPerDay);
     let ns = new Date(s.origStart), ne = new Date(s.origEnd);
     if (s.type === 'move') { ns.setDate(ns.getDate()+deltaDays); ne.setDate(ne.getDate()+deltaDays); }
@@ -391,8 +466,27 @@ const GoalRoadmapV3: React.FC = () => {
     }
   }, [pxPerDay, xFromDate, guideXs]);
 
+  const handleLinkPointerMove = useCallback((ev: PointerEvent) => {
+    const state = dragState.current;
+    if (!state.id || state.type !== 'link') return;
+    ev.preventDefault();
+    const element = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+    const goalEl = element?.closest('[data-grv3-goal]') as HTMLElement | null;
+    const targetId = goalEl?.getAttribute('data-grv3-goal') || null;
+    const validTarget = targetId && targetId !== state.id && !wouldCreateCycle(state.id, targetId) ? targetId : null;
+    if (linkHoverGoalRef.current !== validTarget) {
+      linkHoverGoalRef.current = validTarget;
+      setLinkHoverGoalId(validTarget);
+    }
+  }, [wouldCreateCycle]);
+
   const pointerUp = useCallback(async (ev: PointerEvent) => {
     const s = dragState.current; if (!s.id || !s.type) return; ev.preventDefault();
+    if (s.type === 'link') {
+      dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null };
+      setDraggingId(null);
+      return;
+    }
     document.removeEventListener('pointermove', pointerMove); document.removeEventListener('pointerup', pointerUp);
     const el = document.querySelector(`[data-grv3-goal="${s.id}"]`) as HTMLElement | null;
     if (!el) {
@@ -452,13 +546,53 @@ const GoalRoadmapV3: React.FC = () => {
       setDraggingId(null);
       setThemeDropCandidate(null);
       themeDropCandidateRef.current = null;
+      setLinkHoverGoalId(null);
+      linkHoverGoalRef.current = null;
     }
   }, [dateFromX, pointerMove, currentUser?.uid, snapEnabled, zoom, getThemeDefinition]);
+
+  const handleLinkPointerUp = useCallback(async (ev: PointerEvent) => {
+    const state = dragState.current;
+    if (!state.id || state.type !== 'link') return;
+    ev.preventDefault();
+    document.removeEventListener('pointermove', handleLinkPointerMove);
+    document.removeEventListener('pointerup', handleLinkPointerUp);
+    const sourceId = state.id;
+    const targetId = linkHoverGoalRef.current;
+    dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null };
+    setDraggingId(null);
+    setLinkHoverGoalId(null);
+    linkHoverGoalRef.current = null;
+    setThemeDropCandidate(null);
+    themeDropCandidateRef.current = null;
+    setGuideXs([]);
+    setActiveGuideX(null);
+    if (targetId && !wouldCreateCycle(sourceId, targetId)) {
+      try {
+        await updateDoc(doc(db, 'goals', sourceId), { parentGoalId: targetId, updatedAt: Date.now() });
+      } catch (error) {
+        console.error('Failed to link goals', error);
+      }
+    }
+  }, [handleLinkPointerMove, wouldCreateCycle]);
 
   const startDrag = useCallback((ev: React.PointerEvent, goal: Goal, type: 'move'|'start'|'end') => {
     ev.preventDefault();
     const startDate = goal.startDate ? new Date(goal.startDate) : new Date();
     const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now()+90*DAY_MS));
+
+    if (type === 'move' && (ev.metaKey || ev.altKey)) {
+      dragState.current = { id: goal.id, type: 'link', startX: ev.clientX, origStart: startDate, origEnd: endDate, goal };
+      setThemeDropCandidate(null);
+      themeDropCandidateRef.current = null;
+      setDraggingId(goal.id);
+      linkHoverGoalRef.current = null;
+      setLinkHoverGoalId(null);
+      document.addEventListener('pointermove', handleLinkPointerMove, { passive: false });
+      document.addEventListener('pointerup', handleLinkPointerUp, { passive: false });
+      return;
+    }
+
     dragState.current = { id: goal.id, type, startX: ev.clientX, origStart: startDate, origEnd: endDate, goal };
     setThemeDropCandidate(null);
     themeDropCandidateRef.current = null;
@@ -478,7 +612,7 @@ const GoalRoadmapV3: React.FC = () => {
       for (let y=start.getFullYear(); y<=end.getFullYear(); y++) { const d=new Date(y,0,1); if(d>=start&&d<=end) guides.push(xFromDate(d)); }
     }
     setGuideXs(guides);
-  }, [pointerMove, pointerUp, timeRange.start.getTime(), timeRange.end.getTime(), xFromDate, zoom]);
+  }, [pointerMove, pointerUp, timeRange.start.getTime(), timeRange.end.getTime(), xFromDate, zoom, handleLinkPointerMove, handleLinkPointerUp]);
 
   // Keyboard nudges for accessibility and precision
   const onKeyNudge = useCallback(async (e: React.KeyboardEvent, g: Goal) => {
@@ -702,11 +836,25 @@ const GoalRoadmapV3: React.FC = () => {
     setNoteDraft(''); setNoteGoalId(null);
   }, [noteGoalId, noteDraft, currentUser?.uid]);
 
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement === containerRef.current) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+      } else if (containerRef.current?.requestFullscreen) {
+        await containerRef.current.requestFullscreen();
+      }
+    } catch (error) {
+      console.error('Failed to toggle roadmap fullscreen', error);
+    }
+  }, []);
+
   const laneHeight = useMemo(() => {
-    if (zoom === 'weeks') return 92;
-    if (zoom === 'months') return 84;
-    if (zoom === 'quarters') return 64;
-    return 48;
+    if (zoom === 'weeks') return 72;
+    if (zoom === 'months') return 66;
+    if (zoom === 'quarters') return 48;
+    return 36;
   }, [zoom]);
 
   type TimedGoal = { id: string; start: number; end: number; raw: Goal };
@@ -734,6 +882,22 @@ const GoalRoadmapV3: React.FC = () => {
     totalHeight: number;
   };
 
+  type GoalLayout = {
+    left: number;
+    width: number;
+    centerX: number;
+    centerY: number;
+    barHeight: number;
+    themeColor: string;
+  };
+
+  type ConnectorSegment = {
+    path: string;
+    gradientId: string;
+    startColor: string;
+    endColor: string;
+  };
+
   const themeRows = useMemo(() => {
     return themesList
       .map<ThemeRowData | null>((themeDef) => {
@@ -749,7 +913,8 @@ const GoalRoadmapV3: React.FC = () => {
         const laneAssignment = computeLanes(timedGoals);
         const laneIndexes = Array.from(laneAssignment.values());
         const laneCount = laneIndexes.length ? Math.max(0, ...laneIndexes) + 1 : 1;
-        const rowHeight = Math.max(laneHeight + 24, laneCount * (laneHeight + 8) + 16);
+        const laneStride = laneHeight + 48;
+        const rowHeight = Math.max(laneStride, laneCount * laneStride + 16);
         const visibleGoals = allGoals.filter(applyFilters);
         const totalHeight = rowHeight + TRACK_VERTICAL_PADDING;
         return { theme: themeDef, allGoals, visibleGoals, laneAssignment, rowHeight, totalHeight };
@@ -762,6 +927,266 @@ const GoalRoadmapV3: React.FC = () => {
     return Math.max(laneHeight + 48, total);
   }, [laneHeight, themeRows]);
   const overlayHeight = contentHeight + AXIS_GAP_PX;
+
+  const layoutMap = new Map<string, GoalLayout>();
+  const visibleGoalIds = new Set<string>();
+  let accumulatedRowTop = 0;
+
+  const rowsMarkup = themeRows.map((row) => {
+    const laneH = laneHeight;
+    const isEmpty = row.visibleGoals.length === 0;
+    const rowTop = accumulatedRowTop;
+    accumulatedRowTop += row.totalHeight;
+
+    return (
+      <div
+        key={row.theme.id}
+        ref={(el) => {
+          if (el) themeRowRefs.current.set(row.theme.id, el);
+          else themeRowRefs.current.delete(row.theme.id);
+        }}
+        className={`grv3-theme-row${isEmpty ? ' grv3-theme-row-empty' : ''}${themeDropCandidate === row.theme.id ? ' grv3-theme-row-drop-target' : ''}`}
+        style={{ minHeight: row.totalHeight }}
+      >
+        <div className="grv3-label" style={{ color: row.theme.color }}>
+          <span className="grv3-label-dot" />
+          <span className="grv3-label-text">{row.theme.name}</span>
+        </div>
+        <div className="grv3-track" style={{ width: totalWidth, minHeight: row.totalHeight }}>
+          {row.visibleGoals.map((g) => {
+            const startDate = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
+            const endDateRaw = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now() + 90 * DAY_MS));
+            const start = new Date(startDate); start.setHours(0,0,0,0);
+            const end = new Date(endDateRaw); end.setHours(0,0,0,0);
+            if (end < start) end.setTime(start.getTime());
+            const durationMs = end.getTime() - start.getTime();
+            const isMilestone = durationMs >= 0 && durationMs < MILESTONE_THRESHOLD_MS;
+
+            const rawLeft = xFromDate(start);
+            const rawRight = xFromDate(end);
+            let width = Math.max(14, rawRight - rawLeft);
+            if (!Number.isFinite(width) || width < 14) width = 14;
+            let left = rawLeft;
+
+            const lane = row.laneAssignment.get(g.id) ?? 0;
+            const laneStride = laneHeight + 48;
+            const laneBase = lane * laneStride;
+            const labelTop = laneBase - (isMilestone ? 12 : 0);
+            const barTop = laneBase + 32;
+            const barHeight = laneH;
+
+            const milestoneSize = Math.max(28, Math.min(40, barHeight + 10));
+            const milestonePadding = 12;
+            let barLeft = left;
+            let barWidth = width;
+            if (isMilestone) {
+              const containerWidth = milestoneSize + milestonePadding;
+              const midPoint = left + width / 2;
+              barLeft = midPoint - containerWidth / 2;
+              barWidth = containerWidth;
+            }
+
+            const containerWidth = Math.max(barWidth, isMilestone ? milestoneSize + milestonePadding : barWidth);
+            const barOffset = (containerWidth - barWidth) / 2;
+            const absoluteBarLeft = barLeft + barOffset;
+
+            const themeId = migrateThemeValue(g.theme);
+            const themeDef = getThemeDefinition(themeId);
+            const themeColor = themeDef.color || '#6c757d';
+
+            const buffer = 800;
+            const visLeft = viewport.left;
+            const visRight = viewport.left + viewport.width;
+            const barRightBound = absoluteBarLeft + barWidth;
+            if (barRightBound < visLeft - buffer || absoluteBarLeft > visRight + buffer) {
+              return null;
+            }
+
+            visibleGoalIds.add(g.id);
+
+            layoutMap.set(g.id, {
+              left: absoluteBarLeft,
+              width: barWidth,
+              centerX: absoluteBarLeft + barWidth / 2,
+              centerY: rowTop + barTop + barHeight / 2,
+              barHeight,
+              themeColor
+            });
+
+            const labelWidth = containerWidth;
+            const startLabel = g.startDate ? new Date(g.startDate).toLocaleDateString() : '';
+            const endLabel = g.endDate ? new Date(g.endDate).toLocaleDateString() : '';
+            const dateRangeText = [startLabel, endLabel].filter(Boolean).join(' → ');
+
+            const totalStories = storyCounts[g.id] || 0;
+            const totalTasksForGoal = taskCounts[g.id] || 0;
+            const sprintStories = storySprintCounts[g.id] || 0;
+            const sprintTasksForGoal = taskSprintCounts[g.id] || 0;
+            const sprintLine = `${sprintStories} ${pluralize('story', sprintStories)} • ${sprintTasksForGoal} ${pluralize('task', sprintTasksForGoal)} in sprint`;
+            const totalLine = `${totalStories} ${pluralize('story', totalStories)} • ${totalTasksForGoal} ${pluralize('task', totalTasksForGoal)} total`;
+            const pct = totalStories ? Math.round(((storyDoneCounts[g.id] || 0) / totalStories) * 100) : 0;
+
+            const tooltipParts = [
+              g.title,
+              dateRangeText ? `Dates: ${dateRangeText}` : '',
+              sprintLine ? `Sprint: ${sprintLine}` : '',
+              `Completion: ${pct}%`,
+              totalLine
+            ].filter(Boolean);
+            const tooltipText = tooltipParts.join(' • ');
+
+            const barClasses = ['grv3-bar'];
+            if (draggingId === g.id) barClasses.push('dragging');
+            if (isMilestone) barClasses.push('milestone');
+            if (linkHoverGoalId === g.id) barClasses.push('link-target');
+
+            const barStyleValues = barStyle(g);
+            const baseBarStyle: React.CSSProperties = {
+              left: barOffset,
+              width: barWidth,
+              height: barHeight,
+              top: barTop,
+              ...barStyleValues
+            };
+            if (isMilestone) {
+              baseBarStyle.justifyContent = 'center';
+              baseBarStyle.alignItems = 'center';
+              baseBarStyle.padding = 0;
+              baseBarStyle.border = 'none';
+              baseBarStyle.background = 'transparent';
+              baseBarStyle.boxShadow = 'none';
+              baseBarStyle.width = 0;
+              baseBarStyle.height = 0;
+            }
+
+            return (
+              <div
+                key={g.id}
+                data-grv3-goal={g.id}
+                className={`grv3-goal-item${linkHoverGoalId === g.id ? ' linking-target' : ''}`}
+                style={{ left: barLeft, width: containerWidth, top: 0, zIndex: hoveredId === g.id ? 1000 : undefined }}
+              >
+                <div
+                  className="grv3-bar-label"
+                  style={{ top: labelTop, width: labelWidth, marginBottom: isMilestone ? -8 : undefined }}
+                >
+                  <div className={`grv3-bar-title${isMilestone ? ' milestone-title' : ''}`} title={g.title}>
+                    {g.title}
+                  </div>
+                </div>
+                <div
+                  className={barClasses.join(' ')}
+                  style={baseBarStyle}
+                  title={tooltipText}
+                  onPointerDown={(e) => startDrag(e, g, 'move')}
+                  tabIndex={0}
+                  onKeyDown={(e) => onKeyNudge(e, g)}
+                  onMouseEnter={() => setHoveredId(g.id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  onDoubleClick={() => showSidebar(g as any, 'goal')}
+                >
+                  {!isMilestone && (
+                    <div
+                      aria-label={`Completion ${pct}%`}
+                      style={{
+                        position: 'absolute',
+                        top: 6,
+                        left: 8,
+                        padding: '2px 6px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        background: 'rgba(255,255,255,.82)',
+                        color: '#111827'
+                      }}
+                    >
+                      {pct}%
+                    </div>
+                  )}
+                  {!isMilestone && (
+                    <>
+                      <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
+                      <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
+                    </>
+                  )}
+                  {isMilestone && (
+                    <div className="grv3-milestone" style={{ color: themeColor }}>
+                      <Star size={22} strokeWidth={2} />
+                    </div>
+                  )}
+                  {!isMilestone && (zoom === 'weeks' || zoom === 'months') && (
+                    <div className="mt-1" style={{ width: '100%' }}>
+                      <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,.3)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: 'rgba(255,255,255,.9)' }} />
+                      </div>
+                    </div>
+                  )}
+                  {!isMilestone && (zoom === 'weeks' || zoom === 'months') && (lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote) && (
+                    <div className="grv3-meta">📝 {lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote}</div>
+                  )}
+                  <div className="grv3-hover-actions icons-only" onClick={(e) => e.stopPropagation()}>
+                    <button className="icon-btn" title="Edit Goal" onClick={() => setEditGoal(g)}>
+                      <Edit3 size={14} />
+                    </button>
+                    <button className="icon-btn" title="Generate Stories" onClick={() => handleGenerateStories(g.id)}>
+                      <Wand2 size={14} />
+                    </button>
+                    <button className="icon-btn" title="AI Schedule Time" onClick={() => scheduleGoalAI(g)}>
+                      <CalendarIcon size={14} />
+                    </button>
+                    <button className="icon-btn" title="Open Activity Stream" onClick={() => showSidebar(g as any, 'goal')}>
+                      <ListIcon size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {row.visibleGoals.length === 0 && (
+            <div className="grv3-track-empty">
+              {row.allGoals.length === 0 ? 'No goals in this theme' : 'No goals match the active filters'}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  });
+
+  const connectorSegments: ConnectorSegment[] = goals
+    .filter((goal) => goal.parentGoalId && visibleGoalIds.has(goal.id) && visibleGoalIds.has(goal.parentGoalId as string))
+    .map((goal) => {
+      const parentLayout = layoutMap.get(goal.parentGoalId as string);
+      const childLayout = layoutMap.get(goal.id);
+      if (!parentLayout || !childLayout) return null;
+
+      const startX = parentLayout.left + parentLayout.width;
+      const endX = childLayout.left;
+      const startY = parentLayout.centerY;
+      const endY = childLayout.centerY;
+      const gradientId = `grv3-connector-${goal.id}`;
+
+      let path: string;
+      const distance = endX - startX;
+      const safetyBuffer = 16;
+      if (Math.abs(distance) < safetyBuffer) {
+        path = `M ${startX} ${startY} L ${endX} ${endY}`;
+      } else {
+        const offset = Math.max(Math.abs(distance) / 2, 36);
+        const midCandidate = distance >= 0 ? startX + offset : startX - offset;
+        const midX = distance >= 0
+          ? Math.min(midCandidate, endX - safetyBuffer)
+          : Math.max(midCandidate, endX + safetyBuffer);
+        path = `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`;
+      }
+
+      return {
+        path,
+        gradientId,
+        startColor: parentLayout.themeColor,
+        endColor: childLayout.themeColor
+      };
+    })
+    .filter(Boolean) as ConnectorSegment[];
 
   return (
     <div className={`grv3 ${zoomClass}`} style={axisCssVars}>
@@ -832,7 +1257,15 @@ const GoalRoadmapV3: React.FC = () => {
           setFilterInSelectedSprint(true);
           const el = containerRef.current; if (!el) return; const left = 260 + xFromDate(new Date()) - el.clientWidth * .35; el.scrollLeft = clamp(left, 0, el.scrollWidth);
         }} aria-label="Today (Month)"><Home size={14} /></Button>
-        <Button size="sm" variant="outline-secondary" onClick={() => containerRef.current?.requestFullscreen?.()}>Full Screen</Button>
+        <Button
+          size="sm"
+          variant={isFullscreen ? 'primary' : 'outline-secondary'}
+          onClick={toggleFullscreen}
+          aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          style={{ width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </Button>
         <Form.Check type="switch" id="toggle-sprints" label="Sprints" checked={showSprints} onChange={(e) => setShowSprints(e.currentTarget.checked)} className="ms-2" />
         <Form.Check type="switch" id="toggle-snap" label="Snap" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.currentTarget.checked)} className="ms-1" />
         <Form.Check type="switch" id="toggle-empty-themes" label="Empty themes" checked={showEmptyThemes} onChange={(e) => setShowEmptyThemes(e.currentTarget.checked)} className="ms-1" />
@@ -868,6 +1301,23 @@ const GoalRoadmapV3: React.FC = () => {
           window.addEventListener('mouseup', onUp);
         }}
       >
+        {isFullscreen && (
+          <Button
+            variant="light"
+            size="sm"
+            onClick={toggleFullscreen}
+            aria-label="Exit fullscreen"
+            style={{
+              position: 'fixed',
+              top: '16px',
+              right: '24px',
+              zIndex: 1300,
+              boxShadow: '0 10px 28px rgba(15, 23, 42, 0.24)'
+            }}
+          >
+            <Minimize2 size={14} />
+          </Button>
+        )}
         {/* Header axis + sticky theme label */}
         <div className="grv3-header">
           <div className="grv3-axis-wrapper" style={{ width: 260 + totalWidth }}>
@@ -926,169 +1376,32 @@ const GoalRoadmapV3: React.FC = () => {
           </>
         )}
 
-        {/* Theme rows */}
+        {connectorSegments.length > 0 && (
+          <svg className="grv3-connectors" width={totalWidth} height={contentHeight}>
+            <defs>
+              {connectorSegments.map((segment) => (
+                <linearGradient id={segment.gradientId} key={`grad-${segment.gradientId}`} gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor={segment.startColor} stopOpacity={0.85} />
+                  <stop offset="100%" stopColor={segment.endColor} stopOpacity={0.85} />
+                </linearGradient>
+              ))}
+            </defs>
+            {connectorSegments.map((segment) => (
+              <path
+                key={segment.gradientId}
+                d={segment.path}
+                stroke={`url(#${segment.gradientId})`}
+                strokeWidth={2}
+                fill="none"
+                strokeDasharray="6 6"
+                strokeLinecap="round"
+              />
+            ))}
+          </svg>
+        )}
+
         <div className="grv3-rows" style={{ width: 260 + totalWidth }}>
-          {themeRows.map((row) => {
-            const laneH = laneHeight;
-            const isEmpty = row.visibleGoals.length === 0;
-            return (
-            <div
-              key={row.theme.id}
-              ref={(el) => {
-                if (el) themeRowRefs.current.set(row.theme.id, el);
-                else themeRowRefs.current.delete(row.theme.id);
-              }}
-              className={`grv3-theme-row${isEmpty ? ' grv3-theme-row-empty' : ''}${themeDropCandidate === row.theme.id ? ' grv3-theme-row-drop-target' : ''}`}
-              style={{ minHeight: row.totalHeight }}
-            >
-              <div className="grv3-label d-flex align-items-center gap-2" style={{ color: row.theme.color }}>
-                <span style={{ width: 10, height: 10, borderRadius: 9999, background: 'currentColor' }} />
-                <span>{row.theme.name}</span>
-              </div>
-              <div className="grv3-track" style={{ width: totalWidth, minHeight: row.totalHeight }}>
-                {row.visibleGoals.map(g => {
-                  // Culling: only render bars near viewport
-                  const start = g.startDate ? new Date(g.startDate) : new Date();
-                  const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+90*DAY_MS);
-                  const left = xFromDate(start); const width = Math.max(14, xFromDate(end) - left);
-                  const buffer = 800; const visLeft = viewport.left; const visRight = viewport.left + viewport.width;
-                  const barLeft = left; const barRight = left + width;
-                  if (barRight < visLeft - buffer || barLeft > visRight + buffer) return null;
-                  const lane = row.laneAssignment.get(g.id) ?? 0;
-                  const total = storyCounts[g.id] || 0;
-                  const done = storyDoneCounts[g.id] || 0;
-                  const pct = total ? Math.round((done/total)*100) : 0;
-                  return (
-                  <div
-                    key={g.id}
-                    data-grv3-goal={g.id}
-                    className={`grv3-bar ${draggingId===g.id ? 'dragging' : ''}`}
-                    style={{ left, width, height: laneH, top: 12 + lane*(laneH + 8), zIndex: hoveredId===g.id ? 1000 : undefined, ...barStyle(g) }}
-                    title={`${g.title} — ${g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} → ${g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}${total ? ` • ${pct}%` : ''}`}
-                    onPointerDown={(e) => startDrag(e, g, 'move')}
-                    tabIndex={0}
-                    onKeyDown={(e) => onKeyNudge(e, g)}
-                    onMouseEnter={() => setHoveredId(g.id)}
-                    onMouseLeave={() => setHoveredId(null)}
-                    onDoubleClick={() => showSidebar(g as any, 'goal')}
-                  >
-                    {/* Compact % badge overlay (moved to top-left) */}
-                    <div
-                      aria-label={`Completion ${pct}%`}
-                      style={{
-                        position: 'absolute',
-                        top: 6,
-                        left: 8,
-                        padding: '2px 6px',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        borderRadius: 999,
-                        background: 'rgba(255,255,255,.82)',
-                        color: '#111827'
-                      }}
-                    >
-                      {pct}%
-                    </div>
-                    <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
-                    <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
-
-                    <div className="grv3-actions">
-                      <Dropdown align="end" onClick={(e) => e.stopPropagation()}>
-                        <Dropdown.Toggle
-                          size="sm"
-                          variant="outline-light"
-                          className="grv3-action-toggle"
-                          aria-label="Open goal actions"
-                        >
-                          <MoreVertical size={16} />
-                        </Dropdown.Toggle>
-                        <Dropdown.Menu>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); handleGenerateStories(g.id); }}>
-                            <Wand2 size={14} className="me-2" />
-                            Generate Stories
-                          </Dropdown.Item>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); handleAiOrchestrate(g.id); }}>
-                            <Wand2 size={14} className="me-2" />
-                            AI Orchestrate (Research + Plan)
-                          </Dropdown.Item>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}>
-                            <ListIcon size={14} className="me-2" />
-                            Open Activity Stream
-                          </Dropdown.Item>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); scheduleGoalAI(g); }}>
-                            <CalendarIcon size={14} className="me-2" />
-                            AI Schedule Time
-                          </Dropdown.Item>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}>
-                            <MessageSquareText size={14} className="me-2" />
-                            Add Note
-                          </Dropdown.Item>
-                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); setEditGoal(g); }}>
-                            <Edit3 size={14} className="me-2" />
-                            Edit Goal
-                          </Dropdown.Item>
-                          <Dropdown.Divider />
-                          <Dropdown.Item
-                            className="text-danger"
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              const ok = window.confirm(`Delete goal "${g.title}"? This cannot be undone.`);
-                              if (ok) {
-                                try {
-                                  await deleteDoc(doc(db, 'goals', g.id));
-                                } catch (err) {
-                                  window.alert('Failed to delete goal: ' + (err as any)?.message);
-                                }
-                              }
-                            }}
-                          >
-                            <Trash2 size={14} className="me-2" />
-                            Delete Goal
-                          </Dropdown.Item>
-                        </Dropdown.Menu>
-                      </Dropdown>
-                    </div>
-
-                    <div className="grv3-title">{g.title}</div>
-                    <div className="grv3-meta">{g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} – {g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}{typeof storyCounts[g.id] === 'number' ? ` • ${storyCounts[g.id]} stories` : ''}</div>
-                    {(zoom === 'weeks' || zoom === 'months') && (
-                      <div className="mt-1" style={{ width: '100%' }}>
-                        <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,.3)', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${pct}%`, background: 'rgba(255,255,255,.9)' }} />
-                        </div>
-                      </div>
-                    )}
-                    {(zoom === 'weeks' || zoom === 'months') && (lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote) && (
-                      <div className="grv3-meta">📝 {lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote}</div>
-                    )}
-
-                    {/* Hover actions under card (icons only) */}
-                    <div className="grv3-hover-actions icons-only" onClick={(e) => e.stopPropagation()}>
-                      <button className="icon-btn" title="Edit Goal" onClick={() => setEditGoal(g)}>
-                        <Edit3 size={14} />
-                      </button>
-                      <button className="icon-btn" title="Generate Stories" onClick={() => handleGenerateStories(g.id)}>
-                        <Wand2 size={14} />
-                      </button>
-                      <button className="icon-btn" title="AI Schedule Time" onClick={() => scheduleGoalAI(g)}>
-                        <CalendarIcon size={14} />
-                      </button>
-                      <button className="icon-btn" title="Open Activity Stream" onClick={() => showSidebar(g as any, 'goal')}>
-                        <ListIcon size={14} />
-                      </button>
-                    </div>
-                  </div>
-                  );
-                })}
-                {row.visibleGoals.length === 0 && (
-                  <div className="grv3-track-empty">
-                    {row.allGoals.length === 0 ? 'No goals in this theme' : 'No goals match the active filters'}
-                  </div>
-                )}
-              </div>
-            </div>
-            );
-          })}
+          {rowsMarkup}
           {themeRows.length === 0 && (
             <div className="grv3-empty" style={{ marginLeft: 260, padding: '32px 16px', color: 'var(--bs-secondary-color)', fontSize: 14 }}>
               No goals match the current filters.
@@ -1126,6 +1439,7 @@ const GoalRoadmapV3: React.FC = () => {
           goal={editGoal as any}
           onClose={() => setEditGoal(null)}
           currentUserId={currentUser?.uid || ''}
+          allGoals={goals}
         />
       )}
     </div>

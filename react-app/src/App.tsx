@@ -221,6 +221,7 @@ function AppContent() {
             <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
             <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
+            <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
             
             <Route path="/tasks-management" element={<TasksManagement />} />
             <Route path="/mobile-view" element={<MobileView />} />

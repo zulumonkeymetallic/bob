@@ -3,35 +3,35 @@
   --label-col: 260px;
   --header-h: 48px;
   --axis-h: 72px;
-  --row-h: 116px;
+  --row-h: 128px;
   --axis-gap: 12px;
   /* Layering: grid < bars < header */
   --grid-z: 20;
-  --bar-z: 40;
-  --header-z: 60;
+  --bar-z: 80;
+  --header-z: 140;
   position: relative;
   overflow: hidden;
 }
 
-.grv3-toolbar { position: sticky; top: 0; z-index: var(--header-z); background: var(--bs-body-bg); border-bottom: 1px solid var(--bs-border-color); }
-.grv3-container { position: relative; overflow: auto; border: 1px solid var(--bs-border-color); border-radius: 10px; background: var(--bs-body-bg); cursor: grab; }
+.grv3-toolbar { position: sticky; top: 0; z-index: var(--header-z); background: #fff; border-bottom: 1px solid var(--bs-border-color); padding-bottom: 6px !important; }
+.grv3-container { position: relative; overflow: auto; border: 1px solid var(--bs-border-color); border-radius: 12px; background: #fff; cursor: grab; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08); }
 .grv3-container.panning { cursor: grabbing; }
-.grv3-header { position: sticky; top: 44px; background: var(--bs-body-bg); z-index: var(--header-z); border-bottom: 1px solid var(--bs-border-color); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); isolation: isolate; }
+.grv3-header { position: sticky; top: 44px; background: #fff; z-index: var(--header-z); border-bottom: 1px solid var(--bs-border-color); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); isolation: isolate; }
 .grv3-header::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: var(--bs-body-bg);
+  background: #fff;
   z-index: -1;
 }
-.grv3-axis-wrapper { position: relative; height: var(--axis-h); background: var(--bs-body-bg); }
-.grv3-header-left { position: sticky; left: 0; width: var(--label-col); height: var(--axis-h); display: flex; align-items: center; padding: 12px 14px; font-size: 13px; font-weight: 700; color: var(--bs-body-color); background: var(--bs-body-bg); border-right: 1px solid var(--bs-border-color); z-index: calc(var(--header-z) + 1); box-shadow: inset -1px 0 0 rgba(15,23,42,0.08); }
-.grv3-axis-track { position: absolute; top: 0; left: 0; margin-left: var(--label-col); width: max-content; height: var(--axis-h); padding: 6px 0; background: var(--bs-body-bg); box-shadow: inset 0 -1px 0 rgba(15,23,42,0.05); }
+.grv3-axis-wrapper { position: relative; height: var(--axis-h); background: #fff; margin-top: -2px; }
+.grv3-header-left { position: sticky; left: 0; width: var(--label-col); height: var(--axis-h); display: flex; align-items: center; justify-content: center; padding: 12px 14px; font-size: 13px; font-weight: 700; color: var(--bs-body-color); background: #fff; border-right: 1px solid var(--bs-border-color); z-index: calc(var(--header-z) + 1); box-shadow: inset -1px 0 0 rgba(15,23,42,0.06); }
+.grv3-axis-track { position: absolute; top: 0; left: 0; margin-left: var(--label-col); width: max-content; height: var(--axis-h); padding: 6px 0; background: #fff; box-shadow: inset 0 -1px 0 rgba(15,23,42,0.05); }
 .grv3-axis-track::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: var(--bs-body-bg);
+  background: #fff;
   z-index: -1;
 }
 .grv3-axis-row { position: relative; height: 28px; border-top: 1px solid rgba(15,23,42,0.06); }
@@ -54,9 +54,9 @@
 .grv3-guides { position: absolute; top: calc(var(--axis-h) + var(--axis-gap)); left: var(--label-col); z-index: calc(var(--bar-z) - 2); pointer-events: none; }
 .grv3-guide { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(33, 150, 243, 0.35); }
 .grv3-guide.active { width: 2px; background: rgba(33, 150, 243, 0.75); box-shadow: 0 0 12px rgba(33,150,243,0.45); }
-.grv3-rows { position: relative; margin-top: var(--axis-gap); }
-.grv3-theme-row { position: relative; min-height: var(--row-h); border-bottom: 1px solid var(--bs-border-color); background: linear-gradient(180deg, rgba(15,23,42,0.02), rgba(15,23,42,0)); }
-.grv3-theme-row-empty { background: linear-gradient(180deg, rgba(15,23,42,0.04), rgba(15,23,42,0)); }
+.grv3-rows { position: relative; margin-top: 4px; }
+.grv3-theme-row { position: relative; min-height: var(--row-h); border-bottom: 1px solid rgba(15,23,42,0.08); background: #fff; }
+.grv3-theme-row-empty { background: #fff; }
 .grv3-theme-row-drop-target::before {
   content: '';
   position: absolute;
@@ -66,8 +66,10 @@
   pointer-events: none;
   box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.15);
 }
-.grv3-label { position: sticky; left: 0; width: var(--label-col); padding: 12px 14px; background: var(--bs-body-bg); border-right: 1px solid var(--bs-border-color); z-index: calc(var(--header-z) + 1); box-shadow: inset -1px 0 0 rgba(15,23,42,0.08); }
-.grv3-track { position: relative; margin-left: var(--label-col); min-height: var(--row-h); padding: 10px 0 18px; }
+.grv3-label { position: sticky; left: 0; width: var(--label-col); padding: 20px 16px; background: #fff; border-right: 1px solid rgba(15,23,42,0.08); z-index: calc(var(--header-z) + 1); box-shadow: inset -1px 0 0 rgba(15,23,42,0.06); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; }
+.grv3-label-dot { width: 12px; height: 12px; border-radius: 999px; background: currentColor; box-shadow: 0 0 0 2px rgba(15,23,42,0.08); }
+.grv3-label-text { font-size: 14px; font-weight: 600; color: inherit; line-height: 1.2; }
+.grv3-track { position: relative; margin-left: var(--label-col); min-height: var(--row-h); padding: 0 0 18px; background: #fff; }
 .grv3-track-empty {
   position: absolute;
   inset: 16px;
@@ -83,9 +85,16 @@
 }
 .grv3-empty { font-size: 13px; color: var(--bs-secondary-color); text-align: center; }
 
-.grv3-bar { position: absolute; top: 14px; height: calc(var(--row-h) - 24px); display: flex; flex-direction: column; justify-content: center; color: inherit; border-radius: 12px; border: 2px solid rgba(255,255,255,.35); box-shadow: 0 6px 22px rgba(0,0,0,.18); padding: 10px 12px; cursor: grab; user-select: none; z-index: var(--bar-z); }
-.grv3-bar:hover { transform: translateY(-1px); box-shadow: 0 8px 26px rgba(0,0,0,.24); }
-.grv3-bar.dragging { cursor: grabbing; z-index: 1000; transform: scale(1.03); }
+.grv3-goal-item { position: absolute; top: 0; pointer-events: none; }
+.grv3-goal-item .grv3-bar,
+.grv3-goal-item .grv3-hover-actions { pointer-events: auto; }
+.grv3-bar-label { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-bottom: 4px; color: #0f172a; pointer-events: none; text-align: center; }
+.grv3-bar-title { font-weight: 700; font-size: 9px; line-height: 1.15; text-transform: none; }
+.grv3-bar-title.milestone-title { white-space: nowrap; }
+.grv3-bar-meta-line { font-size: 9px; color: rgba(15,23,42,0.7); }
+.grv3-bar { position: absolute; top: 0; height: calc(var(--row-h) - 48px); display: flex; flex-direction: column; justify-content: center; align-items: flex-start; color: inherit; border-radius: 10px; border: 1px solid rgba(255,255,255,.45); box-shadow: 0 6px 20px rgba(15,23,42,.16); padding: 8px 10px; cursor: grab; user-select: none; z-index: var(--bar-z); }
+.grv3-bar:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(15,23,42,.22); }
+.grv3-bar.dragging { cursor: grabbing; z-index: calc(var(--bar-z) + 40); transform: scale(1.02); }
 .grv3-title { font-weight: 800; font-size: 14px; line-height: 1.25; text-shadow: 0 1px 2px rgba(0,0,0,.2); white-space: normal; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .grv3-meta { font-size: 11px; opacity: .95; }
 .grv3-actions { position: absolute; right: 8px; top: 6px; opacity: 0; transition: opacity .12s; pointer-events: none; }
@@ -148,3 +157,49 @@
 }
 .grv3-hover-actions.icons-only .icon-btn svg { pointer-events: none; }
 .grv3-hover-actions .icon-btn:hover { background: #fff; }
+
+.grv3-milestone {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.92);
+  pointer-events: none;
+  box-shadow: 0 6px 14px rgba(15,23,42,0.16);
+}
+
+.grv3-milestone svg {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  color: inherit;
+  opacity: 0.85;
+}
+
+.grv3-milestone-progress {
+  position: relative;
+  font-size: 11px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.grv3-bar.link-target {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45);
+  border-color: rgba(59, 130, 246, 0.8);
+}
+
+.grv3-goal-item.linking-target .grv3-bar-label {
+  opacity: 1;
+}
+
+.grv3-connectors {
+  position: absolute;
+  top: calc(var(--axis-h) + var(--axis-gap));
+  left: var(--label-col);
+  pointer-events: none;
+  z-index: calc(var(--bar-z) - 5);
+}

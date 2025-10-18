@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Form, Alert, InputGroup } from 'react-bootstrap';
 import { db } from '../firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
@@ -13,9 +13,10 @@ interface EditGoalModalProps {
   onClose: () => void;
   show: boolean;
   currentUserId: string;
+  allGoals?: Goal[];
 }
 
-const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId }) => {
+const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = [] }) => {
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -28,12 +29,14 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     status: 'New',
     priority: 2,
     estimatedCost: '',
-    kpis: [] as Array<{name: string; target: number; unit: string}>
+    kpis: [] as Array<{name: string; target: number; unit: string}>,
+    parentGoalId: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitResult, setSubmitResult] = useState<string | null>(null);
-  const { themes } = useGlobalThemes();
-  const [themeInput, setThemeInput] = useState('');
+const [submitResult, setSubmitResult] = useState<string | null>(null);
+const { themes } = useGlobalThemes();
+const [themeInput, setThemeInput] = useState('');
+  const [parentSearch, setParentSearch] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
@@ -48,6 +51,46 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     { value: 2, label: 'Medium Priority (2)' },
     { value: 3, label: 'Low Priority (3)' }
   ];
+
+  const goalIndex = useMemo(() => {
+    const map = new Map<string, Goal>();
+    allGoals.forEach((g) => map.set(g.id, g));
+    return map;
+  }, [allGoals]);
+
+  const wouldCreateCycle = useCallback((sourceId: string, targetId: string | null | undefined) => {
+    if (!targetId) return false;
+    if (sourceId === targetId) return true;
+    const visited = new Set<string>();
+    let currentId: string | null | undefined = targetId;
+    while (currentId) {
+      if (currentId === sourceId) return true;
+      if (visited.has(currentId)) break;
+      visited.add(currentId);
+      currentId = goalIndex.get(currentId)?.parentGoalId || null;
+    }
+    return false;
+  }, [goalIndex]);
+
+  const parentCandidates = useMemo(() => {
+    if (!goal) return [] as Goal[];
+    const persona = (goal as any)?.persona;
+    return allGoals.filter((candidate) => {
+      if (candidate.id === goal.id) return false;
+      if (persona && (candidate as any)?.persona && (candidate as any)?.persona !== persona) return false;
+      return !wouldCreateCycle(goal.id, candidate.id);
+    });
+  }, [allGoals, goal, wouldCreateCycle]);
+
+  const filteredParentOptions = useMemo(() => {
+    const query = parentSearch.trim().toLowerCase();
+    if (!query) return parentCandidates;
+    return parentCandidates.filter((candidate) => {
+      const title = candidate.title || '';
+      const ref = (candidate as any)?.ref || '';
+      return title.toLowerCase().includes(query) || ref.toLowerCase().includes(query);
+    });
+  }, [parentCandidates, parentSearch]);
 
   // Load goal data when modal opens
   useEffect(() => {
@@ -77,11 +120,13 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         status: statusMap[goal.status as keyof typeof statusMap] || 'New',
         priority: goal.priority || 2,
         estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
-        kpis: goal.kpis || []
+        kpis: goal.kpis || [],
+        parentGoalId: goal.parentGoalId || ''
       });
       const current = migrateThemeValue(goal.theme);
       const themeObj = themes.find(t => t.id === current);
       setThemeInput(themeObj?.label || '');
+      setParentSearch('');
     }
   }, [goal, show, themes]);
 
@@ -152,6 +197,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         priority: formData.priority,
         kpis: formData.kpis,
         estimatedCost: formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost),
+        parentGoalId: formData.parentGoalId ? formData.parentGoalId : null,
         updatedAt: serverTimestamp()
       };
 
@@ -337,6 +383,37 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     <option key={size.value} value={size.value}>{size.label}</option>
                   ))}
                 </Form.Select>
+              </Form.Group>
+          </div>
+        </div>
+
+          <div className="row">
+            <div className="col-md-12">
+              <Form.Group className="mb-3">
+                <Form.Label>Parent Goal</Form.Label>
+                <Form.Control
+                  type="text"
+                  size="sm"
+                  placeholder="Search parent goals..."
+                  value={parentSearch}
+                  onChange={(e) => setParentSearch(e.target.value)}
+                  className="mb-2"
+                />
+                <Form.Select
+                  value={formData.parentGoalId}
+                  onChange={(e) => setFormData({ ...formData, parentGoalId: e.target.value })}
+                  size="sm"
+                >
+                  <option value="">No parent</option>
+                  {filteredParentOptions.map(option => (
+                    <option key={option.id} value={option.id}>
+                      {option.title || 'Untitled goal'}
+                    </option>
+                  ))}
+                </Form.Select>
+                <Form.Text className="text-muted">
+                  Hold Option/Alt while dragging one goal onto another in the roadmap to link quickly.
+                </Form.Text>
               </Form.Group>
             </div>
           </div>

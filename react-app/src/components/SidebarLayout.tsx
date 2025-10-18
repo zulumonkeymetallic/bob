@@ -159,8 +159,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   ];
 
   const handleNavigation = (path: string) => {
-    navigate(path);
-    setShowSidebar(false);
+    try {
+      console.info('[Sidebar] navigation requested', { path });
+      navigate(path);
+      setShowSidebar(false);
+    } catch (error) {
+      console.error('[Sidebar] navigation failed', { path, error });
+    }
   };
 
   const toggleGroup = (groupLabel: string) => {
