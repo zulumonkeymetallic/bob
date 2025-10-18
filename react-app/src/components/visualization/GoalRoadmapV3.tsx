@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, ButtonGroup, Modal, Form, Badge, Dropdown } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
@@ -10,13 +11,21 @@ import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story } from '../../types';
 import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
-import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Activity } from 'lucide-react';
+import { Wand2, List as ListIcon, BookOpen, MessageSquareText, Edit3, Trash2, ZoomIn, ZoomOut, Home, Maximize2, ChevronLeft, ChevronRight, MoreVertical, Calendar as CalendarIcon } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import GLOBAL_THEMES, { migrateThemeValue, type GlobalTheme } from '../../constants/globalThemes';
 
 type Zoom = 'weeks' | 'months' | 'quarters' | 'years';
+type AxisLabel = { label: string; subLabel?: string; x: number; width: number };
+type AxisRow = { id: 'year' | 'half' | 'quarter' | 'month'; labels: AxisLabel[] };
+type ThemeDescriptor = { id: number; name: string; color: string; textColor?: string };
+const DAY_MS = 86400000;
+const YEAR_MS = DAY_MS * 365.25;
+const AXIS_ROW_HEIGHT = 28;
+const TRACK_VERTICAL_PADDING = 28;
+const AXIS_GAP_PX = 12;
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
 
@@ -25,6 +34,7 @@ const GoalRoadmapV3: React.FC = () => {
   const { theme } = useTheme();
   const { selectedSprintId } = useSprint();
   const { showSidebar } = useSidebar();
+  const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
 
   const [zoom, setZoom] = useState<Zoom>('quarters');
@@ -35,22 +45,45 @@ const GoalRoadmapV3: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activityGoalId, setActivityGoalId] = useState<string | null>(null);
-  const [activityItems, setActivityItems] = useState<any[]>([]);
+  // Embedded activity feed removed in favor of global sidebar stream
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [lastNotes, setLastNotes] = useState<Record<string, string>>({});
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
   const [storyDoneCounts, setStoryDoneCounts] = useState<Record<string, number>>({});
-  const [showGlobalActivity, setShowGlobalActivity] = useState(false);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
-  const [globalActivityItems, setGlobalActivityItems] = useState<any[]>([]);
   const [showSprints, setShowSprints] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [showEmptyThemes, setShowEmptyThemes] = useState(false);
   const [filterHasStories, setFilterHasStories] = useState(false);
   const [filterInSelectedSprint, setFilterInSelectedSprint] = useState(false);
   const [filterOverlapSelectedSprint, setFilterOverlapSelectedSprint] = useState(false);
+  const [themeDropCandidate, setThemeDropCandidate] = useState<number | null>(null);
+  const themeDropCandidateRef = useRef<number | null>(null);
+
+  const datasetRange = useMemo(() => {
+    if (!goals || goals.length === 0) return null;
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const goal of goals) {
+      const startMs = goal.startDate ?? goal.targetDate ?? null;
+      const endMs = goal.endDate ?? goal.targetDate ?? null;
+      if (typeof startMs === 'number' && !Number.isNaN(startMs)) {
+        min = Math.min(min, startMs);
+      }
+      if (typeof endMs === 'number' && !Number.isNaN(endMs)) {
+        max = Math.max(max, endMs);
+      }
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    if (min === max) max = min + 90 * DAY_MS;
+    const pad = Math.max(21 * DAY_MS, Math.round((max - min) * 0.05));
+    const start = new Date(min - pad);
+    const end = new Date(max + pad);
+    start.setHours(0,0,0,0);
+    end.setHours(0,0,0,0);
+    return { start, end };
+  }, [goals]);
 
   const themePalette = useMemo(() => (globalThemes && globalThemes.length ? globalThemes : GLOBAL_THEMES), [globalThemes]);
   const themeMap = useMemo(() => {
@@ -66,10 +99,12 @@ const GoalRoadmapV3: React.FC = () => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [financeOnTrack, setFinanceOnTrack] = useState<boolean|null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [schedulingId, setSchedulingId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const themeRowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const timeRange = useMemo(() => {
     if (customRange) {
@@ -103,18 +138,31 @@ const GoalRoadmapV3: React.FC = () => {
       end = new Date(start.getFullYear() + yearSpan, 0, 1); end.setDate(end.getDate() - 1);
     }
     start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+    if (datasetRange) {
+      const unionStart = Math.min(start.getTime(), datasetRange.start.getTime());
+      const unionEnd = Math.max(end.getTime(), datasetRange.end.getTime());
+      const maxSpan = 10 * YEAR_MS;
+      const span = Math.min(Math.max(unionEnd - unionStart, DAY_MS * 90), maxSpan);
+      start = new Date(unionStart);
+      end = new Date(unionStart + span);
+      start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+    }
     return { start, end };
-  }, [zoom, yearSpan, customRange]);
+  }, [zoom, yearSpan, customRange, datasetRange]);
 
   const pxPerDay = useMemo(() => {
-    switch (zoom) {
-      case 'weeks': return 12;
-      case 'months': return 4;
-      case 'quarters': return 1.8;
-      case 'years': return 0.8;
-      default: return 1.8;
+    if (zoom === 'weeks') return 16;
+    if (zoom === 'months') return 6;
+    if (zoom === 'quarters') return 2.4;
+    if (zoom === 'years') {
+      const spanMs = timeRange.end.getTime() - timeRange.start.getTime();
+      const approxYears = Math.max(0.5, spanMs / YEAR_MS);
+      if (approxYears <= 1.25) return 3.2;
+      if (approxYears <= 3.5) return 1.8;
+      return 1.1;
     }
-  }, [zoom]);
+    return 2;
+  }, [zoom, timeRange]);
 
   const daysBetween = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime()) / 86400000);
   const xFromDate = useCallback((date: Date) => daysBetween(timeRange.start, date) * pxPerDay, [timeRange.start, pxPerDay]);
@@ -255,27 +303,7 @@ const GoalRoadmapV3: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid]);
 
-  // Activity stream subscription per selected goal
-  useEffect(() => {
-    if (!activityGoalId) return;
-    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems);
-    return () => unsub();
-  }, [activityGoalId]);
-
-  // Global activity stream subscription when modal open
-  useEffect(() => {
-    if (!showGlobalActivity || !currentUser?.uid) return;
-    const q = query(
-      collection(db, 'activity_stream'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('timestamp', 'desc')
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setGlobalActivityItems(list as any[]);
-    });
-    return () => unsub();
-  }, [showGlobalActivity, currentUser?.uid]);
+  // Embedded activity subscriptions removed. Use global sidebar stream.
 
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
@@ -293,23 +321,6 @@ const GoalRoadmapV3: React.FC = () => {
     window.addEventListener('resize', update);
     return () => { el.removeEventListener('scroll', update); window.removeEventListener('resize', update); };
   }, []);
-
-  const gridLines = useMemo(() => {
-    const out: { label: string; x: number }[] = [];
-    const cursor = new Date(timeRange.start); cursor.setDate(1);
-    while (cursor <= timeRange.end) {
-      let label = '';
-      if (zoom === 'weeks' || zoom === 'months') label = `${cursor.toLocaleString('default',{month:'short'})} ${cursor.getFullYear()}`;
-      else if (zoom === 'quarters') label = `Q${Math.floor(cursor.getMonth()/3)+1} ${cursor.getFullYear()}`;
-      else label = `${cursor.getFullYear()}`;
-      out.push({ label, x: xFromDate(new Date(cursor)) });
-      if (zoom === 'weeks') cursor.setMonth(cursor.getMonth()+1);
-      else if (zoom === 'months') cursor.setMonth(cursor.getMonth()+1);
-      else if (zoom === 'quarters') cursor.setMonth(cursor.getMonth()+3);
-      else cursor.setFullYear(cursor.getFullYear()+1);
-    }
-    return out;
-  }, [timeRange, xFromDate, zoom]);
 
   // Sprint overlays (labels + bands) for weeks/months only
   const sprintOverlays = useMemo(() => {
@@ -333,7 +344,7 @@ const GoalRoadmapV3: React.FC = () => {
       const s = sprints.find(x => x.id === selectedSprintId);
       if (s) {
         const gs = g.startDate ? new Date(g.startDate).getTime() : Date.now();
-        const ge = g.endDate ? new Date(g.endDate).getTime() : gs + 86400000*90;
+        const ge = g.endDate ? new Date(g.endDate).getTime() : gs + 90 * DAY_MS;
         const ss = new Date(s.startDate).getTime();
         const se = new Date(s.endDate).getTime();
         const overlaps = gs <= se && ge >= ss;
@@ -344,7 +355,7 @@ const GoalRoadmapV3: React.FC = () => {
   }, [filterHasStories, filterInSelectedSprint, filterOverlapSelectedSprint, selectedSprintId, sprints, storyCounts]);
 
   // Drag+resize implementation
-  const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|null; startX: number; origStart: Date; origEnd: Date }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() });
+  const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|null; startX: number; origStart: Date; origEnd: Date; goal: Goal | null }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null });
   const [guideXs, setGuideXs] = useState<number[]>([]);
   const [activeGuideX, setActiveGuideX] = useState<number | null>(null);
   const pointerMove = useCallback((ev: PointerEvent) => {
@@ -364,12 +375,32 @@ const GoalRoadmapV3: React.FC = () => {
       for (let i=1;i<guideXs.length;i++){ const d = Math.abs(guideXs[i]-sx); if (d < bd) { bd = d; best = guideXs[i]; } }
       setActiveGuideX(best);
     }
+    if (s.type === 'move' && s.goal) {
+      const currentThemeId = migrateThemeValue(s.goal.theme);
+      let dropThemeId: number | null = null;
+      for (const [themeId, rowEl] of themeRowRefs.current.entries()) {
+        if (!rowEl) continue;
+        const rect = rowEl.getBoundingClientRect();
+        if (ev.clientY >= rect.top && ev.clientY <= rect.bottom) { dropThemeId = themeId; break; }
+      }
+      if (dropThemeId === currentThemeId) dropThemeId = null;
+      if (themeDropCandidateRef.current !== dropThemeId) {
+        themeDropCandidateRef.current = dropThemeId;
+        setThemeDropCandidate(dropThemeId);
+      }
+    }
   }, [pxPerDay, xFromDate, guideXs]);
 
   const pointerUp = useCallback(async (ev: PointerEvent) => {
     const s = dragState.current; if (!s.id || !s.type) return; ev.preventDefault();
     document.removeEventListener('pointermove', pointerMove); document.removeEventListener('pointerup', pointerUp);
-    const el = document.querySelector(`[data-grv3-goal="${s.id}"]`) as HTMLElement | null; if (!el) { dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() }; return; }
+    const el = document.querySelector(`[data-grv3-goal="${s.id}"]`) as HTMLElement | null;
+    if (!el) {
+      dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null };
+      setThemeDropCandidate(null);
+      themeDropCandidateRef.current = null;
+      return;
+    }
     const left = parseFloat(el.style.left || '0'); const width = parseFloat(el.style.width || '0');
     let newStart = dateFromX(left); let newEnd = dateFromX(left+width);
     // Optional snapping strategy on drop
@@ -390,15 +421,47 @@ const GoalRoadmapV3: React.FC = () => {
       if (currentUser?.uid) {
         await ActivityStreamService.logFieldChange(s.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${s.origStart.toDateString()} – ${s.origEnd.toDateString()}`, `${newStart.toDateString()} – ${newEnd.toDateString()}`, 'personal', s.id, 'human');
       }
+      const candidateTheme = themeDropCandidateRef.current;
+      if (candidateTheme != null && s.goal) {
+        const originalThemeId = migrateThemeValue(s.goal.theme);
+        if (candidateTheme !== originalThemeId) {
+          await updateDoc(doc(db, 'goals', s.id), { theme: candidateTheme, updatedAt: Date.now() });
+          if (currentUser?.uid) {
+            const fromTheme = getThemeDefinition(originalThemeId);
+            const toTheme = getThemeDefinition(candidateTheme);
+            await ActivityStreamService.logFieldChange(
+              s.id,
+              'goal',
+              currentUser.uid,
+              currentUser.email || '',
+              'theme',
+              fromTheme?.name || String(originalThemeId),
+              toTheme?.name || String(candidateTheme),
+              'personal',
+              s.id,
+              'human'
+            );
+          }
+        }
+      }
     } catch (e) { console.error('Failed to update goal dates', e); }
-    finally { const tip = tooltipRef.current; if (tip) tip.style.display='none'; setGuideXs([]); setActiveGuideX(null); dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date() }; setDraggingId(null); }
-  }, [dateFromX, pointerMove, currentUser?.uid]);
+    finally {
+      const tip = tooltipRef.current; if (tip) tip.style.display='none';
+      setGuideXs([]); setActiveGuideX(null);
+      dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null };
+      setDraggingId(null);
+      setThemeDropCandidate(null);
+      themeDropCandidateRef.current = null;
+    }
+  }, [dateFromX, pointerMove, currentUser?.uid, snapEnabled, zoom, getThemeDefinition]);
 
   const startDrag = useCallback((ev: React.PointerEvent, goal: Goal, type: 'move'|'start'|'end') => {
     ev.preventDefault();
     const startDate = goal.startDate ? new Date(goal.startDate) : new Date();
-    const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now()+86400000*90));
-    dragState.current = { id: goal.id, type, startX: ev.clientX, origStart: startDate, origEnd: endDate };
+    const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now()+90*DAY_MS));
+    dragState.current = { id: goal.id, type, startX: ev.clientX, origStart: startDate, origEnd: endDate, goal };
+    setThemeDropCandidate(null);
+    themeDropCandidateRef.current = null;
     setDraggingId(goal.id);
     document.addEventListener('pointermove', pointerMove, { passive: false }); document.addEventListener('pointerup', pointerUp, { passive: false });
     // Build snap guides for current zoom
@@ -415,12 +478,12 @@ const GoalRoadmapV3: React.FC = () => {
       for (let y=start.getFullYear(); y<=end.getFullYear(); y++) { const d=new Date(y,0,1); if(d>=start&&d<=end) guides.push(xFromDate(d)); }
     }
     setGuideXs(guides);
-  }, [pointerMove, pointerUp]);
+  }, [pointerMove, pointerUp, timeRange.start.getTime(), timeRange.end.getTime(), xFromDate, zoom]);
 
   // Keyboard nudges for accessibility and precision
   const onKeyNudge = useCallback(async (e: React.KeyboardEvent, g: Goal) => {
     const start = g.startDate ? new Date(g.startDate) : new Date();
-    const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
+    const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+90*DAY_MS);
     let ds = 0, de = 0;
     const step = e.shiftKey ? 7 : 1;
     if (e.key === 'ArrowLeft') { ds -= step; de -= step; }
@@ -450,31 +513,187 @@ const GoalRoadmapV3: React.FC = () => {
   };
 
   const barStyle = (g: Goal): React.CSSProperties => {
-    const start = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
-    const end = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now()+86400000*90));
-    const left = xFromDate(start); const width = Math.max(14, xFromDate(end) - left);
     const themeId = migrateThemeValue(g.theme);
     const themeDef = getThemeDefinition(themeId);
     const themeColor = themeDef.color || '#6c757d';
     // V2-inspired subtle gradient using theme color
     const bgStart = hexToRgba(themeColor, theme === 'dark' ? 0.24 : 0.18);
     const bgEnd = hexToRgba(themeColor, theme === 'dark' ? 0.12 : 0.08);
+    const preferredLightText = 'rgba(17, 24, 39, 0.92)';
+    const computedText = theme === 'dark'
+      ? (themeDef.textColor || '#fff')
+      : (themeDef.textColor && themeDef.textColor.toLowerCase() !== '#ffffff' && themeDef.textColor.toLowerCase() !== '#fff'
+        ? themeDef.textColor
+        : preferredLightText);
     return {
-      left,
-      width,
       background: `linear-gradient(180deg, ${bgStart}, ${bgEnd})`,
       border: `2px solid ${themeColor}`,
-      color: themeDef.textColor || '#fff'
+      color: computedText
     } as React.CSSProperties;
   };
 
   const zoomClass = useMemo(() => (zoom === 'years' ? 'ultra' : zoom === 'quarters' ? 'slim' : ''), [zoom]);
   const totalWidth = useMemo(() => Math.max(1400, Math.round(daysBetween(timeRange.start, timeRange.end) * pxPerDay)), [timeRange, pxPerDay]);
 
+  const axis = useMemo(() => {
+    const rows: AxisRow[] = [];
+    const major = new Set<number>();
+    const secondary = new Set<number>();
+    const minor = new Set<number>();
+
+    if (!Number.isFinite(totalWidth) || totalWidth <= 0) {
+      return { rows, major: [] as number[], secondary: [] as number[], minor: [] as number[] };
+    }
+
+    const trackStart = new Date(timeRange.start);
+    const trackEnd = new Date(timeRange.end);
+    trackStart.setHours(0, 0, 0, 0);
+    trackEnd.setHours(0, 0, 0, 0);
+    trackEnd.setDate(trackEnd.getDate() + 1); // include final day
+
+    const clampSegment = (start: Date, end: Date, minWidth: number) => {
+      const rawStart = xFromDate(start);
+      const rawEnd = xFromDate(end);
+      if (rawEnd <= 0 && rawStart <= 0) return null;
+      if (rawStart >= totalWidth && rawEnd >= totalWidth) return null;
+      const left = Math.max(0, rawStart);
+      const right = Math.min(totalWidth, rawEnd);
+      if (right <= left) return null;
+      const width = Math.min(Math.max(minWidth, right - left), totalWidth - left);
+      if (width <= 0) return null;
+      return { left, width };
+    };
+
+    const addLine = (set: Set<number>, value: number) => {
+      const px = Number(value.toFixed(2));
+      if (px < 0 || px > totalWidth) return;
+      set.add(px);
+    };
+
+    const approxYears = Math.max(0.5, (timeRange.end.getTime() - timeRange.start.getTime()) / YEAR_MS);
+
+    const yearRow: AxisRow = { id: 'year', labels: [] };
+    const firstYearStart = new Date(trackStart.getFullYear(), 0, 1);
+    if (firstYearStart > trackStart) firstYearStart.setFullYear(firstYearStart.getFullYear() - 1);
+    for (const cursor = new Date(firstYearStart); cursor < trackEnd; cursor.setFullYear(cursor.getFullYear() + 1)) {
+      const next = new Date(cursor.getFullYear() + 1, 0, 1);
+      const seg = clampSegment(cursor, next, 96);
+      if (!seg) continue;
+      yearRow.labels.push({ label: `${cursor.getFullYear()}`, x: seg.left, width: seg.width });
+      addLine(major, xFromDate(cursor));
+    }
+    if (yearRow.labels.length === 0) {
+      const seg = clampSegment(trackStart, trackEnd, 96);
+      if (seg) yearRow.labels.push({ label: `${trackStart.getFullYear()}`, x: seg.left, width: seg.width });
+    }
+    rows.push(yearRow);
+
+    const includeQuarterRow = (zoom === 'quarters' || zoom === 'months') || (approxYears <= 3.5 && zoom !== 'weeks');
+    const includeMonthRow = zoom === 'weeks' || zoom === 'months' || zoom === 'quarters' || approxYears <= 1.2;
+    const includeHalfRow = zoom === 'years' && approxYears > 3 && approxYears <= 6;
+
+    if (includeHalfRow) {
+      const halfRow: AxisRow = { id: 'half', labels: [] };
+      const firstHalfStart = new Date(trackStart.getFullYear(), trackStart.getMonth() < 6 ? 0 : 6, 1);
+      if (firstHalfStart > trackStart) firstHalfStart.setMonth(firstHalfStart.getMonth() - 6);
+      for (const cursor = new Date(firstHalfStart); cursor < trackEnd; cursor.setMonth(cursor.getMonth() + 6)) {
+        const next = new Date(cursor.getFullYear(), cursor.getMonth() + 6, 1);
+        const seg = clampSegment(cursor, next, 80);
+        if (!seg) continue;
+        const halfNumber = cursor.getMonth() < 6 ? 1 : 2;
+        halfRow.labels.push({ label: `H${halfNumber}`, subLabel: `'${String(cursor.getFullYear()).slice(-2)}`, x: seg.left, width: seg.width });
+        addLine(secondary, xFromDate(cursor));
+      }
+      if (halfRow.labels.length) rows.push(halfRow);
+    } else if (includeQuarterRow) {
+      const quarterRow: AxisRow = { id: 'quarter', labels: [] };
+      const firstQuarterStart = new Date(trackStart.getFullYear(), Math.floor(trackStart.getMonth() / 3) * 3, 1);
+      if (firstQuarterStart > trackStart) firstQuarterStart.setMonth(firstQuarterStart.getMonth() - 3);
+      for (const cursor = new Date(firstQuarterStart); cursor < trackEnd; cursor.setMonth(cursor.getMonth() + 3)) {
+        const next = new Date(cursor.getFullYear(), cursor.getMonth() + 3, 1);
+        const seg = clampSegment(cursor, next, 72);
+        if (!seg) continue;
+        const quarter = Math.floor(cursor.getMonth() / 3) + 1;
+        quarterRow.labels.push({ label: `Q${quarter}`, x: seg.left, width: seg.width });
+        addLine(secondary, xFromDate(cursor));
+      }
+      if (quarterRow.labels.length) rows.push(quarterRow);
+    }
+
+    if (includeMonthRow) {
+      const monthRow: AxisRow = { id: 'month', labels: [] };
+      const firstMonthStart = new Date(trackStart.getFullYear(), trackStart.getMonth(), 1);
+      if (firstMonthStart > trackStart) firstMonthStart.setMonth(firstMonthStart.getMonth() - 1);
+      for (const cursor = new Date(firstMonthStart); cursor < trackEnd; cursor.setMonth(cursor.getMonth() + 1)) {
+        const next = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+        const seg = clampSegment(cursor, next, 56);
+        if (!seg) continue;
+        monthRow.labels.push({ label: cursor.toLocaleString(undefined, { month: 'short' }), x: seg.left, width: seg.width });
+        addLine(includeQuarterRow ? minor : secondary, xFromDate(cursor));
+      }
+      if (monthRow.labels.length) rows.push(monthRow);
+    }
+
+    if (zoom === 'weeks') {
+      const weekCursor = new Date(trackStart);
+      const offset = (weekCursor.getDay() + 6) % 7;
+      weekCursor.setDate(weekCursor.getDate() - offset);
+      while (weekCursor < trackEnd) {
+        addLine(minor, xFromDate(new Date(weekCursor)));
+        weekCursor.setDate(weekCursor.getDate() + 7);
+      }
+    }
+
+    const toSortedArray = (set: Set<number>) => Array.from(set.values()).sort((a, b) => a - b);
+
+    return {
+      rows,
+      major: toSortedArray(major),
+      secondary: toSortedArray(secondary),
+      minor: toSortedArray(minor)
+    };
+  }, [timeRange, totalWidth, xFromDate, zoom]);
+  const axisRowCount = Math.max(1, axis.rows.length);
+  const axisHeight = axisRowCount * AXIS_ROW_HEIGHT + 12;
+  const axisCssVars = useMemo(() => ({ '--axis-h': `${axisHeight}px` }) as React.CSSProperties, [axisHeight]);
+
   const handleGenerateStories = useCallback(async (goalId: string) => {
     try { const callable = httpsCallable(functions, 'generateStoriesForGoal'); await callable({ goalId }); }
     catch (e:any) { alert('AI story generation failed: ' + (e?.message || 'unknown')); }
-  }, []);
+  }, [functions]);
+
+  const handleAiOrchestrate = useCallback(async (goalId: string) => {
+    try {
+      const callable = httpsCallable(functions, 'orchestrateGoalPlanning');
+      await callable({ goalId });
+      alert('AI research, stories, and schedule created. Check your email for the research brief.');
+    } catch (error: any) {
+      alert('AI Orchestrate failed: ' + (error?.message || 'Unknown error'));
+    }
+  }, [functions]);
+
+  const scheduleGoalAI = useCallback(async (g: Goal) => {
+    try {
+      if (!currentUser?.uid) return;
+      setSchedulingId(g.id);
+      const planCalendar = httpsCallable(functions, 'planCalendar');
+      const minutes = Math.min(Math.max(60, (g.timeToMasterHours || 2) * 60), 300);
+      const result = await planCalendar({ persona: 'personal', focusGoalId: g.id, goalTimeRequest: minutes });
+      const data = result.data as any;
+      const blocksCreated = typeof data?.blocksCreated === 'number'
+        ? data.blocksCreated
+        : Array.isArray(data?.blocks) ? data.blocks.length : 0;
+      window.alert(`AI scheduled ${blocksCreated} time block${blocksCreated === 1 ? '' : 's'} for "${g.title}"`);
+    } catch (err:any) {
+      const rawMessage = String(err?.message || 'unknown');
+      const friendly = rawMessage.toLowerCase().includes('blocks is not iterable')
+        ? 'The AI scheduler could not create new calendar blocks. Try updating the goal with a clear date range or duration and run the planner again.'
+        : rawMessage;
+      window.alert('Failed to schedule via AI: ' + friendly);
+    } finally {
+      setSchedulingId(null);
+    }
+  }, [currentUser?.uid]);
 
   const handleAddNote = useCallback(async () => {
     if (!noteGoalId || !currentUser?.uid || !noteDraft.trim()) return;
@@ -483,16 +702,15 @@ const GoalRoadmapV3: React.FC = () => {
     setNoteDraft(''); setNoteGoalId(null);
   }, [noteGoalId, noteDraft, currentUser?.uid]);
 
-  // Compute stacking lanes per theme row to avoid visual overlap
-  const getLaneHeight = useCallback(() => {
+  const laneHeight = useMemo(() => {
     if (zoom === 'weeks') return 92;
     if (zoom === 'months') return 84;
     if (zoom === 'quarters') return 64;
-    return 48; // years
+    return 48;
   }, [zoom]);
 
   type TimedGoal = { id: string; start: number; end: number; raw: Goal };
-  const computeLanes = (items: TimedGoal[]): Map<string, number> => {
+  const computeLanes = useCallback((items: TimedGoal[]): Map<string, number> => {
     // Greedy interval graph coloring by start time
     const sorted = [...items].sort((a,b) => a.start - b.start || a.end - b.end);
     const laneEnds: number[] = [];
@@ -505,10 +723,48 @@ const GoalRoadmapV3: React.FC = () => {
       if (!placed) { assignment.set(it.id, laneEnds.length); laneEnds.push(it.end); }
     }
     return assignment;
+  }, []);
+
+  type ThemeRowData = {
+    theme: ThemeDescriptor;
+    allGoals: Goal[];
+    visibleGoals: Goal[];
+    laneAssignment: Map<string, number>;
+    rowHeight: number;
+    totalHeight: number;
   };
 
+  const themeRows = useMemo(() => {
+    return themesList
+      .map<ThemeRowData | null>((themeDef) => {
+        const allGoals = goals.filter(g => migrateThemeValue(g.theme) === themeDef.id);
+        if (!showEmptyThemes && allGoals.length === 0) return null;
+        const timedGoals: TimedGoal[] = allGoals.map(g => {
+          const start = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
+          const end = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now() + 90 * DAY_MS));
+          start.setHours(0,0,0,0);
+          end.setHours(0,0,0,0);
+          return { id: g.id, start: start.getTime(), end: end.getTime(), raw: g };
+        });
+        const laneAssignment = computeLanes(timedGoals);
+        const laneIndexes = Array.from(laneAssignment.values());
+        const laneCount = laneIndexes.length ? Math.max(0, ...laneIndexes) + 1 : 1;
+        const rowHeight = Math.max(laneHeight + 24, laneCount * (laneHeight + 8) + 16);
+        const visibleGoals = allGoals.filter(applyFilters);
+        const totalHeight = rowHeight + TRACK_VERTICAL_PADDING;
+        return { theme: themeDef, allGoals, visibleGoals, laneAssignment, rowHeight, totalHeight };
+      })
+      .filter((row): row is ThemeRowData => row !== null);
+  }, [themesList, goals, showEmptyThemes, computeLanes, laneHeight, applyFilters]);
+
+  const contentHeight = useMemo(() => {
+    const total = themeRows.reduce((sum, row) => sum + row.totalHeight, 0);
+    return Math.max(laneHeight + 48, total);
+  }, [laneHeight, themeRows]);
+  const overlayHeight = contentHeight + AXIS_GAP_PX;
+
   return (
-    <div className={`grv3 ${zoomClass}`}>
+    <div className={`grv3 ${zoomClass}`} style={axisCssVars}>
       <div className="grv3-toolbar d-flex align-items-center justify-content-start p-2 gap-2">
         {/* Sticky zoom controls on the top-left */}
         <Button size="sm" variant="outline-secondary" onClick={() => {
@@ -567,15 +823,7 @@ const GoalRoadmapV3: React.FC = () => {
             setZoom('years');
           }
         }} aria-label="Fit All"><Maximize2 size={14} /></Button>
-        <Button
-          size="sm"
-          variant="outline-secondary"
-          className="ms-2"
-          onClick={() => setShowGlobalActivity(true)}
-        >
-          <Activity size={14} className="me-1" />
-          Activity Feed
-        </Button>
+        {/* Global activity feed button removed; open per-goal Activity Stream from the goal actions. */}
         <Button size="sm" variant="outline-secondary" onClick={() => { 
           // Zoom to Month around today and filter to goals with stories in selected sprint
           setCustomRange(null);
@@ -620,29 +868,42 @@ const GoalRoadmapV3: React.FC = () => {
           window.addEventListener('mouseup', onUp);
         }}
       >
-        {/* Header months + sticky left label */}
+        {/* Header axis + sticky theme label */}
         <div className="grv3-header">
-          <div className="position-relative" style={{ height: 36 }}>
-            <div className="grv3-months" style={{ width: 260 + totalWidth }}>
-              <div className="grv3-header-left">Themes</div>
-              {gridLines.map((g, i) => (
-                <div key={i} className="grv3-month" style={{ left: 260 + g.x }}>{g.label}</div>
+          <div className="grv3-axis-wrapper" style={{ width: 260 + totalWidth }}>
+            <div className="grv3-header-left">Themes</div>
+            <div className="grv3-axis-track" style={{ width: totalWidth }}>
+              {axis.rows.map((row) => (
+                <div key={row.id} className={`grv3-axis-row grv3-axis-row-${row.id}`}>
+                  {row.labels.map((label, idx) => (
+                    <div
+                      key={`${row.id}-${idx}-${label.label}-${Math.round(label.x)}`}
+                      className="grv3-axis-label"
+                      style={{ left: label.x, width: label.width }}
+                    >
+                      <span className="grv3-axis-label-main">{label.label}</span>
+                      {label.subLabel && <span className="grv3-axis-label-sub">{label.subLabel}</span>}
+                    </div>
+                  ))}
+                </div>
               ))}
             </div>
           </div>
         </div>
 
         {/* Grid lines */}
-        <div className="grv3-grid" style={{ width: totalWidth }}>
-          {gridLines.map((g, i) => (<div key={i} className="grv3-grid-line" style={{ left: g.x }} />))}
+        <div className="grv3-grid" style={{ width: totalWidth, height: overlayHeight }}>
+          {axis.minor.map((x, i) => (<div key={`minor-${i}`} className="grv3-grid-line minor" style={{ left: x }} />))}
+          {axis.secondary.map((x, i) => (<div key={`secondary-${i}`} className="grv3-grid-line secondary" style={{ left: x }} />))}
+          {axis.major.map((x, i) => (<div key={`major-${i}`} className="grv3-grid-line major" style={{ left: x }} />))}
         </div>
 
         {/* Today line */}
-        <div className="grv3-today-line" style={{ left: 260 + xFromDate(new Date()) }} />
+        <div className="grv3-today-line" style={{ left: 260 + xFromDate(new Date()), height: overlayHeight }} />
 
         {/* Snap guides during drag */}
         {guideXs.length > 0 && (
-          <div className="grv3-guides" style={{ width: totalWidth }}>
+          <div className="grv3-guides" style={{ width: totalWidth, height: overlayHeight }}>
             {guideXs.map((x, i) => (
               <div key={i} className={`grv3-guide ${activeGuideX === x ? 'active' : ''}`} style={{ left: x }} />
             ))}
@@ -653,7 +914,7 @@ const GoalRoadmapV3: React.FC = () => {
         {showSprints && (zoom === 'weeks' || zoom === 'months') && (
           <>
             {sprintOverlays.map((s, i) => (
-              <div key={`band-${i}`} className="grv3-sprint-band" style={{ left: 260 + s.left, width: s.width }} />
+              <div key={`band-${i}`} className="grv3-sprint-band" style={{ left: 260 + s.left, width: s.width, height: overlayHeight }} />
             ))}
             <div className="grv3-sprints" style={{ width: totalWidth }}>
               {sprintOverlays.map((s, i) => (
@@ -666,38 +927,34 @@ const GoalRoadmapV3: React.FC = () => {
         )}
 
         {/* Theme rows */}
-        <div style={{ position: 'relative', width: 260 + totalWidth }}>
-          {themesList.map(t => {
-            // Prepare timed goals for this theme
-            const tg: { id: string; start: number; end: number; raw: Goal }[] = goals
-              .filter(g => migrateThemeValue(g.theme) === t.id)
-              .map(g => {
-                const s = g.startDate ? new Date(g.startDate) : new Date();
-                const e = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
-                s.setHours(0,0,0,0); e.setHours(0,0,0,0);
-                return { id: g.id, start: s.getTime(), end: e.getTime(), raw: g };
-              });
-            if (!showEmptyThemes && tg.length === 0) return null;
-            const laneAssign = computeLanes(tg);
-            const laneCount = Math.max(0, ...Array.from(laneAssign.values()).map(v=>v)) + 1;
-            const laneH = getLaneHeight();
-            const rowMin = Math.max(laneH + 24, laneCount * (laneH + 8) + 16);
+        <div className="grv3-rows" style={{ width: 260 + totalWidth }}>
+          {themeRows.map((row) => {
+            const laneH = laneHeight;
+            const isEmpty = row.visibleGoals.length === 0;
             return (
-            <div key={t.id} className="grv3-theme-row" style={{ minHeight: rowMin }}>
-              <div className="grv3-label d-flex align-items-center gap-2" style={{ color: t.color }}>
+            <div
+              key={row.theme.id}
+              ref={(el) => {
+                if (el) themeRowRefs.current.set(row.theme.id, el);
+                else themeRowRefs.current.delete(row.theme.id);
+              }}
+              className={`grv3-theme-row${isEmpty ? ' grv3-theme-row-empty' : ''}${themeDropCandidate === row.theme.id ? ' grv3-theme-row-drop-target' : ''}`}
+              style={{ minHeight: row.totalHeight }}
+            >
+              <div className="grv3-label d-flex align-items-center gap-2" style={{ color: row.theme.color }}>
                 <span style={{ width: 10, height: 10, borderRadius: 9999, background: 'currentColor' }} />
-                <span>{t.name}</span>
+                <span>{row.theme.name}</span>
               </div>
-              <div className="grv3-track" style={{ width: totalWidth, minHeight: rowMin }}>
-                {goals.filter(g => migrateThemeValue(g.theme) === t.id).filter(applyFilters).map(g => {
+              <div className="grv3-track" style={{ width: totalWidth, minHeight: row.totalHeight }}>
+                {row.visibleGoals.map(g => {
                   // Culling: only render bars near viewport
                   const start = g.startDate ? new Date(g.startDate) : new Date();
-                  const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+86400000*90);
+                  const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+90*DAY_MS);
                   const left = xFromDate(start); const width = Math.max(14, xFromDate(end) - left);
                   const buffer = 800; const visLeft = viewport.left; const visRight = viewport.left + viewport.width;
                   const barLeft = left; const barRight = left + width;
                   if (barRight < visLeft - buffer || barLeft > visRight + buffer) return null;
-                  const lane = laneAssign.get(g.id) || 0;
+                  const lane = row.laneAssignment.get(g.id) ?? 0;
                   const total = storyCounts[g.id] || 0;
                   const done = storyDoneCounts[g.id] || 0;
                   const pct = total ? Math.round((done/total)*100) : 0;
@@ -713,8 +970,25 @@ const GoalRoadmapV3: React.FC = () => {
                     onKeyDown={(e) => onKeyNudge(e, g)}
                     onMouseEnter={() => setHoveredId(g.id)}
                     onMouseLeave={() => setHoveredId(null)}
-                    onDoubleClick={() => setShowGlobalActivity(true)}
+                    onDoubleClick={() => showSidebar(g as any, 'goal')}
                   >
+                    {/* Compact % badge overlay (moved to top-left) */}
+                    <div
+                      aria-label={`Completion ${pct}%`}
+                      style={{
+                        position: 'absolute',
+                        top: 6,
+                        left: 8,
+                        padding: '2px 6px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        borderRadius: 999,
+                        background: 'rgba(255,255,255,.82)',
+                        color: '#111827'
+                      }}
+                    >
+                      {pct}%
+                    </div>
                     <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
                     <div className="grv3-resize end" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'end'); }} />
 
@@ -733,9 +1007,17 @@ const GoalRoadmapV3: React.FC = () => {
                             <Wand2 size={14} className="me-2" />
                             Generate Stories
                           </Dropdown.Item>
+                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); handleAiOrchestrate(g.id); }}>
+                            <Wand2 size={14} className="me-2" />
+                            AI Orchestrate (Research + Plan)
+                          </Dropdown.Item>
                           <Dropdown.Item onClick={(e) => { e.stopPropagation(); showSidebar(g as any, 'goal'); }}>
                             <ListIcon size={14} className="me-2" />
                             Open Activity Stream
+                          </Dropdown.Item>
+                          <Dropdown.Item onClick={(e) => { e.stopPropagation(); scheduleGoalAI(g); }}>
+                            <CalendarIcon size={14} className="me-2" />
+                            AI Schedule Time
                           </Dropdown.Item>
                           <Dropdown.Item onClick={(e) => { e.stopPropagation(); setNoteGoalId(g.id); setNoteDraft(''); }}>
                             <MessageSquareText size={14} className="me-2" />
@@ -769,60 +1051,56 @@ const GoalRoadmapV3: React.FC = () => {
 
                     <div className="grv3-title">{g.title}</div>
                     <div className="grv3-meta">{g.startDate ? new Date(g.startDate).toLocaleDateString() : ''} – {g.endDate ? new Date(g.endDate).toLocaleDateString() : ''}{typeof storyCounts[g.id] === 'number' ? ` • ${storyCounts[g.id]} stories` : ''}</div>
-                    {typeof storyCounts[g.id] === 'number' && storyCounts[g.id] > 0 && (
+                    {(zoom === 'weeks' || zoom === 'months') && (
                       <div className="mt-1" style={{ width: '100%' }}>
                         <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,.3)', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${Math.round(((storyDoneCounts[g.id]||0) / storyCounts[g.id]) * 100)}%`, background: 'rgba(255,255,255,.9)' }} />
+                          <div style={{ height: '100%', width: `${pct}%`, background: 'rgba(255,255,255,.9)' }} />
                         </div>
-                        <div className="grv3-meta">{Math.round(((storyDoneCounts[g.id]||0) / storyCounts[g.id]) * 100)}%</div>
                       </div>
                     )}
                     {(zoom === 'weeks' || zoom === 'months') && (lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote) && (
                       <div className="grv3-meta">📝 {lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote}</div>
                     )}
+
+                    {/* Hover actions under card (icons only) */}
+                    <div className="grv3-hover-actions icons-only" onClick={(e) => e.stopPropagation()}>
+                      <button className="icon-btn" title="Edit Goal" onClick={() => setEditGoal(g)}>
+                        <Edit3 size={14} />
+                      </button>
+                      <button className="icon-btn" title="Generate Stories" onClick={() => handleGenerateStories(g.id)}>
+                        <Wand2 size={14} />
+                      </button>
+                      <button className="icon-btn" title="AI Schedule Time" onClick={() => scheduleGoalAI(g)}>
+                        <CalendarIcon size={14} />
+                      </button>
+                      <button className="icon-btn" title="Open Activity Stream" onClick={() => showSidebar(g as any, 'goal')}>
+                        <ListIcon size={14} />
+                      </button>
+                    </div>
                   </div>
                   );
                 })}
+                {row.visibleGoals.length === 0 && (
+                  <div className="grv3-track-empty">
+                    {row.allGoals.length === 0 ? 'No goals in this theme' : 'No goals match the active filters'}
+                  </div>
+                )}
               </div>
             </div>
             );
           })}
+          {themeRows.length === 0 && (
+            <div className="grv3-empty" style={{ marginLeft: 260, padding: '32px 16px', color: 'var(--bs-secondary-color)', fontSize: 14 }}>
+              No goals match the current filters.
+            </div>
+          )}
         </div>
       </div>
 
       {/* Tooltip for drag */}
       <div ref={tooltipRef} className="grv3-tooltip" style={{ display: 'none' }} />
 
-      {/* Activity Modal */}
-      {/* Activity modal header adopts the goal theme color */}
-      <Modal show={!!activityGoalId} onHide={() => setActivityGoalId(null)} size="lg">
-        {(() => {
-          const g = goals.find(x => x.id === activityGoalId);
-          const themeId = migrateThemeValue(g?.theme ?? 0);
-          const themeDef = getThemeDefinition(themeId);
-          const colorVar = themeDef.color || '#6c757d';
-          const overlay = theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
-          return (
-            <Modal.Header closeButton style={{ ['--modal-color' as any]: String(colorVar), background: `linear-gradient(135deg, var(--modal-color) 0%, ${overlay} 100%)`, color: '#fff' }}>
-              <Modal.Title>Activity Stream</Modal.Title>
-            </Modal.Header>
-          );
-        })()}
-        <Modal.Body>
-          {activityItems.length === 0 ? (
-            <div className="text-muted">No activity yet.</div>
-          ) : (
-            <ul className="list-group">
-              {activityItems.map(a => (
-                <li key={a.id} className="list-group-item">
-                  <div className="small text-muted">{a.timestamp?.toDate?.().toLocaleString?.() || ''}</div>
-                  <div>{a.description || a.activityType}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Modal.Body>
-      </Modal>
+      {/* Activity modal removed in favor of global sidebar (Open Activity Stream) */}
 
       {/* Add Note Modal */}
       <Modal show={!!noteGoalId} onHide={() => setNoteGoalId(null)}>
@@ -839,26 +1117,7 @@ const GoalRoadmapV3: React.FC = () => {
         </Modal.Footer>
       </Modal>
 
-      {/* Global Activity Modal */}
-      <Modal show={showGlobalActivity} onHide={() => setShowGlobalActivity(false)} size="lg">
-        <Modal.Header closeButton>
-          <Modal.Title>Global Activity</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          {globalActivityItems.length === 0 ? (
-            <div className="text-muted">No activity yet.</div>
-          ) : (
-            <ul className="list-group">
-              {globalActivityItems.slice(0, 200).map(a => (
-                <li key={a.id} className="list-group-item">
-                  <div className="small text-muted">{a.timestamp?.toDate?.().toLocaleString?.() || ''}</div>
-                  <div>{a.description || `${a.activityType} on ${a.entityType}`}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Modal.Body>
-      </Modal>
+      {/* Global activity modal removed */}
 
       {/* Edit Goal Modal */}
       {editGoal && (
