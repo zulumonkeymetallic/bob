@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Dropdown } from 'react-bootstrap';
-import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Sprint } from '../types';
-import { isStatus, isTheme } from '../utils/statusHelpers';
+import { isStatus } from '../utils/statusHelpers';
 import logger from '../utils/logger';
+import { usePersona } from '../contexts/PersonaContext';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
@@ -21,19 +22,22 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !currentPersona) {
       setLoading(false);
       return;
     }
 
-    logger.debug('sprint', 'Setting up sprint listener for user', { uid: currentUser.uid });
+    logger.debug('sprint', 'Setting up sprint listener for user', { uid: currentUser.uid, persona: currentPersona });
 
     const q = query(
       collection(db, 'sprints'),
       where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc')
+      where('persona', '==', currentPersona),
+      orderBy('startDate', 'desc'),
+      limit(50)
     );
 
     const unsubscribe = onSnapshot(q, 
@@ -93,7 +97,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
     );
 
     return () => unsubscribe();
-  }, [currentUser, selectedSprintId, onSprintChange]);
+  }, [currentUser, currentPersona, selectedSprintId, onSprintChange]);
 
   const selectedSprint = sprints.find(sprint => sprint.id === selectedSprintId);
 

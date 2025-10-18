@@ -1,12 +1,12 @@
 {
-  "version": "3.9.4",
-  "buildTime": "2025-10-06T21:40:00Z",
-  "buildHash": "feature-ai-focus-scheduling-3.9.4",
+  "version": "4.0.0",
+  "buildTime": "2025-10-18T00:00:00Z",
+  "buildHash": "feature-kanban-policy-refresh-4.0.0",
   "features": [
-    "AI Focus Scheduling enhancements",
-    "Stability: version parity for login",
-    "Cache loop prevention improvements"
+    "Kanban & Sprint card refresh",
+    "Roadmap milestone linking + star milestones",
+    "Planner & roadmap performance improvements"
   ],
-  "description": "Align UI + server versions to stop login loop",
+  "description": "Kanban & roadmap refinements for unified planning experience",
   "githubIssues": []
 }

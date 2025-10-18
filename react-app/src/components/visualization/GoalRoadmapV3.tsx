@@ -92,6 +92,12 @@ const GoalRoadmapV3: React.FC = () => {
     return { start, end };
   }, [goals]);
 
+  useEffect(() => {
+    if (datasetRange && !customRange) {
+      setCustomRange({ start: datasetRange.start, end: datasetRange.end });
+    }
+  }, [datasetRange, customRange]);
+
   const themePalette = useMemo(() => (globalThemes && globalThemes.length ? globalThemes : GLOBAL_THEMES), [globalThemes]);
   const themeMap = useMemo(() => {
     const map = new Map<number, GlobalTheme>();
@@ -971,28 +977,28 @@ const GoalRoadmapV3: React.FC = () => {
             const lane = row.laneAssignment.get(g.id) ?? 0;
             const laneStride = laneHeight + 48;
             const laneBase = lane * laneStride;
-            const labelTop = laneBase - (isMilestone ? 12 : 0);
-            const barTop = laneBase + 32;
-            const barHeight = laneH;
+            const milestoneVisualSize = 34;
+            const milestoneOffsetTop = 18;
 
-            const milestoneSize = Math.max(28, Math.min(40, barHeight + 10));
-            const milestonePadding = 12;
             let barLeft = left;
             let barWidth = width;
+            let barTop = laneBase + 32;
+            let barHeight = laneH;
             if (isMilestone) {
-              const containerWidth = milestoneSize + milestonePadding;
               const midPoint = left + width / 2;
-              barLeft = midPoint - containerWidth / 2;
-              barWidth = containerWidth;
+              barWidth = milestoneVisualSize;
+              barHeight = milestoneVisualSize;
+              barTop = laneBase + milestoneOffsetTop;
             }
 
-            const containerWidth = Math.max(barWidth, isMilestone ? milestoneSize + milestonePadding : barWidth);
+            const containerWidth = isMilestone ? milestoneVisualSize : barWidth;
             const barOffset = (containerWidth - barWidth) / 2;
             const absoluteBarLeft = barLeft + barOffset;
 
             const themeId = migrateThemeValue(g.theme);
             const themeDef = getThemeDefinition(themeId);
             const themeColor = themeDef.color || '#6c757d';
+            const milestoneBackground = hexToRgba(themeColor, theme === 'dark' ? 0.45 : 0.2);
 
             const buffer = 800;
             const visLeft = viewport.left;
@@ -1013,10 +1019,12 @@ const GoalRoadmapV3: React.FC = () => {
               themeColor
             });
 
-            const labelWidth = containerWidth;
+            const milestoneLabelWidth = 200;
+            const labelWidth = isMilestone ? milestoneLabelWidth : containerWidth;
             const startLabel = g.startDate ? new Date(g.startDate).toLocaleDateString() : '';
             const endLabel = g.endDate ? new Date(g.endDate).toLocaleDateString() : '';
             const dateRangeText = [startLabel, endLabel].filter(Boolean).join(' → ');
+            const labelTop = isMilestone ? barTop - (milestoneVisualSize + 6) : laneBase;
 
             const totalStories = storyCounts[g.id] || 0;
             const totalTasksForGoal = taskCounts[g.id] || 0;
@@ -1030,7 +1038,7 @@ const GoalRoadmapV3: React.FC = () => {
               g.title,
               dateRangeText ? `Dates: ${dateRangeText}` : '',
               sprintLine ? `Sprint: ${sprintLine}` : '',
-              `Completion: ${pct}%`,
+              !isMilestone ? `Completion: ${pct}%` : '',
               totalLine
             ].filter(Boolean);
             const tooltipText = tooltipParts.join(' • ');
@@ -1055,8 +1063,11 @@ const GoalRoadmapV3: React.FC = () => {
               baseBarStyle.border = 'none';
               baseBarStyle.background = 'transparent';
               baseBarStyle.boxShadow = 'none';
-              baseBarStyle.width = 0;
-              baseBarStyle.height = 0;
+              baseBarStyle.width = milestoneVisualSize;
+              baseBarStyle.height = milestoneVisualSize;
+              baseBarStyle.minHeight = milestoneVisualSize;
+              baseBarStyle.minWidth = milestoneVisualSize;
+              baseBarStyle.borderRadius = 0;
             }
 
             return (
@@ -1068,7 +1079,12 @@ const GoalRoadmapV3: React.FC = () => {
               >
                 <div
                   className="grv3-bar-label"
-                  style={{ top: labelTop, width: labelWidth, marginBottom: isMilestone ? -8 : undefined }}
+                  style={{
+                    top: labelTop,
+                    width: labelWidth,
+                    marginBottom: 0,
+                    left: isMilestone ? -(labelWidth - containerWidth) / 2 : 0
+                  }}
                 >
                   <div className={`grv3-bar-title${isMilestone ? ' milestone-title' : ''}`} title={g.title}>
                     {g.title}
@@ -1110,8 +1126,8 @@ const GoalRoadmapV3: React.FC = () => {
                     </>
                   )}
                   {isMilestone && (
-                    <div className="grv3-milestone" style={{ color: themeColor }}>
-                      <Star size={22} strokeWidth={2} />
+                    <div className="grv3-milestone" style={{ color: themeColor, backgroundColor: milestoneBackground }}>
+                      <Star size={18} strokeWidth={1.6} />
                     </div>
                   )}
                   {!isMilestone && (zoom === 'weeks' || zoom === 'months') && (
@@ -1152,41 +1168,7 @@ const GoalRoadmapV3: React.FC = () => {
     );
   });
 
-  const connectorSegments: ConnectorSegment[] = goals
-    .filter((goal) => goal.parentGoalId && visibleGoalIds.has(goal.id) && visibleGoalIds.has(goal.parentGoalId as string))
-    .map((goal) => {
-      const parentLayout = layoutMap.get(goal.parentGoalId as string);
-      const childLayout = layoutMap.get(goal.id);
-      if (!parentLayout || !childLayout) return null;
-
-      const startX = parentLayout.left + parentLayout.width;
-      const endX = childLayout.left;
-      const startY = parentLayout.centerY;
-      const endY = childLayout.centerY;
-      const gradientId = `grv3-connector-${goal.id}`;
-
-      let path: string;
-      const distance = endX - startX;
-      const safetyBuffer = 16;
-      if (Math.abs(distance) < safetyBuffer) {
-        path = `M ${startX} ${startY} L ${endX} ${endY}`;
-      } else {
-        const offset = Math.max(Math.abs(distance) / 2, 36);
-        const midCandidate = distance >= 0 ? startX + offset : startX - offset;
-        const midX = distance >= 0
-          ? Math.min(midCandidate, endX - safetyBuffer)
-          : Math.max(midCandidate, endX + safetyBuffer);
-        path = `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`;
-      }
-
-      return {
-        path,
-        gradientId,
-        startColor: parentLayout.themeColor,
-        endColor: childLayout.themeColor
-      };
-    })
-    .filter(Boolean) as ConnectorSegment[];
+  const connectorSegments: ConnectorSegment[] = [];
 
   return (
     <div className={`grv3 ${zoomClass}`} style={axisCssVars}>

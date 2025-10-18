@@ -13,10 +13,10 @@
   overflow: hidden;
 }
 
-.grv3-toolbar { position: sticky; top: 0; z-index: var(--header-z); background: #fff; border-bottom: 1px solid var(--bs-border-color); padding-bottom: 6px !important; }
+.grv3-toolbar { position: sticky; top: 0; z-index: var(--header-z); background: #fff; border-bottom: 1px solid var(--bs-border-color); padding: 4px 12px 0; margin-bottom: -8px; }
 .grv3-container { position: relative; overflow: auto; border: 1px solid var(--bs-border-color); border-radius: 12px; background: #fff; cursor: grab; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08); }
 .grv3-container.panning { cursor: grabbing; }
-.grv3-header { position: sticky; top: 44px; background: #fff; z-index: var(--header-z); border-bottom: 1px solid var(--bs-border-color); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); isolation: isolate; }
+.grv3-header { position: sticky; top: 28px; background: #fff; z-index: var(--header-z); border-bottom: 1px solid var(--bs-border-color); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); isolation: isolate; }
 .grv3-header::after {
   content: '';
   position: absolute;
@@ -24,7 +24,7 @@
   background: #fff;
   z-index: -1;
 }
-.grv3-axis-wrapper { position: relative; height: var(--axis-h); background: #fff; margin-top: -2px; }
+.grv3-axis-wrapper { position: relative; height: var(--axis-h); background: #fff; margin-top: -12px; }
 .grv3-header-left { position: sticky; left: 0; width: var(--label-col); height: var(--axis-h); display: flex; align-items: center; justify-content: center; padding: 12px 14px; font-size: 13px; font-weight: 700; color: var(--bs-body-color); background: #fff; border-right: 1px solid var(--bs-border-color); z-index: calc(var(--header-z) + 1); box-shadow: inset -1px 0 0 rgba(15,23,42,0.06); }
 .grv3-axis-track { position: absolute; top: 0; left: 0; margin-left: var(--label-col); width: max-content; height: var(--axis-h); padding: 6px 0; background: #fff; box-shadow: inset 0 -1px 0 rgba(15,23,42,0.05); }
 .grv3-axis-track::after {
@@ -145,8 +145,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border-radius: 8px;
   border: 1px solid rgba(0,0,0,0.12);
@@ -160,31 +160,23 @@
 
 .grv3-milestone {
   position: relative;
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255,255,255,0.92);
   pointer-events: none;
-  box-shadow: 0 6px 14px rgba(15,23,42,0.16);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  box-shadow: 0 6px 14px rgba(15,23,42,0.12);
+  border: 2px solid currentColor;
 }
 
 .grv3-milestone svg {
-  position: absolute;
-  width: 20px;
-  height: 20px;
-  stroke: currentColor;
-  color: inherit;
-  opacity: 0.85;
-}
-
-.grv3-milestone-progress {
-  position: relative;
-  font-size: 11px;
-  font-weight: 700;
-  color: #111827;
+  width: 18px;
+  height: 18px;
+  stroke: #fff;
+  fill: #fff;
+  opacity: 0.95;
 }
 
 .grv3-bar.link-target {
