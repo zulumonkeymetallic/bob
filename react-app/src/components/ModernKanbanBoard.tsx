@@ -44,7 +44,7 @@ interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
 }
 
-type LaneStatus = 'backlog' | 'in-progress' | 'done';
+type LaneStatus = 'backlog' | 'in-progress' | 'blocked' | 'done';
 
 // Droppable Area Component
 const DroppableArea: React.FC<{
@@ -457,9 +457,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   // Swim lanes configuration
   const swimLanes: Array<{ id: LaneStatus; title: string; status: LaneStatus; color: string }> = [
     { id: 'backlog', title: 'Backlog', status: 'backlog', color: themeVars.muted as string },
-    { id: 'in-progress', title: 'Active', status: 'in-progress', color: themeVars.brand as string },
+    { id: 'in-progress', title: 'In Progress', status: 'in-progress', color: themeVars.brand as string },
+    { id: 'blocked', title: 'Blocked', status: 'blocked', color: 'var(--bs-danger, #dc3545)' },
     { id: 'done', title: 'Done', status: 'done', color: 'var(--green)' },
   ];
+  const laneIds: LaneStatus[] = swimLanes.map(lane => lane.id);
 
   // Resolve theme color from goal's theme id or name consistently
   const themeColorForGoal = (goal?: Goal): string => goalThemeColor(goal);
@@ -474,6 +476,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const storyLaneForStatus = (story: Story): LaneStatus => {
     const raw = (story as any).status;
     if (typeof raw === 'number') {
+      if (isStatus(raw, 'Blocked')) return 'blocked';
       if (isStatus(raw, 'done') || isStatus(raw, 'Complete')) return 'done';
       if (isStatus(raw, 'active') || isStatus(raw, 'in-progress') || isStatus(raw, 'testing')) return 'in-progress';
       return 'backlog';
@@ -481,6 +484,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     const normalized = normalizeStatusValue(raw);
     if (!normalized) return 'backlog';
     if (['done', 'complete', 'completed', 'finished'].includes(normalized)) return 'done';
+    if (['blocked', 'stalled', 'waiting', 'on-hold', 'onhold', 'paused'].includes(normalized)) return 'blocked';
     if (['in-progress', 'inprogress', 'active', 'doing', 'testing', 'qa', 'review'].includes(normalized)) return 'in-progress';
     return 'backlog';
   };
@@ -488,6 +492,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const taskLaneForStatus = (task: Task): LaneStatus => {
     const raw = (task as any).status;
     if (typeof raw === 'number') {
+      if (raw === 3 || isStatus(raw, 'blocked')) return 'blocked';
       if (raw >= 2) return 'done';
       if (raw === 1) return 'in-progress';
       return 'backlog';
@@ -495,6 +500,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     const normalized = normalizeStatusValue(raw);
     if (!normalized) return 'backlog';
     if (['done', 'complete', 'completed', 'finished'].includes(normalized)) return 'done';
+    if (['blocked', 'stalled', 'waiting', 'on-hold', 'onhold', 'paused'].includes(normalized)) return 'blocked';
     if (['in-progress', 'inprogress', 'active', 'doing'].includes(normalized)) return 'in-progress';
     return 'backlog';
   };
@@ -504,10 +510,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     if (typeof raw === 'number') {
       if (lane === 'backlog') return 0;
       if (lane === 'in-progress') return 2;
+      if (lane === 'blocked') return 3;
       return 4;
     }
     if (lane === 'backlog') return 'backlog';
     if (lane === 'in-progress') return 'in-progress';
+    if (lane === 'blocked') return 'blocked';
     return 'done';
   };
 
@@ -516,10 +524,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     if (typeof raw === 'number') {
       if (lane === 'backlog') return 0;
       if (lane === 'in-progress') return 1;
+      if (lane === 'blocked') return 3;
       return 2;
     }
     if (lane === 'backlog') return 'backlog';
     if (lane === 'in-progress') return 'in-progress';
+    if (lane === 'blocked') return 'blocked';
     return 'done';
   };
 
@@ -605,14 +615,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     const storySuffix = '-stories';
     if (id.endsWith(storySuffix)) {
       const lane = id.slice(0, -storySuffix.length) as LaneStatus;
-      if (lane === 'backlog' || lane === 'in-progress' || lane === 'done') {
+      if (laneIds.includes(lane)) {
         return { lane, type: 'stories' };
       }
     }
     const taskSuffix = '-tasks';
     if (id.endsWith(taskSuffix)) {
       const lane = id.slice(0, -taskSuffix.length) as LaneStatus;
-      if (lane === 'backlog' || lane === 'in-progress' || lane === 'done') {
+      if (laneIds.includes(lane)) {
         return { lane, type: 'tasks' };
       }
     }
@@ -759,6 +769,13 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           status: nextStatus,
           updatedAt: serverTimestamp(),
         });
+        try {
+          const oldLabel = String((story as any).status ?? '');
+          const newLabel = String(nextStatus);
+          if (oldLabel !== newLabel) {
+            await trackFieldChange(story.id, 'story', 'status', oldLabel, newLabel, (story as any).ref);
+          }
+        } catch {}
       } else {
         const task = tasks.find(t => t.id === activeId);
         if (!task) return;
@@ -996,7 +1013,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         >
           <Row style={{ minHeight: '600px' }}>
           {swimLanes.map((lane) => (
-            <Col lg={4} key={lane.id} style={{ marginBottom: '20px' }}>
+            <Col xs={12} md={6} lg={3} key={lane.id} style={{ marginBottom: '20px' }}>
               <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                 <Card.Header style={{ 
                   backgroundColor: lane.color, 
@@ -1138,7 +1155,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                       >
                         {typeof (selectedItem as any).status === 'number' ? (
                           <>
-                            <option value={0}>Todo</option>
+                            <option value={0}>Backlog</option>
                             <option value={1}>In Progress</option>
                             <option value={2}>Done</option>
                             <option value={3}>Blocked</option>
@@ -1147,6 +1164,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                           <>
                             <option value={'backlog'}>Backlog</option>
                             <option value={'in-progress'}>In Progress</option>
+                            <option value={'blocked'}>Blocked</option>
                             <option value={'done'}>Done</option>
                           </>
                         )}
@@ -1217,6 +1235,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
               >
                 <option value="backlog">Backlog</option>
                 <option value="in-progress">In Progress</option>
+                <option value="blocked">Blocked</option>
                 <option value="done">Done</option>
               </Form.Select>
             </Form.Group>

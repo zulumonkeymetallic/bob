@@ -36,6 +36,14 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 const [submitResult, setSubmitResult] = useState<string | null>(null);
 const { themes } = useGlobalThemes();
 const [themeInput, setThemeInput] = useState('');
+  const resolveThemeId = useCallback((input: string, fallback: number) => {
+    const trimmed = (input || '').trim();
+    if (!trimmed) return fallback;
+    const match = themes.find(t => t.label === trimmed || t.name === trimmed || String(t.id) === trimmed);
+    if (match) return match.id;
+    const numeric = Number.parseInt(trimmed, 10);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }, [themes]);
   const [parentSearch, setParentSearch] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const sizes = [
@@ -184,10 +192,12 @@ const [themeInput, setThemeInput] = useState('');
       
       const selectedSize = sizes.find(s => s.value === formData.size);
       
+      const themeId = resolveThemeId(themeInput, formData.theme);
+
       const goalUpdates: any = {
         title: formData.title.trim(),
         description: formData.description.trim(),
-        theme: formData.theme, // Use theme ID directly
+        theme: themeId, // Ensure numeric theme ID is persisted
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
@@ -228,6 +238,7 @@ const [themeInput, setThemeInput] = useState('');
         timestamp: new Date().toISOString()
       });
 
+      setFormData(prev => ({ ...prev, theme: themeId }));
       setSubmitResult(`✅ Goal updated successfully!`);
       
       // Auto-close after success
@@ -349,11 +360,25 @@ const [themeInput, setThemeInput] = useState('');
                 <Form.Control
                   list="edit-goal-theme-options"
                   value={themeInput}
-                  onChange={(e) => setThemeInput(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setThemeInput(value);
+                    setFormData(prev => ({
+                      ...prev,
+                      theme: resolveThemeId(value, prev.theme)
+                    }));
+                  }}
                   onBlur={() => {
-                    const val = themeInput;
-                    const match = themes.find(t => t.label === val || t.name === val || String(t.id) === val);
-                    setFormData({ ...formData, theme: match ? match.id : (parseInt(val) || formData.theme) });
+                    setThemeInput(prevInput => {
+                      let nextLabel = prevInput;
+                      setFormData(prev => {
+                        const nextThemeId = resolveThemeId(prevInput, prev.theme);
+                        const match = themes.find(t => t.id === nextThemeId);
+                        nextLabel = match?.label ?? prevInput;
+                        return { ...prev, theme: nextThemeId };
+                      });
+                      return nextLabel;
+                    });
                   }}
                   placeholder="Search themes..."
                 />

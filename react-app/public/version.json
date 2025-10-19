@@ -1,12 +1,12 @@
 {
-  "version": "4.0.0",
-  "buildTime": "2025-10-18T00:00:00Z",
-  "buildHash": "feature-kanban-policy-refresh-4.0.0",
+  "version": "4.0.2",
+  "buildTime": "2025-10-21T00:00:00Z",
+  "buildHash": "entity-audit-logging-4.0.2",
   "features": [
-    "Kanban & Sprint card refresh",
-    "Roadmap milestone linking + star milestones",
-    "Planner & roadmap performance improvements"
+    "Global audit logging for goals, stories, tasks",
+    "Toolbar/header overlap refinements",
+    "Roadmap spacing + typography polish"
   ],
-  "description": "Kanban & roadmap refinements for unified planning experience",
+  "description": "Audit logging rollout with roadmap layout improvements",
   "githubIssues": []
 }

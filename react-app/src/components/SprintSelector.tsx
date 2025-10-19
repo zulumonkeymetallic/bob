@@ -35,7 +35,6 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
     const q = query(
       collection(db, 'sprints'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
       orderBy('startDate', 'desc'),
       limit(50)
     );
@@ -47,25 +46,31 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           id: doc.id,
           ...doc.data()
         })) as Sprint[];
+        const filtered = sprintData.filter((sprint) => {
+          const persona = (sprint as any)?.persona;
+          if (!persona) return true;
+          return persona === currentPersona;
+        });
+        logger.debug('sprint', 'Filtered sprint results', { total: sprintData.length, matchedPersona: filtered.length, persona: currentPersona });
         
-        setSprints(sprintData);
+        setSprints(filtered);
         setLoading(false);
 
         // Always try to select active sprint first, then fall back to most recent
-        if (sprintData.length > 0) {
+        if (filtered.length > 0) {
           // Look for active sprint (status = 1) or 'active' string
-          const activeSprint = sprintData.find(sprint => 
+          const activeSprint = filtered.find(sprint => 
             (typeof sprint.status === 'number' && sprint.status === 1) || 
             (typeof sprint.status === 'string' && sprint.status === 'active') || 
             isStatus(sprint.status, 'active')
           );
           // Look for planned sprint (status = 0) or 'planned' string
-          const plannedSprint = sprintData.find(sprint => 
+          const plannedSprint = filtered.find(sprint => 
             (typeof sprint.status === 'number' && sprint.status === 0) || 
             (typeof sprint.status === 'string' && sprint.status === 'planned') || 
             isStatus(sprint.status, 'planned')
           );
-          const fallbackSprint = sprintData[0]; // Most recent by start date
+          const fallbackSprint = filtered[0]; // Most recent by start date
           
           const preferredSprint = activeSprint || plannedSprint || fallbackSprint;
 
@@ -75,7 +80,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           const isExplicitAll = selectedSprintId === '' && saved === '';
 
           // If no sprint is selected (undefined/null) or current selection is not found, select preferred
-          if (!isExplicitAll && (!selectedSprintId || !sprintData.find(s => s.id === selectedSprintId))) {
+          if (!isExplicitAll && (!selectedSprintId || !filtered.find(s => s.id === selectedSprintId))) {
             if (preferredSprint) {
               logger.info('sprint', 'Auto-selecting sprint', { name: preferredSprint.name, status: preferredSprint.status });
               onSprintChange(preferredSprint.id);

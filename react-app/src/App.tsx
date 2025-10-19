@@ -23,7 +23,7 @@ import LoginPage from './components/LoginPage';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
-import { PersonaProvider } from './contexts/PersonaContext';
+import { PersonaProvider, usePersona } from './contexts/PersonaContext';
 import { SprintProvider } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 
@@ -70,6 +70,7 @@ import MonzoSettings from './components/settings/integrations/MonzoSettings';
 import StravaSettings from './components/settings/integrations/StravaSettings';
 import SteamSettings from './components/settings/integrations/SteamSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
+import { useEntityAudit } from './hooks/useEntityAudit';
 
 
 // Lazy-loaded heavy routes
@@ -97,6 +98,7 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const deviceInfo = useDeviceInfo();
+  const { currentPersona } = usePersona();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [forceRender, setForceRender] = useState(0);
@@ -175,6 +177,8 @@ function AppContent() {
       // versionTimeoutService.destroy(); // Temporarily disabled to fix cache loop
     };
   }, []);
+
+  useEntityAudit(currentUser ? { currentUserId: currentUser.uid, currentUserEmail: currentUser.email, persona: currentPersona } : null);
 
   if (!currentUser) {
     return <LoginPage />;

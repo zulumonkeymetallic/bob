@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, ButtonGroup, Modal, Form, Badge } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -16,6 +16,7 @@ import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import GLOBAL_THEMES, { migrateThemeValue, type GlobalTheme } from '../../constants/globalThemes';
+import SprintSelector from '../SprintSelector';
 
 type Zoom = 'weeks' | 'months' | 'quarters' | 'years';
 type AxisLabel = { label: string; subLabel?: string; x: number; width: number };
@@ -23,10 +24,11 @@ type AxisRow = { id: 'year' | 'half' | 'quarter' | 'month'; labels: AxisLabel[] 
 type ThemeDescriptor = { id: number; name: string; color: string; textColor?: string };
 const DAY_MS = 86400000;
 const YEAR_MS = DAY_MS * 365.25;
-const MILESTONE_THRESHOLD_MS = DAY_MS * 7 * 28;
+const MILESTONE_THRESHOLD_MS = DAY_MS * 40;
 const AXIS_ROW_HEIGHT = 28;
-const TRACK_VERTICAL_PADDING = 18;
+const TRACK_VERTICAL_PADDING = 10;
 const AXIS_GAP_PX = 12;
+const HEADER_OVERLAP_PX = 8;
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
 
@@ -35,7 +37,7 @@ const pluralize = (word: string, count: number) => (count === 1 ? word : `${word
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
-  const { selectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId } = useSprint();
   const { showSidebar } = useSidebar();
   const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
@@ -141,6 +143,8 @@ const GoalRoadmapV3: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const themeRowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [toolbarHeight, setToolbarHeight] = useState(56);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -148,6 +152,26 @@ const GoalRoadmapV3: React.FC = () => {
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+    const measure = () => {
+      setToolbarHeight(Math.max(48, Math.round(el.getBoundingClientRect().height)));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const observer = new ResizeObserver((entries) => {
+      if (!entries.length) return;
+      const { height } = entries[0].contentRect;
+      setToolbarHeight(Math.max(48, Math.round(height)));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   const timeRange = useMemo(() => {
@@ -673,7 +697,10 @@ const GoalRoadmapV3: React.FC = () => {
   };
 
   const zoomClass = useMemo(() => (zoom === 'years' ? 'ultra' : zoom === 'quarters' ? 'slim' : ''), [zoom]);
-  const totalWidth = useMemo(() => Math.max(1400, Math.round(daysBetween(timeRange.start, timeRange.end) * pxPerDay)), [timeRange, pxPerDay]);
+  const totalWidth = useMemo(() => {
+    const computed = Math.round(daysBetween(timeRange.start, timeRange.end) * pxPerDay);
+    return Math.max(Math.max(320, viewport.width), computed);
+  }, [timeRange, pxPerDay, viewport.width]);
 
   const axis = useMemo(() => {
     const rows: AxisRow[] = [];
@@ -795,7 +822,14 @@ const GoalRoadmapV3: React.FC = () => {
   }, [timeRange, totalWidth, xFromDate, zoom]);
   const axisRowCount = Math.max(1, axis.rows.length);
   const axisHeight = axisRowCount * AXIS_ROW_HEIGHT + 12;
-  const axisCssVars = useMemo(() => ({ '--axis-h': `${axisHeight}px` }) as React.CSSProperties, [axisHeight]);
+  const axisCssVars = useMemo(
+    () => ({
+      '--axis-h': `${axisHeight}px`,
+      '--toolbar-h': `${toolbarHeight}px`,
+      '--header-overlap': `${HEADER_OVERLAP_PX}px`
+    }) as React.CSSProperties,
+    [axisHeight, toolbarHeight]
+  );
 
   const handleGenerateStories = useCallback(async (goalId: string) => {
     try { const callable = httpsCallable(functions, 'generateStoriesForGoal'); await callable({ goalId }); }
@@ -919,8 +953,9 @@ const GoalRoadmapV3: React.FC = () => {
         const laneAssignment = computeLanes(timedGoals);
         const laneIndexes = Array.from(laneAssignment.values());
         const laneCount = laneIndexes.length ? Math.max(0, ...laneIndexes) + 1 : 1;
-        const laneStride = laneHeight + 48;
-        const rowHeight = Math.max(laneStride, laneCount * laneStride + 16);
+        const laneSpacing = 28;
+        const laneStride = laneHeight + laneSpacing;
+        const rowHeight = Math.max(laneHeight + laneSpacing, laneCount * laneStride + 12);
         const visibleGoals = allGoals.filter(applyFilters);
         const totalHeight = rowHeight + TRACK_VERTICAL_PADDING;
         return { theme: themeDef, allGoals, visibleGoals, laneAssignment, rowHeight, totalHeight };
@@ -975,14 +1010,15 @@ const GoalRoadmapV3: React.FC = () => {
             let left = rawLeft;
 
             const lane = row.laneAssignment.get(g.id) ?? 0;
-            const laneStride = laneHeight + 48;
+            const laneSpacing = 28;
+            const laneStride = laneHeight + laneSpacing;
             const laneBase = lane * laneStride;
             const milestoneVisualSize = 34;
-            const milestoneOffsetTop = 18;
+            const milestoneOffsetTop = 12;
 
             let barLeft = left;
             let barWidth = width;
-            let barTop = laneBase + 32;
+            let barTop = laneBase + 14;
             let barHeight = laneH;
             if (isMilestone) {
               const midPoint = left + width / 2;
@@ -1024,7 +1060,8 @@ const GoalRoadmapV3: React.FC = () => {
             const startLabel = g.startDate ? new Date(g.startDate).toLocaleDateString() : '';
             const endLabel = g.endDate ? new Date(g.endDate).toLocaleDateString() : '';
             const dateRangeText = [startLabel, endLabel].filter(Boolean).join(' → ');
-            const labelTop = isMilestone ? barTop - (milestoneVisualSize + 6) : laneBase;
+            const labelTop = barTop;
+            const labelClassName = `grv3-bar-label${isMilestone ? ' milestone-label' : ' bar-label'}`;
 
             const totalStories = storyCounts[g.id] || 0;
             const totalTasksForGoal = taskCounts[g.id] || 0;
@@ -1078,12 +1115,12 @@ const GoalRoadmapV3: React.FC = () => {
                 style={{ left: barLeft, width: containerWidth, top: 0, zIndex: hoveredId === g.id ? 1000 : undefined }}
               >
                 <div
-                  className="grv3-bar-label"
+                  className={labelClassName}
                   style={{
                     top: labelTop,
                     width: labelWidth,
                     marginBottom: 0,
-                    left: isMilestone ? -(labelWidth - containerWidth) / 2 : 0
+                    left: 0
                   }}
                 >
                   <div className={`grv3-bar-title${isMilestone ? ' milestone-title' : ''}`} title={g.title}>
@@ -1172,7 +1209,15 @@ const GoalRoadmapV3: React.FC = () => {
 
   return (
     <div className={`grv3 ${zoomClass}`} style={axisCssVars}>
-      <div className="grv3-toolbar d-flex align-items-center justify-content-start p-2 gap-2">
+      <div
+        ref={toolbarRef}
+        className="grv3-toolbar"
+      >
+        <SprintSelector
+          selectedSprintId={selectedSprintId}
+          onSprintChange={setSelectedSprintId}
+          className="grv3-sprint-selector"
+        />
         {/* Sticky zoom controls on the top-left */}
         <Button size="sm" variant="outline-secondary" onClick={() => {
           // Step zoom in: 5y -> 3y -> 1y -> quarters -> months -> weeks
