@@ -13,7 +13,7 @@ exports.generateDailyDigest = onSchedule({
   timeZone: 'Europe/London',
   memory: '512MiB',
   timeoutSeconds: 300,
-  secrets: [defineSecret('NYLAS_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')]
+  secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')]
 }, async (event) => {
   console.log('🌅 Starting daily digest generation at 06:30');
   

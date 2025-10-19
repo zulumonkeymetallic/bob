@@ -64,7 +64,7 @@ const SettingsDiagnostics: React.FC = () => {
           {status && (
             <div className="mt-3 d-flex gap-3 flex-wrap">
               <span>Gemini: <Badge bg={status.hasGemini ? 'success' : 'secondary'}>{String(!!status.hasGemini)}</Badge></span>
-              <span>Nylas: <Badge bg={status.hasNylas ? 'success' : 'secondary'}>{String(!!status.hasNylas)}</Badge></span>
+              <span>Brevo: <Badge bg={status.hasBrevo ? 'success' : 'secondary'}>{String(!!status.hasBrevo)}</Badge></span>
               <span>OpenAI: <Badge bg={status.hasOpenAI ? 'success' : 'secondary'}>{String(!!status.hasOpenAI)}</Badge></span>
               <span>App Base URL: <Badge bg={status.appBaseUrl ? 'info' : 'secondary'}>{status.appBaseUrl || 'not set'}</Badge></span>
             </div>
@@ -91,7 +91,7 @@ const SettingsDiagnostics: React.FC = () => {
           <div className="d-flex align-items-center justify-content-between">
             <div>
               <div className="mb-1"><strong>Test Email</strong></div>
-              <div className="text-muted" style={{ fontSize: 13 }}>Sends a test message to your profile email via Nylas.</div>
+              <div className="text-muted" style={{ fontSize: 13 }}>Sends a test message to your profile email via Brevo.</div>
             </div>
             <Button variant="outline-secondary" size="sm" onClick={testEmail} disabled={busy==='email'}>
               {busy==='email' ? 'Sending…' : 'Send Test Email'}

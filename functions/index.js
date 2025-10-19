@@ -57,7 +57,7 @@ const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
-const NYLAS_API_KEY = defineSecret('NYLAS_API_KEY');
+const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
 
 // Scheduler utils (deterministic id + day key)
 function makePlanId(userId, date) {
@@ -1077,7 +1077,7 @@ exports.diagnosticsStatus = httpsV2.onCall({}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   return {
     hasGemini: !!process.env.GOOGLEAISTUDIOAPIKEY,
-    hasNylas: !!process.env.NYLAS_API_KEY,
+    hasBrevo: !!process.env.BREVO_API_KEY,
     hasOpenAI: !!process.env.OPENAI_API_KEY,
     appBaseUrl: process.env.APP_BASE_URL || null,
   };
@@ -1090,14 +1090,14 @@ exports.testLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async 
   return { ok: true, model: 'gemini', response: raw.slice(0, 200) };
 });
 
-// Diagnostics: send test email via Nylas
-exports.sendTestEmail = httpsV2.onCall({ secrets: [NYLAS_API_KEY] }, async (req) => {
+// Diagnostics: send test email via Brevo
+exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
   const snap = await db.collection('profiles').doc(uid).get();
   const email = snap.exists ? (snap.data() || {}).email : null;
   if (!email) throw new httpsV2.HttpsError('failed-precondition', 'Profile email not set');
-  await sendEmail({ to: email, subject: 'BOB · Test Email', html: '<p>This is a test email from BOB diagnostics.</p>' });
+  await sendEmail({ to: email, subject: 'BOB · Test Email', html: '<p>This is a test email from BOB diagnostics (Brevo).</p>' });
   return { ok: true, to: email };
 });
 
@@ -2739,7 +2739,7 @@ Generate a plan as JSON with:
 }
 
 // Orchestrated Goal Planning: research → stories/tasks → schedule → (optional) GitHub issues
-exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
+exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '').trim();
@@ -2907,7 +2907,7 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
 });
 
 // Orchestrated Story Planning: (optional) brief research → tasks → schedule
-exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
+exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const storyId = String(req?.data?.storyId || '').trim();
@@ -6812,7 +6812,7 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 });
 
 // Theme-based Calendar Planner (runs daily at 01:00 UTC)
-exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async () => {
+exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async () => {
   const db = ensureFirestore();
   const profilesSnap = await db.collection('profiles').get();
   const runStartedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -7251,7 +7251,7 @@ exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
   schedule: 'every 15 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('NYLAS_API_KEY')],
+  secrets: [defineSecret('BREVO_API_KEY')],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -7287,7 +7287,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   schedule: 'every 30 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('NYLAS_API_KEY')],
+  secrets: [defineSecret('BREVO_API_KEY')],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -7319,7 +7319,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   }
 });
 
-exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('NYLAS_API_KEY')] }, async (req) => {
+exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY')] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -7620,7 +7620,7 @@ exports.cleanupUserLogs = schedulerV2.onSchedule({
 // ===== New v3.0.2 Functions =====
 
 // Daily Digest Email Generation (uses Nylas)
-exports.generateDailyDigest = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('NYLAS_API_KEY')] }, async () => {
+exports.generateDailyDigest = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('BREVO_API_KEY')] }, async () => {
   try {
     const usersSnapshot = await admin.firestore().collection('users').where('emailDigest', '==', true).get();
     for (const userDoc of usersSnapshot.docs) {
