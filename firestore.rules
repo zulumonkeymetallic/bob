@@ -35,16 +35,27 @@ service cloud.firestore {
     // Finance collections
     match /finance_budgets/{uid} {
       // Per-user finance budget doc keyed by uid
-      allow read, write: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow read:   if isSignedIn() && request.auth.uid == uid;
+      allow update: if isSignedIn() && request.auth.uid == uid;
+      allow delete: if isSignedIn() && request.auth.uid == uid;
     }
     match /monzo_budget_summary/{uid} {
       // Per-user Monzo summary doc keyed by uid
-      allow read, write: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow read:   if isSignedIn() && request.auth.uid == uid;
+      allow update: if isSignedIn() && request.auth.uid == uid;
+      allow delete: if isSignedIn() && request.auth.uid == uid;
     }
     match /monzo_transactions/{id} {
       // Individual transaction rows carry ownerUid
-      allow create: if isOwnerForCreate();
-      allow read, update, delete: if isOwner();
+      // Create: enforce ownerUid equals request.auth.uid
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      // Read/Delete: owner only
+      allow read, delete: if isSignedIn() && request.auth.uid == resource.data.ownerUid;
+      // Update: owner only and ownerUid must be immutable
+      allow update: if isSignedIn() && request.auth.uid == resource.data.ownerUid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
     }
 
     // New scheduler-related collections
