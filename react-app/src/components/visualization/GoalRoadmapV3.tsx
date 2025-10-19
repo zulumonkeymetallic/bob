@@ -1206,7 +1206,7 @@ const GoalRoadmapV3: React.FC = () => {
     );
   });
 
-  const connectorSegments: ConnectorSegment[] = [];
+  // Connectors are currently disabled until generation is implemented.
 
   return (
     <div className={`grv3 ${zoomClass}`} style={axisCssVars}>
@@ -1404,29 +1404,7 @@ const GoalRoadmapV3: React.FC = () => {
           </>
         )}
 
-        {connectorSegments.length > 0 && (
-          <svg className="grv3-connectors" width={totalWidth} height={contentHeight}>
-            <defs>
-              {connectorSegments.map((segment) => (
-                <linearGradient id={segment.gradientId} key={`grad-${segment.gradientId}`} gradientUnits="userSpaceOnUse">
-                  <stop offset="0%" stopColor={segment.startColor} stopOpacity={0.85} />
-                  <stop offset="100%" stopColor={segment.endColor} stopOpacity={0.85} />
-                </linearGradient>
-              ))}
-            </defs>
-            {connectorSegments.map((segment) => (
-              <path
-                key={segment.gradientId}
-                d={segment.path}
-                stroke={`url(#${segment.gradientId})`}
-                strokeWidth={2}
-                fill="none"
-                strokeDasharray="6 6"
-                strokeLinecap="round"
-              />
-            ))}
-          </svg>
-        )}
+        {/* Connectors temporarily removed */}
 
         <div className="grv3-rows" style={{ width: 260 + totalWidth }}>
           {rowsMarkup}

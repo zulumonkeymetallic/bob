@@ -13,6 +13,7 @@ const SettingsEmailPage: React.FC = () => {
   const [emailSecure, setEmailSecure] = useState(true);
   const [emailUser, setEmailUser] = useState('');
   const [emailPassword, setEmailPassword] = useState('');
+  const [hasStoredPassword, setHasStoredPassword] = useState(false);
   const [emailFromAddress, setEmailFromAddress] = useState('');
   const [emailConfigLoading, setEmailConfigLoading] = useState(false);
   const [emailConfigSaving, setEmailConfigSaving] = useState(false);
@@ -44,7 +45,9 @@ const SettingsEmailPage: React.FC = () => {
           setEmailPort(data?.port != null ? String(data.port) : '');
           setEmailSecure(data?.secure !== undefined ? Boolean(data.secure) : true);
           setEmailUser(data?.user ?? '');
-          setEmailPassword(data?.password ?? '');
+          // Do not fetch/render actual password; track presence only
+          setHasStoredPassword(Boolean(data?.password));
+          setEmailPassword('');
           setEmailFromAddress(data?.from ?? '');
         } else {
           setEmailService('');
@@ -52,6 +55,7 @@ const SettingsEmailPage: React.FC = () => {
           setEmailPort('');
           setEmailSecure(true);
           setEmailUser('');
+          setHasStoredPassword(false);
           setEmailPassword('');
           setEmailFromAddress('');
         }
@@ -121,15 +125,18 @@ const SettingsEmailPage: React.FC = () => {
     setEmailConfigError('');
     try {
       const callable = httpsCallable(functions, 'saveEmailSettings');
-      await callable({
+      const payload: any = {
         service: emailService,
         host: emailHost,
         port: emailPort,
         secure: emailSecure,
         user: emailUser,
-        password: emailPassword,
         from: emailFromAddress,
-      });
+      };
+      if (emailPassword && emailPassword.trim() !== '') {
+        payload.password = emailPassword;
+      }
+      await callable(payload);
       setEmailConfigMessage('Email settings saved');
     } catch (error: any) {
       console.error('[settings-email] failed to save config', error);
@@ -193,7 +200,7 @@ const SettingsEmailPage: React.FC = () => {
     }
   };
 
-  const isConfigured = Boolean(emailUser && emailPassword);
+  const isConfigured = Boolean(emailUser && (hasStoredPassword || emailPassword));
 
   return (
     <div className="container py-4">
@@ -283,7 +290,7 @@ const SettingsEmailPage: React.FC = () => {
                   type="password"
                   value={emailPassword}
                   onChange={(e) => setEmailPassword(e.target.value)}
-                  placeholder="App-specific password"
+                  placeholder={hasStoredPassword ? '•••••••• (leave blank to keep existing)' : 'App-specific password'}
                   disabled={emailConfigLoading || emailConfigSaving}
                 />
               </Form.Group>
