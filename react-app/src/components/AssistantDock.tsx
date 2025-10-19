@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Form, Spinner, Badge } from 'react-bootstrap';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { db } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
 
@@ -20,7 +20,6 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
   const [actions, setActions] = useState<any[] | null>(null);
   const [insights, setInsights] = useState<{ priorities?: string[]; warnings?: string[] } | null>(null);
   const [working, setWorking] = useState<string | null>(null);
-  const functions = useMemo(() => getFunctions(), []);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -182,4 +181,3 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
 };
 
 export default AssistantDock;
-

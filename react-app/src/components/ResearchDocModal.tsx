@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Button, Spinner, ListGroup, Badge, Form } from 'react-bootstrap';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { db } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 
 interface ResearchDocModalProps {
   show: boolean;
@@ -25,7 +25,7 @@ const ResearchDocModal: React.FC<ResearchDocModalProps> = ({ show, onHide, goalI
   const [running, setRunning] = useState(false);
   const [provider, setProvider] = useState<'gemini'|'openai'>('gemini');
   const [model, setModel] = useState<string>('gemini-1.5-flash');
-  const functions = useMemo(() => getFunctions(), []);
+  // functions imported from firebase has region preset
 
   useEffect(() => {
     if (!show) return;

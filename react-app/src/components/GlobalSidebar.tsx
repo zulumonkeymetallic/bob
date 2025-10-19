@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2 } from 'lucide-react';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -40,7 +41,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [showChat, setShowChat] = useState(false);
   const [showResearch, setShowResearch] = useState(false);
   const [orchestrating, setOrchestrating] = useState(false);
-  const functions = React.useMemo(() => getFunctions(), []);
 
   // Ensure status labels/variants match each entity’s board semantics
   const getStatusDisplay = (

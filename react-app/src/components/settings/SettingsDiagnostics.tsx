@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { Card, Button, Alert, Badge } from 'react-bootstrap';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../../firebase';
 
 const SettingsDiagnostics: React.FC = () => {
-  const functions = useMemo(() => getFunctions(), []);
+  // functions from firebase is region-configured
   const [status, setStatus] = useState<any | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -103,4 +104,3 @@ const SettingsDiagnostics: React.FC = () => {
 };
 
 export default SettingsDiagnostics;
-
