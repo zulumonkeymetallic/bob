@@ -272,8 +272,16 @@ const Admin = () => {
       if (!goalIdForApproval.trim()) { logMessage('Enter a goalId first'); return; }
       const fn = httpsCallable(functions, 'approveGoalResearch');
       logMessage(`Approving goal research for ${goalIdForApproval}...`);
-      const res: any = await fn({ goalId: goalIdForApproval.trim(), schedule: true });
-      logMessage(`approveGoalResearch: ${JSON.stringify(res.data)}`);
+      try {
+        const res: any = await fn({ goalId: goalIdForApproval.trim(), schedule: true });
+        logMessage(`approveGoalResearch: ${JSON.stringify(res.data)}`);
+      } catch (err: any) {
+        // Fallback: run orchestrateGoalPlanning which generates stories/tasks and schedules
+        logMessage(`approveGoalResearch unavailable, falling back to orchestrateGoalPlanning…`);
+        const alt = httpsCallable(functions, 'orchestrateGoalPlanning');
+        const res2: any = await alt({ goalId: goalIdForApproval.trim(), researchOnly: false });
+        logMessage(`orchestrateGoalPlanning: ${JSON.stringify(res2.data)}`);
+      }
     } catch (e: any) {
       logMessage(`approveGoalResearch failed: ${e?.message || e}`);
     }
@@ -295,8 +303,16 @@ const Admin = () => {
       if (!storyIdForTasks.trim()) { logMessage('Enter a storyId first'); return; }
       const fn = httpsCallable(functions, 'generateTasksForStory');
       logMessage(`Generating tasks for story ${storyIdForTasks}...`);
-      const res: any = await fn({ storyId: storyIdForTasks.trim() });
-      logMessage(`generateTasksForStory: ${JSON.stringify(res.data)}`);
+      try {
+        const res: any = await fn({ storyId: storyIdForTasks.trim() });
+        logMessage(`generateTasksForStory: ${JSON.stringify(res.data)}`);
+      } catch (err: any) {
+        // Fallback: orchestrateStoryPlanning will generate tasks and schedule
+        logMessage(`generateTasksForStory unavailable, falling back to orchestrateStoryPlanning…`);
+        const alt = httpsCallable(functions, 'orchestrateStoryPlanning');
+        const res2: any = await alt({ storyId: storyIdForTasks.trim(), research: false });
+        logMessage(`orchestrateStoryPlanning: ${JSON.stringify(res2.data)}`);
+      }
     } catch (e: any) {
       logMessage(`generateTasksForStory failed: ${e?.message || e}`);
     }

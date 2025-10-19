@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
-import { Activity } from 'lucide-react';
+import { Activity, Wand2 } from 'lucide-react';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 
 interface StoryCardProps {
   story: Story;
@@ -10,6 +12,7 @@ interface StoryCardProps {
 
 const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
   const { showSidebar } = useSidebar();
+  const [aiBusy, setAiBusy] = useState(false);
   // Handle both Story and EnhancedStory types
   const storyRef = (story as any).ref || `STRY-${String(index + 1).padStart(3, '0')}`;
   
@@ -36,6 +39,23 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
                 {story.theme}
               </span>
             )}
+            <button
+              className="btn btn-sm btn-outline-primary"
+              style={{ padding: '2px 6px' }}
+              title="AI: Generate Tasks for Story"
+              disabled={aiBusy}
+              onClick={async (e) => {
+                e.stopPropagation();
+                try {
+                  setAiBusy(true);
+                  const fn = httpsCallable(functions, 'generateTasksForStory');
+                  await fn({ storyId: (story as any).id });
+                } catch {}
+                finally { setAiBusy(false); }
+              }}
+            >
+              <Wand2 size={14} />
+            </button>
             <button
               className="btn btn-sm btn-outline-secondary"
               style={{ padding: '2px 6px' }}
