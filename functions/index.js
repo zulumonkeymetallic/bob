@@ -4233,7 +4233,7 @@ async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runI
 async function detectDuplicateRemindersForUser({ db, userId }) {
   const snap = await db.collection('tasks').where('ownerUid', '==', userId).get();
   const tasks = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-  const reminderTasks = tasks.filter((t) => t.source === 'ios_reminder' || t.source === 'MacApp' || t.source === 'mac_app');
+  const reminderTasks = tasks.filter((t) => t.source === 'ios_reminder');
   const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const hash = (s) => crypto.createHash('sha1').update(String(s || '')).digest('hex');
   const groups = new Map();
@@ -5306,7 +5306,7 @@ async function buildDailyChecklistBriefing({ summaryData, checklist, userId }) {
 
     return {
       mode: 'ai',
-      model: 'gemini-1.5-flash',
+      model: process.env.GOOGLEAISTUDIOAPIKEY ? 'gemini-1.5-flash' : 'gpt-4o-mini',
       generatedAt: new Date().toISOString(),
       headline: headline || 'Stay on target today',
       body: body || 'Lead with your focus items, then clear the supporting chores and routines to keep momentum.',
@@ -7003,7 +7003,7 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
   }
 });
 
-exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, defineSecret("NYLAS_API_KEY")] }, async (req) => {
+exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -7335,7 +7335,7 @@ exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('NYLAS_API
   }
 });
 
-exports.sendDataQualityNow = httpsV2.onCall({ secrets: [defineSecret('NYLAS_API_KEY')] }, async (req) => {
+exports.sendDataQualityNow = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -7401,9 +7401,122 @@ exports.previewDataQualityReport = httpsV2.onCall(async (req) => {
   return { ok: true, snapshot, html };
 });
 
-exports.sendTestEmail = httpsV2.onCall({ secrets: [defineSecret('NYLAS_API_KEY')] }, async (req) => {
+exports.sendTestEmail = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const email = req?.data?.email || profile.email;
+  if (!email) {
+    throw new httpsV2.HttpsError('failed-precondition', 'No email configured on profile.');
+  }
+
+  const html = `
+    <h1>BOB SMTP Test</h1>
+    <p>This is a test email sent at ${new Date().toISOString()} to confirm SMTP settings.</p>
+    <p>User: ${email}</p>
+  `;
+
+  try {
+    const result = await sendEmail({ to: email, subject: 'BOB SMTP Test Email', html, text: 'SMTP configuration test successful.' });
+    await db.collection('email_tests').add({
+      userId: uid,
+      email,
+      result: { messageId: result?.messageId || null, response: result?.response || null },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    await recordIntegrationLog(uid, 'email', 'success', 'SMTP test email sent', {
+      messageId: result?.messageId || null,
+      to: email,
+    });
+    return { ok: true, messageId: result?.messageId || null };
+  } catch (error) {
+    console.error('[email-test] failed', error);
+    await recordIntegrationLog(uid, 'email', 'error', error?.message || 'SMTP test email failed', {
+      to: email,
+    });
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to send test email');
+  }
+});
+
+// Save SMTP email configuration (admin-only)
+exports.saveEmailSettings = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+  if (!isAdmin) {
+    throw new httpsV2.HttpsError('permission-denied', 'Only admins can update email settings');
+  }
+
+  const body = req?.data || {};
+  const normalizeBool = (v, fallback = true) => {
+    if (v === undefined || v === null || v === '') return fallback;
+    if (typeof v === 'boolean') return v;
+    const s = String(v).toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on'].includes(s);
+  };
+  const normalizePort = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new httpsV2.HttpsError('invalid-argument', 'SMTP port must be a number');
+    return n;
+  };
+
+  const payload = {
+    service: body.service || null,
+    host: body.host || null,
+    port: normalizePort(body.port),
+    secure: normalizeBool(body.secure, true),
+    user: body.user || null,
+    password: body.password || null,
+    from: body.from || body.user || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedBy: uid,
+  };
+
+  await db.collection('system_settings').doc('email').set(payload, { merge: true });
+  await recordIntegrationLog(uid, 'email', 'success', 'Updated SMTP configuration', {
+    hasHost: !!payload.host,
+    hasService: !!payload.service,
+    secure: !!payload.secure,
+  });
+  return { ok: true };
+});
+
+exports.cleanupUserLogs = schedulerV2.onSchedule({
+  schedule: '0 4 * * *',
+  timeZone: 'UTC',
+}, async () => {
+  const db = ensureFirestore();
+  const collections = ['integration_logs', 'ai_logs'];
+  const cutoff = admin.firestore.Timestamp.now();
+
+  for (const collectionName of collections) {
+    let hasMore = true;
+    while (hasMore) {
+      const snap = await db.collection(collectionName)
+        .where('expiresAt', '<=', cutoff)
+        .limit(500)
+        .get();
+      if (snap.empty) {
+        hasMore = false;
+        break;
+      }
+      const batch = db.batch();
+      snap.docs.forEach((docRef) => batch.delete(docRef.ref));
+      await batch.commit();
+      hasMore = snap.size === 500;
+    }
+  }
+});
+
+// ===== New v3.0.2 Functions =====
 
   const db = ensureFirestore();
   const profileSnap = await db.collection('profiles').doc(uid).get();

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Dropdown } from 'react-bootstrap';
-import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Sprint } from '../types';
-import { isStatus, isTheme } from '../utils/statusHelpers';
+import { isStatus } from '../utils/statusHelpers';
 import logger from '../utils/logger';
+import { usePersona } from '../contexts/PersonaContext';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
@@ -21,19 +22,21 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !currentPersona) {
       setLoading(false);
       return;
     }
 
-    logger.debug('sprint', 'Setting up sprint listener for user', { uid: currentUser.uid });
+    logger.debug('sprint', 'Setting up sprint listener for user', { uid: currentUser.uid, persona: currentPersona });
 
     const q = query(
       collection(db, 'sprints'),
       where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc')
+      orderBy('startDate', 'desc'),
+      limit(50)
     );
 
     const unsubscribe = onSnapshot(q, 
@@ -43,25 +46,31 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           id: doc.id,
           ...doc.data()
         })) as Sprint[];
+        const filtered = sprintData.filter((sprint) => {
+          const persona = (sprint as any)?.persona;
+          if (!persona) return true;
+          return persona === currentPersona;
+        });
+        logger.debug('sprint', 'Filtered sprint results', { total: sprintData.length, matchedPersona: filtered.length, persona: currentPersona });
         
-        setSprints(sprintData);
+        setSprints(filtered);
         setLoading(false);
 
         // Always try to select active sprint first, then fall back to most recent
-        if (sprintData.length > 0) {
+        if (filtered.length > 0) {
           // Look for active sprint (status = 1) or 'active' string
-          const activeSprint = sprintData.find(sprint => 
+          const activeSprint = filtered.find(sprint => 
             (typeof sprint.status === 'number' && sprint.status === 1) || 
             (typeof sprint.status === 'string' && sprint.status === 'active') || 
             isStatus(sprint.status, 'active')
           );
           // Look for planned sprint (status = 0) or 'planned' string
-          const plannedSprint = sprintData.find(sprint => 
+          const plannedSprint = filtered.find(sprint => 
             (typeof sprint.status === 'number' && sprint.status === 0) || 
             (typeof sprint.status === 'string' && sprint.status === 'planned') || 
             isStatus(sprint.status, 'planned')
           );
-          const fallbackSprint = sprintData[0]; // Most recent by start date
+          const fallbackSprint = filtered[0]; // Most recent by start date
           
           const preferredSprint = activeSprint || plannedSprint || fallbackSprint;
 
@@ -71,7 +80,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           const isExplicitAll = selectedSprintId === '' && saved === '';
 
           // If no sprint is selected (undefined/null) or current selection is not found, select preferred
-          if (!isExplicitAll && (!selectedSprintId || !sprintData.find(s => s.id === selectedSprintId))) {
+          if (!isExplicitAll && (!selectedSprintId || !filtered.find(s => s.id === selectedSprintId))) {
             if (preferredSprint) {
               logger.info('sprint', 'Auto-selecting sprint', { name: preferredSprint.name, status: preferredSprint.status });
               onSprintChange(preferredSprint.id);
@@ -93,7 +102,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
     );
 
     return () => unsubscribe();
-  }, [currentUser, selectedSprintId, onSprintChange]);
+  }, [currentUser, currentPersona, selectedSprintId, onSprintChange]);
 
   const selectedSprint = sprints.find(sprint => sprint.id === selectedSprintId);
 

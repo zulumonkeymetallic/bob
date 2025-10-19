@@ -27,7 +27,7 @@ import LoginPage from './components/LoginPage';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
-import { PersonaProvider } from './contexts/PersonaContext';
+import { PersonaProvider, usePersona } from './contexts/PersonaContext';
 import { SprintProvider } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 
@@ -71,18 +71,13 @@ import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
 import SettingsPlannerPage from './components/settings/SettingsPlannerPage';
-import SettingsDiagnostics from './components/settings/SettingsDiagnostics';
 import AiDiagnosticsLogs from './components/logs/AiDiagnosticsLogs';
 import GoogleCalendarSettings from './components/settings/integrations/GoogleCalendarSettings';
 import MonzoSettings from './components/settings/integrations/MonzoSettings';
 import StravaSettings from './components/settings/integrations/StravaSettings';
 import SteamSettings from './components/settings/integrations/SteamSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
-import TaskCleanupPage from './components/settings/TaskCleanupPage';
-import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
-import DeepLinkTask from './components/routes/DeepLinkTask';
-import DeepLinkStory from './components/routes/DeepLinkStory';
-import DeepLinkGoal from './components/routes/DeepLinkGoal';
+import { useEntityAudit } from './hooks/useEntityAudit';
 
 
 // Lazy-loaded heavy routes
@@ -110,6 +105,7 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const deviceInfo = useDeviceInfo();
+  const { currentPersona } = usePersona();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
@@ -190,6 +186,8 @@ function AppContent() {
     };
   }, []);
 
+  useEntityAudit(currentUser ? { currentUserId: currentUser.uid, currentUserEmail: currentUser.email, persona: currentPersona } : null);
+
   if (!currentUser) {
     return <LoginPage />;
   }
@@ -214,7 +212,6 @@ function AppContent() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/tasks" element={<TaskListView />} />
-              <Route path="/tasks/:id" element={<DeepLinkTask />} />
               <Route path="/task" element={<Navigate to="/tasks" replace />} />
               <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
@@ -236,6 +233,7 @@ function AppContent() {
             <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
             <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
+            <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
             
             <Route path="/tasks-management" element={<TasksManagement />} />
             <Route path="/mobile-view" element={<MobileView />} />
@@ -289,8 +287,6 @@ function AppContent() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
-            <Route path="/settings/diagnostics" element={<SettingsDiagnostics />} />
-            <Route path="/settings/task-cleanup" element={<TaskCleanupPage />} />
             <Route path="/settings/integrations" element={<IntegrationSettings />} />
             <Route path="/settings/integrations/google" element={<GoogleCalendarSettings />} />
             <Route path="/settings/integrations/monzo" element={<MonzoSettings />} />

@@ -1,6 +1,6 @@
 {
   "name": "bob-productivity-platform",
-  "version": "3.9.5",
+  "version": "4.0.2",
   "description": "AI-Powered Personal Productivity Platform with Personal Backlogs, Mobile UX & Visual Canvas",
   "private": true,
   "dependencies": {

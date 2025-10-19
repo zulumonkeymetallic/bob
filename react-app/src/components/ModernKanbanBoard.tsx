@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Row, Col, Badge, Button, Form, Modal } from 'react-bootstrap';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Card, Row, Col, Button, Form, Modal, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import {
   DndContext,
   closestCenter,
@@ -21,7 +21,8 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Settings, Plus, Edit3, Trash2, User, Calendar, Target, BookOpen, AlertCircle, Activity } from 'lucide-react';
+import { Edit3, Trash2, Target, BookOpen, Activity, SquarePlus, ListTodo, KanbanSquare, Maximize2, Minimize2, GripVertical } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -29,38 +30,35 @@ import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSprint } from '../contexts/SprintContext';
-import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
+import { isStatus } from '../utils/statusHelpers';
 import { deriveTaskSprint, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import { DnDMutationHandler } from '../utils/dndMutations';
-import { themeVars, rgbaCard } from '../utils/themeVars';
-import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
+import { themeVars } from '../utils/themeVars';
+import '../styles/KanbanCards.css';
+import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, goalThemeColor, colorWithAlpha } from '../utils/storyCardFormatting';
 
 interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
 }
 
+type LaneStatus = 'backlog' | 'in-progress' | 'blocked' | 'done';
+
 // Droppable Area Component
-const DroppableArea: React.FC<{ 
-  id: string; 
-  children: React.ReactNode; 
-  style?: React.CSSProperties 
+const DroppableArea: React.FC<{
+  id: string;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
 }> = ({ id, children, style }) => {
   const { setNodeRef, isOver } = useDroppable({ id });
 
   return (
-    <div 
+    <div
       ref={setNodeRef}
-      style={{
-        minHeight: '100px',
-        backgroundColor: isOver ? rgbaCard(0.06) : 'transparent',
-        borderRadius: '6px',
-        padding: '8px',
-        transition: 'background-color 0.2s ease',
-        ...style
-      }}
+      className={`drop-lane${isOver ? ' is-over' : ''}`}
+      style={{ minHeight: '100px', ...style }}
     >
       {children}
     </div>
@@ -68,8 +66,8 @@ const DroppableArea: React.FC<{
 };
 
 // Sortable Story Card Component
-const SortableStoryCard: React.FC<{ 
-  story: Story; 
+const SortableStoryCard: React.FC<{
+  story: Story;
   goal?: Goal;
   taskCount: number;
   themeColor: string;
@@ -90,60 +88,68 @@ const SortableStoryCard: React.FC<{
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.8 : 1,
+  };
+
+  const handleCardClick = () => onItemClick(story);
+  const handleCardKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onItemClick(story);
+    }
+  };
+
+  const refLabel = (() => {
+    const shortRef = (story as any).referenceNumber || story.ref;
+    return shortRef && validateRef(shortRef, 'story')
+      ? shortRef
+      : displayRefForEntity('story', story.id);
+  })();
+
+  const statusLabel = storyStatusText((story as any).status);
+  const priorityClass = priorityPillClass(story.priority);
+  const priorityLabel = formatPriorityLabel(story.priority);
+  const accentColor = themeColor || '#2563eb';
+  const handleStyle: React.CSSProperties = {
+    color: accentColor,
+    borderColor: colorWithAlpha(accentColor, 0.45),
+    backgroundColor: colorWithAlpha(accentColor, 0.12)
   };
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
-    >
-      <Card 
-        style={{ 
-          border: `2px solid ${themeColor}`,
-          borderRadius: '8px',
-          boxShadow: isDragging ? '0 8px 16px rgba(0,0,0,0.15)' : '0 2px 4px rgba(0,0,0,0.1)',
-          cursor: 'pointer',
-          transition: 'all 0.2s ease',
-          marginBottom: '12px'
-        }}
-        // Disable opening activity on card click to preserve drag behavior
+    <div ref={setNodeRef} style={style}>
+      <div
+        className={`kanban-card kanban-card--story kanban-card__clickable${isDragging ? ' dragging' : ''}`}
+        style={{ borderLeft: `3px solid ${themeColor || '#2563eb'}` }}
+        role="button"
+        tabIndex={0}
+        onClick={handleCardClick}
+        onKeyDown={handleCardKeyDown}
       >
-        <Card.Body style={{ padding: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                <span style={{ fontSize: '12px', fontWeight: '600', color: themeColor }}>
-                  {(() => {
-                    const shortRef = (story as any).referenceNumber || story.ref;
-                    return shortRef && validateRef(shortRef, 'story')
-                      ? shortRef
-                      : displayRefForEntity('story', story.id);
-                  })()}
-                </span>
-                <h6 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: themeVars.text }}>
-                  {story.title}
-                </h6>
-              </div>
-              {goal && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '8px' }}>
-                  <Target size={12} color={themeColor} />
-                  <span style={{ fontSize: '12px', color: themeVars.muted }}>
-                    {goal.title}
-                  </span>
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
+        <button
+          type="button"
+          className="kanban-card__handle"
+          style={handleStyle}
+          {...attributes}
+          {...listeners}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <GripVertical size={16} />
+        </button>
+
+        <div className="kanban-card__content">
+          <div className="kanban-card__header">
+            <span className="kanban-card__ref" style={{ color: themeColor || '#2563eb' }}>
+              {refLabel}
+            </span>
+            <div className="kanban-card__actions">
               <Button
                 variant="link"
                 size="sm"
-                style={{ padding: '2px', color: themeVars.muted }}
+                className="p-0"
+                style={{ width: 24, height: 24, color: themeVars.muted }}
                 title="Activity stream"
-                onClick={(e) => {
-                  e.stopPropagation();
+                onClick={(event) => {
+                  event.stopPropagation();
                   showSidebar(story, 'story');
                 }}
               >
@@ -152,9 +158,11 @@ const SortableStoryCard: React.FC<{
               <Button
                 variant="link"
                 size="sm"
-                style={{ padding: '2px', color: themeVars.muted }}
-                onClick={(e) => {
-                  e.stopPropagation();
+                className="p-0"
+                style={{ width: 24, height: 24, color: themeVars.muted }}
+                title="Edit story"
+                onClick={(event) => {
+                  event.stopPropagation();
                   onEdit(story);
                 }}
               >
@@ -163,9 +171,11 @@ const SortableStoryCard: React.FC<{
               <Button
                 variant="link"
                 size="sm"
-                style={{ padding: '2px', color: 'var(--red)' }}
-                onClick={(e) => {
-                  e.stopPropagation();
+                className="p-0"
+                style={{ width: 24, height: 24, color: 'var(--red)' }}
+                title="Delete story"
+                onClick={(event) => {
+                  event.stopPropagation();
                   onDelete(story);
                 }}
               >
@@ -174,48 +184,46 @@ const SortableStoryCard: React.FC<{
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <Badge 
-                bg={isPriority(story.priority, 'High') ? 'danger' : isPriority(story.priority, 'Medium') ? 'warning' : 'secondary'}
-                style={{ fontSize: '10px' }}
-              >
-                {story.priority}
-              </Badge>
-              <Badge bg="info" style={{ fontSize: '10px' }}>
-                {story.points} pts
-              </Badge>
-              {goal?.theme && (
-                <Badge 
-                  style={{ 
-                    backgroundColor: themeColor, 
-                    color: themeVars.onAccent,
-                    fontSize: '10px'
-                  }}
-                >
-                  {goal.theme}
-                </Badge>
-              )}
+          <div className="kanban-card__title" title={story.title || 'Untitled story'}>
+            {story.title || 'Untitled story'}
+          </div>
+
+          {story.description && story.description.trim().length > 0 && (
+            <div className="kanban-card__description">
+              {story.description}
             </div>
-            <span style={{ fontSize: '11px', color: themeVars.muted }}>
-              {taskCount} tasks
+          )}
+
+          <div className="kanban-card__meta">
+            <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
+              {priorityLabel}
+            </span>
+            <span className="kanban-card__meta-badge" title="Story points">
+              {(story.points ?? 0)} pts
+            </span>
+            <span className="kanban-card__meta-text" title="Status">
+              {statusLabel}
             </span>
           </div>
 
-          {story.description && (
-            <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: themeVars.muted, lineHeight: '1.4' }}>
-              {story.description.substring(0, 80)}{story.description.length > 80 ? '...' : ''}
-            </p>
-          )}
-        </Card.Body>
-      </Card>
+          <div className="kanban-card__goal">
+            <Target size={12} color={themeColor || '#2563eb'} />
+            <span title={goal?.title || 'No goal linked'}>
+              {goal?.title || 'No goal'}
+            </span>
+            <span className="kanban-card__meta-text" style={{ marginLeft: 'auto' }}>
+              {taskCount} task{taskCount === 1 ? '' : 's'}
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
 
 // Sortable Task Card Component
-const SortableTaskCard: React.FC<{ 
-  task: Task; 
+const SortableTaskCard: React.FC<{
+  task: Task;
   story?: Story;
   themeColor: string;
   onEdit: (task: Task) => void;
@@ -234,97 +242,122 @@ const SortableTaskCard: React.FC<{
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.8 : 1,
+  };
+
+  const handleCardClick = () => onItemClick(task);
+  const handleCardKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onItemClick(task);
+    }
+  };
+
+  const statusLabel = taskStatusText((task as any).status);
+  const priorityClass = priorityPillClass(task.priority);
+  const priorityLabel = formatPriorityLabel(task.priority);
+  const effortLabel = task.effort ? String(task.effort).toUpperCase() : null;
+  const estimateLabel = task.estimateMin ? `${task.estimateMin} min` : null;
+  const refLabel = task.ref || `TASK-${task.id.slice(-4).toUpperCase()}`;
+  const accentColor = themeColor || '#2563eb';
+  const handleStyle: React.CSSProperties = {
+    color: accentColor,
+    borderColor: colorWithAlpha(accentColor, 0.45),
+    backgroundColor: colorWithAlpha(accentColor, 0.12)
   };
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
-    >
-      <Card 
-        style={{ 
-          border: `1px solid ${themeColor}`,
-          borderRadius: '6px',
-          boxShadow: isDragging ? '0 4px 8px rgba(0,0,0,0.15)' : '0 1px 3px rgba(0,0,0,0.1)',
-          cursor: 'pointer',
-          transition: 'all 0.2s ease',
-          marginBottom: '8px'
-        }}
-        // Disable opening activity on card click to preserve drag behavior
+    <div ref={setNodeRef} style={style}>
+      <div
+        className={`kanban-card kanban-card__clickable${isDragging ? ' dragging' : ''}`}
+        style={{ borderLeft: `3px solid ${themeColor || '#2563eb'}`, marginBottom: '10px' }}
+        role="button"
+        tabIndex={0}
+        onClick={handleCardClick}
+        onKeyDown={handleCardKeyDown}
       >
-        <Card.Body style={{ padding: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                <span style={{ fontSize: '11px', fontWeight: '600', color: themeColor }}>
-                  {task.ref || `TASK-${task.id.slice(-3).toUpperCase()}`}
-                </span>
-                <h6 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: themeVars.text }}>
-                  {task.title}
-                </h6>
-              </div>
-              {story && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <BookOpen size={10} color={themeColor} />
-                  <span style={{ fontSize: '10px', color: themeVars.muted }}>
-                    {story.title}
-                  </span>
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
+        <button
+          type="button"
+          className="kanban-card__handle"
+          style={handleStyle}
+          {...attributes}
+          {...listeners}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <GripVertical size={16} />
+        </button>
+
+        <div className="kanban-card__content">
+          <div className="kanban-card__header">
+            <span className="kanban-card__ref" style={{ color: themeColor || '#2563eb' }}>
+              {refLabel}
+            </span>
+            <div className="kanban-card__actions">
               <Button
                 variant="link"
                 size="sm"
-                style={{ padding: '2px', color: themeVars.muted }}
+                className="p-0"
+                style={{ width: 24, height: 24, color: themeVars.muted }}
                 title="Activity stream"
-                onClick={(e) => {
-                  e.stopPropagation();
+                onClick={(event) => {
+                  event.stopPropagation();
                   showSidebar(task, 'task');
                 }}
               >
-                <Activity size={10} />
+                <Activity size={11} />
               </Button>
               <Button
                 variant="link"
                 size="sm"
-                style={{ padding: '2px', color: themeVars.muted }}
-                onClick={(e) => {
-                  e.stopPropagation();
+                className="p-0"
+                style={{ width: 24, height: 24, color: themeVars.muted }}
+                title="Edit task"
+                onClick={(event) => {
+                  event.stopPropagation();
                   onEdit(task);
                 }}
               >
-                <Edit3 size={10} />
+                <Edit3 size={11} />
               </Button>
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-              <Badge 
-                bg={isPriority(task.priority, 'high') ? 'danger' : isPriority(task.priority, 'med') ? 'warning' : 'secondary'}
-                style={{ fontSize: '9px' }}
-              >
-                {task.priority}
-              </Badge>
-              <Badge bg="outline-secondary" style={{ fontSize: '9px', color: themeVars.muted, backgroundColor: 'transparent', border: `1px solid ${themeVars.border}` }}>
-                {task.effort}
-              </Badge>
-              {task.source && (
-                <Badge bg="light" text="dark" style={{ fontSize: '9px', border: `1px solid ${themeVars.border}` }}>
-                  {String(task.source).replace('ios_reminder','iOS').replace('MacApp','Mac').replace('web','Web').replace('ai','AI').toUpperCase()}
-                </Badge>
-              )}
+          <div className="kanban-card__title" title={task.title || 'Untitled task'}>
+            {task.title || 'Untitled task'}
+          </div>
+
+          {task.description && task.description.trim().length > 0 && (
+            <div className="kanban-card__description">
+              {task.description}
             </div>
-            <span style={{ fontSize: '10px', color: themeVars.muted }}>
-              {task.estimateMin}min
+          )}
+
+          <div className="kanban-card__meta">
+            <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
+              {priorityLabel}
+            </span>
+            {effortLabel && (
+              <span className="kanban-card__meta-badge" title="Effort">
+                {effortLabel}
+              </span>
+            )}
+            {estimateLabel && (
+              <span className="kanban-card__meta-text" title="Time estimate">
+                {estimateLabel}
+              </span>
+            )}
+            <span className="kanban-card__meta-text" title="Status">
+              {statusLabel}
             </span>
           </div>
-        </Card.Body>
-      </Card>
+
+          <div className="kanban-card__goal">
+            <BookOpen size={12} color={themeColor || '#2563eb'} />
+            <span title={story?.title || 'No parent story'}>
+              {story?.title || 'No parent story'}
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -334,7 +367,19 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const { currentPersona } = usePersona();
   const { showSidebar, setUpdateHandler } = useSidebar();
   const { selectedSprintId } = useSprint();
+  const navigate = useNavigate();
+  const boardContainerRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const { trackFieldChange, addNote } = useActivityTracking();
+  const iconButtonStyle: React.CSSProperties = {
+    width: 38,
+    height: 38,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 6,
+    borderRadius: 10
+  };
   
   // Data state
   const [stories, setStories] = useState<Story[]>([]);
@@ -370,6 +415,17 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     })
   );
 
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === boardContainerRef.current);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
     const handler = async (item: Story | Task, type: 'story' | 'task', updates: any) => {
@@ -399,17 +455,82 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   }, [setUpdateHandler, tasks, stories, sprints, addNote, trackFieldChange]);
 
   // Swim lanes configuration
-  const swimLanes = [
-    { id: 'backlog', title: 'Backlog', status: 'backlog', color: themeVars.muted },
-    { id: 'active', title: 'Active', status: 'active', color: themeVars.brand },
+  const swimLanes: Array<{ id: LaneStatus; title: string; status: LaneStatus; color: string }> = [
+    { id: 'backlog', title: 'Backlog', status: 'backlog', color: themeVars.muted as string },
+    { id: 'in-progress', title: 'In Progress', status: 'in-progress', color: themeVars.brand as string },
+    { id: 'blocked', title: 'Blocked', status: 'blocked', color: 'var(--bs-danger, #dc3545)' },
     { id: 'done', title: 'Done', status: 'done', color: 'var(--green)' },
   ];
+  const laneIds: LaneStatus[] = swimLanes.map(lane => lane.id);
 
   // Resolve theme color from goal's theme id or name consistently
-  const themeColorForGoal = (goal?: Goal): string => {
-    if (!goal) return themeVars.muted as string;
-    const themeId = migrateThemeValue((goal as any).theme);
-    return getThemeById(Number(themeId)).color || (themeVars.muted as string);
+  const themeColorForGoal = (goal?: Goal): string => goalThemeColor(goal);
+
+  const normalizeStatusValue = (value: any): string | null => {
+    if (typeof value === 'string') {
+      return value.trim().toLowerCase().replace(/\s+/g, '-');
+    }
+    return null;
+  };
+
+  const storyLaneForStatus = (story: Story): LaneStatus => {
+    const raw = (story as any).status;
+    if (typeof raw === 'number') {
+      if (isStatus(raw, 'Blocked')) return 'blocked';
+      if (isStatus(raw, 'done') || isStatus(raw, 'Complete')) return 'done';
+      if (isStatus(raw, 'active') || isStatus(raw, 'in-progress') || isStatus(raw, 'testing')) return 'in-progress';
+      return 'backlog';
+    }
+    const normalized = normalizeStatusValue(raw);
+    if (!normalized) return 'backlog';
+    if (['done', 'complete', 'completed', 'finished'].includes(normalized)) return 'done';
+    if (['blocked', 'stalled', 'waiting', 'on-hold', 'onhold', 'paused'].includes(normalized)) return 'blocked';
+    if (['in-progress', 'inprogress', 'active', 'doing', 'testing', 'qa', 'review'].includes(normalized)) return 'in-progress';
+    return 'backlog';
+  };
+
+  const taskLaneForStatus = (task: Task): LaneStatus => {
+    const raw = (task as any).status;
+    if (typeof raw === 'number') {
+      if (raw === 3 || isStatus(raw, 'blocked')) return 'blocked';
+      if (raw >= 2) return 'done';
+      if (raw === 1) return 'in-progress';
+      return 'backlog';
+    }
+    const normalized = normalizeStatusValue(raw);
+    if (!normalized) return 'backlog';
+    if (['done', 'complete', 'completed', 'finished'].includes(normalized)) return 'done';
+    if (['blocked', 'stalled', 'waiting', 'on-hold', 'onhold', 'paused'].includes(normalized)) return 'blocked';
+    if (['in-progress', 'inprogress', 'active', 'doing'].includes(normalized)) return 'in-progress';
+    return 'backlog';
+  };
+
+  const storyStatusForLane = (story: Story, lane: LaneStatus): string | number => {
+    const raw = (story as any).status;
+    if (typeof raw === 'number') {
+      if (lane === 'backlog') return 0;
+      if (lane === 'in-progress') return 2;
+      if (lane === 'blocked') return 3;
+      return 4;
+    }
+    if (lane === 'backlog') return 'backlog';
+    if (lane === 'in-progress') return 'in-progress';
+    if (lane === 'blocked') return 'blocked';
+    return 'done';
+  };
+
+  const taskStatusForLane = (task: Task, lane: LaneStatus): string | number => {
+    const raw = (task as any).status;
+    if (typeof raw === 'number') {
+      if (lane === 'backlog') return 0;
+      if (lane === 'in-progress') return 1;
+      if (lane === 'blocked') return 3;
+      return 2;
+    }
+    if (lane === 'backlog') return 'backlog';
+    if (lane === 'in-progress') return 'in-progress';
+    if (lane === 'blocked') return 'blocked';
+    return 'done';
   };
 
   // Helper functions
@@ -481,21 +602,50 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     : tasks;
 
   const getStoriesForLane = (status: string): Story[] => {
-    return storiesInScope.filter(story => isStatus(story.status, status));
+    const lane = (status as LaneStatus) || 'backlog';
+    return storiesInScope.filter(story => storyLaneForStatus(story) === lane);
   };
 
   const getTasksForLane = (status: string): Task[] => {
-    return tasksInScope.filter((task) => {
-      const s: any = (task as any).status;
-      if (typeof s === 'number') {
-        if (status === 'backlog') return s === 0; // todo/planned
-        if (status === 'active') return s === 1;  // in progress
-        if (status === 'done') return s === 2;    // complete
-        return false;
+    const lane = (status as LaneStatus) || 'backlog';
+    return tasksInScope.filter(task => taskLaneForStatus(task) === lane);
+  };
+
+  const parseDroppableId = (id: string): { lane: LaneStatus; type: 'stories' | 'tasks' } | null => {
+    const storySuffix = '-stories';
+    if (id.endsWith(storySuffix)) {
+      const lane = id.slice(0, -storySuffix.length) as LaneStatus;
+      if (laneIds.includes(lane)) {
+        return { lane, type: 'stories' };
       }
-      const mapped = status === 'active' ? 'in-progress' : status;
-      return String(s).toLowerCase() === mapped;
-    });
+    }
+    const taskSuffix = '-tasks';
+    if (id.endsWith(taskSuffix)) {
+      const lane = id.slice(0, -taskSuffix.length) as LaneStatus;
+      if (laneIds.includes(lane)) {
+        return { lane, type: 'tasks' };
+      }
+    }
+    return null;
+  };
+
+  const resolveDropTarget = (overId: string, activeId: string): { lane: LaneStatus; type: 'stories' | 'tasks' } | null => {
+    const parsed = parseDroppableId(overId);
+    if (parsed) return parsed;
+
+    const story = stories.find(s => s.id === overId);
+    if (story) return { lane: storyLaneForStatus(story), type: 'stories' };
+
+    const task = tasks.find(t => t.id === overId);
+    if (task) return { lane: taskLaneForStatus(task), type: 'tasks' };
+
+    // When dragging over combined droppable area, fallback to active item's current lane
+    const activeStory = stories.find(s => s.id === activeId);
+    if (activeStory) return { lane: storyLaneForStatus(activeStory), type: 'stories' };
+    const activeTask = tasks.find(t => t.id === activeId);
+    if (activeTask) return { lane: taskLaneForStatus(activeTask), type: 'tasks' };
+
+    return null;
   };
 
   // Data loading effect
@@ -590,46 +740,60 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    
+
     setActiveId(null);
     setActiveDragItem(null);
 
     if (!over) return;
-    
-    const activeId = active.id as string;
-    const overId = over.id as string;
 
-    // Parse the droppable zone ID to get status and type
-    const overParts = overId.split('-');
-    
-    if (overParts.length < 2) return;
-    
-    const newStatus = overParts[0];
-    const itemType = overParts[1]; // 'stories' or 'tasks'
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    const target = resolveDropTarget(overId, activeId);
+    if (!target) return;
+
+    const activeIsStory = stories.some(s => s.id === activeId);
+    const activeIsTask = tasks.some(t => t.id === activeId);
+
+    if (target.type === 'stories' && !activeIsStory) return;
+    if (target.type === 'tasks' && !activeIsTask) return;
 
     try {
-      if (itemType === 'stories') {
+      if (target.type === 'stories') {
         const story = stories.find(s => s.id === activeId);
-        if (story && !isStatus(story.status, newStatus)) {
-          await updateDoc(doc(db, 'stories', activeId), {
-            status: newStatus,
-            updatedAt: serverTimestamp()
-          });
-        }
-      } else if (itemType === 'tasks') {
-        const task = tasks.find(t => t.id === activeId);
-        if (task) {
-          const taskStatus = newStatus === 'active' ? (typeof task.status === 'number' ? 1 : 'in-progress') : (newStatus === 'backlog' ? (typeof task.status === 'number' ? 0 : 'backlog') : (typeof task.status === 'number' ? 2 : 'done'));
-          const changed = typeof task.status === 'number' ? task.status !== taskStatus : !isStatus(task.status, String(taskStatus));
-          if (changed) {
-            await updateDoc(doc(db, 'tasks', activeId), { status: taskStatus, updatedAt: serverTimestamp() });
-            try {
-              const oldLabel = typeof task.status === 'number' ? String(task.status) : String(task.status || '');
-              const newLabel = String(taskStatus);
-              await trackFieldChange(task.id, 'task', 'status', oldLabel, newLabel, (task as any).ref);
-            } catch {}
+        if (!story) return;
+        const currentLane = storyLaneForStatus(story);
+        if (currentLane === target.lane) return;
+
+        const nextStatus = storyStatusForLane(story, target.lane);
+        await updateDoc(doc(db, 'stories', activeId), {
+          status: nextStatus,
+          updatedAt: serverTimestamp(),
+        });
+        try {
+          const oldLabel = String((story as any).status ?? '');
+          const newLabel = String(nextStatus);
+          if (oldLabel !== newLabel) {
+            await trackFieldChange(story.id, 'story', 'status', oldLabel, newLabel, (story as any).ref);
           }
-        }
+        } catch {}
+      } else {
+        const task = tasks.find(t => t.id === activeId);
+        if (!task) return;
+        const currentLane = taskLaneForStatus(task);
+        if (currentLane === target.lane) return;
+
+        const nextStatus = taskStatusForLane(task, target.lane);
+        await updateDoc(doc(db, 'tasks', activeId), {
+          status: nextStatus,
+          updatedAt: serverTimestamp(),
+        });
+        try {
+          const oldLabel = String((task as any).status ?? '');
+          const newLabel = String(nextStatus);
+          if (oldLabel !== newLabel) {
+            await trackFieldChange(task.id, 'task', 'status', oldLabel, newLabel, (task as any).ref);
+          }
+        } catch {}
       }
     } catch (error) {
       console.error('Error updating item status:', error);
@@ -733,6 +897,24 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     }
   };
 
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement === boardContainerRef.current) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+      } else if (boardContainerRef.current?.requestFullscreen) {
+        await boardContainerRef.current.requestFullscreen();
+      }
+    } catch (error) {
+      console.error('Error toggling fullscreen:', error);
+    }
+  }, []);
+
+  const handleOpenPlanningMatrix = useCallback(() => {
+    navigate('/sprints/planning');
+  }, [navigate]);
+
   if (loading) {
     return (
       <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: themeVars.bg }}>
@@ -746,95 +928,92 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
   return (
     <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: themeVars.bg }}>
-      {/* Header */}
-      <div style={{ marginBottom: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text }}>
-            Stories Kanban Board
-          </h1>
-          <div style={{ display: 'flex', gap: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+        <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text }}>
+          Stories Kanban Board
+        </h1>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip id="add-story-tip">Add story</Tooltip>}>
             <Button
               variant="outline-primary"
               onClick={() => handleAdd('story')}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              aria-label="Add story"
+              style={iconButtonStyle}
             >
-              <Plus size={16} />
-              Add Story
+              <SquarePlus size={16} />
             </Button>
+          </OverlayTrigger>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip id="add-task-tip">Add task</Tooltip>}>
             <Button
               variant="outline-secondary"
               onClick={() => handleAdd('task')}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              aria-label="Add task"
+              style={iconButtonStyle}
             >
-              <Plus size={16} />
-              Add Task
+              <ListTodo size={16} />
             </Button>
-          </div>
+          </OverlayTrigger>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip id="planning-matrix-tip">Open planning matrix</Tooltip>}>
+            <Button
+              variant="outline-secondary"
+              onClick={handleOpenPlanningMatrix}
+              aria-label="Open planning matrix"
+              style={iconButtonStyle}
+            >
+              <KanbanSquare size={16} />
+            </Button>
+          </OverlayTrigger>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip id="fullscreen-tip">{isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}</Tooltip>}>
+            <Button
+              variant="outline-secondary"
+              onClick={toggleFullscreen}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              style={iconButtonStyle}
+            >
+              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </Button>
+          </OverlayTrigger>
         </div>
-
-        {/* Summary Cards */}
-        <Row>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: themeVars.muted }}>
-                  {stories.length}
-                </h3>
-                <p style={{ margin: 0, color: themeVars.muted, fontSize: '14px', fontWeight: '500' }}>
-                  Total Stories
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: themeVars.brand }}>
-                  {stories.filter(s => isStatus(s.status, 'active')).length}
-                </h3>
-                <p style={{ margin: 0, color: themeVars.muted, fontSize: '14px', fontWeight: '500' }}>
-                  Active Stories
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--green)' }}>
-                  {stories.filter(s => isStatus(s.status, 'done')).length}
-                </h3>
-                <p style={{ margin: 0, color: themeVars.muted, fontSize: '14px', fontWeight: '500' }}>
-                  Done Stories
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--red)' }}>
-                  {tasks.length}
-                </h3>
-                <p style={{ margin: 0, color: themeVars.muted, fontSize: '14px', fontWeight: '500' }}>
-                  Total Tasks
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
       </div>
 
-      {/* Kanban Board */}
-      <DndContext 
-        sensors={sensors} 
-        collisionDetection={closestCenter}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
+      <div
+        ref={boardContainerRef}
+        style={{
+          position: 'relative',
+          backgroundColor: themeVars.panel,
+          borderRadius: '16px',
+          padding: '16px',
+          boxShadow: '0 12px 24px rgba(15, 23, 42, 0.12)',
+        }}
       >
-        <Row style={{ minHeight: '600px' }}>
+        {isFullscreen && (
+          <Button
+            variant="light"
+            size="sm"
+            onClick={toggleFullscreen}
+            style={{
+              position: 'fixed',
+              top: '16px',
+              right: '24px',
+              zIndex: 1100,
+              boxShadow: '0 6px 18px rgba(15, 23, 42, 0.25)',
+            }}
+          >
+            <Minimize2 size={14} className="me-1" />
+            Exit Fullscreen
+          </Button>
+        )}
+
+        {/* Kanban Board */}
+        <DndContext 
+          sensors={sensors} 
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
+          <Row style={{ minHeight: '600px' }}>
           {swimLanes.map((lane) => (
-            <Col lg={4} key={lane.id} style={{ marginBottom: '20px' }}>
+            <Col xs={12} md={6} lg={3} key={lane.id} style={{ marginBottom: '20px' }}>
               <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                 <Card.Header style={{ 
                   backgroundColor: lane.color, 
@@ -928,6 +1107,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         </DragOverlay>
       </DndContext>
 
+      </div>
+
       {/* Edit Modals */}
       {selectedType === 'story' && (
         <EditStoryModal
@@ -974,7 +1155,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                       >
                         {typeof (selectedItem as any).status === 'number' ? (
                           <>
-                            <option value={0}>Todo</option>
+                            <option value={0}>Backlog</option>
                             <option value={1}>In Progress</option>
                             <option value={2}>Done</option>
                             <option value={3}>Blocked</option>
@@ -983,6 +1164,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                           <>
                             <option value={'backlog'}>Backlog</option>
                             <option value={'in-progress'}>In Progress</option>
+                            <option value={'blocked'}>Blocked</option>
                             <option value={'done'}>Done</option>
                           </>
                         )}
@@ -1052,9 +1234,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                 onChange={(e) => setAddForm({...addForm, status: e.target.value})}
               >
                 <option value="backlog">Backlog</option>
-                <option value="active">Active</option>
+                <option value="in-progress">In Progress</option>
+                <option value="blocked">Blocked</option>
                 <option value="done">Done</option>
-                {addType === 'task' && <option value="in-progress">In Progress</option>}
               </Form.Select>
             </Form.Group>
           </Form>

@@ -1,12 +1,12 @@
 {
-  "version": "3.9.4",
-  "buildTime": "2025-10-06T21:40:00Z",
-  "buildHash": "feature-ai-focus-scheduling-3.9.4",
+  "version": "4.0.2",
+  "buildTime": "2025-10-21T00:00:00Z",
+  "buildHash": "entity-audit-logging-4.0.2",
   "features": [
-    "AI Focus Scheduling enhancements",
-    "Stability: version parity for login",
-    "Cache loop prevention improvements"
+    "Global audit logging for goals, stories, tasks",
+    "Toolbar/header overlap refinements",
+    "Roadmap spacing + typography polish"
   ],
-  "description": "Align UI + server versions to stop login loop",
+  "description": "Audit logging rollout with roadmap layout improvements",
   "githubIssues": []
 }

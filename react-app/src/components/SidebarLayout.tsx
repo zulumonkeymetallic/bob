@@ -69,10 +69,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Finance',
       icon: 'piggy-bank',
       items: [
-        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
-        { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
-        { label: 'Categories', path: '/finance/categories', icon: 'tags' },
-        { label: 'Merchants', path: '/finance/merchants', icon: 'store' }
+        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' }
       ]
     },
     {
@@ -146,8 +143,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Overview', path: '/settings', icon: 'sliders-h' },
         { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
         { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
-        { label: 'Diagnostics', path: '/settings/diagnostics', icon: 'stethoscope' },
-        { label: 'Task Cleanup', path: '/settings/task-cleanup', icon: 'broom' },
         { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
         { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
         { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
@@ -167,8 +162,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   ];
 
   const handleNavigation = (path: string) => {
-    navigate(path);
-    setShowSidebar(false);
+    try {
+      console.info('[Sidebar] navigation requested', { path });
+      navigate(path);
+      setShowSidebar(false);
+    } catch (error) {
+      console.error('[Sidebar] navigation failed', { path, error });
+    }
   };
 
   const toggleGroup = (groupLabel: string) => {
