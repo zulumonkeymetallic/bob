@@ -4,6 +4,8 @@ import { X, Edit3, Save, Calendar, User, Target, BookOpen, Clock, AlertCircle, H
 import { Story, Goal, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { themeVars, domainThemePrimaryVar } from '../utils/themeVars';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 
 interface DetailsSidebarProps {
   item: Story | Task | null;
@@ -28,6 +30,8 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMsg, setAiMsg] = useState<string | null>(null);
 
   // Theme colors mapping
   const themeColors = {
@@ -112,6 +116,21 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
       return `${storyPrefix}-${task.id.substring(0, 6).toUpperCase()}`;
     }
     return 'N/A';
+  };
+
+  const handleGenerateTasksForStory = async () => {
+    if (type !== 'story') return;
+    try {
+      setAiBusy(true);
+      setAiMsg(null);
+      const fn = httpsCallable(functions, 'generateTasksForStory');
+      const res: any = await fn({ storyId: (item as Story).id });
+      setAiMsg(`Generated ${res?.data?.created ?? 0} tasks from story`);
+    } catch (e: any) {
+      setAiMsg(e?.message || 'Failed to generate tasks');
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   return (
@@ -207,6 +226,18 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
             </h4>
           )}
         </div>
+
+        {/* Story-level AI Actions */}
+        {type === 'story' && (
+          <div style={{ marginBottom: '16px', display: 'flex', gap: 8 }}>
+            <Button variant="outline-primary" size="sm" disabled={aiBusy} onClick={handleGenerateTasksForStory}>
+              {aiBusy ? 'Generating…' : 'AI: Generate Tasks for Story'}
+            </Button>
+            {aiMsg && (
+              <span className="text-muted" style={{ fontSize: 12 }}>{aiMsg}</span>
+            )}
+          </div>
+        )}
 
         {/* Description */}
         <div style={{ marginBottom: '20px' }}>
