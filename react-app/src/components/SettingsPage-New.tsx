@@ -140,9 +140,7 @@ const SettingsPage: React.FC = () => {
     if (!currentUser) return;
     try {
       const nonce = Math.random().toString(36).slice(2);
-      const region = 'europe-west2';
-      const projectId = (window as any).FIREBASE_PROJECT_ID || (window as any).REACT_APP_FIREBASE_PROJECT_ID || 'bob20250810';
-      const url = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+      const url = `${window.location.origin}/api/monzo/start?uid=${currentUser.uid}&nonce=${nonce}`;
       const popup = window.open(url, 'monzo-oauth', 'width=500,height=700');
       const check = setInterval(() => {
         if (popup?.closed) { clearInterval(check); setMonzoConnected(true); saveSettings(); }

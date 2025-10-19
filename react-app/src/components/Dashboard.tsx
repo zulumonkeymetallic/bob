@@ -15,6 +15,7 @@ import { httpsCallable } from 'firebase/functions';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import ThemeBreakdown from './ThemeBreakdown';
 import { format, startOfDay, endOfDay } from 'date-fns';
+import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 import { nextDueAt } from '../utils/recurrence';
 

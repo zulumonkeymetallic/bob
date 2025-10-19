@@ -382,6 +382,15 @@ const FinanceDashboard: React.FC = () => {
           <Button variant="primary" as="a" href="/settings?tab=integrations">
             Open Integrations Settings
           </Button>
+          <Button variant="outline-secondary" as="a" href="/finance/merchants">
+            Manage Merchants
+          </Button>
+          <Button variant="outline-secondary" as="a" href="/finance/categories">
+            Categories
+          </Button>
+          <Button variant="outline-secondary" as="a" href="/finance/budgets">
+            Budgets
+          </Button>
         </Col>
       </Row>
 
@@ -460,7 +469,7 @@ const FinanceDashboard: React.FC = () => {
                       })}
                     </div>
                   )}
-                </Card.Body>
+              </Card.Body>
               </Card>
             </Col>
             <Col lg={4}>
@@ -476,7 +485,11 @@ const FinanceDashboard: React.FC = () => {
                           <tr key={merchant.merchantKey}>
                             <td>
                               <div className="fw-semibold">{merchant.merchantName}</div>
-                              <div className="text-muted small">{formatCategory(merchant.primaryCategoryType)}{merchant.lastTransactionISO ? ` · ${new Date(merchant.lastTransactionISO).toLocaleDateString('en-GB')}` : ''}</div>
+                              <div className="text-muted small">
+                                {formatCategory(merchant.primaryCategoryType)}
+                                {merchant.lastTransactionISO ? ` · ${new Date(merchant.lastTransactionISO).toLocaleDateString('en-GB')}` : ''}
+                                { (merchant as any).isRecurring ? ' · Recurring' : '' }
+                              </div>
                             </td>
                             <td className="text-end fw-semibold">{formatMoney(merchant.totalSpend)}</td>
                             <td className="text-end text-muted small">{merchant.transactions} tx</td>
@@ -485,8 +498,8 @@ const FinanceDashboard: React.FC = () => {
                       </tbody>
                     </Table>
                   )}
-                </Card.Body>
-              </Card>
+              </Card.Body>
+            </Card>
             </Col>
             <Col lg={4}>
               <Card className="shadow-sm border-0 h-100">
@@ -507,6 +520,43 @@ const FinanceDashboard: React.FC = () => {
                         </tr>
                       </tbody>
                     </Table>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
+
+          <Row className="gy-4 mt-1">
+            <Col lg={12}>
+              <Card className="shadow-sm border-0">
+                <Card.Body>
+                  <Card.Title>Budget Burndown (This Month)</Card.Title>
+                  {budgetLines.length === 0 ? (
+                    <Alert variant="light" className="mb-0">Configure budgets to enable the burndown view.</Alert>
+                  ) : (
+                    (() => {
+                      const now = new Date();
+                      const totalDays = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+                      const day = now.getDate();
+                      const monthPct = Math.round((day / totalDays) * 100);
+                      const totals = budgetLines.reduce((acc, l) => { acc.b += l.budget; acc.a += l.actual; return acc; }, { a:0, b:0 });
+                      const spendPct = totals.b > 0 ? Math.min(100, Math.round((totals.a / totals.b) * 100)) : 0;
+                      const over = totals.a > totals.b * (day/totalDays + 0.05); // 5% tolerance
+                      return (
+                        <>
+                          <div className="d-flex justify-content-between small mb-1">
+                            <span>Time elapsed</span>
+                            <span>{monthPct}%</span>
+                          </div>
+                          <ProgressBar now={monthPct} variant="secondary" style={{ height: 6 }} className="mb-2" />
+                          <div className="d-flex justify-content-between small mb-1">
+                            <span>Spend vs Budget</span>
+                            <span>{spendPct}% ({formatMoney(totals.a)} / {formatMoney(totals.b)})</span>
+                          </div>
+                          <ProgressBar now={spendPct} variant={over ? 'danger' : 'success'} style={{ height: 8 }} />
+                        </>
+                      );
+                    })()
                   )}
                 </Card.Body>
               </Card>

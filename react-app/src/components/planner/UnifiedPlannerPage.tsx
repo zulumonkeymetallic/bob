@@ -42,7 +42,8 @@ import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
 import { useUnifiedPlannerData, type PlannerRange } from '../../hooks/useUnifiedPlannerData';
 import type { ExternalCalendarEvent } from '../../hooks/useUnifiedPlannerData';
 import { useAuth } from '../../contexts/AuthContext';
-import { db } from '../../firebase';
+import { db, functions } from '../../firebase';
+import { httpsCallable } from 'firebase/functions';
 import {
   addDoc,
   collection,
@@ -518,12 +519,35 @@ const UnifiedPlannerPage: React.FC = () => {
 
   const handleEventMove = useCallback(
     async ({ event, start, end }: { event: PlannerCalendarEvent; start: Date; end: Date }) => {
+      if (event.type === 'external') {
+        setFeedback({ variant: 'info', message: 'Editing external events happens in Google Calendar.' });
+        return;
+      }
       if (event.type === 'block') {
         await updateBlockTiming(event, start, end);
+        // Optional Google Calendar sync for blocks marked to sync
+        try {
+          const block: any = event.block || {};
+          if (block.syncToGoogle) {
+            const startIso = new Date(start).toISOString();
+            const endIso = new Date(end).toISOString();
+            if (block.googleEventId) {
+              const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+              await updateEv({ eventId: block.googleEventId, start: startIso, end: endIso });
+            } else {
+              const createEv = httpsCallable(functions, 'createCalendarEvent');
+              const res: any = await createEv({ summary: block.title || 'Focus Block', start: startIso, end: endIso });
+              const evId = res?.data?.event?.id;
+              if (evId && block.id) {
+                await updateDoc(doc(db, 'calendar_blocks', block.id), { googleEventId: evId, updatedAt: Date.now() });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Planner: Google sync failed/skipped for block move', err);
+        }
       } else if (event.type === 'instance') {
         await updateInstanceTiming(event, start, end);
-      } else {
-        setFeedback({ variant: 'info', message: 'Editing external events happens in Google Calendar.' });
       }
     },
     [updateBlockTiming, updateInstanceTiming],
@@ -831,6 +855,7 @@ const UnifiedPlannerPage: React.FC = () => {
                     events={events}
                     view={view}
                     defaultView={Views.WEEK}
+                    date={range.start}
                     onView={(next) => setView(next as ViewType)}
                     onRangeChange={handleRangeChange}
                     selectable

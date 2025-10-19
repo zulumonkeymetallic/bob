@@ -91,6 +91,8 @@ function summariseTransactions(transactions) {
           transactions: 0,
           byCategory: {},
           lastTransactionISO: null,
+          months: new Set(),
+          amounts: [],
         });
       }
       const merchantEntry = merchantTotals.get(merchantKey);
@@ -101,6 +103,9 @@ function summariseTransactions(transactions) {
       if (createdISO && (!merchantEntry.lastTransactionISO || createdISO > merchantEntry.lastTransactionISO)) {
         merchantEntry.lastTransactionISO = createdISO;
       }
+      const mKey = createdISO ? toMonthKey(createdISO) : null;
+      if (mKey) merchantEntry.months.add(mKey);
+      merchantEntry.amounts.push(absoluteAmount);
       if (!data.userCategoryType) {
         pendingCount += 1;
         if (pendingClassification.length < 25) {
@@ -143,6 +148,14 @@ function summariseTransactions(transactions) {
 
   const merchantSummary = Array.from(merchantTotals.values())
     .map((entry) => {
+      // Basic recurring detection: appears in ≥2 distinct months and amount variance small
+      const monthCount = entry.months.size;
+      const amounts = entry.amounts || [];
+      const mean = amounts.length ? amounts.reduce((a,b)=>a+b,0) / amounts.length : 0;
+      const variance = amounts.length ? amounts.reduce((a,b)=>a + Math.pow(b-mean,2), 0) / amounts.length : 0;
+      const std = Math.sqrt(variance);
+      const cv = mean > 0 ? std / mean : 0;
+      const isRecurring = monthCount >= 2 && cv <= 0.25; // low variance across months
       const topCategory = Object.entries(entry.byCategory)
         .sort((a, b) => b[1] - a[1])[0];
       return {
@@ -152,6 +165,9 @@ function summariseTransactions(transactions) {
         transactions: entry.transactions,
         primaryCategoryType: topCategory ? topCategory[0] : 'optional',
         lastTransactionISO: entry.lastTransactionISO,
+        months: monthCount,
+        isRecurring,
+        avgAmount: mean,
       };
     })
     .sort((a, b) => b.totalSpend - a.totalSpend)
@@ -324,6 +340,7 @@ async function computeMonzoAnalytics(uidOrDb, maybeUid) {
     monthly: aggregation.monthly,
     spendTimeline: aggregation.spendTimeline,
     merchantSummary: aggregation.merchantSummary,
+    recurringMerchants: aggregation.merchantSummary.filter((m) => m.isRecurring).slice(0, 50),
     pendingClassification: aggregation.pendingClassification,
     pendingCount: aggregation.pendingCount,
     budgetProgress: buildBudgetProgress(aggregation.totals, aggregation.categories, budgetByCategory, budgetLabelIndex),

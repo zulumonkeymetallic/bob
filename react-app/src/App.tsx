@@ -8,6 +8,8 @@ import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
+import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
+import ApprovalsCenter from './components/planner/ApprovalsCenter';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
@@ -16,6 +18,8 @@ import GamesBacklog from './components/GamesBacklog';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
+import FloatingAssistantButton from './components/FloatingAssistantButton';
+import AssistantChatModal from './components/AssistantChatModal';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
 import SettingsPage from './components/SettingsPage';
@@ -60,6 +64,9 @@ import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboard from './components/FinanceDashboard';
+import MerchantMappings from './components/finance/MerchantMappings';
+import CategoriesBuckets from './components/finance/CategoriesBuckets';
+import BudgetsPage from './components/finance/BudgetsPage';
 import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
@@ -101,6 +108,7 @@ function AppContent() {
   const { currentPersona } = usePersona();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(false);
   const [forceRender, setForceRender] = useState(0);
   
   // Data for the global sidebar
@@ -231,14 +239,19 @@ function AppContent() {
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<HabitsManagement />} />
+            <Route path="/routines" element={<RoutinesChoresManager />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />
+            <Route path="/planning/approvals" element={<ApprovalsCenter />} />
+            <Route path="/planning/approval" element={<PlanningApprovalPage />} />
             <Route path="/stories" element={<StoriesManagement />} />
+            <Route path="/stories/:id" element={<DeepLinkStory />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
             <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
             <Route path="/personal-backlogs" element={<BacklogManager />} />
             <Route path="/goals" element={<GoalsManagement />} />
+            <Route path="/goals/:id" element={<DeepLinkGoal />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
             {/* Legacy V2 removed; no preview route retained */}
@@ -268,6 +281,9 @@ function AppContent() {
             <Route path="/running-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/finance" element={<FinanceDashboard />} />
+            <Route path="/finance/merchants" element={<MerchantMappings />} />
+            <Route path="/finance/categories" element={<CategoriesBuckets />} />
+            <Route path="/finance/budgets" element={<BudgetsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
@@ -284,6 +300,10 @@ function AppContent() {
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
+
+        {/* Assistant (floating, near FAB but separate) */}
+        <FloatingAssistantButton onClick={() => setShowAssistant(true)} />
+        <AssistantChatModal show={showAssistant} onHide={() => setShowAssistant(false)} />
 
         {/* Floating Action Button for quick adds */}
         <FloatingActionButton onImportClick={() => setShowImportModal(true)} />

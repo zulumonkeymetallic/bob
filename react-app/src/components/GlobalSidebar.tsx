@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
-import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle } from 'lucide-react';
+import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2 } from 'lucide-react';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useTestMode } from '../contexts/TestModeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
+import { validateRef } from '../utils/referenceGenerator';
+import GoalChatModal from './GoalChatModal';
+import ResearchDocModal from './ResearchDocModal';
 import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 
 interface GlobalSidebarProps {
@@ -33,6 +37,88 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [showAddNote, setShowAddNote] = useState(false);
   const [newNote, setNewNote] = useState('');
+  const [showChat, setShowChat] = useState(false);
+  const [showResearch, setShowResearch] = useState(false);
+  const [orchestrating, setOrchestrating] = useState(false);
+  const functions = React.useMemo(() => getFunctions(), []);
+
+  // Ensure status labels/variants match each entity’s board semantics
+  const getStatusDisplay = (
+    type: 'goal' | 'story' | 'task',
+    status: any
+  ): { label: string; variant: string } => {
+    // Helper to normalize string casing
+    const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+    // Story status mapping (numeric and string)
+    if (type === 'story') {
+      // Numeric mapping used in Kanban: 0=backlog,1=planned,2=active/in-progress,3=testing,4=done
+      if (typeof status === 'number') {
+        switch (status) {
+          case 4: return { label: 'Done', variant: 'success' };
+          case 3: return { label: 'Testing', variant: 'warning' };
+          case 2: return { label: 'Active', variant: 'primary' };
+          case 1: return { label: 'Planned', variant: 'secondary' };
+          case 0: return { label: 'Backlog', variant: 'secondary' };
+          default: return { label: 'Unknown', variant: 'light' };
+        }
+      }
+      // String mapping fallback
+      const map: Record<string, { label: string; variant: string }> = {
+        backlog: { label: 'Backlog', variant: 'secondary' },
+        planned: { label: 'Planned', variant: 'secondary' },
+        active: { label: 'Active', variant: 'primary' },
+        'in-progress': { label: 'Active', variant: 'primary' },
+        testing: { label: 'Testing', variant: 'warning' },
+        done: { label: 'Done', variant: 'success' },
+        defect: { label: 'Defect', variant: 'danger' },
+      };
+      return map[String(status) as keyof typeof map] || { label: cap(String(status || 'Unknown')), variant: 'light' };
+    }
+
+    // Task status mapping (primarily string-based today)
+    if (type === 'task') {
+      if (typeof status === 'number') {
+        // Conservative mapping: 0=todo/planned,1=in-progress,3=blocked,2=done (if ever used)
+        switch (status) {
+          case 2: return { label: 'Done', variant: 'success' };
+          case 3: return { label: 'Blocked', variant: 'danger' };
+          case 1: return { label: 'In Progress', variant: 'primary' };
+          case 0: return { label: 'Todo', variant: 'secondary' };
+          default: return { label: 'Unknown', variant: 'light' };
+        }
+      }
+      const map: Record<string, { label: string; variant: string }> = {
+        todo: { label: 'Todo', variant: 'secondary' },
+        planned: { label: 'Planned', variant: 'secondary' },
+        'in-progress': { label: 'In Progress', variant: 'primary' },
+        blocked: { label: 'Blocked', variant: 'danger' },
+        done: { label: 'Done', variant: 'success' },
+      };
+      return map[String(status) as keyof typeof map] || { label: cap(String(status || 'Unknown')), variant: 'light' };
+    }
+
+    // Goal status mapping
+    if (typeof status === 'number') {
+      // Generic goal mapping used elsewhere: 0=New,1=Work in Progress,2=Complete,3=Blocked,4=Deferred
+      switch (status) {
+        case 2: return { label: 'Complete', variant: 'success' };
+        case 1: return { label: 'Active', variant: 'primary' };
+        case 3: return { label: 'Blocked', variant: 'danger' };
+        case 4: return { label: 'Deferred', variant: 'warning' };
+        case 0: return { label: 'New', variant: 'secondary' };
+        default: return { label: 'Unknown', variant: 'light' };
+      }
+    }
+    const map: Record<string, { label: string; variant: string }> = {
+      new: { label: 'New', variant: 'secondary' },
+      active: { label: 'Active', variant: 'primary' },
+      paused: { label: 'Paused', variant: 'warning' },
+      done: { label: 'Done', variant: 'success' },
+      dropped: { label: 'Dropped', variant: 'secondary' },
+    };
+    return map[String(status) as keyof typeof map] || { label: cap(String(status || 'Unknown')), variant: 'light' };
+  };
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
   const hexToRgba = (hex: string, a: number) => {
@@ -59,22 +145,29 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     }
   }, [selectedItem]);
 
-  // Apply margin to main content when sidebar is visible
+  // Determine responsive sidebar width
+  const getSidebarWidth = React.useCallback(() => {
+    const mobile = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 576px)').matches;
+    if (mobile) return '100vw';
+    return isCollapsed ? '60px' : '400px';
+  }, [isCollapsed]);
+
+  // Apply margin to main content when sidebar is visible (no margin on mobile overlay)
   React.useEffect(() => {
-    const sidebarWidth = isCollapsed ? '60px' : '400px';
-    
-    if (isVisible) {
+    const mobile = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 576px)').matches;
+    const sidebarWidth = getSidebarWidth();
+
+    if (isVisible && !mobile) {
       document.body.style.marginRight = sidebarWidth;
       document.body.style.transition = 'margin-right 0.3s ease';
     } else {
       document.body.style.marginRight = '0px';
     }
-    
-    // Cleanup on unmount
+
     return () => {
       document.body.style.marginRight = '0px';
     };
-  }, [isVisible, isCollapsed]);
+  }, [isVisible, isCollapsed, getSidebarWidth]);
 
   if (!isVisible || !selectedItem || !selectedType) {
     return null;
@@ -106,22 +199,33 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
             await ActivityStreamService.logStatusChange(
               selectedItem.id,
               selectedType,
-              change.oldValue,
-              change.newValue,
               currentUser.uid,
               currentUser.email || undefined,
+              change.oldValue,
+              change.newValue,
               undefined, // persona can be added if needed
+              referenceNumber
+            );
+          } else if (change.field === 'sprintId') {
+            await ActivityStreamService.logSprintChange(
+              selectedItem.id,
+              selectedType === 'task' || selectedType === 'story' ? selectedType : 'story',
+              String(change.oldValue || ''),
+              String(change.newValue || ''),
+              currentUser.uid,
+              currentUser.email || undefined,
+              undefined,
               referenceNumber
             );
           } else {
             await ActivityStreamService.logFieldChange(
               selectedItem.id,
               selectedType,
+              currentUser.uid,
+              currentUser.email || undefined,
               change.field,
               change.oldValue,
               change.newValue,
-              currentUser.uid,
-              currentUser.email || undefined,
               undefined,
               referenceNumber
             );
@@ -271,11 +375,31 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     return 'N/A';
   };
 
-  const sidebarWidth = isCollapsed ? '60px' : '400px';
+  const sidebarWidth = getSidebarWidth();
+
+  const deepLink = (() => {
+    const base = window.location.origin || '';
+    if (selectedType === 'task') {
+      const ref = (selectedItem as any).ref || null;
+      const id = (selectedItem as any).id;
+      return `${base}/tasks/${ref && validateRef(ref, 'task') ? ref : id}`;
+    }
+    if (selectedType === 'story') {
+      const ref = (selectedItem as any).ref || null;
+      const id = (selectedItem as any).id;
+      return `${base}/stories/${ref && validateRef(ref, 'story') ? ref : id}`;
+    }
+    if (selectedType === 'goal') {
+      const ref = (selectedItem as any).ref || null;
+      const id = (selectedItem as any).id;
+      return `${base}/goals/${ref && validateRef(ref, 'goal') ? ref : id}`;
+    }
+    return base;
+  })();
 
   return (
     <>
-      <div
+      <div role="dialog" aria-modal="true"
         style={{
           position: 'fixed',
           top: 0,
@@ -418,6 +542,51 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   >
                     <MessageCircle size={16} />
                   </Button>
+                  {(selectedType === 'goal' || selectedType === 'story') && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                      onClick={() => setShowResearch(true)}
+                      title="Open Research"
+                    >
+                      <BookOpen size={16} />
+                    </Button>
+                  )}
+                  {selectedType === 'story' && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                      onClick={async () => {
+                        if (!selectedItem?.id) return;
+                        setOrchestrating(true);
+                        try {
+                          const callable = httpsCallable(functions, 'orchestrateStoryPlanning');
+                          await callable({ storyId: (selectedItem as any).id });
+                          alert('AI story planning complete: tasks created and time scheduled.');
+                        } catch (e: any) {
+                          alert(e?.message || 'Failed to orchestrate story');
+                        } finally {
+                          setOrchestrating(false);
+                        }
+                      }}
+                      title="AI Orchestrate Story"
+                    >
+                      <Wand2 size={16} />
+                    </Button>
+                  )}
+                  {selectedType === 'goal' && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                      onClick={() => setShowChat(true)}
+                      title="AI Goal Chat"
+                    >
+                      <MessageSquare size={16} />
+                    </Button>
+                  )}
                   <Button
                     variant="link"
                     size="sm"
@@ -540,21 +709,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                       )}
                     </Form.Select>
                   ) : (
-                    <Badge 
-                      bg={
-                        selectedItem.status === 2 ? 'success' : 
-                        selectedItem.status === 1 ? 'primary' : 
-                        'secondary'
-                      }
-                      style={{ fontSize: '12px', padding: '6px 12px' }}
-                    >
-                      {selectedItem.status === 0 ? 'New/Backlog' : 
-                       selectedItem.status === 1 ? 'Active/In Progress' : 
-                       selectedItem.status === 2 ? 'Done/Complete' : 
-                       selectedItem.status === 3 ? 'Blocked' : 
-                       selectedItem.status === 4 ? 'Deferred' : 
-                       'Unknown'}
-                    </Badge>
+                    (() => {
+                      const d = getStatusDisplay(selectedType, selectedItem.status);
+                      return (
+                        <Badge bg={d.variant} style={{ fontSize: '12px', padding: '6px 12px' }}>
+                          {d.label}
+                        </Badge>
+                      );
+                    })()
                   )}
                 </Col>
                 <Col xs={6}>
@@ -643,6 +805,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   </div>
                   <div style={{ marginBottom: '8px' }}>
                     <strong>Owner:</strong> {selectedItem.ownerUid}
+                  </div>
+                  <div style={{ marginTop: '12px' }}>
+                    <Button size="sm" variant="outline-secondary" onClick={() => { navigator.clipboard?.writeText(deepLink); }}>
+                      <LinkIcon size={12} className="me-1" /> Copy Deep Link
+                    </Button>
+                    <div className="small text-muted" style={{ marginTop: 4, wordBreak: 'break-all' }}>{deepLink}</div>
                   </div>
                 </div>
               </div>
@@ -796,6 +964,21 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {/* Goal Chat Modal */}
+      {selectedType === 'goal' && (
+        <GoalChatModal goalId={(selectedItem as any).id} show={showChat} onHide={() => setShowChat(false)} />
+      )}
+
+      {/* Research Modal (goal or story) */}
+      {showResearch && (
+        <ResearchDocModal
+          show={showResearch}
+          onHide={() => setShowResearch(false)}
+          goalId={selectedType === 'goal' ? (selectedItem as any)?.id : undefined}
+          storyId={selectedType === 'story' ? (selectedItem as any)?.id : undefined}
+        />
+      )}
     </>
   );
 };
