@@ -33,6 +33,8 @@ import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
 import { deriveTaskSprint, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { ActivityStreamService } from '../services/ActivityStreamService';
+import logger from '../utils/logger';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import { DnDMutationHandler } from '../utils/dndMutations';
@@ -773,6 +775,26 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           const oldLabel = String((story as any).status ?? '');
           const newLabel = String(nextStatus);
           if (oldLabel !== newLabel) {
+            // Special case diagnostics: done->in-progress or blocked->in-progress
+            if ((oldLabel === 'done' && (newLabel === 'in-progress' || newLabel === 'active')) ||
+                (oldLabel === 'blocked' && newLabel === 'in-progress')) {
+              logger.warn('kanban', 'Story status moved to in-progress', { id: story.id, ref: (story as any).ref, from: oldLabel, to: newLabel });
+              try {
+                await ActivityStreamService.logStatusChange(
+                  story.id,
+                  'story',
+                  currentUser?.uid || 'unknown',
+                  currentUser?.email || 'unknown',
+                  oldLabel,
+                  newLabel,
+                  currentPersona || 'personal',
+                  `KNBN-${Date.now().toString(36)}`,
+                  'human'
+                );
+              } catch (e) {
+                logger.error('kanban', 'Failed to log special status change', e);
+              }
+            }
             await trackFieldChange(story.id, 'story', 'status', oldLabel, newLabel, (story as any).ref);
           }
         } catch {}
@@ -791,6 +813,25 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           const oldLabel = String((task as any).status ?? '');
           const newLabel = String(nextStatus);
           if (oldLabel !== newLabel) {
+            // Special case diagnostics: blocked->in-progress
+            if (oldLabel === 'blocked' && newLabel === 'in-progress') {
+              logger.warn('kanban', 'Task status moved from blocked to in-progress', { id: task.id, ref: (task as any).ref, from: oldLabel, to: newLabel });
+              try {
+                await ActivityStreamService.logStatusChange(
+                  task.id,
+                  'task',
+                  currentUser?.uid || 'unknown',
+                  currentUser?.email || 'unknown',
+                  oldLabel,
+                  newLabel,
+                  currentPersona || 'personal',
+                  `KNBN-${Date.now().toString(36)}`,
+                  'human'
+                );
+              } catch (e) {
+                logger.error('kanban', 'Failed to log special task status change', e);
+              }
+            }
             await trackFieldChange(task.id, 'task', 'status', oldLabel, newLabel, (task as any).ref);
           }
         } catch {}
@@ -1117,10 +1158,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           story={selectedItem as Story | null}
           goals={goals}
           onStoryUpdated={() => setShowEditModal(false)}
+          container={isFullscreen ? boardContainerRef.current : undefined}
         />
       )}
       {selectedType === 'task' && (
-        <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
+        <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg" container={isFullscreen ? boardContainerRef.current || undefined : undefined}>
           <Modal.Header closeButton>
             <Modal.Title>Edit Task</Modal.Title>
           </Modal.Header>

@@ -3,40 +3,50 @@
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 export const isStatus = (actualStatus: any, expectedStatus: string): boolean => {
+  // Normalize expected status to handle hyphens/underscores/spaces
+  const exp = String(expectedStatus || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/_+/g, '-');
+
   // Handle numeric status values
   if (typeof actualStatus === 'number') {
-    // Goal status mapping
-    if (expectedStatus === 'New') return actualStatus === 0;
-    if (expectedStatus === 'Work in Progress') return actualStatus === 1;
-    if (expectedStatus === 'Complete') return actualStatus === 2;
-    if (expectedStatus === 'Blocked') return actualStatus === 3;
-    if (expectedStatus === 'Deferred') return actualStatus === 4;
-    
-    // Story status mapping
-    if (expectedStatus === 'backlog') return actualStatus === 0;
-    if (expectedStatus === 'planned') return actualStatus === 1;
-    if (expectedStatus === 'active') return actualStatus === 2;
-    if (expectedStatus === 'in-progress') return actualStatus === 2;
-    if (expectedStatus === 'testing') return actualStatus === 3;
-    if (expectedStatus === 'done') return actualStatus === 4;
-    
-    // Task status mapping
-    if (expectedStatus === 'todo') return actualStatus === 0;
-    if (expectedStatus === 'planned') return actualStatus === 0;
-    if (expectedStatus === 'in_progress') return actualStatus === 1;
-    if (expectedStatus === 'blocked') return actualStatus === 3;
-    
+    // Heuristic: numbers >= 4 are almost certainly story/goal space; <= 3 likely tasks
+    const likelyTask = actualStatus <= 3;
+
+    // Goal status mapping (string names)
+    if (exp === 'new') return actualStatus === 0;
+    if (exp === 'work-in-progress') return actualStatus === 1;
+    if (exp === 'complete') return actualStatus === 2;
+    if (exp === 'blocked') return actualStatus === 3;
+    if (exp === 'deferred') return actualStatus === 4;
+
+    // Story status mapping (0..4)
+    if (exp === 'backlog') return actualStatus === 0;
+    if (exp === 'planned') return actualStatus === 1;
+    if (exp === 'active' || exp === 'in-progress') return actualStatus === 2;
+    if (exp === 'testing') return actualStatus === 3;
+    if (exp === 'done') return actualStatus === 4;
+
+    // Task status mapping (0..3)
+    if (exp === 'todo' || exp === 'planned') return actualStatus === 0;
+    if (exp === 'in-progress') return actualStatus === 1;
+    if (exp === 'done') return likelyTask && actualStatus === 2;
+    if (exp === 'blocked') return actualStatus === 3;
+
     // Sprint status mapping
-    if (expectedStatus === 'planning') return actualStatus === 0;
-    if (expectedStatus === 'active') return actualStatus === 1;
-    if (expectedStatus === 'closed') return actualStatus === 2;
-    if (expectedStatus === 'cancelled') return actualStatus === 3;
-    
+    if (exp === 'planning') return actualStatus === 0;
+    if (exp === 'active') return actualStatus === 1;
+    if (exp === 'closed') return actualStatus === 2;
+    if (exp === 'cancelled') return actualStatus === 3;
+
     return false;
   }
-  
+
   // Handle string status values (legacy)
-  return actualStatus === expectedStatus;
+  const act = String(actualStatus || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/_+/g, '-');
+  return act === exp;
 };
 
 export const isPriority = (actualPriority: any, expectedPriority: string): boolean => {

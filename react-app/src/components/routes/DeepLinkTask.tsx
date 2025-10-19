@@ -2,21 +2,18 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, updateDoc, serverTimestamp, collection, query, where, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { useSidebar } from '../../contexts/SidebarContext';
 import TaskListView from '../TaskListView';
+import EntityDetailModal from '../EntityDetailModal';
+import { useNavigate } from 'react-router-dom';
 
 const DeepLinkTask: React.FC = () => {
   const { id: refOrId } = useParams();
-  const { showSidebar, setUpdateHandler } = useSidebar();
+  const navigate = useNavigate();
+  const [item, setItem] = useState<any | null>(null);
+  const [open, setOpen] = useState(true);
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
-    // Provide a default update handler for sidebar edits
-    setUpdateHandler(async (item, type, updates) => {
-      const col = type === 'story' ? 'stories' : type === 'goal' ? 'goals' : 'tasks';
-      await updateDoc(doc(db, col, (item as any).id), { ...updates, updatedAt: serverTimestamp() });
-    });
-  }, [setUpdateHandler]);
+  // updates handled inside modal
 
   useEffect(() => {
     let cancelled = false;
@@ -28,26 +25,36 @@ const DeepLinkTask: React.FC = () => {
       let opened = false;
       if (!qs.empty) {
         const d = qs.docs[0];
-        const item = { id: d.id, ...(d.data() || {}) } as any;
-        showSidebar(item, 'task');
+        const it = { id: d.id, ...(d.data() || {}) } as any;
+        setItem(it);
         opened = true;
       }
       if (!opened) {
         const snap = await getDoc(doc(db, 'tasks', refOrId));
         if (cancelled) return;
         if (snap.exists()) {
-          const item = { id: snap.id, ...(snap.data() || {}) } as any;
-          showSidebar(item, 'task');
+          const it = { id: snap.id, ...(snap.data() || {}) } as any;
+          setItem(it);
         }
       }
       setLoaded(true);
     };
     run();
     return () => { cancelled = true; };
-  }, [refOrId, showSidebar]);
+  }, [refOrId]);
 
   // Render the main list view beneath the sidebar for full context
-  return <TaskListView />;
+  return (
+    <>
+      <TaskListView />
+      <EntityDetailModal
+        show={open}
+        onHide={() => { setOpen(false); navigate('/tasks', { replace: true }); }}
+        type="task"
+        item={item}
+      />
+    </>
+  );
 };
 
 export default DeepLinkTask;

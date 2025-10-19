@@ -2,19 +2,17 @@ import React, { useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, updateDoc, serverTimestamp, collection, query, where, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { useSidebar } from '../../contexts/SidebarContext';
 import StoriesManagement from '../StoriesManagement';
+import EntityDetailModal from '../EntityDetailModal';
+import { useNavigate } from 'react-router-dom';
 
 const DeepLinkStory: React.FC = () => {
   const { id: refOrId } = useParams();
-  const { showSidebar, setUpdateHandler } = useSidebar();
+  const navigate = useNavigate();
+  const [item, setItem] = React.useState<any | null>(null);
+  const [open, setOpen] = React.useState(true);
 
-  useEffect(() => {
-    setUpdateHandler(async (item, type, updates) => {
-      const col = type === 'story' ? 'stories' : type === 'goal' ? 'goals' : 'tasks';
-      await updateDoc(doc(db, col, (item as any).id), { ...updates, updatedAt: serverTimestamp() });
-    });
-  }, [setUpdateHandler]);
+  // updates handled inside modal
 
   useEffect(() => {
     let cancelled = false;
@@ -25,23 +23,33 @@ const DeepLinkStory: React.FC = () => {
       const qs = await getDocs(q);
       if (!qs.empty) {
         const d = qs.docs[0];
-        const item = { id: d.id, ...(d.data() || {}) } as any;
-        showSidebar(item, 'story');
+        const it = { id: d.id, ...(d.data() || {}) } as any;
+        setItem(it);
         opened = true;
       }
       if (!opened) {
         const snap = await getDoc(doc(db, 'stories', refOrId));
         if (cancelled) return;
         if (snap.exists()) {
-          const item = { id: snap.id, ...(snap.data() || {}) } as any;
-          showSidebar(item, 'story');
+          const it = { id: snap.id, ...(snap.data() || {}) } as any;
+          setItem(it);
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [refOrId, showSidebar]);
+  }, [refOrId]);
 
-  return <StoriesManagement />;
+  return (
+    <>
+      <StoriesManagement />
+      <EntityDetailModal
+        show={open}
+        onHide={() => { setOpen(false); navigate('/stories', { replace: true }); }}
+        type="story"
+        item={item}
+      />
+    </>
+  );
 };
 
 export default DeepLinkStory;
