@@ -32,6 +32,21 @@ service cloud.firestore {
     match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /steam/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 
+    // Finance collections
+    match /finance_budgets/{uid} {
+      // Per-user finance budget doc keyed by uid
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+    match /monzo_budget_summary/{uid} {
+      // Per-user Monzo summary doc keyed by uid
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+    match /monzo_transactions/{id} {
+      // Individual transaction rows carry ownerUid
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
     // New scheduler-related collections
     match /themes/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /chores/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
