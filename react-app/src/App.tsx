@@ -54,6 +54,7 @@ import CurrentSprintKanban from './components/CurrentSprintKanban';
 import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
 import HabitsManagement from './components/HabitsManagement';
+import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
 import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
@@ -78,6 +79,10 @@ import StravaSettings from './components/settings/integrations/StravaSettings';
 import SteamSettings from './components/settings/integrations/SteamSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
 import { useEntityAudit } from './hooks/useEntityAudit';
+// Deep-link routes
+import DeepLinkStory from './components/routes/DeepLinkStory';
+import DeepLinkGoal from './components/routes/DeepLinkGoal';
+import DeepLinkTask from './components/routes/DeepLinkTask';
 
 
 // Lazy-loaded heavy routes
@@ -211,6 +216,8 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/dashboard" element={<Dashboard />} />
+              {/* Deep-link to a specific task must come before generic list */}
+              <Route path="/tasks/:id" element={<DeepLinkTask />} />
               <Route path="/tasks" element={<TaskListView />} />
               <Route path="/task" element={<Navigate to="/tasks" replace />} />
               <Route path="/task-list" element={<Navigate to="/tasks" replace />} />

@@ -12,6 +12,7 @@ interface EditStoryModalProps {
   story: Story | null;
   goals: Goal[];
   onStoryUpdated?: () => void;
+  container?: HTMLElement | null;
 }
 
 const EditStoryModal: React.FC<EditStoryModalProps> = ({ 
@@ -19,7 +20,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   onHide, 
   story, 
   goals,
-  onStoryUpdated 
+  onStoryUpdated,
+  container
 }) => {
   const [editedStory, setEditedStory] = useState({
     title: '',
@@ -128,7 +130,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   };
 
   return (
-    <Modal show={show} onHide={onHide} size="lg">
+    <Modal show={show} onHide={onHide} size="lg" container={container || undefined}>
       <Modal.Header closeButton>
         <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
       </Modal.Header>
