@@ -701,7 +701,6 @@ const GoalRoadmapV3: React.FC = () => {
     const computed = Math.round(daysBetween(timeRange.start, timeRange.end) * pxPerDay);
     return Math.max(Math.max(320, viewport.width), computed);
   }, [timeRange, pxPerDay, viewport.width]);
-
   const axis = useMemo(() => {
     const rows: AxisRow[] = [];
     const major = new Set<number>();
