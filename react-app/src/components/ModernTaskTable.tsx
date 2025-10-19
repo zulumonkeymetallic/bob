@@ -192,7 +192,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   convertLoadingId,
 }) => {
   const { showSidebar } = useSidebar();
-  const { trackCRUD, trackFieldChange } = useActivityTracking();
+  const { trackCRUD, trackFieldChange, addNote } = useActivityTracking();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
     attributes,
@@ -624,6 +624,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
   const closeToast = () => setToastState(prev => ({ ...prev, show: false }));
 
+  // Activity stream helpers
+  const { addNote, trackFieldChange } = useActivityTracking();
+
   // Update story column options when stories change
   useEffect(() => {
     setColumns(prev => 
@@ -684,6 +687,16 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       }
 
       await onTaskUpdate(taskId, payload);
+
+      // Activity stream annotation when due date causes sprint alignment
+      if ('dueDate' in updates && (derivation.sprintId ?? null) !== (existingTask.sprintId ?? null)) {
+        const sprintName = sprintNameForId(sprints, derivation.sprintId ?? null);
+        const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0,10) : 'unknown';
+        try {
+          await addNote(taskId, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.`, (existingTask as any).ref);
+          await trackFieldChange(taskId, 'task', 'sprintId', String(existingTask.sprintId || ''), String(derivation.sprintId || ''), (existingTask as any).ref);
+        } catch {}
+      }
     } catch (error: any) {
       console.error('ModernTaskTable: failed to update task', { taskId, updates, error });
       showToast('Unable to update task. Please try again.');

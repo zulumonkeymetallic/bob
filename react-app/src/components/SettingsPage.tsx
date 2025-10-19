@@ -338,9 +338,7 @@ const SettingsPage: React.FC = () => {
     if (!currentUser) return;
     try {
       const nonce = Math.random().toString(36).slice(2);
-      const region = 'europe-west2';
-      const projectId = (window as any).FIREBASE_PROJECT_ID || (window as any).REACT_APP_FIREBASE_PROJECT_ID || 'bob20250810';
-      const url = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+      const url = `${window.location.origin}/api/monzo/start?uid=${currentUser.uid}&nonce=${nonce}`;
       const popup = window.open(url, 'monzo-oauth', 'width=500,height=700');
       const check = setInterval(() => {
         if (popup?.closed) { clearInterval(check); setMonzoConnected(true); }
@@ -659,7 +657,17 @@ const SettingsPage: React.FC = () => {
                   </Card.Body>
                 </Card>
 
-                <BudgetSettings />
+                <Card className="mb-3" style={{ backgroundColor: backgrounds.card }}>
+                  <Card.Body>
+                    <h6 className="mb-2">Budgets moved</h6>
+                    <p className="text-muted mb-2">Manage budgets, categories, and merchant mappings in the Finance section.</p>
+                    <div className="d-flex gap-2 flex-wrap">
+                      <a className="btn btn-outline-secondary btn-sm" href="/finance/budgets">Open Budgets</a>
+                      <a className="btn btn-outline-secondary btn-sm" href="/finance/categories">Open Categories</a>
+                      <a className="btn btn-outline-secondary btn-sm" href="/finance/merchants">Open Merchants</a>
+                    </div>
+                  </Card.Body>
+                </Card>
               </Tab.Pane>
 
               {/* Reminders (Shortcuts) Tab */}

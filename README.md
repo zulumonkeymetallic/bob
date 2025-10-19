@@ -125,6 +125,7 @@ cd ..
 # Set secrets (Blaze plan required)
 firebase use bob20250810
 firebase functions:secrets:set OPENAI_API_KEY
+firebase functions:secrets:set NYLAS_API_KEY
 firebase functions:secrets:set TRAKT_CLIENT_ID
 firebase functions:secrets:set TRAKT_CLIENT_SECRET
 firebase functions:secrets:set TRAKT_ACCESS_TOKEN

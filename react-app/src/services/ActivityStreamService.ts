@@ -1,14 +1,16 @@
-import { 
-  collection, 
-  addDoc, 
-  query, 
-  where, 
-  orderBy, 
-  onSnapshot, 
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
   serverTimestamp,
-  Timestamp 
+  Timestamp
 } from 'firebase/firestore';
 import { db } from '../firebase';
+
+export type ActivitySource = 'human' | 'function' | 'ai' | 'system';
 
 export interface ActivityEntry {
   id?: string;
@@ -35,7 +37,7 @@ export interface ActivityEntry {
   referenceNumber?: string;
   
   // Source tracking (Human, Function, AI)
-  source: 'human' | 'function' | 'ai';
+  source: ActivitySource;
   sourceDetails?: string;
 }
 
@@ -71,7 +73,7 @@ export class ActivityStreamService {
     newValue: any,
     persona: string,
     referenceNumber: string,
-    source: 'human' | 'function' | 'ai' = 'human'
+    source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Updated ${fieldName} from "${oldValue}" to "${newValue}"`;
     
@@ -101,7 +103,7 @@ export class ActivityStreamService {
     newStatus: string,
     persona: string,
     referenceNumber: string,
-    source: 'human' | 'function' | 'ai' = 'human'
+    source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Status changed from "${oldStatus}" to "${newStatus}"`;
     
@@ -131,7 +133,7 @@ export class ActivityStreamService {
     userEmail?: string,
     persona?: string,
     referenceNumber?: string,
-    source: 'human' | 'function' | 'ai' = 'human'
+    source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Sprint changed from "${oldSprint}" to "${newSprint}"`;
     
@@ -160,7 +162,7 @@ export class ActivityStreamService {
     userEmail?: string,
     persona?: string,
     referenceNumber?: string,
-    source: 'human' | 'function' | 'ai' = 'human'
+    source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Added note: ${noteContent.substring(0, 100)}${noteContent.length > 100 ? '...' : ''}`;
     
@@ -187,7 +189,7 @@ export class ActivityStreamService {
     userEmail?: string,
     persona?: string,
     referenceNumber?: string,
-    source: 'human' | 'function' | 'ai' = 'human'
+    source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Created ${entityType}: ${entityTitle}`;
     
@@ -218,7 +220,16 @@ export class ActivityStreamService {
     return onSnapshot(q, (snapshot) => {
       const raw = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
       // Filter out non-CRUD/noise events (viewed/clicked/imported/exported) and misclassified view notes
-      const allowed = new Set(['created','updated','deleted','note_added','status_changed','sprint_changed','priority_changed']);
+      const allowed = new Set([
+        'created',
+        'updated',
+        'deleted',
+        'note_added',
+        'status_changed',
+        'sprint_changed',
+        'priority_changed',
+        'task_to_story_conversion',
+      ]);
       const activities = raw.filter((a) => {
         const t = String(a.activityType || '').toLowerCase();
         if (!allowed.has(t)) return false;
@@ -284,7 +295,7 @@ export class ActivityStreamService {
     userEmail?: string,
     persona?: string,
     referenceNumber?: string,
-    source: 'human' | 'function' | 'ai' = 'human'
+    source: ActivitySource = 'human'
   ) {
     await this.addActivity({
       entityId,

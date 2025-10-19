@@ -2,10 +2,11 @@
 const functionsV2 = require("firebase-functions/v2");
 const httpsV2 = require("firebase-functions/v2/https");
 const schedulerV2 = require("firebase-functions/v2/scheduler");
+const { loadThemesForUser, mapThemeLabelToId } = require('./services/themeManager');
 const { defineSecret } = require("firebase-functions/params");
 const firestoreV2 = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
-const { OpenAI } = require("openai");
+// OpenAI removed (Gemini-only)
 const aiUsageLogger = require("./utils/aiUsageLogger");
 const { rrulestr } = require('rrule');
 const { DateTime } = require('luxon');
@@ -15,6 +16,7 @@ const {
   inferDefaultCategoryType,
   inferDefaultCategoryLabel,
   toMonthKey,
+  normaliseMerchantName,
 } = require('./monzo/shared');
 const DEFAULT_TIMEZONE = 'Europe/London';
 const {
@@ -25,6 +27,7 @@ const {
   resolveTimezone,
 } = require('./lib/reporting');
 const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
+const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('./services/mediaImportController');
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime } = require('./lib/time');
 const crypto = require('crypto');
@@ -36,8 +39,7 @@ functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
 admin.initializeApp();
 
 // Secrets
-const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
-// Google AI Studio (Gemini) for Issue #124
+// Google AI Studio (Gemini)
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret("GOOGLEAISTUDIOAPIKEY");
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret("GOOGLE_OAUTH_CLIENT_ID");
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret("GOOGLE_OAUTH_CLIENT_SECRET");
@@ -55,6 +57,7 @@ const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
+const NYLAS_API_KEY = defineSecret('NYLAS_API_KEY');
 
 // Scheduler utils (deterministic id + day key)
 function makePlanId(userId, date) {
@@ -79,7 +82,7 @@ function makeAssignmentId({ planId, itemType, itemId }) {
 const MS_IN_MINUTE = 60 * 1000;
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const CHORE_LOOKAHEAD_DAYS = 90;
-const AI_PRIORITY_MODEL = process.env.GOOGLEAISTUDIOAPIKEY ? 'gemini-1.5-flash' : 'gpt-4o-mini';
+const AI_PRIORITY_MODEL = 'gemini-1.5-flash';
 
 function toMillis(value) {
   if (!value && value !== 0) return null;
@@ -247,7 +250,7 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
     else score += 3;
 
     if (t.sprintId) score += 6;
-    if (t.source === 'ios_reminder') score += 4;
+    if (t.source === 'ios_reminder' || t.source === 'MacApp' || t.source === 'mac_app') score += 4;
 
     return Math.max(0, Math.min(100, Math.round(score)));
   }
@@ -931,6 +934,311 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID], invo
   }
 });
 
+// Public approval endpoint for planning jobs (email CTA)
+exports.approvePlanningJob = httpsV2.onRequest({ invoker: 'public' }, async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
+  try {
+    const db = ensureFirestore();
+    const jobId = String(req.query.jobId || '');
+    const uid = String(req.query.uid || '');
+    const token = String(req.query.token || '');
+    if (!jobId || !uid || !token) return res.status(400).json({ error: 'Missing parameters' });
+
+    const ref = db.collection('planning_jobs').doc(jobId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Job not found' });
+    const job = snap.data() || {};
+    if (job.userId !== uid) return res.status(403).json({ error: 'Forbidden' });
+    if (!job.approvalToken || job.approvalToken !== token) return res.status(403).json({ error: 'Invalid token' });
+
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    const timezone = job?.preview?.timezone || profile.timezone || 'UTC';
+    const proposedBlocks = Array.isArray(job.proposedBlocks) ? job.proposedBlocks : [];
+    let previewBlocks = Array.isArray(job?.preview?.blocks) ? job.preview.blocks : null;
+    if (!previewBlocks || previewBlocks.length === 0) {
+      previewBlocks = await buildBlockPreviews(uid, proposedBlocks, { timezone });
+    }
+
+    const validator = job.validator || null;
+
+    const sendPreview = (statusCode = 200) => {
+      return res.status(statusCode).json({
+        status: job.status || 'unknown',
+        jobId,
+        timezone,
+        proposedCount: proposedBlocks.length,
+        validator,
+        preview: {
+          timezone,
+          blocks: previewBlocks,
+        },
+        appliedBlocks: job.appliedBlocks || 0,
+        approvedAt: job.approvedAt || null,
+      });
+    };
+
+    const queryApprove = String(req.query.approve || '').toLowerCase();
+    const queryAction = String(req.query.action || '').toLowerCase();
+    const approveRequested = req.method === 'POST' || queryApprove === '1' || queryApprove === 'true' || queryAction === 'approve';
+    const previewRequested = req.method === 'GET' && !approveRequested;
+
+    if (!approveRequested || previewRequested || String(req.query.preview || '').toLowerCase() === 'true') {
+      return sendPreview();
+    }
+
+    if (job.status !== 'proposed') {
+      return sendPreview();
+    }
+
+    const applied = await applyCalendarBlocks(
+      uid,
+      'personal',
+      proposedBlocks.map((b) => ({
+        ...b,
+        entry_method: 'calendar_ai',
+        confidence_score: (validator?.score || 0.8),
+      })),
+    );
+    await ref.set(
+      {
+        status: 'approved',
+        appliedBlocks: applied,
+        approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+        preview: {
+          timezone,
+          blocks: previewBlocks,
+        },
+      },
+      { merge: true },
+    );
+
+    if (req.method === 'GET') {
+      const origin = process.env.APP_BASE_URL || 'https://bob20250810.web.app';
+      const html = `
+        <html>
+          <head><title>Plan Applied</title></head>
+          <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 32px;">
+            <h2>✅ Plan Applied</h2>
+            <p>${applied} block${applied === 1 ? '' : 's'} were added to your calendar.</p>
+            <p><a href="${origin}/calendar/integration">Open calendar view in BOB</a></p>
+          </body>
+        </html>`;
+      return res.status(200).send(html);
+    }
+
+    return res.status(200).json({ ok: true, status: 'approved', appliedBlocks: applied });
+  } catch (e) {
+    console.error('[approvePlanningJob] failed', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Optional: callable to create a tracking GitHub issue for this feature
+exports.createTrackingIssue = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const repo = process.env.GITHUB_REPO || null; if (!repo) throw new httpsV2.HttpsError('failed-precondition', 'GITHUB_REPO not configured');
+  const title = String(req?.data?.title || 'BOB: Goal Orchestration & Nightly Planning Approvals');
+  const body = String(req?.data?.body || `
+## Summary
+- Goal-level orchestration (research → stories/tasks → schedule)
+- Nightly plan email proposals with approval link
+- Roadmap V3 icon+text actions
+- Deep-link read-only sidebar with mobile overlay
+
+## Server
+- functions/index.js: orchestrateGoalPlanning, sendGoalChatMessage, dailyPlanningJob (approval flow), approvePlanningJob
+- functions/services/mediaImportController.js: Trakt/Goodreads-like imports
+- functions/services/themeManager.js: dynamic themes
+
+## Client
+- GoalRoadmapV3: icon+text quick actions + AI Orchestrate menu
+- GlobalSidebar: AI Goal Chat modal, mobile overlay
+
+## Follow-ups
+- Add UI badges for pending plan approvals
+- Optional: audio interface for goal chat
+`);
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new httpsV2.HttpsError('failed-precondition', 'GITHUB_TOKEN not configured');
+  const resApi = await createGithubIssue({ token, repo, title, body });
+  return { ok: true, issue: { number: resApi.number, url: resApi.html_url } };
+});
+
+// Diagnostics (no secrets required): report environment flags only
+exports.diagnosticsStatus = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  return {
+    hasGemini: !!process.env.GOOGLEAISTUDIOAPIKEY,
+    hasNylas: !!process.env.NYLAS_API_KEY,
+    hasOpenAI: !!process.env.OPENAI_API_KEY,
+    appBaseUrl: process.env.APP_BASE_URL || null,
+  };
+});
+
+// Diagnostics: test LLM (Gemini) round-trip
+exports.testLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const raw = await callLLMJson({ system: 'Return JSON {"ok":true}', user: 'ping', purpose: 'diagnostics', userId: uid, expectJson: true, temperature: 0 });
+  return { ok: true, model: 'gemini', response: raw.slice(0, 200) };
+});
+
+// Diagnostics: send test email via Nylas
+exports.sendTestEmail = httpsV2.onCall({ secrets: [NYLAS_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const snap = await db.collection('profiles').doc(uid).get();
+  const email = snap.exists ? (snap.data() || {}).email : null;
+  if (!email) throw new httpsV2.HttpsError('failed-precondition', 'Profile email not set');
+  await sendEmail({ to: email, subject: 'BOB · Test Email', html: '<p>This is a test email from BOB diagnostics.</p>' });
+  return { ok: true, to: email };
+});
+
+// Assistant Chat: aggregates calendar + backlog + goals to provide insights and suggested actions
+exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const message = String(req?.data?.message || '').trim();
+  const persona = String(req?.data?.persona || 'personal');
+  if (!message) throw new httpsV2.HttpsError('invalid-argument', 'message is required');
+
+  const db = ensureFirestore();
+  const horizonDays = Number(req?.data?.days || 2);
+  const context = await assemblePlanningContext(uid, persona, horizonDays);
+  context.userId = uid;
+
+  // Load stories (active/backlog, top by priority/order)
+  let stories = [];
+  try {
+    const snap = await db.collection('stories')
+      .where('ownerUid', '==', uid)
+      .where('persona', '==', persona)
+      .limit(50)
+      .get();
+    stories = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  } catch {}
+
+  // Compute proposed approvals count
+  let approvals = 0;
+  try {
+    const ps = await db.collection('planning_jobs')
+      .where('userId', '==', uid)
+      .where('status', '==', 'proposed')
+      .get();
+    approvals = ps.size;
+  } catch {}
+
+  // Build condensed context for LLM
+  const topTasks = (context.tasks || [])
+    .filter(t => ['todo', 'planned', 'in-progress', 0, 1].includes(t.status))
+    .slice(0, 20)
+    .map(t => ({ id: t.id, title: t.title, priority: t.priority, theme: t.theme || null, goalId: t.goalId || null, estimated: t.estimated_duration || null }));
+  const topGoals = (context.goals || []).slice(0, 10).map(g => ({ id: g.id, title: g.title, theme: g.theme, priority: g.priority }));
+  const todayEvents = (context.gcalEvents || []).slice(0, 20).map(e => ({ title: e.summary, start: e.start, end: e.end }));
+  const plannedBlocks = (context.existingBlocks || []).slice(0, 20);
+
+  // Persist user message
+  const threadRef = db.collection('assistant_chats').doc(uid);
+  if (isUnsafeMessage(message)) {
+    await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: 'Sorry — I can\'t assist with that request.', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    return { ok: false, reply: 'Content blocked by safety policy', insights: { priorities: [], warnings: [] }, suggested_actions: [] };
+  }
+  await threadRef.collection('messages').add({ id: undefined, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  const latestSummary = await getLatestSummary(threadRef);
+  const recent = await getRecentMessages(threadRef, 10);
+  const system = [
+    'You are BOB, a concise productivity assistant. Keep replies under 120 words.',
+    'Use the provided context to identify priorities for the next 1–2 days.',
+    'RETURN STRICT JSON ONLY with the shape:',
+    '{',
+    '  "reply": string,',
+    '  "insights": { "priorities": string[], "warnings": string[] },',
+    '  "suggested_actions": [',
+    '     { "type": "plan_today" | "open_approvals" | "create_task" | "open_goal",',
+    '       "title"?: string, "estimateMin"?: number, "goalId"?: string }',
+    '  ]',
+    '}',
+  ].join('\n');
+  const user = JSON.stringify({
+    approvals,
+    horizonDays,
+    goals: topGoals,
+    tasks: topTasks,
+    todayEvents: todayEvents.map(e => ({ title: e.title, start: e.start, end: e.end })),
+    plannedBlocks: plannedBlocks.map(b => ({ title: b.title, start: b.start, end: b.end, theme: b.theme || null })),
+    summary: latestSummary || null,
+    recent: recent.map(m => ({ role: m.role, content: m.content })),
+    note: message,
+  });
+
+  let parsed = { reply: 'OK', insights: { priorities: [], warnings: [] }, suggested_actions: [] };
+  try {
+    const raw = await callLLMJson({ system, user, purpose: 'assistantChat', userId: uid, expectJson: true, temperature: 0.2 });
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    // fallback minimal response
+  }
+
+  const reply = String(parsed?.reply || '').slice(0, 1200);
+  await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: reply, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  return {
+    ok: true,
+    reply,
+    insights: parsed?.insights || { priorities: [], warnings: [] },
+    suggested_actions: Array.isArray(parsed?.suggested_actions) ? parsed.suggested_actions.slice(0, 6) : [],
+  };
+});
+
+function isUnsafeMessage(text) {
+  const s = String(text || '').toLowerCase();
+  const banned = [/suicide/, /self\-harm/, /bomb/, /kill\b/, /abuse/, /terror/];
+  return banned.some(re => re.test(s));
+}
+
+async function getLatestSummary(threadRef) {
+  try {
+    const snap = await threadRef.collection('summaries').orderBy('createdAt', 'desc').limit(1).get();
+    if (!snap.empty) {
+      return String((snap.docs[0].data() || {}).content || '');
+    }
+  } catch {}
+  return null;
+}
+
+async function getRecentMessages(threadRef, n = 10) {
+  try {
+    const snap = await threadRef.collection('messages').orderBy('createdAt', 'desc').limit(n).get();
+    const rows = snap.docs.map(d => d.data());
+    return rows.reverse().map(r => ({ role: r.role, content: String(r.content || '').slice(0, 500) }));
+  } catch {
+    return [];
+  }
+}
+
+async function maybeSummarizeThread(threadRef, uid) {
+  try {
+    const recent = await getRecentMessages(threadRef, 40);
+    if (recent.length < 20) return; // only summarize when long enough
+    // Check last summary age
+    const latest = await threadRef.collection('summaries').orderBy('createdAt', 'desc').limit(1).get();
+    const shouldSummarize = latest.empty;
+    if (!shouldSummarize) return;
+    const convo = recent.map(m => `${m.role}: ${m.content}`).join('\n');
+    const system = 'Summarize the following conversation into 5-8 bullets capturing decisions, open questions, and next steps. Keep under 120 words.';
+    const user = convo;
+    const summary = await callLLMJson({ system, user, purpose: 'chatSummary', userId: uid, expectJson: false, temperature: 0.2 });
+    await threadRef.collection('summaries').add({ content: String(summary).slice(0, 2000), createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  } catch {}
+}
+
 // ===== OAuth: callback
 exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
   try {
@@ -976,80 +1284,7 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   }
 });
 
-// ===== Monzo OAuth Start
-exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoker: 'public' }, async (req, res) => {
-  try {
-    const uid = String(req.query.uid || "");
-    const nonce = String(req.query.nonce || "");
-    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
-    const projectId = process.env.GCLOUD_PROJECT;
-    const region = "europe-west2";
-    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
-    const clientId = process.env.MONZO_CLIENT_ID;
-    const state = stateEncode({ uid, nonce });
-    // Monzo OAuth authorize
-    const authUrl = `https://auth.monzo.com/?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${state}`;
-    res.redirect(authUrl);
-  } catch (e) {
-    res.status(500).send("Monzo OAuth start error: " + e.message);
-  }
-});
-
-// ===== Monzo OAuth Callback
-exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] , invoker: 'public' }, async (req, res) => {
-  try {
-    const code = String(req.query.code || "");
-    const state = stateDecode(req.query.state);
-    const uid = state.uid;
-    if (!code || !uid) return res.status(400).send("Missing code/uid");
-
-    const projectId = process.env.GCLOUD_PROJECT;
-    const region = "europe-west2";
-    const redirectUri = `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
-
-    const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        client_id: process.env.MONZO_CLIENT_ID,
-        client_secret: process.env.MONZO_CLIENT_SECRET,
-        redirect_uri: redirectUri,
-      }).toString(),
-    });
-
-    const refresh = tokenData.refresh_token;
-    const access = tokenData.access_token;
-    const expiresIn = tokenData.expires_in; // seconds
-    const user_id = tokenData.user_id || null;
-    if (!refresh) return res.status(400).send("No refresh_token from Monzo. Check app setup.");
-
-    const db = admin.firestore();
-    const tokenRef = db.collection("tokens").doc(`${uid}_monzo`);
-    const expires_at = Math.floor(Date.now()/1000) + (Number(expiresIn)||0);
-    await tokenRef.set({
-      provider: "monzo",
-      ownerUid: uid,
-      monzo_user_id: user_id,
-      refresh_token: refresh,
-      access_token: access || null,
-      expires_at,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    // Mark profile integration flag
-    await db.collection('profiles').doc(uid).set({
-      monzoConnected: true,
-      monzoLastSyncAt: null
-    }, { merge: true });
-
-    res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
-  } catch (e) {
-    console.error('Monzo OAuth callback error:', e);
-    res.status(500).send("Monzo OAuth callback error: " + e.message);
-  }
-});
+// (Removed older Monzo OAuth start/callback – consolidated below with hosting rewrite support)
 
 async function getMonzoAccessToken(uid) {
   const db = admin.firestore();
@@ -1245,7 +1480,8 @@ exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoke
 
     const state = stateEncode({ uid, nonce });
     const scope = encodeURIComponent("openid profile accounts:read balance:read transactions:read pots:read");
-    const authUrl = `https://auth.monzo.com/?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}`;
+    // Force a new consent screen to maximise chance of receiving a refresh_token
+    const authUrl = `https://auth.monzo.com/?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}&prompt=consent`;
     res.redirect(authUrl);
   } catch (e) {
     console.error('Monzo OAuth start error:', e);
@@ -1288,6 +1524,7 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
     const expiresAt = expiresIn ? Math.floor(Date.now() / 1000) + expiresIn : null;
     const monzoUserId = tokenData.user_id || null;
     if (!refresh || !access) {
+      try { await recordIntegrationLog(uid, 'monzo', 'error', 'Token exchange missing tokens', { keys: Object.keys(tokenData || {}) }); } catch {}
       return res.status(400).send("Monzo tokens missing from response");
     }
 
@@ -1599,6 +1836,163 @@ exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MO
   return { ok: true, analytics };
 });
 
+// Helper to apply a single merchant mapping across existing transactions
+async function applyMappingToExisting(uid, merchantKey, categoryType, label) {
+  const db = admin.firestore();
+  const col = db.collection('monzo_transactions');
+  const q = col.where('ownerUid', '==', uid).where('merchantKey', '==', merchantKey);
+  const snap = await q.get();
+  let updated = 0;
+  const MAX_BATCH = 400;
+  let batch = db.batch();
+  let ops = 0;
+  for (const doc of snap.docs) {
+    batch.update(doc.ref, {
+      userCategoryType: categoryType,
+      userCategoryLabel: label || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    ops++; updated++;
+    if (ops >= MAX_BATCH) { await batch.commit(); batch = db.batch(); ops = 0; }
+  }
+  if (ops > 0) await batch.commit();
+  return updated;
+}
+
+// Upsert a mapping for a merchant (auto-categorise going forward)
+exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const merchantName = String(req.data?.merchantName || req.data?.merchant || req.data?.name || '').trim();
+  const merchantKeyRaw = String(req.data?.merchantKey || '').trim();
+  const categoryType = String(req.data?.categoryType || req.data?.type || '').trim().toLowerCase();
+  const label = req.data?.label ? String(req.data.label).trim() : null;
+  const applyToExisting = !!req.data?.applyToExisting;
+
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+  if (!merchantName && !merchantKeyRaw) throw new httpsV2.HttpsError('invalid-argument', 'merchantName or merchantKey is required');
+  if (!allowed.has(categoryType)) throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+
+  const merchantKey = merchantKeyRaw || normaliseMerchantName(merchantName);
+  if (!merchantKey) throw new httpsV2.HttpsError('invalid-argument', 'merchantKey resolved empty');
+
+  const db = admin.firestore();
+  const docRef = db.collection('merchant_mappings').doc(`${uid}_${merchantKey}`);
+  await docRef.set({
+    ownerUid: uid,
+    merchantKey,
+    label: label || merchantName || merchantKey,
+    categoryType,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set merchant mapping', { merchantKey, categoryType, label }); } catch {}
+
+  let updated = 0;
+  if (applyToExisting) {
+    updated = await applyMappingToExisting(uid, merchantKey, categoryType, label);
+    try { await computeMonzoAnalytics(uid); } catch {}
+  }
+
+  return { ok: true, merchantKey, updated };
+});
+
+// Bulk upsert merchant mappings from CSV or UI array
+exports.bulkUpsertMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const rows = Array.isArray(req.data?.rows) ? req.data.rows : [];
+  const apply = !!req.data?.apply;
+  if (!rows.length) return { ok: true, upserts: 0, updated: 0 };
+
+  const db = admin.firestore();
+  const batch = db.batch();
+  let upserts = 0, updated = 0;
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+  for (const r of rows) {
+    const name = String(r.merchantName || r.merchant || r.name || '').trim();
+    const keyRaw = String(r.merchantKey || '').trim();
+    const key = keyRaw || normaliseMerchantName(name);
+    if (!key) continue;
+    const type = String(r.categoryType || r.type || '').trim().toLowerCase();
+    if (!allowed.has(type)) continue;
+    const label = r.label ? String(r.label).trim() : (name || key);
+    const ref = db.collection('merchant_mappings').doc(`${uid}_${key}`);
+    batch.set(ref, {
+      ownerUid: uid,
+      merchantKey: key,
+      label,
+      categoryType: type,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    upserts++;
+  }
+  if (upserts) await batch.commit();
+  if (apply) {
+    // Apply each mapping
+    const snaps = await db.collection('merchant_mappings').where('ownerUid', '==', uid).get();
+    for (const d of snaps.docs) {
+      const m = d.data() || {};
+      if (!m.merchantKey || !m.categoryType) continue;
+      updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
+    }
+    try { await computeMonzoAnalytics(uid); } catch {}
+  }
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Bulk upsert merchant mappings', { upserts, applied: apply }); } catch {}
+  return { ok: true, upserts, updated };
+});
+
+// Explicit apply (all or one merchant)
+exports.applyMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const merchantKeyIn = String(req.data?.merchantKey || '').trim();
+  const db = admin.firestore();
+  let updated = 0;
+  if (merchantKeyIn) {
+    const snap = await db.collection('merchant_mappings').doc(`${uid}_${merchantKeyIn}`).get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Mapping not found');
+    const m = snap.data() || {};
+    updated += await applyMappingToExisting(uid, merchantKeyIn, m.categoryType, m.label || null);
+  } else {
+    const snaps = await db.collection('merchant_mappings').where('ownerUid', '==', uid).get();
+    for (const d of snaps.docs) {
+      const m = d.data() || {};
+      if (!m.merchantKey || !m.categoryType) continue;
+      updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
+    }
+  }
+  try { await computeMonzoAnalytics(uid); } catch {}
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Applied merchant mappings', { updated }); } catch {}
+  return { ok: true, updated };
+});
+
+// Backfill merchantKey for older transactions (run once per user if needed)
+exports.backfillMerchantKeys = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const col = db.collection('monzo_transactions');
+  const snap = await col.where('ownerUid', '==', uid).get();
+  let updated = 0;
+  let batch = db.batch();
+  let ops = 0;
+  const MAX = 400;
+  for (const d of snap.docs) {
+    const data = d.data() || {};
+    if (data.merchantKey) continue;
+    const name = data?.merchant?.name || data?.counterparty?.name || data?.description || null;
+    const key = name ? normaliseMerchantName(name) : null;
+    if (!key) continue;
+    batch.update(d.ref, { merchantKey: key, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    ops++; updated++;
+    if (ops >= MAX) { await batch.commit(); batch = db.batch(); ops = 0; }
+  }
+  if (ops > 0) await batch.commit();
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Backfilled merchant keys', { updated }); } catch {}
+  return { ok: true, updated };
+});
+
 exports.generateMonzoAuditReport = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
@@ -1681,6 +2075,21 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
   let total = 0;
   let lastCreated = since || null;
 
+  // Preload merchant mappings for this user to auto-apply categorisation
+  const merchantMappingsSnap = await db.collection('merchant_mappings')
+    .where('ownerUid', '==', uid)
+    .get();
+  const merchantMap = new Map();
+  merchantMappingsSnap.forEach((d) => {
+    const data = d.data() || {};
+    const key = String(data.merchantKey || '').trim();
+    if (!key) return;
+    merchantMap.set(key, {
+      type: data.categoryType || data.type || 'optional',
+      label: data.label || data.categoryLabel || null,
+    });
+  });
+
   while (true) {
     const params = new URLSearchParams();
     params.set('account_id', accountId);
@@ -1711,6 +2120,10 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
             : JSON.stringify(rawValue);
         }
       }
+      // Merchant key for mapping and analytics
+      const merchantName = tx?.merchant?.name || tx?.counterparty?.name || tx?.description || null;
+      const merchantKey = merchantName ? normaliseMerchantName(merchantName) : (tx?.merchant?.id ? normaliseMerchantName(tx.merchant.id) : null);
+
       const docData = {
         ownerUid: uid,
         accountId,
@@ -1731,6 +2144,7 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
         metadata: Object.keys(metadataSanitised).length ? metadataSanitised : null,
         defaultCategoryType,
         defaultCategoryLabel,
+        merchantKey: merchantKey || null,
         monthKey: tx.created ? toMonthKey(tx.created) : null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         raw: tx,
@@ -1752,6 +2166,13 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
         docData.merchantRaw = tx.merchant;
       } else {
         docData.merchant = null;
+      }
+
+      // Apply user mapping if present so future analytics use user's choice
+      if (merchantKey && merchantMap.has(merchantKey)) {
+        const m = merchantMap.get(merchantKey);
+        docData.userCategoryType = m.type;
+        if (m.label) docData.userCategoryLabel = m.label;
       }
 
       batch.set(docRef, docData, { merge: true });
@@ -1881,7 +2302,7 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
 }
 
 // ===== AI Planning Function
-exports.planCalendar = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
@@ -1901,6 +2322,7 @@ exports.planCalendar = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOG
     // 1. Assemble context for planning
     const context = await assemblePlanningContext(uid, persona, horizonDays);
     context.userId = uid; // Add userId to context for logging
+    try { await recordAiLog(uid, 'planCalendar', 'info', 'Planning started', { persona, horizonDays, focusGoalId, goalTimeRequest }); } catch {}
     
     // 2. Generate AI plan
     const aiResponse = await generateAIPlan(context, { focusGoalId, goalTimeRequest });
@@ -1916,7 +2338,7 @@ exports.planCalendar = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOG
       applied = true;
     }
     
-    return {
+    const resultPayload = {
       proposedBlocks: aiResponse.blocks,
       rationale: aiResponse.rationale,
       validator: validationResult,
@@ -1925,15 +2347,18 @@ exports.planCalendar = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOG
       score: validationResult.score,
       focusGoalId: focusGoalId || null
     };
+    try { await recordAiLog(uid, 'planCalendar', applied ? 'success' : 'warning', applied ? 'AI plan applied' : 'AI plan proposed (not applied)', { blocksProposed: aiResponse.blocks?.length || 0, blocksCreated, score: validationResult.score, focusGoalId }); } catch {}
+    return resultPayload;
     
   } catch (error) {
     console.error('Calendar planning error:', error);
+    try { await recordAiLog(uid, 'planCalendar', 'error', 'Planning failed', { error: String(error?.message || error) }); } catch {}
     throw new functionsV2.https.HttpsError("internal", error.message);
   }
 });
 
 // ===== Story Generation for Goal (AI)
-exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
@@ -2025,7 +2450,7 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [OPENAI_API
 });
 
 // ===== Story Acceptance Criteria Generation (AI)
-exports.generateStoryAcceptanceCriteria = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.generateStoryAcceptanceCriteria = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError('unauthenticated', 'Must be authenticated');
@@ -2087,7 +2512,7 @@ exports.generateStoryAcceptanceCriteria = functionsV2.https.onCall({ secrets: [O
 });
 
 // ===== Task Description Enhancement (AI)
-exports.enhanceTaskDescription = functionsV2.https.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.enhanceTaskDescription = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError('unauthenticated', 'Must be authenticated');
@@ -2208,9 +2633,18 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
 }
 
 async function generateAIPlan(context, options = {}) {
-  const { focusGoalId, goalTimeRequest } = options;
+  const { focusGoalId, goalTimeRequest, llmProvider = 'gemini', llmModel = 'gemini-1.5-flash' } = options;
   
   let systemPrompt = `You are an AI planning assistant for BOB, a personal productivity system.
+
+SCHEDULING RULES:
+- Place chores and routines in morning or pre-evening slots.
+- Avoid scheduling hobbies on weekdays during work hours; prefer weekends or leisure evenings.
+- Prefer learning and study blocks on weeknights ("school night" logic).
+- Insert routines at their habit times when known; otherwise, prefer consistency by time of day.
+- Cluster tasks with similar effort or aligned to the same goal to reduce context switching.
+- Respect existing calendar events and quiet hours; schedule only between wake and sleep times.
+- Do not overbook: keep reasonable buffers; prioritize high-impact items.
 
 CONTEXT:
 - Persona: ${context.persona}
@@ -2271,7 +2705,7 @@ Generate a plan as JSON with:
     {
       "taskId": "task_id_or_null",
       "goalId": "${focusGoalId || 'goal_id_or_null'}",
-      "theme": "Health|Growth|Wealth|Tribe|Home",
+      "theme": "General|Health & Fitness|Career & Professional|Finance & Wealth|Learning & Education|Family & Relationships|Hobbies & Interests|Travel & Adventure|Home & Living|Spiritual & Personal Growth|Chores|Routine|Dev Tasks",
       "category": "Task Work|Goal Focus|Skill Building|Planning",
       "title": "Block title",
       "start": timestamp,
@@ -2292,7 +2726,9 @@ Generate a plan as JSON with:
     purpose: 'planCalendar',
     userId: context.userId,
     expectJson: true,
-    temperature: 0.3
+    temperature: 0.3,
+    provider: llmProvider,
+    model: llmModel
   });
 
   try {
@@ -2302,53 +2738,558 @@ Generate a plan as JSON with:
   }
 }
 
+// Orchestrated Goal Planning: research → stories/tasks → schedule → (optional) GitHub issues
+exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '').trim();
+  const researchOnly = req?.data?.researchOnly === true;
+  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
+
+  const db = ensureFirestore();
+  const goalSnap = await db.collection('goals').doc(goalId).get();
+  if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
+  const goal = goalSnap.data() || {};
+  if (goal.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
+
+  // Apply LLM preferences (optional overrides)
+  const researchProvider = String(req?.data?.researchProvider || 'gemini');
+  const researchModel = String(req?.data?.researchModel || 'gemini-1.5-flash');
+  const generationProvider = String(req?.data?.generationProvider || researchProvider);
+  const generationModel = String(req?.data?.generationModel || researchModel);
+  const planningProvider = String(req?.data?.planningProvider || researchProvider);
+  const planningModel = String(req?.data?.planningModel || researchModel);
+
+  // 1) Generate research package (prompt, questions, outline, next actions, doc)
+  const researchPlanJson = await callLLMJson({
+    system: 'You are a research planning agent. Return strict JSON only. Design a short research plan for the provided goal, including a research_prompt to dig deep, key_questions (max 5), a concise outline list, and initial_next_actions (3-7 items) each with title and estimated_minutes. Do not add prose or Markdown outside the JSON.',
+    user: `Goal: ${goal.title}\nDescription: ${goal.description || ''}\nTheme: ${goal.theme}`,
+    purpose: 'goalResearchPlan',
+    userId: uid,
+    expectJson: true,
+    provider: researchProvider,
+    model: researchModel,
+  });
+  let researchPlan;
+  try { researchPlan = JSON.parse(researchPlanJson); } catch (e) { throw new httpsV2.HttpsError('internal', 'AI failed to produce research plan JSON'); }
+  const researchPrompt = String(researchPlan?.research_prompt || '').slice(0, 4000);
+  const questions = Array.isArray(researchPlan?.key_questions) ? researchPlan.key_questions : [];
+  const outline = Array.isArray(researchPlan?.outline) ? researchPlan.outline : [];
+  const nextActions = Array.isArray(researchPlan?.initial_next_actions) ? researchPlan.initial_next_actions : [];
+
+  const researchDocMd = await callLLMJson({
+    system: 'You are an expert researcher. Compose a crisp, actionable research brief in Markdown. Begin with a 3-5 bullet executive summary, then key findings (placeholders allowed), then recommended next actions. Keep it under 800 words.',
+    user: `Goal: ${goal.title}\nResearch Prompt: ${researchPrompt}\nOutline: ${JSON.stringify(outline)}\nKnown Context: ${goal.description || ''}`,
+    purpose: 'goalResearchDoc',
+    userId: uid,
+    expectJson: false,
+    temperature: 0.3,
+    provider: researchProvider,
+    model: researchModel,
+  });
+
+  // 2) Persist research doc and email it
+  const researchRef = db.collection('research_docs').doc();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  await researchRef.set({
+    id: researchRef.id,
+    ownerUid: uid,
+    goalId,
+    title: `Research: ${goal.title}`,
+    researchPrompt,
+    questions,
+    outline,
+    docMd: researchDocMd,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // Email to user
+  try {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const email = profileSnap.exists ? (profileSnap.data() || {}).email : null;
+    if (email) {
+      const html = `<h2>Research Brief: ${escapeHtml(goal.title)}</h2>`+
+        `<p><strong>Questions:</strong></p><ul>`+
+        questions.map((q) => `<li>${escapeHtml(String(q))}</li>`).join('')+
+        `</ul><hr/><div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(researchDocMd)}</div>`+
+        `<p style="margin-top:16px;">Open in BOB: <a href="/goals/${goal.ref || goalId}">/goals/${goal.ref || goalId}</a></p>`;
+      await sendEmail({ to: email, subject: `Research Brief · ${goal.title}`, html });
+    }
+  } catch (e) {
+    console.warn('[orchestrateGoalPlanning] email send failed', e?.message || e);
+  }
+
+  if (researchOnly) {
+    return { ok: true, researchDocId: researchRef.id };
+  }
+
+  // 3) Create a primary Research story and tasks
+  const storyRef = db.collection('stories').doc();
+  const baseTheme = goal.theme || 'Learning & Education';
+  await storyRef.set({
+    id: storyRef.id,
+    ownerUid: uid,
+    persona: 'personal',
+    title: `Deep Research: ${goal.title}`,
+    description: `Auto-generated research package for goal. Research Doc: /research/${researchRef.id}`,
+    goalId,
+    theme: baseTheme,
+    status: 1,
+    priority: 2,
+    orderIndex: Date.now(),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const createdTasks = [];
+  for (const a of nextActions.slice(0, 12)) {
+    const tRef = db.collection('tasks').doc();
+    await tRef.set({
+      id: tRef.id,
+      ownerUid: uid,
+      persona: 'personal',
+      title: String(a?.title || 'Next step'),
+      description: 'Auto-generated from research plan',
+      storyId: storyRef.id,
+      status: 0,
+      priority: 2,
+      effort: 'S',
+      estimated_duration: Number(a?.estimated_minutes || 30),
+      entry_method: 'ai_research',
+      task_type: 'task',
+      theme: baseTheme,
+      goalId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+    createdTasks.push(tRef.id);
+  }
+
+  // 3b) Optional: auto-assign to active sprint if profile flag enabled
+  try {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const flags = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    if (flags.autoAssignAiWorkToSprint === true) {
+      const sprintId = await getPreferredSprintId(uid);
+      if (sprintId) {
+        await storyRef.set({ sprintId, entry_method: 'ai_orchestration' }, { merge: true });
+        for (const taskId of createdTasks) {
+          await db.collection('tasks').doc(taskId).set({ sprintId, entry_method: 'ai_orchestration' }, { merge: true });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[orchestrateGoalPlanning] sprint auto-assign failed', e?.message || e);
+  }
+
+  // (GitHub issue creation disabled per configuration)
+
+  // 4) Schedule into calendar/backlog via AI plan (short horizon, high score)
+  const context = await assemblePlanningContext(uid, 'personal', 2);
+  const aiBlocks = await generateAIPlan(context, { llmProvider: planningProvider, llmModel: planningModel });
+  const validation = await validateCalendarBlocks(aiBlocks.blocks || [], context);
+  let appliedBlocks = 0;
+  if (validation.errors.length === 0) {
+    appliedBlocks = await applyCalendarBlocks(uid, 'personal', (aiBlocks.blocks || []).map(b => ({ ...b, entry_method: 'calendar_ai', confidence_score: validation.score })));
+  }
+
+  await recordAiLog(uid, 'orchestrateGoalPlanning', 'success', 'Goal research, stories, tasks generated and scheduled', {
+    goalId,
+    researchDocId: researchRef.id,
+    storyId: storyRef.id,
+    tasks: createdTasks.length,
+    appliedBlocks,
+    githubCreated: 0,
+  });
+
+  return { ok: true, researchDocId: researchRef.id, storyId: storyRef.id, tasksCreated: createdTasks.length, appliedBlocks };
+});
+
+// Orchestrated Story Planning: (optional) brief research → tasks → schedule
+exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const storyId = String(req?.data?.storyId || '').trim();
+  const research = req?.data?.research === true; // optional lightweight research
+  const researchOnly = req?.data?.researchOnly === true; // generate/update research doc only
+  const researchProvider = String(req?.data?.researchProvider || 'gemini');
+  const researchModel = String(req?.data?.researchModel || 'gemini-1.5-flash');
+  const generationProvider = String(req?.data?.generationProvider || researchProvider);
+  const generationModel = String(req?.data?.generationModel || researchModel);
+  const planningProvider = String(req?.data?.planningProvider || researchProvider);
+  const planningModel = String(req?.data?.planningModel || researchModel);
+  if (!storyId) throw new httpsV2.HttpsError('invalid-argument', 'storyId is required');
+
+  const db = ensureFirestore();
+  const storySnap = await db.collection('stories').doc(storyId).get();
+  if (!storySnap.exists) throw new httpsV2.HttpsError('not-found', 'Story not found');
+  const story = storySnap.data() || {};
+  if (story.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your story');
+  const goalId = story.goalId || null;
+
+  // 1) Optional: Lightweight research brief for the story
+  let researchDocId = null;
+  if (research || researchOnly) {
+    const systemR = 'You are an expert assistant. Compose a short research brief in Markdown (<= 500 words) for the given story with: context, assumptions, quick sources to check, and next actions (3–6 bullets).';
+    const userR = `Story: ${story.title}\nDescription: ${story.description || ''}\nGoal: ${goalId || '(none)'}`;
+    const docMd = await callLLMJson({ system: systemR, user: userR, purpose: 'storyResearchDoc', userId: uid, expectJson: false, temperature: 0.3, provider: researchProvider, model: researchModel });
+    const ref = db.collection('research_docs').doc();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set({
+      id: ref.id,
+      ownerUid: uid,
+      storyId,
+      goalId: goalId || null,
+      title: `Research: ${story.title}`,
+      docMd,
+      createdAt: now,
+      updatedAt: now,
+    });
+    researchDocId = ref.id;
+    // Email optional
+    try {
+      const profileSnap = await db.collection('profiles').doc(uid).get();
+      const email = profileSnap.exists ? (profileSnap.data() || {}).email : null;
+      if (email) {
+        const html = `<h2>Research Brief: ${escapeHtml(story.title)}</h2>`+
+          `<div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(docMd)}</div>`+
+          `<p style="margin-top:16px;">Open in BOB: <a href="/stories?storyId=${storyId}">/stories?storyId=${storyId}</a></p>`;
+        await sendEmail({ to: email, subject: `Research Brief · ${story.title}`, html });
+      }
+    } catch (e) { console.warn('[orchestrateStoryPlanning] email send failed', e?.message || e); }
+  }
+  if (researchOnly) {
+    return { ok: true, researchDocId };
+  }
+
+  // 2) Generate tasks for this story
+  const system = [
+    'You are a planning assistant. Return STRICT JSON only.',
+    '{',
+    '  "tasks": [{',
+    '     "title": string,',
+    '     "estimated_minutes": number,',
+    '     "priority": "P1"|"P2"|"P3",',
+    '     "acceptance_criteria"?: string[]',
+    '  }],',
+    '  "notes"?: string',
+    '}',
+    'Acceptance criteria should be testable bullet points.',
+  ].join('\n');
+  const user = `Story: ${story.title}\nDescription: ${story.description || ''}\nTheme: ${story.theme || ''}\nGoal: ${goalId || ''}\nPlease propose 3–8 concrete tasks.`;
+  const raw = await callLLMJson({ system, user, purpose: 'storyTasks', userId: uid, expectJson: true, temperature: 0.2, provider: generationProvider, model: generationModel });
+  let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { tasks: [] }; }
+  const tasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
+
+  const createdTasks = [];
+  for (const t of tasks.slice(0, 12)) {
+    const tref = db.collection('tasks').doc();
+    const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x)=>String(x)).slice(0, 12) : [];
+    const desc = 'AI-generated from story orchestration' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
+    await tref.set({
+      id: tref.id,
+      ownerUid: uid,
+      persona: story.persona || 'personal',
+      title: String(t?.title || 'Next step'),
+      description: desc,
+      storyId,
+      status: 0,
+      priority: (String(t?.priority || 'P2')), // safe as string; UI maps variants
+      effort: 'S',
+      estimated_duration: Number(t?.estimated_minutes || 30),
+      entry_method: 'ai_story_orchestration',
+      task_type: 'task',
+      theme: story.theme || 'Growth',
+      goalId: goalId || null,
+      acceptanceCriteria: ac,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+    createdTasks.push(tref.id);
+  }
+
+  // Auto-assign tasks (and story) to active sprint if enabled
+  try {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const flags = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    if (flags.autoAssignAiWorkToSprint === true) {
+      const sprintId = await getPreferredSprintId(uid);
+      if (sprintId) {
+        await storySnap.ref.set({ sprintId, entry_method: 'ai_story_orchestration' }, { merge: true });
+        for (const taskId of createdTasks) {
+          await db.collection('tasks').doc(taskId).set({ sprintId, entry_method: 'ai_story_orchestration' }, { merge: true });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[orchestrateStoryPlanning] sprint auto-assign failed', e?.message || e);
+  }
+
+  // 3) Schedule blocks with focus on the parent goal (if available)
+  // Use a short horizon and requested minutes from tasks
+  const context = await assemblePlanningContext(uid, story.persona || 'personal', 2);
+  context.userId = uid;
+  let goalTimeRequest = 0;
+  for (const t of tasks) { goalTimeRequest += Number(t?.estimated_minutes || 30); }
+  if (!goalTimeRequest) goalTimeRequest = 120;
+  const aiPlan = await generateAIPlan(context, { focusGoalId: goalId || null, goalTimeRequest, llmProvider: planningProvider, llmModel: planningModel });
+  const validation = await validateCalendarBlocks(aiPlan.blocks || [], context);
+  let appliedBlocks = 0;
+  if (validation.errors.length === 0) {
+    appliedBlocks = await applyCalendarBlocks(uid, story.persona || 'personal', (aiPlan.blocks || []).map(b => ({ ...b, storyId, entry_method: 'calendar_ai', confidence_score: validation.score })));
+  }
+
+  await recordAiLog(uid, 'orchestrateStoryPlanning', 'success', 'Story tasks generated and schedule applied', {
+    storyId,
+    tasks: createdTasks.length,
+    researchDocId,
+    appliedBlocks,
+  });
+
+  return { ok: true, storyId, tasksCreated: createdTasks.length, appliedBlocks, researchDocId };
+});
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+}
+
+// (GitHub helper removed)
+
+// Generate stories/tasks from an existing research doc using a chosen model
+exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '').trim() || null;
+  const storyId = String(req?.data?.storyId || '').trim() || null;
+  const researchDocId = String(req?.data?.researchDocId || '').trim();
+  const generationProvider = String(req?.data?.generationProvider || 'gemini');
+  const generationModel = String(req?.data?.generationModel || 'gemini-1.5-flash');
+  if (!researchDocId) throw new httpsV2.HttpsError('invalid-argument', 'researchDocId required');
+
+  const db = ensureFirestore();
+  const docSnap = await db.collection('research_docs').doc(researchDocId).get();
+  if (!docSnap.exists) throw new httpsV2.HttpsError('not-found', 'Research doc not found');
+  const r = docSnap.data() || {};
+  if (r.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your doc');
+
+  const baseTitle = r.title || 'Research';
+  const brief = r.docMd || '';
+  const scope = goalId ? 'goal' : 'story';
+
+  // Ask model to derive story/tasks from the brief
+  const system = [
+    'You are a planning assistant. Return STRICT JSON only with this shape:',
+    '{',
+    '  "story": {',
+    '     "title": string,',
+    '     "description": string,',
+    '     "acceptance_criteria"?: string[]',
+    '  },',
+    '  "tasks": [',
+    '     {',
+    '       "title": string,',
+    '       "estimated_minutes": number,',
+    '       "priority": "P1"|"P2"|"P3",',
+    '       "acceptance_criteria"?: string[]',
+    '     }',
+    '  ]',
+    '}',
+    'Acceptance criteria should be testable bullet points (Given/When/Then or equivalent).',
+  ].join('\n');
+  const user = `Brief: ${brief}\nContext: ${scope.toUpperCase()} ${goalId || storyId || ''}`;
+  let parsed = { story: { title: baseTitle, description: 'Derived from research' }, tasks: [] };
+  try {
+    const raw = await callLLMJson({ system, user, purpose: 'deriveFromResearch', userId: uid, expectJson: true, temperature: 0.2, provider: generationProvider, model: generationModel });
+    parsed = JSON.parse(raw);
+  } catch {}
+
+  const persona = 'personal';
+  let newStoryId = storyId;
+  if (!newStoryId) {
+    const sref = db.collection('stories').doc();
+    await sref.set({
+      id: sref.id,
+      ownerUid: uid,
+      persona,
+      goalId: goalId || null,
+      title: parsed?.story?.title || baseTitle,
+      description: parsed?.story?.description || 'Derived from research',
+      status: 'backlog',
+      priority: 'P2',
+      theme: r.theme || 'Growth',
+      entry_method: 'ai_research_derive',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+    newStoryId = sref.id;
+  }
+
+  let created = 0;
+  for (const t of (parsed?.tasks || []).slice(0, 12)) {
+    const tref = db.collection('tasks').doc();
+    const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x) => String(x)).slice(0, 12) : [];
+    const desc = 'Derived from research' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
+    await tref.set({
+      id: tref.id,
+      ownerUid: uid,
+      persona,
+      goalId: goalId || null,
+      storyId: newStoryId,
+      title: String(t?.title || 'Next step'),
+      description: desc,
+      status: 0,
+      priority: String(t?.priority || 'P2'),
+      effort: 'S',
+      estimated_duration: Number(t?.estimated_minutes || 30),
+      entry_method: 'ai_research_derive',
+      acceptanceCriteria: ac,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+    created += 1;
+  }
+
+  return { ok: true, storyId: newStoryId, tasksCreated: created };
+});
+
+// Minimal goal chat: store message and respond with clarifying Q/A
+exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '');
+  const message = String(req?.data?.message || '').trim();
+  if (!goalId || !message) throw new httpsV2.HttpsError('invalid-argument', 'goalId and message required');
+  const db = ensureFirestore();
+  const goalSnap = await db.collection('goals').doc(goalId).get();
+  if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
+  if (goalSnap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
+
+  const threadRef = db.collection('goal_chats').doc(goalId);
+  if (isUnsafeMessage(message)) {
+    await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: 'Sorry — I can\'t assist with that request.', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    return { ok: false, reply: 'Content blocked by safety policy', tasksCreated: 0, actions: {} };
+  }
+  const msgRef = threadRef.collection('messages').doc();
+  await msgRef.set({ id: msgRef.id, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  const latestSummary = await getLatestSummary(threadRef);
+  const recent = await getRecentMessages(threadRef, 10);
+  const system = [
+    'You are a goal planning assistant. Keep answers under 120 words.',
+    'Return STRICT JSON with this shape only:',
+    '{',
+    '  "reply": string,',
+    '  "suggested_tasks": [{"title": string, "estimateMin": number}] ,',
+    '  "actions": {',
+    '     "orchestrate": boolean,',
+    '     "create_story"?: {"title": string, "description"?: string},',
+    '     "plan_minutes"?: number',
+    '  }',
+    '}',
+  ].join('\n');
+  const user = [
+    `Goal: ${goalSnap.data().title}`,
+    latestSummary ? `Conversation summary: ${latestSummary}` : null,
+    recent.length ? `Recent exchanges:\n${recent.map(m=>`${m.role}: ${m.content}`).join('\n')}` : null,
+    `Known theme: ${goalSnap.data().theme || 'Growth'}`,
+    `User: ${message}`
+  ].filter(Boolean).join('\n');
+  const raw = await callLLMJson({ system, user, purpose: 'goalChat', userId: uid, expectJson: true, temperature: 0.2 });
+  let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { reply: raw, suggested_tasks: [], actions: {} }; }
+  const reply = String(parsed?.reply || '').slice(0, 1200);
+  await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: reply, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  // Create any suggested tasks quickly under this goal
+  const tasks = Array.isArray(parsed?.suggested_tasks) ? parsed.suggested_tasks : [];
+  const created = [];
+  for (const t of tasks.slice(0, 5)) {
+    const taskRef = db.collection('tasks').doc();
+    const est = Number(t?.estimateMin || 30);
+    await taskRef.set({
+      id: taskRef.id,
+      ownerUid: uid,
+      persona: 'personal',
+      title: String(t?.title || 'Follow-up'),
+      description: 'AI-suggested from goal chat',
+      status: 0,
+      priority: 2,
+      effort: 'S',
+      estimated_duration: est,
+      entry_method: 'ai_chat',
+      task_type: 'task',
+      theme: goalSnap.data().theme || 'Growth',
+      goalId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...(est <= 240 ? {
+        reminderSyncDirective: 'upsert',
+        reminderTitle: `[${goalSnap.data().theme || 'Growth'}] – ${String(t?.title || 'Follow-up')}`,
+        reminderNote: `Goal: ${goalSnap.data().title || goalId}`
+      } : {}),
+    }, { merge: true });
+    created.push(taskRef.id);
+  }
+  try { await maybeSummarizeThread(threadRef, uid); } catch {}
+  const actions = parsed?.actions && typeof parsed.actions === 'object' ? parsed.actions : {};
+  return { ok: true, reply, tasksCreated: created.length, actions };
+});
+
 async function validateCalendarBlocks(blocks, context) {
   const errors = [];
   const warnings = [];
+  const blockAnnotations = (blocks || []).map(() => ({ errors: [], warnings: [] }));
   let score = 1.0;
-  
-  // Check for conflicts with existing events
-  for (const block of blocks) {
-    // Check Google Calendar conflicts
+
+  for (let i = 0; i < (blocks || []).length; i++) {
+    const block = blocks[i];
+    if (!block) continue;
+    // Conflicts with Google Calendar events
     for (const event of context.gcalEvents) {
       if (isTimeOverlap(block.start, block.end, event.start.getTime(), event.end.getTime())) {
-        errors.push(`Block conflicts with Google Calendar event: ${event.summary}`);
+        const msg = `Block conflicts with Google Calendar event: ${event.summary}`;
+        errors.push(msg);
+        blockAnnotations[i].errors.push(msg);
         score -= 0.2;
       }
     }
-    
-    // Check existing blocks
+
+    // Conflicts with existing AI calendar blocks
     for (const existing of context.existingBlocks) {
       if (isTimeOverlap(block.start, block.end, existing.start, existing.end)) {
-        errors.push(`Block conflicts with existing calendar block`);
+        const msg = `Block conflicts with existing calendar block`;
+        errors.push(msg);
+        blockAnnotations[i].errors.push(msg);
         score -= 0.1;
       }
     }
-    
-    // Check time constraints
+
+    // Time constraints: wake/sleep
     const blockDate = new Date(block.start);
     const hour = blockDate.getHours();
     const minute = blockDate.getMinutes();
     const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-    
+
     const wakeTime = context.prefs.wakeTime || '07:00';
     const sleepTime = context.prefs.sleepTime || '23:00';
-    
+
     if (timeStr < wakeTime || timeStr > sleepTime) {
-      errors.push(`Block outside wake/sleep hours: ${timeStr}`);
+      const msg = `Outside wake/sleep hours: ${timeStr}`;
+      errors.push(`Block ${msg}`);
+      blockAnnotations[i].errors.push(msg);
       score -= 0.1;
     }
-    
-    // Check quiet hours
+
+    // Quiet hours warnings
     for (const quietPeriod of context.prefs.quietHours || []) {
       if (timeStr >= quietPeriod.start && timeStr <= quietPeriod.end) {
-        warnings.push(`Block during quiet hours: ${timeStr}`);
+        const msg = `During quiet hours: ${timeStr}`;
+        warnings.push(`Block ${msg}`);
+        blockAnnotations[i].warnings.push(msg);
         score -= 0.05;
       }
     }
   }
-  
-  return { errors, warnings, score: Math.max(0, score) };
+
+  return { errors, warnings, score: Math.max(0, score), blockAnnotations };
 }
 
 // Map numeric theme to canonical label
@@ -2366,6 +3307,7 @@ function themeLabelFromNumber(n) {
 async function applyCalendarBlocks(uid, persona, blocks) {
   const db = admin.firestore();
   const batch = db.batch();
+  const userThemes = await loadThemesForUser(uid);
 
   // Helper: derive title, theme, goal link for a proposed block
   async function enrichBlock(proposed) {
@@ -2437,6 +3379,11 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     if (typeof theme === 'number') theme = themeLabelFromNumber(theme);
     if (!theme) theme = 'Growth';
 
+    // If we have a goal but no more granular entity, provide a deep link to the goal
+    if (!linkUrl && goalId) {
+      linkUrl = `/goals/roadmap?goalId=${goalId}`;
+    }
+
     return { title, theme, goalId, storyId, taskId, habitId, linkUrl };
   }
 
@@ -2448,6 +3395,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
   for (const proposed of blocks) {
     const enriched = await enrichBlock(proposed);
     const blockRef = db.collection('calendar_blocks').doc();
+    const theme_id = mapThemeLabelToId(enriched.theme, userThemes);
 
     batch.set(blockRef, {
       ...proposed,
@@ -2459,6 +3407,9 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       version: 1,
       title: enriched.title || proposed.title || `${proposed.category || 'Block'} (${enriched.theme})`,
       theme: enriched.theme,
+      theme_id,
+      entry_method: proposed.entry_method || 'calendar_ai',
+      confidence_score: typeof proposed.confidence_score === 'number' ? proposed.confidence_score : 0.85,
       goalId: enriched.goalId || proposed.goalId || null,
       storyId: enriched.storyId || proposed.storyId || null,
       taskId: enriched.taskId || proposed.taskId || null,
@@ -2472,6 +3423,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     if (enriched.taskId) { linkType = 'task'; refId = enriched.taskId; }
     else if (enriched.storyId) { linkType = 'story'; refId = enriched.storyId; }
     else if (enriched.habitId) { linkType = 'habit'; refId = enriched.habitId; }
+    else if (enriched.goalId) { linkType = 'goal'; refId = enriched.goalId; }
 
     if (linkType && refId) {
       linkTitle = enriched.title || null;
@@ -2484,9 +3436,26 @@ async function applyCalendarBlocks(uid, persona, blocks) {
         refId: String(refId),
         title: linkTitle,
         linkUrl: linkUrl,
+        entry_method: 'calendar_ai',
+        theme_id,
         createdAt: now,
         updatedAt: now
       });
+    }
+
+    // If linked to a task, update due date and set reminders sync directive
+    if (enriched.taskId) {
+      const tRef = db.collection('tasks').doc(String(enriched.taskId));
+      batch.set(tRef, {
+        dueDate: proposed.start || null,
+        entry_method: 'calendar_ai',
+        confidence_score: typeof proposed.confidence_score === 'number' ? proposed.confidence_score : 0.85,
+        theme_id,
+        reminderSyncDirective: 'upsert',
+        reminderTitle: `[${enriched.theme}] – ${linkTitle || enriched.taskId}`,
+        reminderNote: `Deep link: ${linkUrl || ''}`.trim(),
+        updatedAt: now,
+      }, { merge: true });
     }
     createdCount += 1;
   }
@@ -2506,6 +3475,127 @@ async function applyCalendarBlocks(uid, persona, blocks) {
 
   await batch.commit();
   return createdCount;
+}
+
+async function getPreferredSprintId(uid) {
+  try {
+    const db = admin.firestore();
+    // Try active sprint first
+    let snap = await db.collection('sprints')
+      .where('ownerUid', '==', uid)
+      .where('status', 'in', ['active', 1])
+      .orderBy('startDate', 'desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) return snap.docs[0].id;
+    // Then planned
+    snap = await db.collection('sprints')
+      .where('ownerUid', '==', uid)
+      .where('status', 'in', ['planned', 0])
+      .orderBy('startDate', 'desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) return snap.docs[0].id;
+  } catch (e) {
+    console.warn('[getPreferredSprintId] failed', e?.message || e);
+  }
+  return null;
+}
+
+async function buildBlockPreviews(uid, blocks, { timezone = 'UTC' } = {}) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return [];
+  const db = ensureFirestore();
+  const taskIds = new Set();
+  const storyIds = new Set();
+  const goalIds = new Set();
+
+  for (const block of blocks) {
+    if (block?.taskId) taskIds.add(String(block.taskId));
+    if (block?.storyId) storyIds.add(String(block.storyId));
+    if (block?.goalId) goalIds.add(String(block.goalId));
+  }
+
+  const fetchDocs = async (collectionName, ids) => {
+    if (ids.size === 0) return new Map();
+    const snapshots = await Promise.all(
+      Array.from(ids).map(async (id) => {
+        try {
+          return await db.collection(collectionName).doc(id).get();
+        } catch (err) {
+          console.warn(`[buildBlockPreviews] failed to load ${collectionName}/${id}`, err?.message || err);
+          return null;
+        }
+      })
+    );
+    const map = new Map();
+    snapshots.forEach((snap) => {
+      if (snap && snap.exists) {
+        map.set(snap.id, snap.data());
+      }
+    });
+    return map;
+  };
+
+  const [taskMap, storyMap, goalMap] = await Promise.all([
+    fetchDocs('tasks', taskIds),
+    fetchDocs('stories', storyIds),
+    fetchDocs('goals', goalIds),
+  ]);
+
+  const makeDeepLink = ({ taskId, storyId, goalId }) => {
+    if (taskId) return `/tasks?taskId=${taskId}`;
+    if (storyId) return `/stories?storyId=${storyId}`;
+    if (goalId) return `/goals/roadmap?goalId=${goalId}`;
+    return null;
+  };
+
+  const zone = coerceZone(timezone || 'UTC');
+  return blocks.map((block) => {
+    const task = block?.taskId ? taskMap.get(String(block.taskId)) : null;
+    const story = block?.storyId ? storyMap.get(String(block.storyId)) : null;
+    const goal = block?.goalId ? goalMap.get(String(block.goalId)) : null;
+    const theme = block?.theme || goal?.theme || story?.theme || task?.theme || 'Growth';
+
+    const start = typeof block?.start === 'number' ? DateTime.fromMillis(block.start, { zone }) : null;
+    const end = typeof block?.end === 'number' ? DateTime.fromMillis(block.end, { zone }) : null;
+    const durationMinutes = start && end ? Math.max(15, Math.round(end.diff(start, 'minutes').minutes)) : null;
+
+    return {
+      title: block?.title || task?.title || story?.title || (goal ? `Goal: ${goal.title}` : 'Scheduled Block'),
+      theme,
+      start: block?.start || null,
+      end: block?.end || null,
+      displayStart: start && start.isValid ? start.toLocaleString(DateTime.DATETIME_MED) : null,
+      displayEnd: end && end.isValid ? end.toLocaleString(DateTime.DATETIME_MED) : null,
+      durationMinutes,
+      goal: goal
+        ? {
+            id: String(block.goalId),
+            title: goal.title || goal.name || 'Goal',
+            ref: goal.ref || null,
+          }
+        : null,
+      story: story
+        ? {
+            id: String(block.storyId),
+            title: story.title || 'Story',
+            ref: story.ref || null,
+          }
+        : null,
+      task: task
+        ? {
+            id: String(block.taskId),
+            title: task.title || 'Task',
+            ref: task.ref || null,
+          }
+        : null,
+      deepLink: makeDeepLink({
+        taskId: block?.taskId ? String(block.taskId) : null,
+        storyId: block?.storyId ? String(block.storyId) : null,
+        goalId: block?.goalId ? String(block.goalId) : null,
+      }),
+    };
+  });
 }
 
 function getDefaultPlanningPrefs() {
@@ -2547,6 +3637,7 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
       end: new Date(event.end.dateTime || event.end.date)
     }));
   } catch (error) {
+    try { await recordIntegrationLog(uid, 'google', 'error', 'Failed to fetch Google Calendar events', { start: startDate?.toISOString?.(), end: endDate?.toISOString?.(), error: String(error?.message || error) }); } catch {}
     return [];
   }
 }
@@ -2636,6 +3727,11 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
     googleCalendarEventCount: seenDocIds.size,
   }, { merge: true });
 
+  try {
+    const level = events.length === 0 ? 'warning' : 'success';
+    await recordIntegrationLog(uid, 'google', level, 'Imported Google Calendar events', { requestedStart: startDate?.toISOString?.(), requestedEnd: endDate?.toISOString?.(), eventsFetched: events.length, blocksStored: seenDocIds.size });
+  } catch {}
+
   return { events: events.length, stored: seenDocIds.size };
 }
 
@@ -2683,8 +3779,10 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
     const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
     try {
       await importGoogleCalendarEvents(uid, { startDate, endDate });
+      try { await recordIntegrationLog(uid, 'google', 'success', 'Hourly Google Calendar sync ran', { start: startDate.toISOString(), end: endDate.toISOString() }); } catch {}
     } catch (error) {
       console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
+      try { await recordIntegrationLog(uid, 'google', 'error', 'Hourly Google Calendar sync failed', { error: String(error?.message || error) }); } catch {}
     }
   }
 });
@@ -3418,7 +4516,7 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
   return deduplicateUserTasks({ db, userId: uid, dryRun, hardDelete, logActivity: true, activityActor: uid });
 });
 
-exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (req) => {
+exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -3679,22 +4777,22 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
   return { ok: true, results };
 });
 
-// ===== LLM Provider Helpers (Google AI Studio or OpenAI)
-async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2 }) {
-  const preferGemini = !!process.env.GOOGLEAISTUDIOAPIKEY;
+// ===== LLM Provider Helpers (Gemini-only)
+async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = 'gemini-1.5-flash' }) {
   const attempts = 3; // initial + 2 retries
   let lastErr = null;
   for (let i = 0; i < attempts; i++) {
     try {
-      if (preferGemini) {
-        const text = await callGemini({ system, user, expectJson, temperature });
-        // lightweight usage log
-        const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', 'gemini-1.5-flash');
-        await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
-        return text;
+      let text;
+      if (provider === 'openai') {
+        text = await callOpenAIChat({ system, user, model, expectJson, temperature });
       } else {
-        return await callOpenAI({ system, user, expectJson, temperature, userId, purpose });
+        text = await callGemini({ system, user, model, expectJson, temperature });
       }
+      // lightweight usage log
+      const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', 'gemini-1.5-flash');
+      await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
+      return text;
     } catch (e) {
       lastErr = e;
       await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
@@ -3704,10 +4802,11 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
   throw lastErr || new Error('LLM unavailable');
 }
 
-async function callGemini({ system, user, expectJson, temperature }) {
+async function callGemini({ system, user, model = 'gemini-1.5-flash', expectJson, temperature }) {
   const apiKey = process.env.GOOGLEAISTUDIOAPIKEY;
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const mdl = model || 'gemini-1.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mdl)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
     contents: [{ role: 'user', parts: [{ text: `${system}\n\n${user}` }] }],
     generationConfig: Object.assign({}, expectJson ? { responseMimeType: 'application/json' } : {}, { temperature: temperature ?? 0.2 })
@@ -3721,21 +4820,28 @@ async function callGemini({ system, user, expectJson, temperature }) {
   return text;
 }
 
-async function callOpenAI({ system, user, expectJson, temperature, userId, purpose }) {
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const requestData = {
-    model: 'gpt-4o-mini',
+async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson, temperature }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
+  const url = 'https://api.openai.com/v1/chat/completions';
+  const body = {
+    model,
+    temperature: temperature ?? 0.2,
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: user }
+      { role: 'user', content: user },
     ],
-    temperature: temperature ?? 0.2,
-    ...(expectJson ? { response_format: { type: 'json_object' } } : {})
+    ...(expectJson ? { response_format: { type: 'json_object' } } : {}),
   };
-  const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
-  const resp = await aiWrapper(() => openai.chat.completions.create(requestData), { userId, functionName: purpose, request: requestData, purpose });
-  return resp?.choices?.[0]?.message?.content || '';
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content || '';
+  if (!text) throw new Error('Empty response from OpenAI');
+  return text;
 }
+
+// OpenAI fallback removed: Gemini is required.
 
 function flattenHierarchyTasks(hierarchy) {
   const tasks = [];
@@ -5079,15 +6185,27 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     const tasksSnap = await db.collection('tasks').where('ownerUid','==',uid).get();
     const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
     const toPush = tasks.filter(t => !t.reminderId && t.status !== 2 && ((t.dueDate||0) <= (start.getTime()+24*3600*1000)));
-    const payload = toPush.map(t => ({
-      id: t.id,
-      title: t.title,
-      dueDate: t.dueDate || null,
-      ref: `TK-${String(t.id||'').slice(0,6).toUpperCase()}`,
-      createdAt: t.createdAt || null,
-      storyId: t.storyId || null,
-      goalId: t.goalId || null
-    }));
+    const payload = toPush.map(t => {
+      const themeLabel = t.theme || t.theme_id || 'General';
+      const title = `[${themeLabel}] – ${t.title || 'Task'}`;
+      const url = t.deepLink || (t.ref ? `/tasks?ref=${encodeURIComponent(t.ref)}` : `/tasks?taskId=${encodeURIComponent(t.id)}`);
+      const noteLines = [
+        t.reminderNote || '',
+        `BOB: ${url}`,
+        t.storyId ? `Story: ${t.storyId}` : '',
+        t.goalId ? `Goal: ${t.goalId}` : '',
+      ].filter(Boolean);
+      return ({
+        id: t.id,
+        title,
+        dueDate: t.dueDate || null,
+        ref: t.ref || `TK-${String(t.id||'').slice(0,6).toUpperCase()}`,
+        createdAt: t.createdAt || null,
+        storyId: t.storyId || null,
+        goalId: t.goalId || null,
+        note: noteLines.join('\n')
+      });
+    });
     return res.json({ ok: true, tasks: payload });
   } catch (e) {
     console.error('remindersPush error', e);
@@ -5106,10 +6224,19 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     const updates = Array.isArray(req.body?.tasks) ? req.body.tasks : [];
     const db = admin.firestore();
     let updated = 0;
+    const classifyType = (title) => {
+      const t = String(title || '').toLowerCase();
+      const choreHints = ['laundry', 'trash', 'garbage', 'recycling', 'clean', 'dishes', 'vacuum', 'mop', 'tidy'];
+      const routineHints = ['routine', 'meditate', 'journal', 'stretch', 'hydrate', 'water plants'];
+      if (choreHints.some(k => t.includes(k))) return 'chore';
+      if (routineHints.some(k => t.includes(k))) return 'routine';
+      return 'reminder';
+    };
     for (const u of updates) {
       const id = String(u.id || '');
       const reminderId = u.reminderId ? String(u.reminderId) : null;
       const completed = !!u.completed;
+      const title = String(u.title || '');
       if (!id && !reminderId) continue;
       let ref = null;
       if (id) ref = db.collection('tasks').doc(id);
@@ -5118,10 +6245,30 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         if (!snap.empty) ref = snap.docs[0].ref;
       }
       if (ref) {
-        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+        const task_type = classifyType(title);
+        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type };
         if (reminderId) data['reminderId'] = reminderId;
         if (completed) data['status'] = 2;
         await ref.set(data, { merge: true });
+        updated++;
+      } else if (reminderId || title) {
+        // Auto-import new task from Reminders
+        const newRef = db.collection('tasks').doc();
+        const task_type = classifyType(title);
+        await newRef.set({
+          id: newRef.id,
+          ownerUid: uid,
+          persona: 'personal',
+          title: title || 'Reminder',
+          status: completed ? 2 : 0,
+          task_type,
+          entry_method: 'import:reminders',
+          source: 'ios_reminder',
+          reminderId: reminderId || null,
+          reminderCreatedAt: Date.now(),
+          createdAt: Date.now(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
         updated++;
       }
     }
@@ -5163,40 +6310,30 @@ exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{
 });
 
 // ===== AI helpers (as before, simplified)
-exports.prioritizeBacklog = httpsV2.onCall({ secrets: [OPENAI_API_KEY] }, async (req) => {
+exports.prioritizeBacklog = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   let tasks = (req.data && Array.isArray(req.data.tasks)) ? req.data.tasks : [];
-  if (tasks.length > 50) tasks = tasks.slice(0,50);
-  
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const prompt = "Score tasks 0-100 and bucket TODAY/NEXT/LATER. Return JSON {items:[{id,score,bucket}]}\nTasks: " + JSON.stringify(tasks);
-  
-  const requestData = {
-    model: "gpt-4o-mini", 
-    messages: [{ role: "user", content: prompt }], 
-    temperature: 0.2
-  };
+  if (tasks.length > 50) tasks = tasks.slice(0, 50);
 
-  // Wrap the AI call with comprehensive logging
-  const aiWrapper = aiUsageLogger.wrapAICall('openai', 'gpt-4o-mini');
-  
-  const resp = await aiWrapper(
-    () => client.chat.completions.create(requestData),
-    {
-      userId: req.auth.uid,
-      functionName: 'prioritizeBacklog',
-      request: requestData,
-      purpose: 'Task prioritization and bucketing',
-      metadata: {
-        taskCount: tasks.length,
-        persona: req.data?.persona || 'unknown'
-      }
-    }
-  );
-  
-  let out = { items: [] }; 
-  try { 
-    out = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); 
+  const systemPrompt = 'You prioritise tasks using weighted scoring and return strict JSON only.';
+  const userPrompt = [
+    'Score the following tasks with an integer score 0-100 and bucket into TODAY, NEXT, or LATER based on urgency and importance. Return JSON {"items":[{"id":string,"score":number,"bucket":"TODAY|NEXT|LATER"}]}',
+    'Tasks:',
+    JSON.stringify(tasks)
+  ].join('\n');
+
+  const raw = await callLLMJson({
+    system: systemPrompt,
+    user: userPrompt,
+    purpose: 'prioritizeBacklog',
+    userId: req.auth.uid,
+    expectJson: true,
+    temperature: 0.2,
+  });
+
+  let out = { items: [] };
+  try {
+    out = JSON.parse(raw);
   } catch (parseError) {
     console.error('Failed to parse AI response:', parseError);
   }
@@ -5445,6 +6582,25 @@ exports.getSteamAppDetails = httpsV2.onCall(async (req) => {
   };
 });
 
+// Media Import Controller: Generate Stories + Tasks from connected sources
+exports.mediaImportGenerateStories = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const sources = Array.isArray(req?.data?.sources) ? req.data.sources : ['steam', 'trakt'];
+  const goodreadsItems = Array.isArray(req?.data?.goodreadsItems) ? req.data.goodreadsItems : [];
+  const results = {};
+  if (sources.includes('steam')) {
+    results.steam = await importFromSteam(uid, {});
+  }
+  if (sources.includes('trakt')) {
+    results.trakt = await importFromTrakt(uid, {});
+  }
+  if (goodreadsItems.length) {
+    results.goodreads = await importFromGoodreadsLike(uid, goodreadsItems);
+  }
+  return { ok: true, results };
+});
+
 // ===== n8n: inbound webhook for Calendar Blocks
 exports.n8nCalendarWebhook = httpsV2.onRequest({ secrets: [N8N_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
   try {
@@ -5636,13 +6792,159 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
   }
 });
 
+// Theme-based Calendar Planner (runs daily at 01:00 UTC)
+exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async () => {
+  const db = ensureFirestore();
+  const profilesSnap = await db.collection('profiles').get();
+  const runStartedAt = admin.firestore.FieldValue.serverTimestamp();
+  for (const doc of profilesSnap.docs) {
+    const uid = doc.id;
+    const profile = doc.data() || {};
+    if (profile.calendarPlannerEnabled === false) continue;
+
+    const runId = `${uid}_${Date.now()}_dailyPlanner`;
+    try {
+      const persona = 'personal';
+      const horizonDays = 1;
+      const context = await assemblePlanningContext(uid, persona, horizonDays);
+      context.userId = uid;
+      const aiResponse = await generateAIPlan(context, {});
+      const validation = await validateCalendarBlocks(aiResponse.blocks || [], context);
+      const proposedBlocks = Array.isArray(aiResponse.blocks) ? aiResponse.blocks : [];
+      const timezone = profile.timezone || context?.prefs?.timezone || 'UTC';
+      const previewBlocks = await buildBlockPreviews(uid, proposedBlocks, { timezone });
+      const approvalRequired = profile.calendarPlannerApprovalRequired === true;
+      if (approvalRequired) {
+        // Save proposal and email summary with approve link
+        const token = crypto.randomBytes(16).toString('hex');
+        const jobDoc = {
+          id: runId,
+          userId: uid,
+          startedAt: runStartedAt,
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          status: 'proposed',
+          appliedBlocks: 0,
+          validator: validation,
+          rationale: aiResponse.rationale || null,
+          source: 'daily_planner',
+          approvalToken: token,
+          proposedBlocks: aiResponse.blocks || [],
+          preview: {
+            timezone,
+            blocks: previewBlocks,
+          },
+        };
+        await db.collection('planning_jobs').doc(runId).set(jobDoc, { merge: true });
+        const origin = process.env.APP_BASE_URL || 'https://bob20250810.web.app';
+        const approveUrl = `${origin}/planning/approval?jobId=${encodeURIComponent(runId)}&uid=${encodeURIComponent(uid)}&token=${encodeURIComponent(token)}`;
+
+        try {
+          const email = profile.email || null;
+          if (email) {
+            const directApproveUrl = `${origin}/api/approve-planning?jobId=${encodeURIComponent(runId)}&uid=${encodeURIComponent(uid)}&token=${encodeURIComponent(token)}&approve=1`;
+            const blockRows = previewBlocks.slice(0, 10).map((block) => {
+              const label = block.displayStart && block.displayEnd
+                ? `${block.displayStart} → ${block.displayEnd}`
+                : block.displayStart || 'Scheduled block';
+              const detailParts = [
+                block.title,
+                block.theme ? `Theme: ${block.theme}` : null,
+                block.task?.title ? `Task: ${block.task.title}` : null,
+                block.goal?.title ? `Goal: ${block.goal.title}` : null,
+              ].filter(Boolean);
+              return `<li><strong>${escapeHtml(label)}</strong><br/>${detailParts.map(escapeHtml).join(' · ')}</li>`;
+            }).join('');
+            const totalBlocks = previewBlocks.length;
+            const blockCountLine = totalBlocks
+              ? `<p><strong>${totalBlocks}</strong> block${totalBlocks === 1 ? '' : 's'} proposed for ${timezone}.</p>`
+              : '<p>No blocks proposed.</p>';
+            const html = `
+              <h2>BOB · Daily Plan Proposal</h2>
+              <p>We prepared a plan for your calendar. Validation score: ${(validation.score || 0).toFixed(2)}</p>
+              ${blockCountLine}
+              ${blockRows ? `<ul>${blockRows}</ul>` : ''}
+              <p>
+                <a href="${approveUrl}" style="display:inline-block;padding:12px 20px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;">
+                  Review & Approve in BOB
+                </a>
+              </p>
+              <p>If you prefer to approve directly, <a href="${directApproveUrl}">use this quick link</a>.</p>
+              <p>This will add the proposed time blocks to your calendar.</p>`;
+            await sendEmail({ to: email, subject: 'BOB · Daily Plan Proposal (Approval Needed)', html });
+          }
+        } catch (e) { console.warn('[dailyPlanningJob] email proposal failed', e?.message || e); }
+
+        try {
+          const goalSummaries = new Map();
+          previewBlocks.forEach((block) => {
+            const goalId = block?.goal?.id;
+            if (!goalId) return;
+            if (!goalSummaries.has(goalId)) goalSummaries.set(goalId, []);
+            goalSummaries.get(goalId).push(block);
+          });
+          const nowTs = admin.firestore.FieldValue.serverTimestamp();
+          for (const [goalId, blocksForGoal] of goalSummaries.entries()) {
+            const sentences = blocksForGoal.slice(0, 3).map((block) => {
+              const when = block.displayStart ? block.displayStart : 'Upcoming';
+              return `• ${when}: ${block.title}`;
+            }).join('\n');
+            const content = `Nightly planner prepared ${blocksForGoal.length} session${blocksForGoal.length === 1 ? '' : 's'} for this goal.\n${sentences}\n\nApprove: ${approveUrl}`;
+            await db.collection('goal_chats').doc(goalId).collection('messages').add({
+              ownerUid: uid,
+              role: 'assistant',
+              content,
+              createdAt: nowTs,
+              jobId: runId,
+              type: 'planning_proposal',
+            });
+          }
+        } catch (chatErr) {
+          console.warn('[dailyPlanningJob] goal chat notification failed', chatErr?.message || chatErr);
+        }
+      } else {
+        let applied = 0;
+        if (validation.errors.length === 0) {
+          // attach confidence score to each block
+          const blocks = proposedBlocks.map(b => ({ ...b, confidence_score: validation.score, entry_method: 'calendar_ai' }));
+          applied = await applyCalendarBlocks(uid, persona, blocks);
+        }
+        await db.collection('planning_jobs').doc(runId).set({
+          id: runId,
+          userId: uid,
+          startedAt: runStartedAt,
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          status: 'completed',
+          appliedBlocks: applied,
+          validator: validation,
+          rationale: aiResponse.rationale || null,
+          source: 'daily_planner',
+          preview: {
+            timezone,
+            blocks: previewBlocks,
+          },
+        }, { merge: true });
+      }
+    } catch (error) {
+      await db.collection('planning_jobs').doc(runId).set({
+        id: runId,
+        userId: uid,
+        startedAt: runStartedAt,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        status: 'error',
+        error: error?.message || String(error),
+        source: 'daily_planner',
+      }, { merge: true });
+    }
+  }
+});
+
 // ===== Daily Summary Email Automation (Issue #204)
 
 exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
   schedule: '0 2 * * *',
   timeZone: 'UTC',
   memory: '1GiB',
-  secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [GOOGLE_AI_STUDIO_API_KEY],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -5930,6 +7232,7 @@ exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
   schedule: 'every 15 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
+  secrets: [defineSecret('NYLAS_API_KEY')],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -5965,6 +7268,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   schedule: 'every 30 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
+  secrets: [defineSecret('NYLAS_API_KEY')],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -5996,7 +7300,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   }
 });
 
-exports.sendDailySummaryNow = httpsV2.onCall(async (req) => {
+exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('NYLAS_API_KEY')] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -6214,37 +7518,104 @@ exports.cleanupUserLogs = schedulerV2.onSchedule({
 
 // ===== New v3.0.2 Functions =====
 
-// Daily Digest Email Generation
-exports.generateDailyDigest = schedulerV2.onSchedule("30 6 * * *", async (event) => {
-  const nodemailer = require('nodemailer');
-  
-  // Email transporter configuration
-  const transporter = nodemailer.createTransporter({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
-    }
-  });
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const email = req?.data?.email || profile.email;
+  if (!email) {
+    throw new httpsV2.HttpsError('failed-precondition', 'No email configured on profile.');
+  }
+
+  const html = `
+    <h1>BOB Email Test</h1>
+    <p>This is a test email sent via Nylas at ${new Date().toISOString()}.</p>
+    <p>Recipient: ${email}</p>
+  `;
 
   try {
-    // Get all users who have opted in for daily digest
+    const result = await sendEmail({ to: email, subject: 'BOB Email Test (Nylas)', html, text: 'Email delivery via Nylas successful.' });
+    await db.collection('email_tests').add({
+      userId: uid,
+      email,
+      result: { messageId: result?.messageId || null, response: result?.response || null },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    await recordIntegrationLog(uid, 'email', 'success', 'Nylas test email sent', {
+      messageId: result?.messageId || null,
+      to: email,
+    });
+    return { ok: true, messageId: result?.messageId || null };
+  } catch (error) {
+    console.error('[email-test] failed', error);
+    await recordIntegrationLog(uid, 'email', 'error', error?.message || 'Email test failed', {
+      to: email,
+    });
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to send test email');
+  }
+});
+
+// Deprecated: SMTP settings are no longer used. Use NYLAS_API_KEY secret instead.
+exports.saveEmailSettings = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+  if (!isAdmin) {
+    throw new httpsV2.HttpsError('permission-denied', 'Only admins can update email settings');
+  }
+  // Hard deprecate: do not persist SMTP settings anymore
+  await recordIntegrationLog(uid, 'email', 'warning', 'Attempted to update SMTP settings (deprecated). Use NYLAS_API_KEY secret.', {});
+  throw new httpsV2.HttpsError('failed-precondition', 'SMTP settings have been removed. Configure NYLAS_API_KEY secret instead.');
+});
+
+exports.cleanupUserLogs = schedulerV2.onSchedule({
+  schedule: '0 4 * * *',
+  timeZone: 'UTC',
+}, async () => {
+  const db = ensureFirestore();
+  const collections = ['integration_logs', 'ai_logs'];
+  const cutoff = admin.firestore.Timestamp.now();
+
+  for (const collectionName of collections) {
+    let hasMore = true;
+    while (hasMore) {
+      const snap = await db.collection(collectionName)
+        .where('expiresAt', '<=', cutoff)
+        .limit(500)
+        .get();
+      if (snap.empty) {
+        hasMore = false;
+        break;
+      }
+      const batch = db.batch();
+      snap.docs.forEach((docRef) => batch.delete(docRef.ref));
+      await batch.commit();
+      hasMore = snap.size === 500;
+    }
+  }
+});
+
+// ===== New v3.0.2 Functions =====
+
+// Daily Digest Email Generation (uses Nylas)
+exports.generateDailyDigest = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('NYLAS_API_KEY')] }, async () => {
+  try {
     const usersSnapshot = await admin.firestore().collection('users').where('emailDigest', '==', true).get();
-    
     for (const userDoc of usersSnapshot.docs) {
       const userId = userDoc.id;
       const userData = userDoc.data();
-      
-      await generateUserDigest(userId, userData, transporter);
+      await generateUserDigest(userId, userData);
     }
-    
     console.log('Daily digest generation completed');
   } catch (error) {
     console.error('Error generating daily digest:', error);
   }
 });
 
-async function generateUserDigest(userId, userData, transporter) {
+async function generateUserDigest(userId, userData) {
   try {
     const today = new Date();
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -6286,15 +7657,13 @@ async function generateUserDigest(userId, userData, transporter) {
       createdAt: admin.firestore.Timestamp.now()
     });
 
-    // Send email if user has email
+    // Send email if user has email (Nylas)
     if (userData.email) {
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
+      await sendEmail({
         to: userData.email,
         subject: `BOB Daily Digest - ${today.toLocaleDateString()}`,
-        html: html
+        html,
       });
-      
       console.log(`Daily digest sent to ${userData.email}`);
     }
 
@@ -6652,6 +8021,56 @@ exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     }
+  }
+});
+
+// Ensure every goal/story/task has a human-readable ref (e.g., GR-26LGIP, ST-XXXX, TK-XXXX)
+exports.ensureEntityRefs = schedulerV2.onSchedule({ schedule: 'every 2 hours', timeZone: 'UTC' }, async () => {
+  const db = ensureFirestore();
+  const prefixFor = (col) => (col === 'goals' ? 'GR' : col === 'stories' ? 'ST' : 'TK');
+  const makeRefLocal = (prefix) => {
+    const ts = Date.now().toString(36).toUpperCase().slice(-4);
+    const rnd = Math.random().toString(36).toUpperCase().slice(2, 4);
+    return `${prefix}-${ts}${rnd}`;
+  };
+
+  const collections = ['goals', 'stories', 'tasks'];
+  for (const col of collections) {
+    const snap = await db.collection(col).limit(1000).get();
+    const missing = snap.docs.filter((d) => {
+      const data = d.data() || {};
+      return !data.ref || typeof data.ref !== 'string' || data.ref.trim() === '';
+    });
+    if (!missing.length) continue;
+
+    const batch = db.batch();
+    const activityBatch = db.batch();
+    const prefix = prefixFor(col);
+    for (const docSnap of missing.slice(0, 200)) { // cap per run
+      const id = docSnap.id;
+      const data = docSnap.data() || {};
+      const ref = makeRefLocal(prefix);
+      batch.set(docSnap.ref, { ref, updatedAt: Date.now() }, { merge: true });
+      const actRef = db.collection('activity_stream').doc();
+      activityBatch.set(actRef, {
+        id: actRef.id,
+        entityId: id,
+        entityType: col === 'goals' ? 'goal' : col === 'stories' ? 'story' : 'task',
+        activityType: 'updated',
+        userId: data.ownerUid || 'system',
+        description: `Assigned reference ${ref}`,
+        fieldName: 'ref',
+        oldValue: null,
+        newValue: ref,
+        ownerUid: data.ownerUid || null,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        source: 'function',
+      });
+    }
+    await batch.commit();
+    await activityBatch.commit();
   }
 });
 

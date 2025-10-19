@@ -1,137 +1,70 @@
-const nodemailer = require('nodemailer');
-const functions = require('firebase-functions');
+// Unified email sender: Nylas v3
+// This module sends emails via Nylas using only the API key.
+// It supports two modes:
+// 1) Grant-based send if NYLAS_GRANT_ID (or per-call grantId) is provided
+// 2) App outbox send when no grant is provided (if enabled for the app)
+//
+// Required: process.env.NYLAS_API_KEY must be available (declare as a secret on callers).
+
 const admin = require('firebase-admin');
 
-let cachedTransporter = null;
-let cachedConfigKey = null;
-let cachedFromAddress = null;
-let lastLoadedAt = 0;
+const NYLAS_API_BASE = process.env.NYLAS_API_BASE || 'https://api.us.nylas.com';
 
-const EMAIL_CONFIG_CACHE_MS = 5 * 60 * 1000; // 5 minutes
-
-const safeConfig = () => {
-  try {
-    return functions.config?.() || {};
-  } catch (_) {
-    return {};
+async function nylasFetch(path, options = {}) {
+  const apiKey = process.env.NYLAS_API_KEY;
+  if (!apiKey) {
+    throw new Error('NYLAS_API_KEY not configured');
   }
-};
-
-const normaliseBoolean = (value, fallback = false) => {
-  if (value === undefined || value === null || value === '') return fallback;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value !== 0;
-  const normalized = String(value).toLowerCase().trim();
-  if (['true', '1', 'yes', 'y'].includes(normalized)) return true;
-  if (['false', '0', 'no', 'n'].includes(normalized)) return false;
-  return fallback;
-};
-
-const normaliseNumber = (value) => {
-  if (value === undefined || value === null || value === '') return null;
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
-};
-
-const loadFirestoreEmailConfig = async () => {
-  try {
-    if (!admin.apps.length) return {};
-    const snap = await admin.firestore().collection('system_settings').doc('email').get();
-    if (snap.exists) {
-      return snap.data() || {};
-    }
-  } catch (error) {
-    console.warn('[email] failed to load Firestore config', error?.message || error);
-  }
-  return {};
-};
-
-const resolveEmailConfig = async () => {
-  const configFromFunctions = safeConfig().email || {};
-  const configFromFirestore = await loadFirestoreEmailConfig();
-
-  const service = configFromFirestore.service ?? configFromFunctions.service ?? process.env.EMAIL_SERVICE ?? null;
-  const host = configFromFirestore.host ?? configFromFunctions.host ?? process.env.EMAIL_HOST ?? null;
-  const port = normaliseNumber(configFromFirestore.port ?? configFromFunctions.port ?? process.env.EMAIL_PORT);
-  const secure = normaliseBoolean(configFromFirestore.secure ?? configFromFunctions.secure ?? process.env.EMAIL_SECURE, host ? true : false);
-  const user = configFromFirestore.user ?? configFromFunctions.user ?? process.env.EMAIL_USER ?? null;
-  const password = configFromFirestore.password ?? configFromFunctions.password ?? process.env.EMAIL_PASSWORD ?? null;
-  const from = configFromFirestore.from ?? configFromFunctions.from ?? process.env.EMAIL_FROM ?? user ?? null;
-
-  if (!user || !password) {
-    throw new Error('Email credentials not configured (user/password required via settings or environment).');
-  }
-
-  return {
-    service,
-    host,
-    port,
-    secure,
-    user,
-    password,
-    from,
-  };
-};
-
-const createTransporter = async () => {
-  const now = Date.now();
-  if (cachedTransporter && now - lastLoadedAt < EMAIL_CONFIG_CACHE_MS) {
-    return { transporter: cachedTransporter, from: cachedFromAddress };
-  }
-
-  const config = await resolveEmailConfig();
-  const configKey = JSON.stringify({
-    service: config.service,
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    user: config.user,
+  const url = `${NYLAS_API_BASE}${path}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(options.body || {}),
   });
-
-  if (cachedTransporter && cachedConfigKey === configKey) {
-    lastLoadedAt = now;
-    cachedFromAddress = config.from;
-    return { transporter: cachedTransporter, from: cachedFromAddress };
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = json?.message || json?.error || `Nylas error ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.payload = json;
+    throw err;
   }
+  return json;
+}
 
-  let transporter;
-  if (config.host) {
-    transporter = nodemailer.createTransport({
-      host: config.host,
-      port: config.port || (config.secure ? 465 : 587),
-      secure: config.secure,
-      auth: { user: config.user, pass: config.password },
-    });
-  } else {
-    transporter = nodemailer.createTransport({
-      service: config.service || 'gmail',
-      auth: { user: config.user, pass: config.password },
-    });
-  }
-
-  cachedTransporter = transporter;
-  cachedConfigKey = configKey;
-  cachedFromAddress = config.from;
-  lastLoadedAt = now;
-
-  return { transporter, from: cachedFromAddress };
-};
-
-const sendEmail = async ({ to, subject, html, text }) => {
+// Attempts grant send first if a grantId is available; otherwise tries app-level send.
+const sendEmail = async ({ to, subject, html, text, from, grantId }) => {
   if (!to) throw new Error('Email recipient required');
-  const { transporter, from } = await createTransporter();
+  const toList = Array.isArray(to) ? to : [to];
 
-  const payload = {
-    from,
-    to,
-    subject,
-    html,
-    ...(text ? { text } : {}),
+  // Build Nylas message payload
+  const message = {
+    subject: subject || '(no subject)',
+    to: toList.map((addr) => ({ email: addr })),
+    ...(from ? { from: [{ email: from }] } : {}),
+    ...(html ? { body: html } : {}),
+    ...(text && !html ? { body: text } : {}),
   };
 
-  return transporter.sendMail(payload);
+  const tryGrantId = grantId || process.env.NYLAS_GRANT_ID || null;
+  try {
+    if (tryGrantId) {
+      // Grant-scoped send
+      const json = await nylasFetch(`/v3/grants/${encodeURIComponent(tryGrantId)}/messages/send`, { body: message });
+      return { messageId: json?.data?.id || json?.id || null, response: json };
+    }
+  } catch (err) {
+    // If grant send fails for any reason, fall through to app-level send attempt
+    // but only if no explicit grantId was provided by caller
+    if (grantId) throw err;
+  }
+
+  // App-level send (requires Outbox to be enabled for the Nylas app)
+  const json = await nylasFetch(`/v3/messages/send`, { body: message });
+  return { messageId: json?.data?.id || json?.id || null, response: json };
 };
 
-module.exports = {
-  sendEmail,
-};
+module.exports = { sendEmail };

@@ -638,7 +638,9 @@ const StoriesManagement: React.FC = () => {
                 onTaskCreate={async (newTask) => {
                   // Inherit theme from linked goal
                   const linkedGoal = goals.find(g => g.id === selectedStory.goalId);
+                  const ref = generateRef('task', []);
                   await addDoc(collection(db, 'tasks'), {
+                    ref,
                     title: newTask.title,
                     description: newTask.description || '',
                     parentType: 'story',

@@ -19,6 +19,13 @@
         }
       },
       {
+        "source": "/api/approve-planning",
+        "function": {
+          "functionId": "approvePlanningJob",
+          "region": "europe-west2"
+        }
+      },
+      {
         "source": "/api/oauth/callback",
         "function": {
           "functionId": "oauthCallback",
@@ -50,6 +57,13 @@
         "source": "/api/monzo/callback",
         "function": {
           "functionId": "monzoOAuthCallback",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/monzo/webhook",
+        "function": {
+          "functionId": "monzoWebhook",
           "region": "europe-west2"
         }
       },
@@ -92,6 +106,10 @@
           {
             "key": "Cache-Control",
             "value": "public, max-age=31536000, immutable"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/javascript"
           }
         ]
       },

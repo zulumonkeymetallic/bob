@@ -1,13 +1,13 @@
 // Version tracking for cache busting
 // Align version with branch build
-export const VERSION = '3.9.4';
+export const VERSION = '4.0.2';
 export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'feature-ai-focus-scheduling-3.9.4';
+export const BUILD_HASH = 'entity-audit-logging-4.0.2';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Unified daily briefing + checklist`);
-console.log(`🔧 Fixes: Dashboard checklist rendering & task route consolidation`);
-console.log(`🎯 Features: AI-generated morning brief, /tasks navigation update`);
+console.log(`✅ Status: Entity audit coverage`);
+console.log(`🔧 Fixes: Roadmap layout tweaks & toolbar overlap`);
+console.log(`🎯 Features: Global goals/stories/tasks change auditing`);
 console.log(`🚀 Architecture: Cache bust via ${BUILD_HASH}`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
