@@ -598,30 +598,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                           : 'No stories yet'}
                       </div>
                     </div>
-                    <div
-                      className="goals-card-quick-stat"
-                      style={{
-                        background: hexToRgba(themeColor, 0.12),
-                        border: `1px solid ${hexToRgba(themeColor, 0.22)}`,
-                        color: textColor
-                      }}
-                    >
-                      <span className="label">Priority</span>
-                      <span className="value">{goal.priority ?? '—'}</span>
-                    </div>
-                    {allocatedMinutes !== undefined && (
-                      <div
-                        className="goals-card-quick-stat"
-                        style={{
-                          background: hexToRgba(themeColor, 0.12),
-                          border: `1px solid ${hexToRgba(themeColor, 0.22)}`,
-                          color: textColor
-                        }}
-                      >
-                        <span className="label">This Week</span>
-                        <span className="value">{Math.round(allocatedMinutes)}m</span>
-                      </div>
-                    )}
+                    {/* Removed Priority and This Week per request */}
                   </div>
                 )}
 
@@ -720,18 +697,12 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         <div className="label">Total Stories</div>
                         <div className="value">{totalStories ?? '—'}</div>
                       </div>
-                    <div className="goals-card-stat-block">
-                      <div className="label">Priority</div>
-                      <div className="value">{goal.priority ?? '—'}</div>
-                    </div>
+                    {/* Priority removed */}
                     <div className="goals-card-stat-block">
                       <div className="label">Confidence</div>
                       <div className="value">{goal.confidence ? `${goal.confidence}/10` : '—'}</div>
                     </div>
-                    <div className="goals-card-stat-block">
-                      <div className="label">This Week</div>
-                      <div className="value">{allocatedMinutes !== undefined ? `${Math.round(allocatedMinutes)}m` : '—'}</div>
-                    </div>
+                    {/* This Week removed */}
                     </div>
                   </>
                 )}
@@ -744,11 +715,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       <span style={{ fontWeight: '500' }}>Size:</span>
                       <span>{goal.size}</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                      <Hash size={14} />
-                      <span style={{ fontWeight: '500' }}>Priority:</span>
-                      <span>{goal.priority}</span>
-                    </div>
+                    {/* Priority removed from details */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
                       <User size={14} />
                       <span style={{ fontWeight: '500' }}>Owner:</span>
@@ -761,13 +728,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         <span>{goal.confidence}/10</span>
                       </div>
                     )}
-                    {goalTimeAllocations[goal.id] !== undefined && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: textColor }}>
-                        <Clock size={14} />
-                        <span style={{ fontWeight: '500' }}>This Week:</span>
-                        <span>{Math.round(goalTimeAllocations[goal.id])} minutes allocated</span>
-                      </div>
-                    )}
+                    {/* This Week allocation hidden in details per request */}
                   </div>
                 )}
 

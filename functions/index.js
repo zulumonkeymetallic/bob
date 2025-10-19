@@ -3418,6 +3418,25 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       createdAt: now
     });
 
+    // Write per-story daily allocation for dashboard rollups
+    try {
+      if (enriched.storyId && proposed.start && proposed.end) {
+        const startDate = new Date(proposed.start);
+        const endDate = new Date(proposed.end);
+        const mins = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
+        const dayKey = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).toISOString().slice(0,10);
+        const storyRef = db.collection('stories').doc(String(enriched.storyId));
+        batch.set(storyRef, {
+          allocation: {
+            daily: {
+              [dayKey]: admin.firestore.FieldValue.increment(mins)
+            }
+          },
+          updatedAt: now
+        }, { merge: true });
+      }
+    } catch {}
+
     // Create scheduled_items doc if a linked entity exists
     let linkType = null, refId = null, linkTitle = null, linkUrl = enriched.linkUrl || null;
     if (enriched.taskId) { linkType = 'task'; refId = enriched.taskId; }

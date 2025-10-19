@@ -106,14 +106,14 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   };
 
   const generateReferenceNumber = () => {
+    // Prefer canonical ref stored on the entity
+    if ((item as any)?.ref) return String((item as any).ref);
     if (type === 'story') {
-      const story = item as Story;
-      const goalPrefix = goal?.theme ? getThemeClass(goal.theme).substring(0, 2).toUpperCase() : 'ST';
-      return `${goalPrefix}-${story.id.substring(0, 6).toUpperCase()}`;
+      const storyItem = item as Story;
+      return `STRY-${storyItem.id.substring(0, 6).toUpperCase()}`;
     } else if (type === 'task') {
-      const task = item as Task;
-      const storyPrefix = story?.title ? story.title.substring(0, 2).toUpperCase() : 'TK';
-      return `${storyPrefix}-${task.id.substring(0, 6).toUpperCase()}`;
+      const taskItem = item as Task;
+      return `TASK-${taskItem.id.substring(0, 6).toUpperCase()}`;
     }
     return 'N/A';
   };

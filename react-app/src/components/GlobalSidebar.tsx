@@ -358,19 +358,17 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const generateReferenceNumber = () => {
+    // Prefer canonical ref if present
+    if ((selectedItem as any)?.ref) return String((selectedItem as any).ref);
     if (selectedType === 'goal') {
-      const goalItem = selectedItem as Goal;
-      const themeName = getThemeName(goalItem.theme);
-      return `${themeName.substring(0, 2).toUpperCase()}-${goalItem.id.substring(0, 6).toUpperCase()}`;
+      const g = selectedItem as Goal;
+      return `GOAL-${g.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'story') {
-      const storyItem = selectedItem as Story;
-      const themeName = goal?.theme ? getThemeName(goal.theme) : 'Story';
-      const goalPrefix = themeName.substring(0, 2).toUpperCase();
-      return `${goalPrefix}-${storyItem.id.substring(0, 6).toUpperCase()}`;
+      const s = selectedItem as Story;
+      return `STRY-${s.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'task') {
-      const taskItem = selectedItem as Task;
-      const storyPrefix = story?.title ? story.title.substring(0, 2).toUpperCase() : 'TK';
-      return `${storyPrefix}-${taskItem.id.substring(0, 6).toUpperCase()}`;
+      const t = selectedItem as Task;
+      return `TASK-${t.id.substring(0, 6).toUpperCase()}`;
     }
     return 'N/A';
   };
