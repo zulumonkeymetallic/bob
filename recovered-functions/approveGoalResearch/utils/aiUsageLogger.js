@@ -63,7 +63,12 @@ class AIUsageLogger {
         totalTokens: totalTokens || (promptTokens || 0) + (completionTokens || 0),
         requestId,
         latency,
-        cost: cost || this.estimateCost(service, model, totalTokens || 0),
+        cost: typeof cost === 'number'
+          ? cost
+          : this.estimateCost(service, model, {
+              prompt_tokens: promptTokens || 0,
+              completion_tokens: completionTokens || 0,
+            }),
         status,
         errorMessage,
         userId,
@@ -90,22 +95,22 @@ class AIUsageLogger {
    */
   async updateDailyAggregates(logEntry) {
     try {
-      const date = logEntry.analytics.date;
+      const date = logEntry.date;
       const aggregateRef = this.db.collection('ai_usage_aggregates').doc(date);
       
       await aggregateRef.set({
         date,
         totalRequests: admin.firestore.FieldValue.increment(1),
-        totalTokens: admin.firestore.FieldValue.increment(logEntry.usage.totalTokens),
-        totalCostUSD: admin.firestore.FieldValue.increment(logEntry.cost.estimatedUSD),
-        avgLatencyMs: logEntry.performance.latencyMs, // Will need proper averaging logic
+        totalTokens: admin.firestore.FieldValue.increment(logEntry.totalTokens || 0),
+        totalCostUSD: admin.firestore.FieldValue.increment(logEntry.cost || 0),
+        avgLatencyMs: logEntry.latency || 0, // Simple overwrite; refine to rolling average if needed
         
         // Service breakdowns
         byService: {
-          [logEntry.aiService]: {
+          [logEntry.service]: {
             requests: admin.firestore.FieldValue.increment(1),
-            tokens: admin.firestore.FieldValue.increment(logEntry.usage.totalTokens),
-            costUSD: admin.firestore.FieldValue.increment(logEntry.cost.estimatedUSD)
+            tokens: admin.firestore.FieldValue.increment(logEntry.totalTokens || 0),
+            costUSD: admin.firestore.FieldValue.increment(logEntry.cost || 0)
           }
         },
         
@@ -113,8 +118,8 @@ class AIUsageLogger {
         byModel: {
           [logEntry.model]: {
             requests: admin.firestore.FieldValue.increment(1),
-            tokens: admin.firestore.FieldValue.increment(logEntry.usage.totalTokens),
-            costUSD: admin.firestore.FieldValue.increment(logEntry.cost.estimatedUSD)
+            tokens: admin.firestore.FieldValue.increment(logEntry.totalTokens || 0),
+            costUSD: admin.firestore.FieldValue.increment(logEntry.cost || 0)
           }
         },
         
@@ -122,8 +127,8 @@ class AIUsageLogger {
         byFunction: {
           [logEntry.functionName]: {
             requests: admin.firestore.FieldValue.increment(1),
-            tokens: admin.firestore.FieldValue.increment(logEntry.usage.totalTokens),
-            costUSD: admin.firestore.FieldValue.increment(logEntry.cost.estimatedUSD)
+            tokens: admin.firestore.FieldValue.increment(logEntry.totalTokens || 0),
+            costUSD: admin.firestore.FieldValue.increment(logEntry.cost || 0)
           }
         },
         

@@ -21,9 +21,10 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Edit3, Trash2, Target, BookOpen, Activity, SquarePlus, ListTodo, KanbanSquare, Maximize2, Minimize2, GripVertical } from 'lucide-react';
+import { Edit3, Trash2, Target, BookOpen, Activity, SquarePlus, ListTodo, KanbanSquare, Maximize2, Minimize2, GripVertical, Wand2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -154,6 +155,25 @@ const SortableStoryCard: React.FC<{
                 }}
               >
                 <Activity size={12} />
+              </Button>
+              <Button
+                variant="link"
+                size="sm"
+                className="p-0"
+                style={{ width: 24, height: 24, color: themeVars.muted }}
+                title="AI: Generate tasks for this story"
+                onClick={async (event) => {
+                  event.stopPropagation();
+                  try {
+                    const callable = httpsCallable(functions, 'orchestrateStoryPlanning');
+                    await callable({ storyId: (story as any).id });
+                  } catch (e) {
+                    // best-effort; surface minimal alert to user
+                    alert((e as any)?.message || 'Failed to orchestrate story planning');
+                  }
+                }}
+              >
+                <Wand2 size={12} />
               </Button>
               <Button
                 variant="link"
@@ -1007,8 +1027,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           onDragEnd={handleDragEnd}
         >
           <Row style={{ minHeight: '600px' }}>
-          {swimLanes.map((lane) => (
-            <Col xs={12} md={6} lg={3} key={lane.id} style={{ marginBottom: '20px' }}>
+          {swimLanes.map((lane) => {
+            const lgCols = Math.max(1, Math.floor(12 / swimLanes.length));
+            const mdCols = Math.min(12, Math.max(6, lgCols * 2));
+            return (
+            <Col xs={12} md={mdCols as any} lg={lgCols as any} key={lane.id} style={{ marginBottom: '20px' }}>
               <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                 <Card.Header style={{ 
                   backgroundColor: lane.color, 
@@ -1085,7 +1108,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                 </Card.Body>
               </Card>
             </Col>
-          ))}
+          );})}
         </Row>
 
         {/* Drag Overlay */}
