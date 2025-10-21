@@ -10,6 +10,7 @@ import { Task, Goal, Story, WorkProject, Sprint } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
+import { taskStatusText } from '../utils/storyCardFormatting';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 interface TaskWithContext extends Task {
@@ -873,7 +874,7 @@ const TasksList: React.FC = () => {
                 <td onClick={(e) => e.stopPropagation()}>
                   <Dropdown>
                     <Dropdown.Toggle as={Badge} bg={getBadgeVariant(getStatusName(task.status))} style={{ cursor: 'pointer' }}>
-                      {getStatusName(task.status).replace('-', ' ').toUpperCase()}
+                      {taskStatusText(task.status)}
                     </Dropdown.Toggle>
                     <Dropdown.Menu>
                       <Dropdown.Item onClick={() => handleQuickStatusChange(task.id, 'planned')}>

@@ -270,18 +270,13 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                 onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
               >
                 <option value="backlog">Backlog</option>
-                <option value="active">Active</option>
+                <option value="in-progress">In Progress</option>
+                <option value="blocked">Blocked</option>
                 <option value="done">Done</option>
-                {type === 'task' && (
-                  <>
-                    <option value="in-progress">In Progress</option>
-                    <option value="blocked">Blocked</option>
-                  </>
-                )}
               </Form.Select>
             ) : (
               <Badge 
-                bg={isStatus(item.status, 'done') ? 'success' : isStatus(item.status, 'active') || isStatus(item.status, 'in-progress') ? 'primary' : 'secondary'}
+                bg={isStatus(item.status, 'done') ? 'success' : isStatus(item.status, 'in-progress') ? 'primary' : 'secondary'}
                 style={{ fontSize: '12px', padding: '6px 12px' }}
               >
                 {item.status}

@@ -3,7 +3,7 @@
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 export const isStatus = (actualStatus: any, expectedStatus: string): boolean => {
-  // Handle numeric status values
+  // Handle numeric status values (legacy, mixed across entities)
   if (typeof actualStatus === 'number') {
     // Goal status mapping
     if (expectedStatus === 'New') return actualStatus === 0;
@@ -11,7 +11,7 @@ export const isStatus = (actualStatus: any, expectedStatus: string): boolean => 
     if (expectedStatus === 'Complete') return actualStatus === 2;
     if (expectedStatus === 'Blocked') return actualStatus === 3;
     if (expectedStatus === 'Deferred') return actualStatus === 4;
-    
+
     // Story status mapping
     if (expectedStatus === 'backlog') return actualStatus === 0;
     if (expectedStatus === 'planned') return actualStatus === 1;
@@ -19,24 +19,37 @@ export const isStatus = (actualStatus: any, expectedStatus: string): boolean => 
     if (expectedStatus === 'in-progress') return actualStatus === 2;
     if (expectedStatus === 'testing') return actualStatus === 3;
     if (expectedStatus === 'done') return actualStatus === 4;
-    
+
     // Task status mapping
     if (expectedStatus === 'todo') return actualStatus === 0;
     if (expectedStatus === 'planned') return actualStatus === 0;
     if (expectedStatus === 'in_progress') return actualStatus === 1;
+    if (expectedStatus === 'in-progress') return actualStatus === 1;
+    if (expectedStatus === 'done') return actualStatus === 2;
     if (expectedStatus === 'blocked') return actualStatus === 3;
-    
+
     // Sprint status mapping
     if (expectedStatus === 'planning') return actualStatus === 0;
     if (expectedStatus === 'active') return actualStatus === 1;
     if (expectedStatus === 'closed') return actualStatus === 2;
     if (expectedStatus === 'cancelled') return actualStatus === 3;
-    
+
     return false;
   }
-  
-  // Handle string status values (legacy)
-  return actualStatus === expectedStatus;
+
+  // Handle string status values with normalization (treat synonyms consistently)
+  const normalize = (s: any): string => {
+    const v = String(s || '').trim().toLowerCase();
+    if (!v) return '';
+    const x = v.replace(/_/g, '-');
+    if (x === 'active' || x === 'in-progress' || x === 'in progress' || x === 'wip' || x === 'work in progress' || x === 'testing') return 'in-progress';
+    if (x === 'todo' || x === 'backlog' || x === 'planned' || x === 'new') return 'backlog';
+    if (x === 'done' || x === 'complete' || x === 'completed' || x === 'closed') return 'done';
+    if (x === 'blocked' || x === 'paused') return 'blocked';
+    return x;
+  };
+
+  return normalize(actualStatus) === normalize(expectedStatus);
 };
 
 export const isPriority = (actualPriority: any, expectedPriority: string): boolean => {
@@ -123,6 +136,7 @@ export const getPriorityName = (priority: any): string => {
 
 // Helper to get status display name
 export const getStatusName = (status: any): string => {
+  // Numeric goal status mapping retained as-is
   if (typeof status === 'number') {
     switch (status) {
       case 0: return 'New';
@@ -133,9 +147,19 @@ export const getStatusName = (status: any): string => {
       default: return 'Unknown';
     }
   }
-  
-  // Handle string status (legacy)
-  return typeof status === 'string' ? status : 'Unknown';
+
+  // Strings: normalise and map to canonical display labels used app-wide
+  const raw = String(status || '').trim();
+  if (!raw) return 'Unknown';
+  const v = raw.toLowerCase().replace(/_/g, '-');
+  if (['backlog', 'todo', 'planned', 'new'].includes(v)) return 'Backlog';
+  if (['in-progress', 'in progress', 'active', 'wip', 'testing', 'qa', 'review'].includes(v)) return 'In Progress';
+  if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(v)) return 'Blocked';
+  if (['done', 'complete', 'completed', 'closed', 'finished'].includes(v)) return 'Done';
+  // Title-case fallback
+  return raw
+    .replace(/[-_]+/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
 // Helper to get priority color

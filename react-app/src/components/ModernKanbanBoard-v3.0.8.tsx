@@ -63,7 +63,7 @@ const DroppableArea: React.FC<{
 };
 
 // Sortable Story Card Component
-const SortableStoryCard: React.FC<{ 
+  const SortableStoryCard: React.FC<{ 
   story: Story; 
   goal?: Goal;
   taskCount: number;
@@ -87,6 +87,8 @@ const SortableStoryCard: React.FC<{
     opacity: isDragging ? 0.8 : 1,
   };
 
+  const blocked = isStatus(story.status, 'blocked') || (story as any)?.status === 'Blocked';
+
   return (
     <div
       ref={setNodeRef}
@@ -96,23 +98,23 @@ const SortableStoryCard: React.FC<{
     >
       <Card 
         style={{ 
-          border: `2px solid ${themeColor}`,
-          borderRadius: '8px',
-          boxShadow: isDragging ? '0 8px 16px rgba(0,0,0,0.15)' : '0 2px 4px rgba(0,0,0,0.1)',
+          border: blocked ? '2px solid var(--red)' : '1px solid ' + themeColor,
+          borderRadius: '7px',
+          boxShadow: isDragging ? '0 8px 16px rgba(0,0,0,0.15)' : '0 1px 3px rgba(0,0,0,0.1)',
           cursor: 'pointer',
           transition: 'all 0.2s ease',
-          marginBottom: '12px'
+          marginBottom: '10px'
         }}
         onClick={() => onItemClick(story)}
       >
-        <Card.Body style={{ padding: '16px' }}>
+        <Card.Body style={{ padding: '14px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                <span style={{ fontSize: '12px', fontWeight: '600', color: themeColor }}>
+                <span style={{ fontSize: '11px', fontWeight: '600', color: blocked ? 'var(--red)' : (themeColor as string) }}>
                   {story.ref || `STRY-${story.id.slice(-3).toUpperCase()}`}
                 </span>
-                <h6 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: themeVars.text as string }}>
+                <h6 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: themeVars.text as string }}>
                   {story.title}
                 </h6>
               </div>
@@ -162,6 +164,9 @@ const SortableStoryCard: React.FC<{
               <Badge bg="info" style={{ fontSize: '10px' }}>
                 {story.points} pts
               </Badge>
+              {blocked && (
+                <Badge bg="danger" style={{ fontSize: '10px' }}>Blocked</Badge>
+              )}
               {goal?.theme && (
                 <Badge 
                   style={{ 
@@ -180,7 +185,7 @@ const SortableStoryCard: React.FC<{
           </div>
 
           {story.description && (
-            <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: themeVars.muted as string, lineHeight: '1.4' }}>
+            <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: themeVars.muted as string, lineHeight: '1.35' }}>
               {story.description.substring(0, 80)}{story.description.length > 80 ? '...' : ''}
             </p>
           )}
@@ -191,7 +196,7 @@ const SortableStoryCard: React.FC<{
 };
 
 // Sortable Task Card Component
-const SortableTaskCard: React.FC<{ 
+  const SortableTaskCard: React.FC<{ 
   task: Task; 
   story?: Story;
   themeColor: string;
@@ -213,6 +218,8 @@ const SortableTaskCard: React.FC<{
     opacity: isDragging ? 0.8 : 1,
   };
 
+  const blocked = isStatus(task.status, 'blocked') || (task as any)?.status === 'Blocked';
+
   return (
     <div
       ref={setNodeRef}
@@ -222,23 +229,23 @@ const SortableTaskCard: React.FC<{
     >
       <Card 
         style={{ 
-          border: `1px solid ${themeColor}`,
-          borderRadius: '6px',
+          border: blocked ? '2px solid var(--red)' : `1px solid ${themeColor}`,
+          borderRadius: '5px',
           boxShadow: isDragging ? '0 4px 8px rgba(0,0,0,0.15)' : '0 1px 3px rgba(0,0,0,0.1)',
           cursor: 'pointer',
           transition: 'all 0.2s ease',
-          marginBottom: '8px'
+          marginBottom: '7px'
         }}
         onClick={() => onItemClick(task)}
       >
-        <Card.Body style={{ padding: '12px' }}>
+        <Card.Body style={{ padding: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                <span style={{ fontSize: '11px', fontWeight: '600', color: themeColor }}>
+                <span style={{ fontSize: '10px', fontWeight: '600', color: blocked ? 'var(--red)' : (themeColor as string) }}>
                   {task.ref || `TASK-${task.id.slice(-3).toUpperCase()}`}
                 </span>
-                <h6 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: themeVars.text as string }}>
+                <h6 style={{ margin: 0, fontSize: '12px', fontWeight: '600', color: themeVars.text as string }}>
                   {task.title}
                 </h6>
               </div>
@@ -277,6 +284,9 @@ const SortableTaskCard: React.FC<{
               <Badge bg="outline-secondary" style={{ fontSize: '9px', color: themeVars.muted as string, backgroundColor: 'transparent', border: `1px solid ${themeVars.border}` }}>
                 {task.effort}
               </Badge>
+              {blocked && (
+                <Badge bg="danger" style={{ fontSize: '9px' }}>Blocked</Badge>
+              )}
             </div>
             <span style={{ fontSize: '10px', color: themeVars.muted as string }}>
               {task.estimateMin}min
@@ -327,10 +337,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     })
   );
 
-  // Swim lanes configuration
+  // Swim lanes configuration (Blocked is not a separate lane; it renders as red border within In Progress)
   const swimLanes = [
     { id: 'backlog', title: 'Backlog', status: 'backlog', color: themeVars.muted },
-    { id: 'active', title: 'Active', status: 'active', color: themeVars.brand },
+    { id: 'in-progress', title: 'In Progress', status: 'in-progress', color: themeVars.brand },
     { id: 'done', title: 'Done', status: 'done', color: 'var(--green)' },
   ];
 
@@ -359,12 +369,38 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   };
 
   const getStoriesForLane = (status: string): Story[] => {
-    return stories.filter(story => isStatus(story.status, status));
+    const s = status;
+    return stories.filter(story => {
+      const st = (story as any).status;
+      if (s === 'backlog') {
+        return isStatus(st, 'backlog') || isStatus(st, 'planned') || isStatus(st, 'todo') || st === 0 || st === 1;
+      }
+      if (s === 'in-progress') {
+        // Include blocked in the In Progress lane (visualized by red border)
+        return isStatus(st, 'in-progress') || isStatus(st, 'active') || isStatus(st, 'testing') || isStatus(st, 'blocked') || st === 2 || st === 3;
+      }
+      if (s === 'done') {
+        return isStatus(st, 'done') || st === 4;
+      }
+      return isStatus(st, s);
+    });
   };
 
   const getTasksForLane = (status: string): Task[] => {
-    const taskStatus = status === 'active' ? 'in-progress' : status;
-    return tasks.filter(task => isStatus(task.status, taskStatus));
+    return tasks.filter(task => {
+      const st = (task as any).status;
+      if (status === 'backlog') {
+        return isStatus(st, 'backlog') || isStatus(st, 'planned') || isStatus(st, 'todo') || st === 0;
+      }
+      if (status === 'in-progress') {
+        // Include blocked tasks in the In Progress lane
+        return isStatus(st, 'in-progress') || isStatus(st, 'blocked') || st === 1 || st === 3;
+      }
+      if (status === 'done') {
+        return isStatus(st, 'done') || st === 2;
+      }
+      return isStatus(st, status);
+    });
   };
 
   // Data loading effect
@@ -491,10 +527,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       if (itemType === 'stories') {
         const story = stories.find(s => s.id === activeId);
         console.log('Found story:', story);
-        if (story && !isStatus(story.status, newStatus)) {
+        // Normalize 'active' to 'in-progress' for consistency
+        const normalized = newStatus === 'active' ? 'in-progress' : newStatus;
+        if (story && !isStatus(story.status, normalized)) {
           console.log('Updating story status from', story.status, 'to', newStatus);
           await updateDoc(doc(db, 'stories', activeId), {
-            status: newStatus,
+            status: normalized,
             updatedAt: serverTimestamp()
           });
           console.log('Story updated successfully');

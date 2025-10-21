@@ -93,6 +93,11 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.ownerUid == uid;
     }
 
+    // Per-user app settings
+    match /user_settings/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
     // No client access to tokens by default (server-only)
   }
 }

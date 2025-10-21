@@ -108,7 +108,7 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
   });
 
   const urgentStories = stories.filter(story => 
-    isPriority(story.priority, 'High') && isStatus(story.status, 'active')
+    isPriority(story.priority, 'High') && isStatus(story.status, 'in-progress')
   );
 
   if (!deviceInfo.isMobile) {

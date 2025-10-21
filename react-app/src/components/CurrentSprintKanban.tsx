@@ -23,7 +23,7 @@ const CurrentSprintKanban: React.FC = () => {
 
     const kanbanLanes = [
         { id: 0, title: 'Backlog', stringId: 'backlog' },
-        { id: 2, title: 'In Progress', stringId: 'active' }, // Story IN_PROGRESS = 2
+        { id: 2, title: 'In Progress', stringId: 'in-progress' }, // Story IN_PROGRESS = 2
         { id: 4, title: 'Done', stringId: 'done' } // Story DONE = 4
     ];
 

@@ -78,6 +78,9 @@ import StravaSettings from './components/settings/integrations/StravaSettings';
 import SteamSettings from './components/settings/integrations/SteamSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
 import { useEntityAudit } from './hooks/useEntityAudit';
+import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
+import DeepLinkStory from './components/routes/DeepLinkStory';
+import DeepLinkGoal from './components/routes/DeepLinkGoal';
 
 
 // Lazy-loaded heavy routes
@@ -209,7 +212,7 @@ function AppContent() {
           
           <div key={`${location.pathname}-${forceRender}`}>
             <Routes>
-              <Route path="/" element={<Dashboard />} />
+              <Route path="/" element={<Navigate to="/sprints/kanban" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/tasks" element={<TaskListView />} />
               <Route path="/task" element={<Navigate to="/tasks" replace />} />

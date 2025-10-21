@@ -3,6 +3,7 @@
 // Auth: HTTP header "api-key: <BREVO_API_KEY>"
 // Docs: https://developers.brevo.com/docs/send-a-transactional-email
 
+const admin = require('firebase-admin');
 const BREVO_API_BASE = process.env.BREVO_API_BASE || 'https://api.brevo.com/v3';
 
 async function brevoFetch(path, payload) {
@@ -29,11 +30,31 @@ async function brevoFetch(path, payload) {
   return json;
 }
 
+let cachedFrom = null;
+let cachedFromAt = 0;
+async function resolveSenderFromSettings() {
+  try {
+    const now = Date.now();
+    if (cachedFrom && now - cachedFromAt < 5 * 60 * 1000) return cachedFrom; // cache 5 min
+    const db = admin.firestore();
+    const snap = await db.collection('system_settings').doc('email').get();
+    const from = snap.exists ? (snap.data() || {}).from : null;
+    cachedFrom = typeof from === 'string' && from.includes('@') ? from : null;
+    cachedFromAt = now;
+    return cachedFrom;
+  } catch {
+    return null;
+  }
+}
+
 const sendEmail = async ({ to, subject, html, text, from, senderName }) => {
   if (!to) throw new Error('Email recipient required');
   const toList = Array.isArray(to) ? to : [to];
 
-  const senderEmail = from || process.env.BREVO_SENDER_EMAIL || 'no-reply@bob.local';
+  // Resolve sender precedence: explicit arg > Firestore settings > env > default
+  let senderEmail = from;
+  if (!senderEmail) senderEmail = await resolveSenderFromSettings();
+  if (!senderEmail) senderEmail = process.env.BREVO_SENDER_EMAIL || 'no-reply@bob.local';
   const sender = { email: senderEmail };
   if (senderName || process.env.BREVO_SENDER_NAME) sender.name = senderName || process.env.BREVO_SENDER_NAME;
 
