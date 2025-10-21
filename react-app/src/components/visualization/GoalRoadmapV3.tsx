@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
-import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
 import { Goal, Sprint, Story, Task } from '../../types';
@@ -541,7 +541,7 @@ const GoalRoadmapV3: React.FC = () => {
       else if (zoom === 'years') { newStart = startOfMonth(newStart); newEnd = endOfMonth(newEnd); }
     }
     try {
-      await updateDoc(doc(db, 'goals', s.id), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: Date.now() });
+      await updateDoc(doc(db, 'goals', s.id), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: serverTimestamp() });
       if (currentUser?.uid) {
         await ActivityStreamService.logFieldChange(s.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${s.origStart.toDateString()} – ${s.origEnd.toDateString()}`, `${newStart.toDateString()} – ${newEnd.toDateString()}`, 'personal', s.id, 'human');
       }
@@ -549,7 +549,7 @@ const GoalRoadmapV3: React.FC = () => {
       if (candidateTheme != null && s.goal) {
         const originalThemeId = migrateThemeValue(s.goal.theme);
         if (candidateTheme !== originalThemeId) {
-          await updateDoc(doc(db, 'goals', s.id), { theme: candidateTheme, updatedAt: Date.now() });
+          await updateDoc(doc(db, 'goals', s.id), { theme: candidateTheme, updatedAt: serverTimestamp() });
           if (currentUser?.uid) {
             const fromTheme = getThemeDefinition(originalThemeId);
             const toTheme = getThemeDefinition(candidateTheme);
@@ -599,7 +599,7 @@ const GoalRoadmapV3: React.FC = () => {
     setActiveGuideX(null);
     if (targetId && !wouldCreateCycle(sourceId, targetId)) {
       try {
-        await updateDoc(doc(db, 'goals', sourceId), { parentGoalId: targetId, updatedAt: Date.now() });
+        await updateDoc(doc(db, 'goals', sourceId), { parentGoalId: targetId, updatedAt: serverTimestamp() });
       } catch (error) {
         console.error('Failed to link goals', error);
       }
@@ -659,7 +659,7 @@ const GoalRoadmapV3: React.FC = () => {
     const ns = new Date(start); ns.setDate(ns.getDate()+ds); ns.setHours(0,0,0,0);
     const ne = new Date(end); ne.setDate(ne.getDate()+de); ne.setHours(0,0,0,0);
     try {
-      await updateDoc(doc(db, 'goals', g.id), { startDate: ns.getTime(), endDate: ne.getTime(), updatedAt: Date.now() });
+      await updateDoc(doc(db, 'goals', g.id), { startDate: ns.getTime(), endDate: ne.getTime(), updatedAt: serverTimestamp() });
       if (currentUser?.uid) {
         await ActivityStreamService.logFieldChange(g.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${start.toDateString()} – ${end.toDateString()}`, `${ns.toDateString()} – ${ne.toDateString()}`, 'personal', g.id, 'human');
       }
@@ -874,7 +874,7 @@ const GoalRoadmapV3: React.FC = () => {
   const handleAddNote = useCallback(async () => {
     if (!noteGoalId || !currentUser?.uid || !noteDraft.trim()) return;
     await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft.trim(), currentUser.uid, currentUser.email || '', 'personal', noteGoalId, 'human');
-    try { await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft.trim(), updatedAt: Date.now() }); } catch {}
+    try { await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft.trim(), updatedAt: serverTimestamp() }); } catch {}
     setNoteDraft(''); setNoteGoalId(null);
   }, [noteGoalId, noteDraft, currentUser?.uid]);
 

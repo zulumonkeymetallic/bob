@@ -6285,9 +6285,11 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
     const toPush = tasks.filter(t => !t.reminderId && t.status !== 2 && ((t.dueDate||0) <= (start.getTime()+24*3600*1000)));
     const payload = toPush.map(t => {
-      const themeLabel = t.theme || t.theme_id || 'General';
+      const themeLabel = themeLabelFromValue(t.theme || t.theme_id || 'General');
       const title = `[${themeLabel}] – ${t.title || 'Task'}`;
-      const url = t.deepLink || (t.ref ? `/tasks?ref=${encodeURIComponent(t.ref)}` : `/tasks?taskId=${encodeURIComponent(t.id)}`);
+      // Prefer canonical /tasks/:ref deep link; fall back to id
+      const rel = t.ref ? `/tasks/${encodeURIComponent(t.ref)}` : `/tasks/${encodeURIComponent(t.id)}`;
+      const url = buildAbsoluteUrl(t.deepLink || rel);
       const noteLines = [
         t.reminderNote || '',
         `BOB: ${url}`,
@@ -6336,6 +6338,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       const reminderId = u.reminderId ? String(u.reminderId) : null;
       const completed = !!u.completed;
       const title = String(u.title || '');
+      const iosTags = Array.isArray(u.tags) ? u.tags.filter(x=>typeof x==='string').slice(0,12) : [];
       if (!id && !reminderId) continue;
       let ref = null;
       if (id) ref = db.collection('tasks').doc(id);
@@ -6348,6 +6351,14 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type };
         if (reminderId) data['reminderId'] = reminderId;
         if (completed) data['status'] = 2;
+        if (iosTags.length) {
+          try {
+            const snap = await ref.get();
+            const existing = (snap.exists && Array.isArray((snap.data()||{}).tags)) ? (snap.data().tags) : [];
+            const merged = Array.from(new Set([...(existing||[]), ...iosTags])).slice(0, 12);
+            data['tags'] = merged;
+          } catch {}
+        }
         await ref.set(data, { merge: true });
         updated++;
       } else if (reminderId || title) {
@@ -6367,6 +6378,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           reminderCreatedAt: Date.now(),
           createdAt: Date.now(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          ...(iosTags.length ? { tags: iosTags } : {}),
         }, { merge: true });
         updated++;
       }
@@ -8321,4 +8333,111 @@ exports.runDailySchedulerAdjustments = schedulerV2.onSchedule({
       }, { merge: true });
     }
   }
+});
+function themeLabelFromValue(v) {
+  if (typeof v === 'number') {
+    return ({1:'Health',2:'Growth',3:'Wealth',4:'Tribe',5:'Home'})[v] || 'Growth';
+  }
+  const s = String(v||'').trim();
+  if (!s) return 'Growth';
+  const lower = s.toLowerCase();
+  if (['health','growth','wealth','tribe','home'].includes(lower)) {
+    return lower.charAt(0).toUpperCase()+lower.slice(1);
+  }
+  return s;
+}
+
+function buildAbsoluteUrl(path) {
+  const origin = process.env.APP_BASE_URL || 'https://bob.jc1.tech';
+  if (!path) return origin;
+  if (path.startsWith('http')) return path;
+  if (!path.startsWith('/')) return `${origin}/${path}`;
+  return `${origin}${path}`;
+}
+
+async function buildTaskContext(db, task) {
+  const ctx = { themeName: null, sprintRef: null, storyRef: null, goalRef: null };
+  // Theme direct or via story/goal
+  if (task.theme != null) ctx.themeName = themeLabelFromValue(task.theme);
+  let goalId = task.goalId || null;
+  let storyId = task.storyId || task.parentId || null;
+  if (storyId && !goalId) {
+    try { const s = await db.collection('stories').doc(String(storyId)).get(); if (s.exists) { const d = s.data()||{}; goalId = d.goalId || goalId; ctx.storyRef = d.ref || null; if (d.sprintId) { try { const sp = await db.collection('sprints').doc(String(d.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data()||{}).ref || (sp.data()||{}).name || sp.id; } catch {} } } } catch {}
+  }
+  if (goalId) {
+    try { const g = await db.collection('goals').doc(String(goalId)).get(); if (g.exists) { const gd = g.data()||{}; ctx.goalRef = gd.ref || g.id; if (!ctx.themeName && gd.theme != null) ctx.themeName = themeLabelFromValue(gd.theme); } } catch {}
+  }
+  // Fallback sprint from task
+  if (!ctx.sprintRef && task.sprintId) {
+    try { const sp = await db.collection('sprints').doc(String(task.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data()||{}).ref || (sp.data()||{}).name || sp.id; } catch {}
+  }
+  return ctx;
+}
+
+function mergeTags(existing, toAdd) {
+  const set = new Set(Array.isArray(existing) ? existing : []);
+  for (const t of toAdd) {
+    const s = String(t||'').trim();
+    if (s) set.add(s);
+  }
+  // Limit to 12 tags to keep Reminders tidy
+  return Array.from(set).slice(0, 12);
+}
+
+exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const now = Date.now();
+  const cutoff = now - 24*60*60*1000; // process tasks touched in last 24h
+  let processed = 0, updated = 0;
+  try {
+    const snap = await db.collection('tasks').orderBy('updatedAt','desc').limit(500).get();
+    const batch = db.batch();
+    for (const docSnap of snap.docs) {
+      const t = docSnap.data() || {};
+      processed += 1;
+      // Skip very old if updatedAt is numeric and older than cutoff
+      if (typeof t.updatedAt === 'number' && t.updatedAt < cutoff) continue;
+      const ctx = await buildTaskContext(db, t);
+      const themeTag = ctx.themeName ? `theme-${ctx.themeName}` : null;
+      const sprintTag = ctx.sprintRef ? `sprint-${ctx.sprintRef}` : null;
+      const storyTag = ctx.storyRef ? `story-${ctx.storyRef}` : null;
+      const goalTag  = ctx.goalRef ? `goal-${ctx.goalRef}` : null;
+      const newTags = mergeTags(t.tags, [themeTag, sprintTag, storyTag, goalTag].filter(Boolean));
+
+      // Deep links (absolute) for task + parents
+      const taskRef = t.ref || t.referenceNumber || t.reference || t.id;
+      const taskUrl = buildAbsoluteUrl(`/tasks/${encodeURIComponent(taskRef)}`);
+      const storyUrl = ctx.storyRef ? buildAbsoluteUrl(`/stories/${encodeURIComponent(ctx.storyRef)}`) : null;
+      const goalUrl  = ctx.goalRef  ? buildAbsoluteUrl(`/goals/${encodeURIComponent(ctx.goalRef)}`)  : null;
+      const themeLabel = ctx.themeName || 'Growth';
+      const reminderTitle = `[${themeLabel}] – ${t.title || 'Task'}`;
+      const noteLines = [
+        `Task: ${taskUrl}`,
+        storyUrl ? `Story: ${storyUrl}` : null,
+        goalUrl ? `Goal: ${goalUrl}` : null,
+        '',
+        '-------',
+        `BOB: taskRef=${taskRef}${ctx.storyRef?` storyRef=${ctx.storyRef}`:''}${ctx.goalRef?` goalRef=${ctx.goalRef}`:''} list=${t.list||''}`,
+        ctx.sprintRef ? `#sprint: ${ctx.sprintRef}` : null,
+        ctx.themeName ? `#theme: ${ctx.themeName}` : null,
+        ctx.storyRef ? `#story: ${ctx.storyRef}` : null,
+        `#task: ${taskRef}`,
+        ctx.goalRef ? `#goal: ${ctx.goalRef}` : null,
+      ].filter(Boolean).join('\n');
+
+      const updates = {
+        tags: newTags,
+        deepLink: taskUrl,
+        reminderTitle,
+        reminderNote: noteLines,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      batch.set(docSnap.ref, updates, { merge: true });
+      updated += 1;
+    }
+    if (updated) await batch.commit();
+  } catch (e) {
+    console.error('tagTasksAndBuildDeepLinks error', e?.message || e);
+  }
+  return { processed, updated };
 });
