@@ -7441,6 +7441,62 @@ exports.sendTestEmail = httpsV2.onCall(async (req) => {
   }
 });
 
+// Manual trigger: AI Scheduling & Enrichment (v4.3.0)
+exports.runSchedulingEnrichmentNow = httpsV2.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+
+  const runId = await logAutomationRun(db, {
+    automation: 'ai_scheduling_enrichment',
+    userId: uid,
+    status: 'started',
+    triggeredBy: 'callable',
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  try {
+    // Reuse existing planner logic to build a 7-day plan window
+    const plan = await generateCalendarPlanForUser({ db, userId: uid, profile, runId });
+
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'ai_scheduling_enrichment',
+      dayIso: nowUtc.toISODate(),
+      status: 'success',
+      runId,
+    });
+
+    await db.collection('automation_runs').doc(runId).set({
+      status: 'success',
+      schedulingPlan: plan,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return { ok: true, runId, plan };
+  } catch (error) {
+    console.error('[run-scheduling-enrichment-now] failed', error);
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'ai_scheduling_enrichment',
+      dayIso: nowUtc.toISODate(),
+      status: 'error',
+      message: error?.message || String(error),
+      runId,
+    });
+    await db.collection('automation_runs').doc(runId).set({
+      status: 'error',
+      error: error?.message || String(error),
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to run scheduling & enrichment');
+  }
+});
 // Save SMTP email configuration (admin-only)
 exports.saveEmailSettings = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
