@@ -81,6 +81,7 @@ import { useEntityAudit } from './hooks/useEntityAudit';
 import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
+import DeepLinkTask from './components/routes/DeepLinkTask';
 
 
 // Lazy-loaded heavy routes
@@ -215,6 +216,9 @@ function AppContent() {
               <Route path="/" element={<Navigate to="/sprints/kanban" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/tasks" element={<TaskListView />} />
+              <Route path="/tasks/:id" element={<DeepLinkTask />} />
+              {/* Back-compat for older deep links */}
+              <Route path="/task/:id" element={<DeepLinkTask />} />
               <Route path="/task" element={<Navigate to="/tasks" replace />} />
               <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
