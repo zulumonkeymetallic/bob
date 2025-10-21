@@ -26,6 +26,9 @@ const MerchantMappings: React.FC = () => {
   const [edits, setEdits] = useState<Record<string, { type: string; label: string }>>({});
   const [status, setStatus] = useState<string>('');
   const [busy, setBusy] = useState(false);
+  const [subKey, setSubKey] = useState('');
+  const [subDecision, setSubDecision] = useState<'keep'|'reduce'|'cancel'>('keep');
+  const [subNote, setSubNote] = useState('');
 
   useEffect(() => {
     if (!currentUser) return;
@@ -90,6 +93,19 @@ const MerchantMappings: React.FC = () => {
     } finally { setBusy(false); }
   };
 
+  const saveSubscriptionOverride = async () => {
+    if (!currentUser || !subKey.trim()) return;
+    setBusy(true); setStatus('');
+    try {
+      const fn = httpsCallable(functions, 'setMonzoSubscriptionOverride');
+      const res: any = await fn({ merchantKey: subKey.trim(), decision: subDecision, note: subNote || undefined });
+      setStatus(`Subscription override saved for ${subKey} → ${subDecision}.`);
+      setSubKey(''); setSubNote(''); setSubDecision('keep');
+    } catch (e: any) {
+      setStatus(e?.message || 'Failed to set subscription override');
+    } finally { setBusy(false); }
+  };
+
   const handleCsvImport = async (file: File) => {
     if (!currentUser) return;
     setBusy(true); setStatus('');
@@ -140,6 +156,38 @@ const MerchantMappings: React.FC = () => {
             </Button>
             <Button size="sm" variant="outline-secondary" disabled={busy} onClick={backfillMerchantKeys}>Backfill Merchant Keys</Button>
             {status && <span className="ms-2 small text-muted">{status}</span>}
+          </div>
+        </Card.Body>
+      </Card>
+
+      <Card className="mb-3">
+        <Card.Header>
+          <strong>Subscription Overrides</strong>
+        </Card.Header>
+        <Card.Body>
+          <div className="row g-2 align-items-end">
+            <div className="col-sm-4">
+              <Form.Label className="mb-1">Merchant Key</Form.Label>
+              <Form.Control size="sm" value={subKey} onChange={(e)=>setSubKey(e.target.value)} placeholder="normalized key (e.g., netflix)" />
+            </div>
+            <div className="col-sm-3">
+              <Form.Label className="mb-1">Decision</Form.Label>
+              <Form.Select size="sm" value={subDecision} onChange={(e)=>setSubDecision(e.target.value as any)}>
+                <option value="keep">keep</option>
+                <option value="reduce">reduce</option>
+                <option value="cancel">cancel</option>
+              </Form.Select>
+            </div>
+            <div className="col-sm-5">
+              <Form.Label className="mb-1">Note</Form.Label>
+              <Form.Control size="sm" value={subNote} onChange={(e)=>setSubNote(e.target.value)} placeholder="optional note" />
+            </div>
+          </div>
+          <div className="mt-2">
+            <Button size="sm" variant="warning" disabled={busy || !subKey.trim()} onClick={saveSubscriptionOverride}>
+              {busy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+              Save Override
+            </Button>
           </div>
         </Card.Body>
       </Card>

@@ -701,6 +701,7 @@ const GoalRoadmapV3: React.FC = () => {
     const computed = Math.round(daysBetween(timeRange.start, timeRange.end) * pxPerDay);
     return Math.max(Math.max(320, viewport.width), computed);
   }, [timeRange, pxPerDay, viewport.width]);
+
   const axis = useMemo(() => {
     const rows: AxisRow[] = [];
     const major = new Set<number>();
@@ -1206,7 +1207,7 @@ const GoalRoadmapV3: React.FC = () => {
     );
   });
 
-  // Connectors are currently disabled until generation is implemented.
+  const connectorSegments: ConnectorSegment[] = [];
 
   return (
     <div className={`grv3 ${zoomClass}`} style={axisCssVars}>
@@ -1404,7 +1405,29 @@ const GoalRoadmapV3: React.FC = () => {
           </>
         )}
 
-        {/* Connectors temporarily removed */}
+        {connectorSegments.length > 0 && (
+          <svg className="grv3-connectors" width={totalWidth} height={contentHeight}>
+            <defs>
+              {connectorSegments.map((segment) => (
+                <linearGradient id={segment.gradientId} key={`grad-${segment.gradientId}`} gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor={segment.startColor} stopOpacity={0.85} />
+                  <stop offset="100%" stopColor={segment.endColor} stopOpacity={0.85} />
+                </linearGradient>
+              ))}
+            </defs>
+            {connectorSegments.map((segment) => (
+              <path
+                key={segment.gradientId}
+                d={segment.path}
+                stroke={`url(#${segment.gradientId})`}
+                strokeWidth={2}
+                fill="none"
+                strokeDasharray="6 6"
+                strokeLinecap="round"
+              />
+            ))}
+          </svg>
+        )}
 
         <div className="grv3-rows" style={{ width: 260 + totalWidth }}>
           {rowsMarkup}

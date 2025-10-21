@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2 } from 'lucide-react';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -40,7 +41,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [showChat, setShowChat] = useState(false);
   const [showResearch, setShowResearch] = useState(false);
   const [orchestrating, setOrchestrating] = useState(false);
-  const functions = React.useMemo(() => getFunctions(), []);
 
   // Ensure status labels/variants match each entity’s board semantics
   const getStatusDisplay = (
@@ -358,19 +358,17 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const generateReferenceNumber = () => {
+    // Prefer canonical ref if present
+    if ((selectedItem as any)?.ref) return String((selectedItem as any).ref);
     if (selectedType === 'goal') {
-      const goalItem = selectedItem as Goal;
-      const themeName = getThemeName(goalItem.theme);
-      return `${themeName.substring(0, 2).toUpperCase()}-${goalItem.id.substring(0, 6).toUpperCase()}`;
+      const g = selectedItem as Goal;
+      return `GOAL-${g.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'story') {
-      const storyItem = selectedItem as Story;
-      const themeName = goal?.theme ? getThemeName(goal.theme) : 'Story';
-      const goalPrefix = themeName.substring(0, 2).toUpperCase();
-      return `${goalPrefix}-${storyItem.id.substring(0, 6).toUpperCase()}`;
+      const s = selectedItem as Story;
+      return `STRY-${s.id.substring(0, 6).toUpperCase()}`;
     } else if (selectedType === 'task') {
-      const taskItem = selectedItem as Task;
-      const storyPrefix = story?.title ? story.title.substring(0, 2).toUpperCase() : 'TK';
-      return `${storyPrefix}-${taskItem.id.substring(0, 6).toUpperCase()}`;
+      const t = selectedItem as Task;
+      return `TASK-${t.id.substring(0, 6).toUpperCase()}`;
     }
     return 'N/A';
   };

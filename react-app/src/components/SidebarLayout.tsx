@@ -35,6 +35,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   // const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('leftNavCollapsed') === '1'; } catch { return false; }
+  });
+  const toggleNavCollapsed = () => {
+    setNavCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('leftNavCollapsed', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance', 'Settings', 'Logs']);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -181,7 +191,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
   return (
     <div className="d-flex" style={{ minHeight: '100vh' }}>
-      {/* Desktop Sidebar */}
+      {/* Desktop Sidebar (collapsible) */}
+      {!navCollapsed && (
       <div className="sidebar-desktop d-none d-lg-block" style={{ width: '250px', minHeight: '100vh' }}>
         <div className="h-100 d-flex flex-column" style={{ 
           background: 'var(--panel)', 
@@ -381,6 +392,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </div>
         </div>
       </div>
+      )}
 
       {/* Mobile Header */}
       <div className="d-lg-none fixed-top bg-dark">
@@ -529,6 +541,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </div>
         </Offcanvas.Body>
       </Offcanvas>
+
+      {/* Global collapse/expand toggle */}
+      <button
+        type="button"
+        className="btn btn-sm btn-light position-fixed"
+        onClick={toggleNavCollapsed}
+        style={{ top: 10, left: navCollapsed ? 10 : 260, zIndex: 2000, boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}
+        title={navCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+      >
+        {navCollapsed ? '▶' : '◀'}
+      </button>
 
       {/* Main Content Area */}
       <div className="flex-grow-1" style={{ paddingTop: window.innerWidth < 992 ? '60px' : '0' }}>

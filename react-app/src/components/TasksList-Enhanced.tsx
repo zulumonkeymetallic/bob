@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { taskStatusText } from '../utils/storyCardFormatting';
 import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
@@ -623,7 +624,7 @@ const TasksList: React.FC = () => {
                 <td onClick={(e) => e.stopPropagation()}>
                   <Dropdown>
                     <Dropdown.Toggle as={Badge} bg={getBadgeVariant(getStatusName(task.status))} style={{ cursor: 'pointer' }}>
-                      {getStatusName(task.status).replace('-', ' ').toUpperCase()}
+                      {taskStatusText(task.status)}
                     </Dropdown.Toggle>
                     <Dropdown.Menu>
                       <Dropdown.Item onClick={() => handleQuickStatusChange(task.id, 'todo')}>

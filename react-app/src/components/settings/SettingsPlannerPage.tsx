@@ -26,17 +26,10 @@ const SettingsPlannerPage: React.FC = () => {
   const [maintenanceError, setMaintenanceError] = useState('');
   const [maintenanceRunning, setMaintenanceRunning] = useState(false);
 
-  const [summaryStatus, setSummaryStatus] = useState('');
-  const [summaryError, setSummaryError] = useState('');
-  const [summaryRunning, setSummaryRunning] = useState(false);
-
-  const [qualityStatus, setQualityStatus] = useState('');
-  const [qualityError, setQualityError] = useState('');
-  const [qualityRunning, setQualityRunning] = useState(false);
-
-  const [previewStatus, setPreviewStatus] = useState('');
-  const [previewError, setPreviewError] = useState('');
-  const [previewRunning, setPreviewRunning] = useState(false);
+  // Email-related actions moved to Email settings page
+  const [normalizeStatus, setNormalizeStatus] = useState('');
+  const [normalizeError, setNormalizeError] = useState('');
+  const [normalizeRunning, setNormalizeRunning] = useState(false);
 
   useEffect(() => {
     const loadPrefs = async () => {
@@ -120,56 +113,23 @@ const SettingsPlannerPage: React.FC = () => {
     }
   };
 
-  const handleSendDailySummary = async () => {
-    if (!currentUser) return;
-    setSummaryRunning(true);
-    setSummaryStatus('');
-    setSummaryError('');
-    try {
-      const callable = httpsCallable(functions, 'sendDailySummaryNow');
-      await callable({});
-      setSummaryStatus('Daily summary queued for delivery');
-    } catch (error: any) {
-      console.error('[settings-planner] daily summary trigger failed', error);
-      setSummaryError(error?.message || 'Failed to trigger daily summary');
-    } finally {
-      setSummaryRunning(false);
-    }
-  };
+  // removed: handleSendDailySummary, handleSendDataQuality, handlePreviewSummary
 
-  const handleSendDataQuality = async () => {
+  const handleNormalizeStatuses = async () => {
     if (!currentUser) return;
-    setQualityRunning(true);
-    setQualityStatus('');
-    setQualityError('');
+    setNormalizeRunning(true);
+    setNormalizeStatus('');
+    setNormalizeError('');
     try {
-      const callable = httpsCallable(functions, 'sendDataQualityNow');
-      await callable({});
-      setQualityStatus('Data quality report queued for delivery');
-    } catch (error: any) {
-      console.error('[settings-planner] data quality trigger failed', error);
-      setQualityError(error?.message || 'Failed to trigger data quality report');
-    } finally {
-      setQualityRunning(false);
-    }
-  };
-
-  const handlePreviewSummary = async () => {
-    if (!currentUser) return;
-    setPreviewRunning(true);
-    setPreviewStatus('');
-    setPreviewError('');
-    try {
-      const callable = httpsCallable(functions, 'previewDailySummary');
+      const callable = httpsCallable(functions, 'normalizeStatuses');
       const response: any = await callable({});
       const payload = response?.data ?? response;
-      const meta = payload?.summary?.metadata;
-      setPreviewStatus(`Preview generated for ${meta?.dayIso || 'today'} (${(payload?.html || '').length} chars).`);
+      setNormalizeStatus(`Normalized ${payload?.storiesUpdated || 0} stories and ${payload?.tasksUpdated || 0} tasks.`);
     } catch (error: any) {
-      console.error('[settings-planner] preview summary failed', error);
-      setPreviewError(error?.message || 'Failed to generate preview');
+      console.error('[settings-planner] normalize statuses failed', error);
+      setNormalizeError(error?.message || 'Failed to normalize statuses');
     } finally {
-      setPreviewRunning(false);
+      setNormalizeRunning(false);
     }
   };
 
@@ -238,26 +198,18 @@ const SettingsPlannerPage: React.FC = () => {
             <Button variant="primary" onClick={handleRunMaintenance} disabled={maintenanceRunning}>
               {maintenanceRunning ? 'Running…' : 'Run AI Reprioritisation Now'}
             </Button>
-            <Button variant="outline-primary" onClick={handleSendDailySummary} disabled={summaryRunning}>
-              {summaryRunning ? 'Triggering…' : 'Send Daily Summary Now'}
-            </Button>
-            <Button variant="outline-primary" onClick={handleSendDataQuality} disabled={qualityRunning}>
-              {qualityRunning ? 'Triggering…' : 'Send Data Quality Now'}
-            </Button>
-            <Button variant="outline-secondary" onClick={handlePreviewSummary} disabled={previewRunning}>
-              {previewRunning ? 'Generating…' : 'Preview Daily Summary'}
+            {/* Email actions moved to Email settings */}
+            <Button variant="outline-danger" onClick={handleNormalizeStatuses} disabled={normalizeRunning}>
+              {normalizeRunning ? 'Normalizing…' : 'Normalize Story/Task Statuses'}
             </Button>
           </div>
 
           <div className="mt-3 d-flex flex-column gap-1">
             {maintenanceStatus && <span className="text-success small">{maintenanceStatus}</span>}
             {maintenanceError && <span className="text-danger small">{maintenanceError}</span>}
-            {summaryStatus && <span className="text-success small">{summaryStatus}</span>}
-            {summaryError && <span className="text-danger small">{summaryError}</span>}
-            {qualityStatus && <span className="text-success small">{qualityStatus}</span>}
-            {qualityError && <span className="text-danger small">{qualityError}</span>}
-            {previewStatus && <span className="text-success small">{previewStatus}</span>}
-            {previewError && <span className="text-danger small">{previewError}</span>}
+            {/* removed email statuses */}
+            {normalizeStatus && <span className="text-success small">{normalizeStatus}</span>}
+            {normalizeError && <span className="text-danger small">{normalizeError}</span>}
           </div>
         </Card.Body>
       </Card>

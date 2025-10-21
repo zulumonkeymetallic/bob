@@ -4,6 +4,8 @@ import { X, Edit3, Save, Calendar, User, Target, BookOpen, Clock, AlertCircle, H
 import { Story, Goal, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { themeVars, domainThemePrimaryVar } from '../utils/themeVars';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 
 interface DetailsSidebarProps {
   item: Story | Task | null;
@@ -28,6 +30,8 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMsg, setAiMsg] = useState<string | null>(null);
 
   // Theme colors mapping
   const themeColors = {
@@ -102,16 +106,31 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   };
 
   const generateReferenceNumber = () => {
+    // Prefer canonical ref stored on the entity
+    if ((item as any)?.ref) return String((item as any).ref);
     if (type === 'story') {
-      const story = item as Story;
-      const goalPrefix = goal?.theme ? getThemeClass(goal.theme).substring(0, 2).toUpperCase() : 'ST';
-      return `${goalPrefix}-${story.id.substring(0, 6).toUpperCase()}`;
+      const storyItem = item as Story;
+      return `STRY-${storyItem.id.substring(0, 6).toUpperCase()}`;
     } else if (type === 'task') {
-      const task = item as Task;
-      const storyPrefix = story?.title ? story.title.substring(0, 2).toUpperCase() : 'TK';
-      return `${storyPrefix}-${task.id.substring(0, 6).toUpperCase()}`;
+      const taskItem = item as Task;
+      return `TASK-${taskItem.id.substring(0, 6).toUpperCase()}`;
     }
     return 'N/A';
+  };
+
+  const handleGenerateTasksForStory = async () => {
+    if (type !== 'story') return;
+    try {
+      setAiBusy(true);
+      setAiMsg(null);
+      const fn = httpsCallable(functions, 'generateTasksForStory');
+      const res: any = await fn({ storyId: (item as Story).id });
+      setAiMsg(`Generated ${res?.data?.created ?? 0} tasks from story`);
+    } catch (e: any) {
+      setAiMsg(e?.message || 'Failed to generate tasks');
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   return (
@@ -208,6 +227,18 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
           )}
         </div>
 
+        {/* Story-level AI Actions */}
+        {type === 'story' && (
+          <div style={{ marginBottom: '16px', display: 'flex', gap: 8 }}>
+            <Button variant="outline-primary" size="sm" disabled={aiBusy} onClick={handleGenerateTasksForStory}>
+              {aiBusy ? 'Generating…' : 'AI: Generate Tasks for Story'}
+            </Button>
+            {aiMsg && (
+              <span className="text-muted" style={{ fontSize: 12 }}>{aiMsg}</span>
+            )}
+          </div>
+        )}
+
         {/* Description */}
         <div style={{ marginBottom: '20px' }}>
           <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text as string, marginBottom: '6px', display: 'block' }}>
@@ -239,18 +270,13 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                 onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
               >
                 <option value="backlog">Backlog</option>
-                <option value="active">Active</option>
+                <option value="in-progress">In Progress</option>
+                <option value="blocked">Blocked</option>
                 <option value="done">Done</option>
-                {type === 'task' && (
-                  <>
-                    <option value="in-progress">In Progress</option>
-                    <option value="blocked">Blocked</option>
-                  </>
-                )}
               </Form.Select>
             ) : (
               <Badge 
-                bg={isStatus(item.status, 'done') ? 'success' : isStatus(item.status, 'active') || isStatus(item.status, 'in-progress') ? 'primary' : 'secondary'}
+                bg={isStatus(item.status, 'done') ? 'success' : isStatus(item.status, 'in-progress') ? 'primary' : 'secondary'}
                 style={{ fontSize: '12px', padding: '6px 12px' }}
               >
                 {item.status}

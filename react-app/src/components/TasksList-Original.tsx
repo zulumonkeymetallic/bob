@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { taskStatusText } from '../utils/storyCardFormatting';
 
 const TasksList: React.FC = () => {
   const { currentUser } = useAuth();
@@ -393,7 +394,7 @@ const TasksList: React.FC = () => {
                   isStatus(task.status, 'done') ? 'success' : 
                   isStatus(task.status, 'in_progress') ? 'warning' : 'secondary'
                 }>
-                  {getStatusName(task.status).replace('_', ' ')}
+                  {taskStatusText(task.status)}
                 </Badge>
               </td>
               <td>

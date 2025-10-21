@@ -57,7 +57,7 @@ const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
-const NYLAS_API_KEY = defineSecret('NYLAS_API_KEY');
+const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
 
 // Scheduler utils (deterministic id + day key)
 function makePlanId(userId, date) {
@@ -1077,7 +1077,7 @@ exports.diagnosticsStatus = httpsV2.onCall({}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   return {
     hasGemini: !!process.env.GOOGLEAISTUDIOAPIKEY,
-    hasNylas: !!process.env.NYLAS_API_KEY,
+    hasBrevo: !!process.env.BREVO_API_KEY,
     hasOpenAI: !!process.env.OPENAI_API_KEY,
     appBaseUrl: process.env.APP_BASE_URL || null,
   };
@@ -1090,14 +1090,94 @@ exports.testLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async 
   return { ok: true, model: 'gemini', response: raw.slice(0, 200) };
 });
 
-// Diagnostics: send test email via Nylas
-exports.sendTestEmail = httpsV2.onCall({ secrets: [NYLAS_API_KEY] }, async (req) => {
+// Admin: fetch sanitized email settings from Firestore
+exports.getEmailSettings = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+  if (!isAdmin) throw new httpsV2.HttpsError('permission-denied', 'Admins only');
+  const snap = await db.collection('system_settings').doc('email').get();
+  const data = snap.exists ? (snap.data() || {}) : {};
+  // Remove secrets
+  delete data.password;
+  delete data.user;
+  return { ok: true, settings: data };
+});
+
+// Data migration: normalize story/task statuses to {backlog, in-progress, blocked, done}
+exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+
+  const normalize = (value, kind /* 'story' | 'task' */) => {
+    if (value === undefined || value === null) return 'backlog';
+    // Do NOT change numeric values to avoid breaking legacy metrics elsewhere
+    if (typeof value === 'number') return null; // signal: no update
+    const v = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+    if (!v) return 'backlog';
+    if (['blocked', 'paused'].includes(v)) return 'blocked';
+    if (['done', 'complete', 'completed', 'closed'].includes(v)) return 'done';
+    if (['in-progress', 'in progress', 'active', 'wip', 'testing'].includes(v)) return 'in-progress';
+    if (['backlog', 'todo', 'planned', 'new'].includes(v)) return 'backlog';
+    return 'backlog';
+  };
+
+  const stats = { storiesChecked: 0, storiesUpdated: 0, tasksChecked: 0, tasksUpdated: 0, changes: [] };
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  // Stories
+  const storySnap = await db.collection('stories').where('ownerUid', '==', uid).get();
+  for (const docSnap of storySnap.docs) {
+    stats.storiesChecked++;
+    const data = docSnap.data() || {};
+    const current = data.status;
+    const next = normalize(current, 'story');
+    // Only update string statuses that differ; skip numerics
+    if (next && (typeof current !== 'string' || current !== next)) {
+      await docSnap.ref.set({ status: next, updatedAt: now }, { merge: true });
+      stats.storiesUpdated++;
+      stats.changes.push({ type: 'story', id: docSnap.id, from: current ?? null, to: next });
+    }
+  }
+
+  // Tasks
+  const taskSnap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+  for (const docSnap of taskSnap.docs) {
+    stats.tasksChecked++;
+    const data = docSnap.data() || {};
+    const current = data.status;
+    const next = normalize(current, 'task');
+    if (next && (typeof current !== 'string' || current !== next)) {
+      await docSnap.ref.set({ status: next, updatedAt: now }, { merge: true });
+      stats.tasksUpdated++;
+      stats.changes.push({ type: 'task', id: docSnap.id, from: current ?? null, to: next });
+    }
+  }
+
+  try {
+    await recordIntegrationLog(uid, 'migration', 'success', 'Normalized story/task statuses', {
+      storiesChecked: stats.storiesChecked,
+      storiesUpdated: stats.storiesUpdated,
+      tasksChecked: stats.tasksChecked,
+      tasksUpdated: stats.tasksUpdated,
+    });
+  } catch {}
+
+  return { ok: true, ...stats, changeCount: stats.changes.length };
+});
+
+// Diagnostics: send test email via Brevo
+exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
   const snap = await db.collection('profiles').doc(uid).get();
   const email = snap.exists ? (snap.data() || {}).email : null;
   if (!email) throw new httpsV2.HttpsError('failed-precondition', 'Profile email not set');
-  await sendEmail({ to: email, subject: 'BOB · Test Email', html: '<p>This is a test email from BOB diagnostics.</p>' });
+  await sendEmail({ to: email, subject: 'BOB · Test Email', html: '<p>This is a test email from BOB diagnostics (Brevo).</p>' });
   return { ok: true, to: email };
 });
 
@@ -2739,7 +2819,7 @@ Generate a plan as JSON with:
 }
 
 // Orchestrated Goal Planning: research → stories/tasks → schedule → (optional) GitHub issues
-exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
+exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '').trim();
@@ -2907,7 +2987,7 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
 });
 
 // Orchestrated Story Planning: (optional) brief research → tasks → schedule
-exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async (req) => {
+exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const storyId = String(req?.data?.storyId || '').trim();
@@ -3417,6 +3497,25 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       updatedAt: now,
       createdAt: now
     });
+
+    // Write per-story daily allocation for dashboard rollups
+    try {
+      if (enriched.storyId && proposed.start && proposed.end) {
+        const startDate = new Date(proposed.start);
+        const endDate = new Date(proposed.end);
+        const mins = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
+        const dayKey = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).toISOString().slice(0,10);
+        const storyRef = db.collection('stories').doc(String(enriched.storyId));
+        batch.set(storyRef, {
+          allocation: {
+            daily: {
+              [dayKey]: admin.firestore.FieldValue.increment(mins)
+            }
+          },
+          updatedAt: now
+        }, { merge: true });
+      }
+    } catch {}
 
     // Create scheduled_items doc if a linked entity exists
     let linkType = null, refId = null, linkTitle = null, linkUrl = enriched.linkUrl || null;
@@ -6793,7 +6892,7 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 });
 
 // Theme-based Calendar Planner (runs daily at 01:00 UTC)
-exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, NYLAS_API_KEY] }, async () => {
+exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async () => {
   const db = ensureFirestore();
   const profilesSnap = await db.collection('profiles').get();
   const runStartedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -7003,7 +7102,7 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
   }
 });
 
-exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [OPENAI_API_KEY, GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -7232,7 +7331,7 @@ exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
   schedule: 'every 15 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('NYLAS_API_KEY')],
+  secrets: [defineSecret('BREVO_API_KEY')],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -7268,7 +7367,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   schedule: 'every 30 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('NYLAS_API_KEY')],
+  secrets: [defineSecret('BREVO_API_KEY')],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -7300,7 +7399,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   }
 });
 
-exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('NYLAS_API_KEY')] }, async (req) => {
+exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY')] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -7516,12 +7615,10 @@ exports.cleanupUserLogs = schedulerV2.onSchedule({
   }
 });
 
-// [Removed duplicate and stray top-level code block from merge artifact]
-
-// ===== New v3.0.2 Functions =====
+// ===== v3.0.2 Functions =====
 
 // Daily Digest Email Generation (uses Nylas)
-exports.generateDailyDigest = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('NYLAS_API_KEY')] }, async () => {
+exports.generateDailyDigest = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('BREVO_API_KEY')] }, async () => {
   try {
     const usersSnapshot = await admin.firestore().collection('users').where('emailDigest', '==', true).get();
     for (const userDoc of usersSnapshot.docs) {

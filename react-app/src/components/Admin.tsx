@@ -20,6 +20,13 @@ const Admin = () => {
   const [log, setLog] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [dataType, setDataType] = useState('goals');
+  // Recovered function helpers
+  const [goalIdForApproval, setGoalIdForApproval] = useState('');
+  const [approveAllLimit, setApproveAllLimit] = useState<number>(3);
+  const [storyIdForTasks, setStoryIdForTasks] = useState('');
+  const [monzoMerchantKey, setMonzoMerchantKey] = useState('');
+  const [monzoDecision, setMonzoDecision] = useState<'keep'|'reduce'|'cancel'>('keep');
+  const [monzoNote, setMonzoNote] = useState('');
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(user => {
@@ -259,6 +266,70 @@ const Admin = () => {
       .catch(err => logMessage(`Percentiles update failed: ${err.message}`));
   };
 
+  // ===== Recovered callable function bridges =====
+  const handleApproveGoalResearch = async () => {
+    try {
+      if (!goalIdForApproval.trim()) { logMessage('Enter a goalId first'); return; }
+      const fn = httpsCallable(functions, 'approveGoalResearch');
+      logMessage(`Approving goal research for ${goalIdForApproval}...`);
+      try {
+        const res: any = await fn({ goalId: goalIdForApproval.trim(), schedule: true });
+        logMessage(`approveGoalResearch: ${JSON.stringify(res.data)}`);
+      } catch (err: any) {
+        // Fallback: run orchestrateGoalPlanning which generates stories/tasks and schedules
+        logMessage(`approveGoalResearch unavailable, falling back to orchestrateGoalPlanning…`);
+        const alt = httpsCallable(functions, 'orchestrateGoalPlanning');
+        const res2: any = await alt({ goalId: goalIdForApproval.trim(), researchOnly: false });
+        logMessage(`orchestrateGoalPlanning: ${JSON.stringify(res2.data)}`);
+      }
+    } catch (e: any) {
+      logMessage(`approveGoalResearch failed: ${e?.message || e}`);
+    }
+  };
+
+  const handleApproveAllGoalResearch = async () => {
+    try {
+      const fn = httpsCallable(functions, 'approveAllGoalResearch');
+      logMessage(`Approving all pending goal research (limit ${approveAllLimit})...`);
+      const res: any = await fn({ schedule: true, limit: approveAllLimit });
+      logMessage(`approveAllGoalResearch: ${JSON.stringify(res.data)}`);
+    } catch (e: any) {
+      logMessage(`approveAllGoalResearch failed: ${e?.message || e}`);
+    }
+  };
+
+  const handleGenerateTasksForStory = async () => {
+    try {
+      if (!storyIdForTasks.trim()) { logMessage('Enter a storyId first'); return; }
+      const fn = httpsCallable(functions, 'generateTasksForStory');
+      logMessage(`Generating tasks for story ${storyIdForTasks}...`);
+      try {
+        const res: any = await fn({ storyId: storyIdForTasks.trim() });
+        logMessage(`generateTasksForStory: ${JSON.stringify(res.data)}`);
+      } catch (err: any) {
+        // Fallback: orchestrateStoryPlanning will generate tasks and schedule
+        logMessage(`generateTasksForStory unavailable, falling back to orchestrateStoryPlanning…`);
+        const alt = httpsCallable(functions, 'orchestrateStoryPlanning');
+        const res2: any = await alt({ storyId: storyIdForTasks.trim(), research: false });
+        logMessage(`orchestrateStoryPlanning: ${JSON.stringify(res2.data)}`);
+      }
+    } catch (e: any) {
+      logMessage(`generateTasksForStory failed: ${e?.message || e}`);
+    }
+  };
+
+  const handleSetMonzoSubscriptionOverride = async () => {
+    try {
+      if (!monzoMerchantKey.trim()) { logMessage('Enter a merchant key'); return; }
+      const fn = httpsCallable(functions, 'setMonzoSubscriptionOverride');
+      logMessage(`Setting Monzo subscription override for ${monzoMerchantKey} → ${monzoDecision}...`);
+      const res: any = await fn({ merchantKey: monzoMerchantKey.trim(), decision: monzoDecision, note: monzoNote || undefined });
+      logMessage(`setMonzoSubscriptionOverride: ${JSON.stringify(res.data)}`);
+    } catch (e: any) {
+      logMessage(`setMonzoSubscriptionOverride failed: ${e?.message || e}`);
+    }
+  };
+
   return (
     <div>
       <h2>Admin Page</h2>
@@ -359,6 +430,46 @@ const Admin = () => {
             </select>
           </div>
           <button className="btn btn-primary" onClick={handleImport}>Import</button>
+        </div>
+      </div>
+
+      <div className="card mt-3">
+        <div className="card-body">
+          <h5 className="card-title">Recovered Functions (deployed-only)</h5>
+          <div className="mb-3">
+            <label className="form-label">Goal ID (approveGoalResearch)</label>
+            <input className="form-control" value={goalIdForApproval} onChange={e=>setGoalIdForApproval(e.target.value)} placeholder="goal document id" />
+            <button className="btn btn-primary mt-2" onClick={handleApproveGoalResearch}>Approve Goal Research</button>
+          </div>
+          <div className="mb-3">
+            <label className="form-label">Approve All (limit)</label>
+            <input type="number" className="form-control" value={approveAllLimit} onChange={e=>setApproveAllLimit(Number(e.target.value)||1)} min={1} max={15} />
+            <button className="btn btn-secondary mt-2" onClick={handleApproveAllGoalResearch}>Approve All Goal Research</button>
+          </div>
+          <div className="mb-3">
+            <label className="form-label">Story ID (generateTasksForStory)</label>
+            <input className="form-control" value={storyIdForTasks} onChange={e=>setStoryIdForTasks(e.target.value)} placeholder="story document id" />
+            <button className="btn btn-primary mt-2" onClick={handleGenerateTasksForStory}>Generate Tasks For Story</button>
+          </div>
+          <div className="mb-2">
+            <label className="form-label">Monzo Subscription Override</label>
+            <div className="row g-2">
+              <div className="col-sm-4">
+                <input className="form-control" value={monzoMerchantKey} onChange={e=>setMonzoMerchantKey(e.target.value)} placeholder="merchant key (normalized)" />
+              </div>
+              <div className="col-sm-3">
+                <select className="form-select" value={monzoDecision} onChange={e=>setMonzoDecision(e.target.value as any)}>
+                  <option value="keep">keep</option>
+                  <option value="reduce">reduce</option>
+                  <option value="cancel">cancel</option>
+                </select>
+              </div>
+              <div className="col-sm-5">
+                <input className="form-control" value={monzoNote} onChange={e=>setMonzoNote(e.target.value)} placeholder="optional note" />
+              </div>
+            </div>
+            <button className="btn btn-warning mt-2" onClick={handleSetMonzoSubscriptionOverride}>Set Override</button>
+          </div>
         </div>
       </div>
 

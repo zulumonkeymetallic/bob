@@ -129,37 +129,30 @@ export const useEntityAudit = (options: AuditOptions | null) => {
           if (!meaningfulDiffs.length) return;
 
           const systemSource: ActivitySource = 'system';
-          const fields = meaningfulDiffs.map(d => d.field);
-          const prevMap: Record<string, string> = {};
-          const nextMap: Record<string, string> = {};
-          meaningfulDiffs.forEach(d => {
-            prevMap[d.field] = serialiseForActivity(d.previous);
-            nextMap[d.field] = serialiseForActivity(d.next);
-          });
-
-          const persona = personaFromRecord(currentData) ?? 'audit';
-          const entityType: 'goal' | 'story' | 'task' =
-            collectionName === 'goals' ? 'goal' :
-            collectionName === 'stories' ? 'story' :
-            'task';
-
-          logger.info('audit', `Entity fields changed: ${fields.join(', ')}`, { collection: collectionName, id: change.doc.id, fields });
-
-          // Log a single aggregated entry using fieldName 'fields' and JSON summaries
-          ActivityStreamService.logFieldChange(
-            change.doc.id,
-            entityType,
-            options.currentUserId,
-            options.currentUserEmail || '',
-            `Updated fields: ${fields.join(', ')}`,
-            JSON.stringify(prevMap),
-            JSON.stringify(nextMap),
-            persona,
-            change.doc.id,
-            systemSource
-          ).catch((error) => {
-            logger.error('audit', 'Failed to record aggregated activity stream entry', error);
-          });
+          meaningfulDiffs.forEach((diff) => {
+            const details = describeChange(collectionName, change.doc, diff);
+            logger.info('audit', 'Entity field changed', details);
+            console.log('[AUDIT]', details);
+            const persona = personaFromRecord(currentData) ?? 'audit';
+            const entityType: 'goal' | 'story' | 'task' =
+                collectionName === 'goals' ? 'goal' :
+                collectionName === 'stories' ? 'story' :
+                'task';
+              ActivityStreamService.logFieldChange(
+                change.doc.id,
+                entityType,
+                options.currentUserId,
+                options.currentUserEmail || '',
+                diff.field,
+                serialiseForActivity(diff.previous),
+                serialiseForActivity(diff.next),
+                persona,
+                change.doc.id,
+                systemSource
+              ).catch((error) => {
+                logger.error('audit', 'Failed to record activity stream entry', error);
+              });
+            });
           });
         },
         (error) => {
@@ -175,7 +168,8 @@ export const useEntityAudit = (options: AuditOptions | null) => {
           } else {
             logger.error('audit', `Failed to attach audit listener for ${collectionName}`, error);
           }
-          // No-op: teardown handled by unsubscribe closure above
+          // Disable further processing for this listener.
+          return () => undefined;
         }
       );
     });

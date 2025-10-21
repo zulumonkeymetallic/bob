@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Button, Form, Spinner } from 'react-bootstrap';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { httpsCallable, getFunctions } from 'firebase/functions';
-import { db } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
 interface GoalChatModalProps {
@@ -16,7 +16,6 @@ const GoalChatModal: React.FC<GoalChatModalProps> = ({ goalId, show, onHide }) =
   const [messages, setMessages] = useState<Array<{ id?: string; role: 'user'|'assistant'; content: string }>>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const functions = useMemo(() => getFunctions(), []);
 
   useEffect(() => {
     if (!goalId || !show) return;
@@ -80,4 +79,3 @@ const GoalChatModal: React.FC<GoalChatModalProps> = ({ goalId, show, onHide }) =
 };
 
 export default GoalChatModal;
-

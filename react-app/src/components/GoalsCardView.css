@@ -10,8 +10,9 @@
 }
 
 .goals-card-grid--comfortable {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 32px;
+  /* Reduce size ~25% and ensure at least 3 per row on wide screens */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
 }
 
 @media (max-width: 1920px) {

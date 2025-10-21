@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/f
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { storyStatusText } from '../utils/storyCardFormatting';
 import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
 
 const StoryBacklog: React.FC = () => {
@@ -264,8 +265,8 @@ const StoryBacklog: React.FC = () => {
                           <td onClick={(e) => e.stopPropagation()}>
                             <Dropdown>
                               <Dropdown.Toggle as={Badge} bg={isStatus(story.status, 'done') ? 'success' : 
-                                  isStatus(story.status, 'active') ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
-                                {getStatusName(story.status).replace('_', ' ').toUpperCase()}
+                                  isStatus(story.status, 'in-progress') ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                                {storyStatusText(story.status)}
                               </Dropdown.Toggle>
                               <Dropdown.Menu>
                                 <Dropdown.Item onClick={() => updateStoryStatus(story.id, 'backlog')}>
@@ -299,7 +300,7 @@ const StoryBacklog: React.FC = () => {
                                   → Backlog
                                 </Button>
                               )}
-                              {!isStatus(story.status, 'active') && (
+                              {!isStatus(story.status, 'in-progress') && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-warning"

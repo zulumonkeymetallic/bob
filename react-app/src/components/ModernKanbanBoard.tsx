@@ -33,8 +33,6 @@ import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
 import { deriveTaskSprint, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useActivityTracking } from '../hooks/useActivityTracking';
-import { ActivityStreamService } from '../services/ActivityStreamService';
-import logger from '../utils/logger';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import { DnDMutationHandler } from '../utils/dndMutations';
@@ -46,7 +44,7 @@ interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
 }
 
-type LaneStatus = 'backlog' | 'in-progress' | 'blocked' | 'done';
+type LaneStatus = 'backlog' | 'in-progress' | 'done';
 
 // Droppable Area Component
 const DroppableArea: React.FC<{
@@ -121,7 +119,7 @@ const SortableStoryCard: React.FC<{
     <div ref={setNodeRef} style={style}>
       <div
         className={`kanban-card kanban-card--story kanban-card__clickable${isDragging ? ' dragging' : ''}`}
-        style={{ borderLeft: `3px solid ${themeColor || '#2563eb'}` }}
+        style={{ borderLeft: `3px solid ${isStatus((story as any).status, 'blocked') ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb')}` }}
         role="button"
         tabIndex={0}
         onClick={handleCardClick}
@@ -271,7 +269,7 @@ const SortableTaskCard: React.FC<{
     <div ref={setNodeRef} style={style}>
       <div
         className={`kanban-card kanban-card__clickable${isDragging ? ' dragging' : ''}`}
-        style={{ borderLeft: `3px solid ${themeColor || '#2563eb'}`, marginBottom: '10px' }}
+        style={{ borderLeft: `3px solid ${isStatus((task as any).status, 'blocked') ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb')}`, marginBottom: '10px' }}
         role="button"
         tabIndex={0}
         onClick={handleCardClick}
@@ -460,7 +458,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const swimLanes: Array<{ id: LaneStatus; title: string; status: LaneStatus; color: string }> = [
     { id: 'backlog', title: 'Backlog', status: 'backlog', color: themeVars.muted as string },
     { id: 'in-progress', title: 'In Progress', status: 'in-progress', color: themeVars.brand as string },
-    { id: 'blocked', title: 'Blocked', status: 'blocked', color: 'var(--bs-danger, #dc3545)' },
     { id: 'done', title: 'Done', status: 'done', color: 'var(--green)' },
   ];
   const laneIds: LaneStatus[] = swimLanes.map(lane => lane.id);
@@ -478,7 +475,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const storyLaneForStatus = (story: Story): LaneStatus => {
     const raw = (story as any).status;
     if (typeof raw === 'number') {
-      if (isStatus(raw, 'Blocked')) return 'blocked';
+      if (isStatus(raw, 'Blocked')) return 'in-progress';
       if (isStatus(raw, 'done') || isStatus(raw, 'Complete')) return 'done';
       if (isStatus(raw, 'active') || isStatus(raw, 'in-progress') || isStatus(raw, 'testing')) return 'in-progress';
       return 'backlog';
@@ -486,7 +483,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     const normalized = normalizeStatusValue(raw);
     if (!normalized) return 'backlog';
     if (['done', 'complete', 'completed', 'finished'].includes(normalized)) return 'done';
-    if (['blocked', 'stalled', 'waiting', 'on-hold', 'onhold', 'paused'].includes(normalized)) return 'blocked';
+    if (['blocked', 'stalled', 'waiting', 'on-hold', 'onhold', 'paused'].includes(normalized)) return 'in-progress';
     if (['in-progress', 'inprogress', 'active', 'doing', 'testing', 'qa', 'review'].includes(normalized)) return 'in-progress';
     return 'backlog';
   };
@@ -494,7 +491,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const taskLaneForStatus = (task: Task): LaneStatus => {
     const raw = (task as any).status;
     if (typeof raw === 'number') {
-      if (raw === 3 || isStatus(raw, 'blocked')) return 'blocked';
+      if (raw === 3 || isStatus(raw, 'blocked')) return 'in-progress';
       if (raw >= 2) return 'done';
       if (raw === 1) return 'in-progress';
       return 'backlog';
@@ -502,7 +499,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     const normalized = normalizeStatusValue(raw);
     if (!normalized) return 'backlog';
     if (['done', 'complete', 'completed', 'finished'].includes(normalized)) return 'done';
-    if (['blocked', 'stalled', 'waiting', 'on-hold', 'onhold', 'paused'].includes(normalized)) return 'blocked';
+    if (['blocked', 'stalled', 'waiting', 'on-hold', 'onhold', 'paused'].includes(normalized)) return 'in-progress';
     if (['in-progress', 'inprogress', 'active', 'doing'].includes(normalized)) return 'in-progress';
     return 'backlog';
   };
@@ -512,12 +509,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     if (typeof raw === 'number') {
       if (lane === 'backlog') return 0;
       if (lane === 'in-progress') return 2;
-      if (lane === 'blocked') return 3;
       return 4;
     }
     if (lane === 'backlog') return 'backlog';
     if (lane === 'in-progress') return 'in-progress';
-    if (lane === 'blocked') return 'blocked';
     return 'done';
   };
 
@@ -526,12 +521,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     if (typeof raw === 'number') {
       if (lane === 'backlog') return 0;
       if (lane === 'in-progress') return 1;
-      if (lane === 'blocked') return 3;
       return 2;
     }
     if (lane === 'backlog') return 'backlog';
     if (lane === 'in-progress') return 'in-progress';
-    if (lane === 'blocked') return 'blocked';
     return 'done';
   };
 
@@ -775,26 +768,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           const oldLabel = String((story as any).status ?? '');
           const newLabel = String(nextStatus);
           if (oldLabel !== newLabel) {
-            // Special case diagnostics: done->in-progress or blocked->in-progress
-            if ((oldLabel === 'done' && (newLabel === 'in-progress' || newLabel === 'active')) ||
-                (oldLabel === 'blocked' && newLabel === 'in-progress')) {
-              logger.warn('kanban', 'Story status moved to in-progress', { id: story.id, ref: (story as any).ref, from: oldLabel, to: newLabel });
-              try {
-                await ActivityStreamService.logStatusChange(
-                  story.id,
-                  'story',
-                  currentUser?.uid || 'unknown',
-                  currentUser?.email || 'unknown',
-                  oldLabel,
-                  newLabel,
-                  currentPersona || 'personal',
-                  `KNBN-${Date.now().toString(36)}`,
-                  'human'
-                );
-              } catch (e) {
-                logger.error('kanban', 'Failed to log special status change', e);
-              }
-            }
             await trackFieldChange(story.id, 'story', 'status', oldLabel, newLabel, (story as any).ref);
           }
         } catch {}
@@ -813,25 +786,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           const oldLabel = String((task as any).status ?? '');
           const newLabel = String(nextStatus);
           if (oldLabel !== newLabel) {
-            // Special case diagnostics: blocked->in-progress
-            if (oldLabel === 'blocked' && newLabel === 'in-progress') {
-              logger.warn('kanban', 'Task status moved from blocked to in-progress', { id: task.id, ref: (task as any).ref, from: oldLabel, to: newLabel });
-              try {
-                await ActivityStreamService.logStatusChange(
-                  task.id,
-                  'task',
-                  currentUser?.uid || 'unknown',
-                  currentUser?.email || 'unknown',
-                  oldLabel,
-                  newLabel,
-                  currentPersona || 'personal',
-                  `KNBN-${Date.now().toString(36)}`,
-                  'human'
-                );
-              } catch (e) {
-                logger.error('kanban', 'Failed to log special task status change', e);
-              }
-            }
             await trackFieldChange(task.id, 'task', 'status', oldLabel, newLabel, (task as any).ref);
           }
         } catch {}
@@ -1158,11 +1112,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           story={selectedItem as Story | null}
           goals={goals}
           onStoryUpdated={() => setShowEditModal(false)}
-          container={isFullscreen ? boardContainerRef.current : undefined}
         />
       )}
       {selectedType === 'task' && (
-        <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg" container={isFullscreen ? boardContainerRef.current || undefined : undefined}>
+        <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
           <Modal.Header closeButton>
             <Modal.Title>Edit Task</Modal.Title>
           </Modal.Header>

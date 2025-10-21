@@ -8,8 +8,23 @@ service cloud.firestore {
 
     match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
-    match /tasks/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
-    match /stories/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Allow updates when either the existing or incoming doc asserts ownership
+    match /tasks/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isSignedIn() && (
+        (resource.data.ownerUid == request.auth.uid) ||
+        (request.resource.data.ownerUid == request.auth.uid)
+      );
+    }
+    match /stories/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isSignedIn() && (
+        (resource.data.ownerUid == request.auth.uid) ||
+        (request.resource.data.ownerUid == request.auth.uid)
+      );
+    }
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -102,6 +117,11 @@ service cloud.firestore {
     match /profiles/{uid} {
       allow read, update, delete: if isSignedIn() && request.auth.uid == uid;
       allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.ownerUid == uid;
+    }
+
+    // Per-user app settings
+    match /user_settings/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
 
     // No client access to tokens by default (server-only)

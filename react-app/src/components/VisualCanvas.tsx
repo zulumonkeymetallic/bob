@@ -246,7 +246,7 @@ const VisualCanvas: React.FC = () => {
         return (themeColors as any)[goal.theme] || 'var(--muted)';
       case 'story':
         const story = node.data as Story;
-        return isStatus(story.status, 'done') ? 'var(--green)' : isStatus(story.status, 'active') ? 'var(--brand)' : 'var(--muted)';
+        return isStatus(story.status, 'done') ? 'var(--green)' : isStatus(story.status, 'in-progress') ? 'var(--brand)' : 'var(--muted)';
       case 'task':
         const task = node.data as Task;
         return isStatus(task.status, 'done') ? 'var(--green)' : isStatus(task.status, 'in_progress') ? 'var(--brand)' : 'var(--muted)';

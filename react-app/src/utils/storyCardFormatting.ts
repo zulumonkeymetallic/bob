@@ -11,28 +11,42 @@ export const toSentenceCase = (value: string): string => {
 };
 
 export const storyStatusText = (status: any): string => {
+  // Numeric legacy mapping (0..4)
   if (typeof status === 'number') {
     switch (status) {
       case 0: return 'Backlog';
-      case 1: return 'Planned';
+      case 1: return 'Planned'; // Shown as its own label but mapped to Backlog lane
       case 2: return 'In Progress';
-      case 3: return 'Testing';
+      case 3: return 'In Progress'; // unify former "Testing" with In Progress
       case 4: return 'Done';
       default: return 'Unknown';
     }
   }
-  if (!status) return 'Backlog';
-  return toSentenceCase(String(status));
+  // String mapping with normalisation
+  const s = String(status || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!s) return 'Backlog';
+  if (['backlog', 'todo', 'planned', 'new'].includes(s)) return 'Backlog';
+  if (['in-progress', 'in progress', 'active', 'wip', 'testing', 'qa', 'review'].includes(s)) return 'In Progress';
+  if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(s)) return 'Blocked';
+  if (['done', 'complete', 'completed', 'closed', 'finished'].includes(s)) return 'Done';
+  return toSentenceCase(s.replace(/-/g, ' '));
 };
 
 export const taskStatusText = (status: any): string => {
+  // Numeric mapping common in tasks (0 Backlog/Todo, 1 In Progress, 2 Done, 3 Blocked)
   if (typeof status === 'number') {
+    if (status === 3) return 'Blocked';
     if (status >= 2) return 'Done';
     if (status === 1) return 'In Progress';
-    return 'Todo';
+    return 'Backlog';
   }
-  if (!status) return 'Todo';
-  return toSentenceCase(String(status));
+  const s = String(status || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!s) return 'Backlog';
+  if (['backlog', 'todo', 'planned', 'new'].includes(s)) return 'Backlog';
+  if (['in-progress', 'in progress', 'active', 'doing'].includes(s)) return 'In Progress';
+  if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(s)) return 'Blocked';
+  if (['done', 'complete', 'completed', 'closed', 'finished'].includes(s)) return 'Done';
+  return toSentenceCase(s.replace(/-/g, ' '));
 };
 
 export const priorityLabel = (priority: any, fallback: string = 'None'): string => {

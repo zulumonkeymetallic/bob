@@ -37,6 +37,7 @@ import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars, rgbaCard } from '../utils/themeVars';
+import { taskStatusText } from '../utils/storyCardFormatting';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
@@ -311,6 +312,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
         return value;
       }
       return '';
+    }
+    if (key === 'status') {
+      return taskStatusText(value);
     }
     if (key === 'theme' && typeof value === 'number') {
       const theme = GLOBAL_THEMES.find(t => t.id === value);
