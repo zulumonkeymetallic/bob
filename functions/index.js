@@ -114,6 +114,22 @@ function makeRef(type) {
   return `${prefix}-${timestampPart}${randomPart}`;
 }
 
+// --- Redaction helper for safe audit metadata
+function redact(obj) {
+  try {
+    const text = JSON.stringify(obj);
+    // remove emails, bearer tokens, long free text
+    const scrubbed = text
+      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[redacted-email]')
+      .replace(/Bearer\s+[A-Za-z0-9\-_.~+/=]+/gi, 'Bearer [redacted]')
+      .replace(/https?:\/\/[^\s"']+/gi, '[redacted-url]');
+    const parsed = JSON.parse(scrubbed);
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
 async function generateStoryRef(db, ownerUid) {
   for (let attempt = 0; attempt < 10; attempt++) {
     const candidate = makeRef('story');
@@ -471,6 +487,173 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
     assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })),
     importantTasks
   };
+});
+
+// ===== Spec wrappers: syncCalendarAndTasks, autoEnrichTasks, taskStoryConversion, plannerLLM
+exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const direction = String(req?.data?.direction || 'both').toLowerCase();
+  const doPull = direction === 'both' || direction === 'gcal->firestore' || direction === 'pull';
+  const doPush = direction === 'both' || direction === 'firestore->gcal' || direction === 'push';
+  let reconciled = 0;
+  let pushed = 0;
+  try {
+    if (doPull && exports.reconcilePlanFromGoogleCalendar?.run) {
+      const res = await exports.reconcilePlanFromGoogleCalendar.run({ auth: { uid }, data: {} });
+      reconciled = Number(res?.result?.reconciled || res?.reconciled || 0);
+    }
+    if (doPush && exports.syncPlanToGoogleCalendar?.run) {
+      const res2 = await exports.syncPlanToGoogleCalendar.run({ auth: { uid }, data: {} });
+      pushed = Number(res2?.result?.pushed || res2?.pushed || 0);
+    }
+  } catch (e) {
+    console.warn('[syncCalendarAndTasks] failed', e?.message || e);
+    throw new httpsV2.HttpsError('internal', 'Calendar sync failed');
+  } finally {
+    try {
+      const db = ensureFirestore();
+      const ref = db.collection('activity_stream').doc();
+      await ref.set({
+        id: ref.id,
+        entityType: 'calendar',
+        entityId: `calendar_${uid}`,
+        activityType: 'calendar_sync',
+        userId: uid,
+        description: `Calendar sync completed: pulled ${reconciled}, pushed ${pushed}`,
+        metadata: redact({ direction, reconciled, pushed }),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch {}
+  }
+  return { ok: true, reconciled, pushed };
+});
+
+exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const estimateMissing = req?.data?.estimateMissing !== false;
+  const linkSuggestions = !!req?.data?.linkSuggestions;
+  const limit = Math.max(1, Math.min(Number(req?.data?.limit || 20), 100));
+
+  const db = ensureFirestore();
+  const snap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+  const all = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  const candidates = all.filter(t => {
+    const done = String(t.status || '').toLowerCase();
+    const isDone = done === 'done' || done === 'complete' || Number(t.status) === 2;
+    const needsEstimate = estimateMissing && !(Number(t.estimateMin) > 0) && !t.estimatedHours;
+    const needsLink = linkSuggestions && !(t.goalId || t.storyId || (t.parentType && t.parentId));
+    return !isDone && (needsEstimate || needsLink);
+  }).slice(0, limit);
+
+  let updated = 0, estimatesAdded = 0, linksSuggested = 0;
+  const batch = db.batch();
+  for (const t of candidates) {
+    let est = Number(t.estimateMin || 0);
+    let suggestion = null;
+    try {
+      const system = 'Return compact JSON for a single task enrichment.';
+      const user = [
+        'Task:',
+        JSON.stringify({ title: t.title || 'Task', description: (t.description || '').slice(0, 400) }),
+        'Respond as {"estimateMin": number, "suggestedGoalId"?: string}',
+      ].join('\n');
+      const text = await callLLMJson({ system, user, purpose: 'taskEnrich', userId: uid, expectJson: true, temperature: 0.1 });
+      const obj = JSON.parse(text || '{}');
+      if (estimateMissing && Number(obj.estimateMin || 0) > 0) {
+        est = Math.max(10, Math.min(480, Math.round(Number(obj.estimateMin))));
+      }
+      if (linkSuggestions && obj.suggestedGoalId && typeof obj.suggestedGoalId === 'string') {
+        suggestion = String(obj.suggestedGoalId);
+      }
+    } catch {}
+    const ref = db.collection('tasks').doc(t.id);
+    const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (estimateMissing && est > 0) { patch.estimateMin = est; estimatesAdded++; }
+    if (linkSuggestions && suggestion) { patch.suggestedGoalId = suggestion; linksSuggested++; }
+    if (patch.estimateMin || patch.suggestedGoalId) { batch.set(ref, patch, { merge: true }); updated++; }
+  }
+  if (updated) await batch.commit();
+
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'task',
+      entityId: `tasks_${uid}`,
+      activityType: 'auto_enrich_tasks',
+      userId: uid,
+      description: `Auto-enriched ${updated} tasks (estimates: ${estimatesAdded}, links: ${linksSuggested})`,
+      metadata: redact({ updated, estimatesAdded, linksSuggested, limit }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
+
+  return { processed: candidates.length, updated, estimatesAdded, linksSuggested };
+});
+
+exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const autoApply = !!req?.data?.autoApply;
+  const taskIds = Array.isArray(req?.data?.taskIds) ? req.data.taskIds.map(String) : [];
+
+  let suggestions = [];
+  try {
+    if (exports.suggestTaskStoryConversions?.run) {
+      const res = await exports.suggestTaskStoryConversions.run({ auth: { uid }, data: { taskIds, limit: 12 } });
+      suggestions = res?.suggestions || res?.result?.suggestions || [];
+    }
+  } catch (e) {
+    console.warn('[taskStoryConversion] suggest failed', e?.message || e);
+  }
+
+  let converted = [];
+  if (autoApply) {
+    const toConvert = suggestions.filter(s => (s.convert === true) && s.taskId).map(s => s.taskId);
+    if (toConvert.length && exports.convertTasksToStories?.run) {
+      try {
+        const res2 = await exports.convertTasksToStories.run({ auth: { uid }, data: { taskIds: toConvert } });
+        converted = res2?.results || res2?.result?.results || [];
+      } catch (e2) {
+        console.warn('[taskStoryConversion] convert failed', e2?.message || e2);
+      }
+    }
+  }
+
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'task',
+      entityId: `tasks_${uid}`,
+      activityType: 'task_story_conversion',
+      userId: uid,
+      description: `Suggested ${suggestions.length}, converted ${converted.filter(r=>r.status==='converted').length}`,
+      metadata: redact({ suggested: suggestions.length, converted: converted.length }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
+
+  return { suggestions, converted };
+});
+
+exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const persona = String(req?.data?.persona || 'personal');
+  const horizonDays = Math.max(1, Math.min(Number(req?.data?.horizonDays || 1), 14));
+  if (!exports.planCalendar?.run) throw new httpsV2.HttpsError('failed-precondition', 'planner not available');
+  const res = await exports.planCalendar.run({ auth: { uid }, data: { startDate: day, persona, horizonDays } });
+  return res?.result || res;
 });
 
 async function fetchGoogleBusy(uid, start, end) {

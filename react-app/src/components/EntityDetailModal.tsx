@@ -228,7 +228,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
           </div>
 
           {/* Theme (tasks without a story can set theme directly) */}
-          {type === 'task' && (!item?.parentId || (item as any)?.parentType !== 'story') && (
+          {type === 'task' && (!((item as any)?.parentId) || (item as any)?.parentType !== 'story') && (
             <div>
               <label style={{ fontWeight: 500 }}>Theme</label>
               {isEditing ? (
