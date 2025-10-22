@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Card, Badge, Button, Dropdown, Modal, Alert } from 'react-bootstrap';
+import { Card, Badge, Button, Dropdown, Modal, Alert, Toast, ToastContainer } from 'react-bootstrap';
 import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -52,6 +52,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [isSchedulingGoal, setIsSchedulingGoal] = useState<string | null>(null);
   const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
   const [generatingForGoal, setGeneratingForGoal] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toastVariant, setToastVariant] = useState<'success' | 'danger' | 'info'>('success');
 
   const themePalette = useMemo(() => (themes && themes.length ? themes : GLOBAL_THEMES), [themes]);
   const themeMap = useMemo(() => {
@@ -271,6 +273,10 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           [goal.id]: `✅ Scheduled ${planResult.blocksCreated} time blocks for "${goal.title}"` 
         }));
 
+        // Toast success
+        setToastVariant('success');
+        setToastMsg(`Scheduled ${planResult.blocksCreated} blocks for "${goal.title}"`);
+
         // Track activity
         await addDoc(collection(db, 'activity_stream'), {
           entityType: 'goal',
@@ -286,6 +292,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           ...prev, 
           [goal.id]: '⚠️ No available time slots found for scheduling' 
         }));
+        setToastVariant('info');
+        setToastMsg('No available time slots found');
       }
     } catch (error) {
       console.error('Failed to schedule goal time:', error);
@@ -293,6 +301,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
         ...prev, 
         [goal.id]: '❌ Failed to schedule time: ' + (error as Error).message 
       }));
+      setToastVariant('danger');
+      setToastMsg('Failed to schedule time');
     } finally {
       setIsSchedulingGoal(null);
       // Clear status after 5 seconds
@@ -375,6 +385,11 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
 
   return (
     <div className="goals-card-view" style={{ padding: '20px' }}>
+      <ToastContainer position="bottom-end" className="p-3">
+        <Toast bg={toastVariant === 'success' ? 'success' : toastVariant === 'danger' ? 'danger' : 'info'} onClose={() => setToastMsg(null)} show={!!toastMsg} delay={2200} autohide>
+          <Toast.Body className="text-white">{toastMsg}</Toast.Body>
+        </Toast>
+      </ToastContainer>
       <div className={gridClassName}>
         {sortedGoals.map((goal) => {
           const themeDef = resolveTheme(goal.theme);

@@ -725,6 +725,15 @@ const UnifiedPlannerPage: React.FC = () => {
   }, [planner, range.start]);
 
   const eventStyleGetter = useCallback((event: PlannerCalendarEvent) => {
+    const overlaps = (a: PlannerCalendarEvent, b: PlannerCalendarEvent) => {
+      if (!a || !b) return false;
+      const aStart = a.start.getTime();
+      const aEnd = a.end.getTime();
+      const bStart = b.start.getTime();
+      const bEnd = b.end.getTime();
+      return aStart < bEnd && bStart < aEnd;
+    };
+    const hasConflict = events.some(e => e.id !== event.id && overlaps(e, event) && e.type !== 'external' && event.type !== 'external');
     if (event.type === 'external') {
       return {
         style: {
@@ -772,11 +781,12 @@ const UnifiedPlannerPage: React.FC = () => {
     return {
       style: {
         backgroundColor: hexToRgba(baseColor, 0.85),
-        borderColor: baseColor,
+        borderColor: hasConflict ? '#dc2626' : baseColor,
+        boxShadow: hasConflict ? '0 0 0 2px rgba(220,38,38,0.3) inset' : undefined,
         color: textColor,
       },
     };
-  }, []);
+  }, [events]);
 
   const clearFeedback = useCallback(() => setFeedback(null), []);
 
