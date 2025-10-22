@@ -3694,6 +3694,12 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     const enriched = await enrichBlock(proposed);
     const blockRef = db.collection('calendar_blocks').doc();
     const theme_id = mapThemeLabelToId(enriched.theme, userThemes);
+    const startMs = Number(proposed.start || 0);
+    const endMs = Number(proposed.end || 0);
+    const titleForHash = (enriched.title || proposed.title || '').slice(0, 48);
+    const rawKey = `${uid}:${Math.round(startMs/60000)}:${Math.round(endMs/60000)}:${titleForHash}`;
+    let h = 0; for (let i=0;i<rawKey.length;i++) h = (h*33 + rawKey.charCodeAt(i)) >>> 0;
+    const dedupeKey = h.toString(36);
 
     batch.set(blockRef, {
       ...proposed,
@@ -3706,6 +3712,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       title: enriched.title || proposed.title || `${proposed.category || 'Block'} (${enriched.theme})`,
       theme: enriched.theme,
       theme_id,
+      dedupeKey,
       entry_method: proposed.entry_method || 'calendar_ai',
       confidence_score: typeof proposed.confidence_score === 'number' ? proposed.confidence_score : 0.85,
       goalId: enriched.goalId || proposed.goalId || null,
@@ -7415,6 +7422,86 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
     }
   }
 });
+
+// ===== DUR-2: Auto-reschedule missed items (hourly)
+exports.autoRescheduleMissed = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  return await _autoRescheduleMissedForUser(uid, { limit: 10 });
+});
+
+exports.rescheduleMissedHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+  const db = ensureFirestore();
+  const usersSnap = await db.collection('profiles').get();
+  for (const doc of usersSnap.docs) {
+    const uid = doc.id;
+    try { await _autoRescheduleMissedForUser(uid, { limit: 10 }); } catch (e) { console.warn('[rescheduleMissedHourly]', uid, e?.message || e); }
+  }
+});
+
+async function _autoRescheduleMissedForUser(uid, { limit = 10 } = {}) {
+  const db = ensureFirestore();
+  const now = Date.now();
+  const qSnap = await db.collection('scheduled_instances')
+    .where('ownerUid', '==', uid)
+    .get();
+  const all = qSnap.docs.map(d => ({ id: d.id, ref: d.ref, ...(d.data() || {}) }));
+  const candidates = all
+    .filter(x => x && typeof x === 'object')
+    .filter(x => x.status !== 'completed' && x.status !== 'cancelled')
+    .filter(x => {
+      const endIso = x.plannedEnd || null;
+      const endMs = endIso ? Date.parse(endIso) : null;
+      return endMs != null && endMs < now;
+    })
+    .slice(0, limit);
+
+  let rescheduled = 0;
+  for (const it of candidates) {
+    try {
+      const startIso = it.plannedStart ? new Date(Date.parse(it.plannedStart)) : new Date();
+      startIso.setDate(startIso.getDate() + 1);
+      const endIso = new Date(startIso.getTime() + (Number(it.durationMinutes || 30) * 60000));
+      const patch = {
+        plannedStart: startIso.toISOString(),
+        plannedEnd: endIso.toISOString(),
+        occurrenceDate: toDayKey(new Date(startIso)),
+        status: 'planned',
+        statusReason: null,
+        updatedAt: Date.now(),
+      };
+      await it.ref.set(patch, { merge: true });
+      // If linked google event id exists, try to patch times
+      const eid = it?.external?.gcalEventId || null;
+      if (eid) {
+        try {
+          const updateFn = exports.updateCalendarEvent;
+          if (updateFn?.run) await updateFn.run({ auth: { uid }, data: { eventId: eid, start: patch.plannedStart, end: patch.plannedEnd } });
+        } catch {}
+      }
+      rescheduled++;
+    } catch (e) {
+      console.warn('[autoReschedule] failed', it.id, e?.message || e);
+    }
+  }
+
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'plan',
+      entityId: `plan_${toDayKey(new Date())}_${uid}`,
+      activityType: 'auto_reschedule_missed',
+      description: `Auto-rescheduled ${rescheduled} items`,
+      userId: uid,
+      metadata: redact({ rescheduled, limit }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
+
+  return { ok: true, rescheduled };
+}
 
 exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;

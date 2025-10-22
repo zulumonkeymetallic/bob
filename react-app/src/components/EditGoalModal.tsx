@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Form, Alert, InputGroup } from 'react-bootstrap';
 import { db } from '../firebase';
-import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { Goal } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
@@ -46,6 +46,7 @@ const [themeInput, setThemeInput] = useState('');
   }, [themes]);
   const [parentSearch, setParentSearch] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
+  const [recentActivity, setRecentActivity] = useState<Array<{ id: string; description?: string; activityType?: string; createdAt?: any }>>([]);
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -150,6 +151,25 @@ const [themeInput, setThemeInput] = useState('');
     };
     if (show && currentUserId) loadPots();
   }, [show, currentUserId]);
+
+  // Load recent activity for this goal when modal is open
+  useEffect(() => {
+    if (!goal || !show) return;
+    try {
+      const qref = query(
+        collection(db, 'activity_stream'),
+        where('entityType','==','goal'),
+        where('entityId','==', goal.id),
+        orderBy('createdAt','desc'),
+        limit(15)
+      );
+      const unsub = onSnapshot(qref, (snap) => {
+        const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+        setRecentActivity(list);
+      });
+      return () => unsub();
+    } catch {}
+  }, [goal, show]);
 
   // KPI Management functions
   const addKPI = () => {
@@ -583,6 +603,22 @@ const [themeInput, setThemeInput] = useState('');
             </Form.Text>
           </Form.Group>
         </Form>
+
+        {/* Recent activity */}
+        <div className="mt-3">
+          <h6 className="mb-2">Recent Activity</h6>
+          {recentActivity.length === 0 ? (
+            <div className="text-muted small">No recent entries.</div>
+          ) : (
+            <ul className="list-unstyled small mb-0">
+              {recentActivity.map((a) => (
+                <li key={a.id} className="border rounded p-2 mb-1">
+                  <div><strong>{a.activityType || 'activity'}</strong> – {a.description || ''}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
         {submitResult && (
           <Alert variant={submitResult.includes('✅') ? 'success' : 'danger'}>
