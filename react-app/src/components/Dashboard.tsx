@@ -650,12 +650,28 @@ const Dashboard: React.FC = () => {
                   <div className="text-uppercase text-muted small fw-semibold mb-2">Next up</div>
                   {upcomingFocus.length ? (
                     <ul className="list-unstyled mb-0">
-                      {upcomingFocus.map((task) => (
-                        <li key={task.id} className="mb-2">
-                          <div className="fw-semibold">{task.title}</div>
-                          <div className="text-muted small">{formatDueLabel(task)}</div>
-                        </li>
-                      ))}
+                      {upcomingFocus.map((task) => {
+                        const due = decodeToDate((task as any).dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs);
+                        const now = new Date();
+                        const sameDay = due ? due.toDateString() === now.toDateString() : false;
+                        const overdue = due ? due.getTime() < now.setHours(0,0,0,0) : false;
+                        const reasons: string[] = [];
+                        if (overdue) reasons.push('Overdue');
+                        else if (sameDay) reasons.push('Due today');
+                        if ((task as any).priority === 1) reasons.push('High priority');
+                        if ((task as any).storyId) reasons.push('Story-linked');
+                        const createdMs = (task as any).createdAt ? new Date((task as any).createdAt).getTime() : null;
+                        if (createdMs) {
+                          const ageDays = Math.floor((Date.now() - createdMs) / 86400000);
+                          if (ageDays >= 14) reasons.push(`${ageDays}d old`);
+                        }
+                        return (
+                          <li key={task.id} className="mb-2">
+                            <div className="fw-semibold">{task.title}</div>
+                            <div className="text-muted small">{formatDueLabel(task)}{reasons.length ? ` • ${reasons.join(' · ')}` : ''}</div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   ) : (
                     <div className="text-muted small">No upcoming work detected.</div>

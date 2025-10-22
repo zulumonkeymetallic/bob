@@ -279,18 +279,36 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
               <Col xs={3} className="fw-bold">
                 Themes → Goals → SubGoals
               </Col>
-              {sprints.map(sprint => (
-                <Col key={sprint.id} className="text-center">
-                  <Card className="sprint-header">
-                    <Card.Body className="p-2">
-                      <div className="fw-bold">{sprint.name}</div>
-                      <small className="text-muted">
-                        {sprint.startDate ? new Date(sprint.startDate).toLocaleDateString() : 'No date'}
-                      </small>
-                    </Card.Body>
-                  </Card>
-                </Col>
-              ))}
+              {sprints.map(sprint => {
+                const cap = capacityBySprint[sprint.id] || 20;
+                const total = stories.filter(st => (st as any).sprintId === sprint.id).reduce((sum, st) => sum + (st.points || 1), 0);
+                const over = total > cap;
+                return (
+                  <Col key={sprint.id} className="text-center">
+                    <Card className="sprint-header">
+                      <Card.Body className="p-2">
+                        <div className="fw-bold">{sprint.name}</div>
+                        <small className="text-muted d-block mb-1">
+                          {sprint.startDate ? new Date(sprint.startDate).toLocaleDateString() : 'No date'}
+                        </small>
+                        <div className="d-flex justify-content-center align-items-center gap-2">
+                          <span className={`badge ${over ? 'bg-danger' : 'bg-primary'}`}>{total}/{cap} pts</span>
+                          <Button size="sm" variant="outline-secondary" onClick={async () => {
+                            const raw = prompt('Set sprint capacity (points):', String(cap));
+                            const next = raw ? parseInt(raw) : NaN;
+                            if (!Number.isFinite(next) || next <= 0) return;
+                            try {
+                              const { doc, updateDoc } = await import('firebase/firestore');
+                              const { db } = await import('../firebase');
+                              await updateDoc(doc(db, 'sprints', sprint.id), { capacityPoints: next, updatedAt: Date.now() } as any);
+                            } catch (e) { console.warn('capacity update failed', e); }
+                          }}>Cap</Button>
+                        </div>
+                      </Card.Body>
+                    </Card>
+                  </Col>
+                );
+              })}
             </Row>
           </div>
 
