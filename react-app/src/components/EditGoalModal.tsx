@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Modal, Button, Form, Alert, InputGroup } from 'react-bootstrap';
+import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer } from 'react-bootstrap';
 import { db } from '../firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { Goal } from '../types';
@@ -34,6 +34,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 const [submitResult, setSubmitResult] = useState<string | null>(null);
+const [toastMsg, setToastMsg] = useState<string | null>(null);
 const { themes } = useGlobalThemes();
 const [themeInput, setThemeInput] = useState('');
   const resolveThemeId = useCallback((input: string, fallback: number) => {
@@ -260,6 +261,7 @@ const [themeInput, setThemeInput] = useState('');
 
       setFormData(prev => ({ ...prev, theme: themeId }));
       setSubmitResult(`✅ Goal updated successfully!`);
+      setToastMsg('Goal updated');
       
       // Auto-close after success
       setTimeout(() => {
@@ -288,6 +290,11 @@ const [themeInput, setThemeInput] = useState('');
 
   return (
     <Modal show={show} onHide={handleClose} centered size="lg">
+      <ToastContainer position="bottom-end" className="p-3">
+        <Toast bg="success" onClose={() => setToastMsg(null)} show={!!toastMsg} delay={1800} autohide>
+          <Toast.Body className="text-white">{toastMsg}</Toast.Body>
+        </Toast>
+      </ToastContainer>
       <Modal.Header closeButton>
         <Modal.Title>Edit Goal: {goal.title}</Modal.Title>
       </Modal.Header>
