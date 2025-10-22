@@ -748,7 +748,42 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   const end = start.plus({ days: days - 1 }).endOf('day');
 
   const db = admin.firestore();
-  const busy = req?.data?.includeBusy === false ? [] : await fetchGoogleBusy(uid, start, end);
+  let busy = req?.data?.includeBusy === false ? [] : await fetchGoogleBusy(uid, start, end);
+
+  // Apply quiet hours from profile as synthetic busy windows
+  try {
+    const db = ensureFirestore();
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    const qhStart = Number(profile.quietHoursStart); // 0-23
+    const qhEnd = Number(profile.quietHoursEnd);     // 0-23
+    if (Number.isFinite(qhStart) && Number.isFinite(qhEnd)) {
+      const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+      const extras = [];
+      for (let i = 0; i < daysSpan; i++) {
+        const d0 = start.plus({ days: i }).startOf('day');
+        const d1 = d0.plus({ days: 1 });
+        // We allow scheduling between qhStart..qhEnd; all other hours are busy
+        if (qhStart === qhEnd) {
+          // If equal, treat as fully available (no quiet hours)
+          continue;
+        }
+        const allowedStart = d0.plus({ hours: qhStart });
+        const allowedEnd = d0.plus({ hours: qhEnd });
+        if (qhStart < qhEnd) {
+          // Busy from 00:00->allowedStart and allowedEnd->24:00
+          extras.push({ start: d0.toISO(), end: allowedStart.toISO() });
+          extras.push({ start: allowedEnd.toISO(), end: d1.toISO() });
+        } else {
+          // Overnight allowed window (e.g., 22..6) => busy during allowedEnd..allowedStart
+          extras.push({ start: allowedEnd.toISO(), end: allowedStart.toISO() });
+        }
+      }
+      busy = [...busy, ...extras];
+    }
+  } catch (e) {
+    console.warn('[planBlocksV2] quiet hours application failed', e?.message || e);
+  }
 
   const plan = await planSchedule({
     db,
@@ -6317,6 +6352,21 @@ exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
     body: JSON.stringify({ summary, start: { dateTime: start }, end: { dateTime: end } }),
   });
+  // Audit (sanitized)
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'calendar',
+      activityType: 'calendar_event_created',
+      description: 'Created Google event',
+      userId: req.auth.uid,
+      metadata: redact({ id: ev?.id, start, end }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
   return { ok: true, event: ev };
 });
 
@@ -6335,6 +6385,20 @@ exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
     headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'calendar',
+      activityType: 'calendar_event_updated',
+      description: 'Updated Google event',
+      userId: req.auth.uid,
+      metadata: redact({ id: eventId, hasSummary: !!summary, hasStart: !!start, hasEnd: !!end }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
   return { ok: true, event: ev };
 });
 
@@ -6359,6 +6423,20 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
     method: 'DELETE',
     headers: { 'Authorization': 'Bearer ' + access }
   });
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'calendar',
+      activityType: 'calendar_event_deleted',
+      description: 'Deleted Google event',
+      userId: req.auth.uid,
+      metadata: redact({ id: eventId }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
   return { ok: true };
 });
 
@@ -6398,12 +6476,23 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
       }
       // Create parent block event if missing
       if (!parentEventId && blockDoc) {
+        const priv = {
+          'bob-block-id': blockId,
+          bobBlockId: blockId,
+        };
+        if (blockDoc.goalId) priv['bob-goal-id'] = String(blockDoc.goalId);
+        if (blockDoc.storyId) priv['bob-story-id'] = String(blockDoc.storyId);
+        if (blockDoc.taskId) priv['bob-task-id'] = String(blockDoc.taskId);
+        if (blockDoc.habitId) priv['bob-habit-id'] = String(blockDoc.habitId);
+        if (blockDoc.persona) priv['bob-persona'] = String(blockDoc.persona);
+        if (blockDoc.theme) priv['bob-theme'] = String(blockDoc.theme);
+        if (blockDoc.theme_id != null) priv['bob-theme-id'] = String(blockDoc.theme_id);
         const body = {
           summary: blockDoc.title || `${blockDoc.theme || 'Block'}: ${blockDoc.category || ''}`.trim(),
           description: blockDoc.rationale || 'BOB block',
           start: { dateTime: new Date(blockDoc.start).toISOString() },
           end: { dateTime: new Date(blockDoc.end).toISOString() },
-          extendedProperties: { private: { bobBlockId: blockId } }
+          extendedProperties: { private: priv }
         };
         const parent = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
           method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(body)
@@ -6412,18 +6501,48 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
         parentsCreated++;
         await db.collection('calendar_blocks').doc(blockId).set({ googleEventId: parentEventId, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       }
+      // If parent exists, ensure metadata stays in sync
+      if (parentEventId && blockDoc) {
+        const priv2 = {
+          'bob-block-id': blockId,
+          bobBlockId: blockId,
+        };
+        if (blockDoc.goalId) priv2['bob-goal-id'] = String(blockDoc.goalId);
+        if (blockDoc.storyId) priv2['bob-story-id'] = String(blockDoc.storyId);
+        if (blockDoc.taskId) priv2['bob-task-id'] = String(blockDoc.taskId);
+        if (blockDoc.habitId) priv2['bob-habit-id'] = String(blockDoc.habitId);
+        if (blockDoc.persona) priv2['bob-persona'] = String(blockDoc.persona);
+        if (blockDoc.theme) priv2['bob-theme'] = String(blockDoc.theme);
+        if (blockDoc.theme_id != null) priv2['bob-theme-id'] = String(blockDoc.theme_id);
+        const patch = {
+          summary: blockDoc.title || `${blockDoc.theme || 'Block'}: ${blockDoc.category || ''}`.trim(),
+          description: blockDoc.rationale || 'BOB block',
+          start: { dateTime: new Date(blockDoc.start).toISOString() },
+          end: { dateTime: new Date(blockDoc.end).toISOString() },
+          extendedProperties: { private: priv2 }
+        };
+        try {
+          await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(parentEventId)}`, {
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(patch)
+          });
+          updated++;
+        } catch {}
+      }
     }
 
     for (const a of list) {
       if (!a.start || !a.end) continue; // skip deferred/unscheduled
       const ext = a.external || {};
       const eid = ext.googleEventId || null;
+      const evPriv = { bobAssignmentId: a.id, 'bob-assignment-id': a.id, bobBlockId: blockId || '', 'bob-block-id': blockId || '' };
+      if (a.itemType) evPriv['bob-assignment-type'] = String(a.itemType);
+      if (a.itemId) evPriv['bob-assignment-item-id'] = String(a.itemId);
       const evBody = {
         summary: a.title || 'Assignment',
         start: { dateTime: new Date(a.start).toISOString() },
         end: { dateTime: new Date(a.end).toISOString() },
         description: 'BOB assignment',
-        extendedProperties: { private: { bobAssignmentId: a.id, bobBlockId: blockId || '' } }
+        extendedProperties: { private: evPriv }
       };
       if (eid) {
         try {

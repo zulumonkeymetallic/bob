@@ -542,12 +542,45 @@ const UnifiedPlannerPage: React.FC = () => {
                 await updateDoc(doc(db, 'calendar_blocks', block.id), { googleEventId: evId, updatedAt: Date.now() });
               }
             }
+            // Ensure extendedProperties and metadata are refreshed via server push for this day
+            try {
+              const syncDay = format(start, 'yyyy-MM-dd');
+              const pushDay = httpsCallable(functions, 'syncPlanToGoogleCalendar');
+              await pushDay({ day: syncDay });
+            } catch {}
           }
         } catch (err) {
           console.warn('Planner: Google sync failed/skipped for block move', err);
         }
       } else if (event.type === 'instance') {
         await updateInstanceTiming(event, start, end);
+        // Try to reflect instance move to Google Calendar if linked
+        try {
+          const startIso = new Date(start).toISOString();
+          const endIso = new Date(end).toISOString();
+          const eid = event.instance?.external?.gcalEventId;
+          if (eid) {
+            const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+            await updateEv({ eventId: eid, start: startIso, end: endIso });
+          } else {
+            // Create event if missing and store id back into scheduled_instances.external.gcalEventId
+            const createEv = httpsCallable(functions, 'createCalendarEvent');
+            const res: any = await createEv({ summary: event.instance?.title || 'Planned Session', start: startIso, end: endIso });
+            const newId = res?.data?.event?.id;
+            if (newId && event.instance?.id) {
+              const ref = doc(db, 'scheduled_instances', event.instance.id);
+              await updateDoc(ref, { external: { ...(event.instance.external || {}), gcalEventId: newId, lastSyncedAt: { ...(event.instance.external?.lastSyncedAt || {}), gcal: Date.now() } } });
+            }
+          }
+          // Also refresh block parent metadata for this day
+          try {
+            const syncDay = format(start, 'yyyy-MM-dd');
+            const pushDay = httpsCallable(functions, 'syncPlanToGoogleCalendar');
+            await pushDay({ day: syncDay });
+          } catch {}
+        } catch (err) {
+          console.warn('Planner: Google sync failed/skipped for instance move', err);
+        }
       }
     },
     [updateBlockTiming, updateInstanceTiming],
@@ -579,6 +612,12 @@ const UnifiedPlannerPage: React.FC = () => {
 
     setComposerSaving(true);
 
+    const makeDedupeKey = (title: string, startMs: number, endMs: number) => {
+      const raw = `${currentUser?.uid || ''}:${Math.round(startMs/60000)}:${Math.round(endMs/60000)}:${(title||'').slice(0,24)}`;
+      let h = 0; for (let i=0;i<raw.length;i++) h = (h*33 + raw.charCodeAt(i)) >>> 0;
+      return h.toString(36);
+    };
+
     const payload: Record<string, unknown> = {
       googleEventId: null,
       syncToGoogle: blockForm.syncToGoogle,
@@ -592,6 +631,7 @@ const UnifiedPlannerPage: React.FC = () => {
       category: blockForm.category,
       start: start.getTime(),
       end: end.getTime(),
+      dedupeKey: makeDedupeKey(blockForm.title, start.getTime(), end.getTime()),
       flexibility: blockForm.flexibility,
       status: 'proposed',
       colorId: null,
@@ -1074,6 +1114,17 @@ const UnifiedPlannerPage: React.FC = () => {
                       >
                         Skip
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="outline-primary"
+                        onClick={async () => {
+                          const s = addMinutes(new Date(activeEvent.start), 15);
+                          const e = addMinutes(new Date(activeEvent.end), 15);
+                          await handleEventMove({ event: activeEvent, start: s, end: e });
+                        }}
+                      >
+                        Shift +15m
+                      </Button>
                     </div>
                     {(activeEvent.instance.deepLink || activeEvent.instance.mobileCheckinUrl) && (
                       <div className="d-flex gap-2 flex-wrap">
@@ -1127,12 +1178,27 @@ const UnifiedPlannerPage: React.FC = () => {
                   </>
                 )}
                 {activeEvent.type === 'block' && activeEvent.block && (
-                  <div className="text-muted small">
-                    Theme{' '}
-                    <Badge bg="light" text="dark">
-                      {activeEvent.themeLabel || activeEvent.block.theme}
-                    </Badge>
-                  </div>
+                  <>
+                    <div className="text-muted small">
+                      Theme{' '}
+                      <Badge bg="light" text="dark">
+                        {activeEvent.themeLabel || activeEvent.block.theme}
+                      </Badge>
+                    </div>
+                    <div className="d-flex gap-2 mt-2">
+                      <Button
+                        size="sm"
+                        variant="outline-primary"
+                        onClick={async () => {
+                          const s = addMinutes(new Date(activeEvent.start), 15);
+                          const e = addMinutes(new Date(activeEvent.end), 15);
+                          await handleEventMove({ event: activeEvent, start: s, end: e });
+                        }}
+                      >
+                        Shift +15m
+                      </Button>
+                    </div>
+                  </>
                 )}
               </Card.Body>
             </Card>
