@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Button, Form, Badge, ListGroup, Spinner } from 'react-bootstrap';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -16,9 +16,10 @@ interface Props {
   type: EntityType;
   item: Goal | Story | Task | null;
   onHide: () => void;
+  initialTab?: 'details' | 'activity';
 }
 
-const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
+const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialTab = 'details' }) => {
   const { currentUser } = useAuth();
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [isEditing, setIsEditing] = useState(false);
@@ -26,6 +27,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
   const [loading, setLoading] = useState(false);
   const [resolvedThemeHex, setResolvedThemeHex] = useState<string>('#6b7280');
   const { themes: globalThemes } = useGlobalThemes();
+  const activityRef = useRef<HTMLDivElement | null>(null);
 
   // Resolve theme color based on entity (goal direct; story->goal; task->story->goal)
   useEffect(() => {
@@ -83,6 +85,15 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
     if (!item) { setActivities([]); return; }
     return ActivityStreamService.subscribeToActivityStream(item.id, setActivities);
   }, [item?.id]);
+
+  // If requested, scroll to activity on open
+  useEffect(() => {
+    if (show && initialTab === 'activity') {
+      setTimeout(() => {
+        try { activityRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
+      }, 100);
+    }
+  }, [show, initialTab]);
 
   // Initialize edit form when opening
   useEffect(() => {
@@ -173,6 +184,12 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
       </Modal.Header>
       <Modal.Body>
         <div style={{ display: 'flex', gap: 16, flexDirection: 'column' }}>
+          {/* If initialTab=activity, a small anchor to jump down */}
+          {initialTab === 'activity' && (
+            <a href="#entity-activity" style={{ position: 'absolute', left: -9999 }} aria-hidden>
+              Activity
+            </a>
+          )}
           {/* Core fields */}
           <div>
             <label style={{ fontWeight: 500 }}>Title</label>
@@ -251,7 +268,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
           )}
 
           {/* Activity Stream */}
-          <div>
+          <div id="entity-activity" ref={activityRef}>
             <label style={{ fontWeight: 600 }}>Activity</label>
             {!activities && <Spinner size="sm" />}
             {activities && (
