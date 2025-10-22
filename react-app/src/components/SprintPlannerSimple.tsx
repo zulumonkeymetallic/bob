@@ -236,22 +236,31 @@ const SprintPlannerSimple: React.FC = () => {
                             {sprints.length === 0 ? (
                                 <p className="text-muted">No sprints created yet.</p>
                             ) : (
-                                sprints.map(sprint => {
-                                    const sprintStories = stories.filter(s => s.sprintId === sprint.id);
-                                    const totalPoints = sprintStories.reduce((sum, s) => sum + (s.points || 1), 0);
-                                    
-                                    return (
-                                        <Card key={sprint.id} className="mb-3">
-                                            <Card.Header className="bg-light">
-                                                <div className="d-flex justify-content-between align-items-center">
-                                                    <h6 className="mb-0">{sprint.name}</h6>
-                                                    <span className="badge bg-primary">{totalPoints} pts</span>
-                                                </div>
-                                            </Card.Header>
-                                            <Card.Body>
-                                                {sprint.objective && (
-                                                    <p className="text-muted small mb-2">{sprint.objective}</p>
-                                                )}
+                sprints.map(sprint => {
+                    const sprintStories = stories.filter(s => s.sprintId === sprint.id);
+                    const totalPoints = sprintStories.reduce((sum, s) => sum + (s.points || 1), 0);
+                    const capacity = (sprint as any).capacityPoints || 20;
+                    const pct = Math.min(100, Math.round((totalPoints / Math.max(1, capacity)) * 100));
+                    
+                    return (
+                        <Card key={sprint.id} className="mb-3">
+                            <Card.Header className="bg-light">
+                                <div className="d-flex justify-content-between align-items-center">
+                                    <h6 className="mb-0">{sprint.name}</h6>
+                                    <div className="d-flex align-items-center gap-2">
+                                      <span className={`badge ${totalPoints > capacity ? 'bg-danger' : 'bg-primary'}`}>{totalPoints} / {capacity} pts</span>
+                                    </div>
+                                </div>
+                            </Card.Header>
+                            <Card.Body>
+                                <div className="mb-2">
+                                  <div className="progress" style={{ height: 8 }}>
+                                    <div className={`progress-bar ${totalPoints > capacity ? 'bg-danger' : 'bg-success'}`} role="progressbar" style={{ width: `${pct}%` }} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}></div>
+                                  </div>
+                                </div>
+                                {sprint.objective && (
+                                    <p className="text-muted small mb-2">{sprint.objective}</p>
+                                )}
                                                 <div>
                                                     <strong>Stories ({sprintStories.length}):</strong>
                                                     {sprintStories.length === 0 ? (

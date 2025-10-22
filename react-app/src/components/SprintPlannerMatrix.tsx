@@ -39,6 +39,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   const [goals, setGoals] = useState<Goal[]>([]);
   const [subGoals, setSubGoals] = useState<SubGoal[]>([]);
   const [stories, setStories] = useState<EnhancedStory[]>([]);
+  const [capacityBySprint, setCapacityBySprint] = useState<Record<string, number>>({});
   
   // UI state
   const [rowExpansion, setRowExpansion] = useState<PlannerRowExpansion>({});
@@ -73,6 +74,9 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
         ...doc.data()
       })) as Sprint[];
       setSprints(sprintsData);
+      const cap: Record<string, number> = {};
+      sprintsData.forEach(s => { cap[s.id] = (s as any).capacityPoints || 20; });
+      setCapacityBySprint(cap);
       console.log('SprintPlannerMatrix: Loaded', sprintsData.length, 'sprints');
     });
     unsubscribes.push(sprintsUnsub);
@@ -386,6 +390,27 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
           </div>
         </>
       )}
+
+      {/* Capacity overview */}
+      <div className="mt-3">
+        <h6>Sprint Capacity</h6>
+        <div className="d-flex flex-wrap gap-2">
+          {sprints.map((s) => {
+            const cap = capacityBySprint[s.id] || 20;
+            const total = stories.filter(st => (st as any).sprintId === s.id).reduce((sum, st) => sum + (st.points || 1), 0);
+            const over = total > cap;
+            const pct = Math.min(100, Math.round((total / Math.max(1, cap)) * 100));
+            return (
+              <div key={s.id} className="border rounded px-2 py-1 small">
+                <strong>{s.name}</strong> – {total}/{cap} pts
+                <div className="progress" style={{ height: 6, width: 160 }}>
+                  <div className={`progress-bar ${over ? 'bg-danger' : 'bg-success'}`} role="progressbar" style={{ width: `${pct}%` }} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Instructions */}
       <div className="mt-4 p-3 bg-light rounded">
