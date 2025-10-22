@@ -114,6 +114,22 @@ function makeRef(type) {
   return `${prefix}-${timestampPart}${randomPart}`;
 }
 
+// --- Redaction helper for safe audit metadata
+function redact(obj) {
+  try {
+    const text = JSON.stringify(obj);
+    // remove emails, bearer tokens, long free text
+    const scrubbed = text
+      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[redacted-email]')
+      .replace(/Bearer\s+[A-Za-z0-9\-_.~+/=]+/gi, 'Bearer [redacted]')
+      .replace(/https?:\/\/[^\s"']+/gi, '[redacted-url]');
+    const parsed = JSON.parse(scrubbed);
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
 async function generateStoryRef(db, ownerUid) {
   for (let attempt = 0; attempt < 10; attempt++) {
     const candidate = makeRef('story');
@@ -471,6 +487,173 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
     assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })),
     importantTasks
   };
+});
+
+// ===== Spec wrappers: syncCalendarAndTasks, autoEnrichTasks, taskStoryConversion, plannerLLM
+exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const direction = String(req?.data?.direction || 'both').toLowerCase();
+  const doPull = direction === 'both' || direction === 'gcal->firestore' || direction === 'pull';
+  const doPush = direction === 'both' || direction === 'firestore->gcal' || direction === 'push';
+  let reconciled = 0;
+  let pushed = 0;
+  try {
+    if (doPull && exports.reconcilePlanFromGoogleCalendar?.run) {
+      const res = await exports.reconcilePlanFromGoogleCalendar.run({ auth: { uid }, data: {} });
+      reconciled = Number(res?.result?.reconciled || res?.reconciled || 0);
+    }
+    if (doPush && exports.syncPlanToGoogleCalendar?.run) {
+      const res2 = await exports.syncPlanToGoogleCalendar.run({ auth: { uid }, data: {} });
+      pushed = Number(res2?.result?.pushed || res2?.pushed || 0);
+    }
+  } catch (e) {
+    console.warn('[syncCalendarAndTasks] failed', e?.message || e);
+    throw new httpsV2.HttpsError('internal', 'Calendar sync failed');
+  } finally {
+    try {
+      const db = ensureFirestore();
+      const ref = db.collection('activity_stream').doc();
+      await ref.set({
+        id: ref.id,
+        entityType: 'calendar',
+        entityId: `calendar_${uid}`,
+        activityType: 'calendar_sync',
+        userId: uid,
+        description: `Calendar sync completed: pulled ${reconciled}, pushed ${pushed}`,
+        metadata: redact({ direction, reconciled, pushed }),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch {}
+  }
+  return { ok: true, reconciled, pushed };
+});
+
+exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const estimateMissing = req?.data?.estimateMissing !== false;
+  const linkSuggestions = !!req?.data?.linkSuggestions;
+  const limit = Math.max(1, Math.min(Number(req?.data?.limit || 20), 100));
+
+  const db = ensureFirestore();
+  const snap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+  const all = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  const candidates = all.filter(t => {
+    const done = String(t.status || '').toLowerCase();
+    const isDone = done === 'done' || done === 'complete' || Number(t.status) === 2;
+    const needsEstimate = estimateMissing && !(Number(t.estimateMin) > 0) && !t.estimatedHours;
+    const needsLink = linkSuggestions && !(t.goalId || t.storyId || (t.parentType && t.parentId));
+    return !isDone && (needsEstimate || needsLink);
+  }).slice(0, limit);
+
+  let updated = 0, estimatesAdded = 0, linksSuggested = 0;
+  const batch = db.batch();
+  for (const t of candidates) {
+    let est = Number(t.estimateMin || 0);
+    let suggestion = null;
+    try {
+      const system = 'Return compact JSON for a single task enrichment.';
+      const user = [
+        'Task:',
+        JSON.stringify({ title: t.title || 'Task', description: (t.description || '').slice(0, 400) }),
+        'Respond as {"estimateMin": number, "suggestedGoalId"?: string}',
+      ].join('\n');
+      const text = await callLLMJson({ system, user, purpose: 'taskEnrich', userId: uid, expectJson: true, temperature: 0.1 });
+      const obj = JSON.parse(text || '{}');
+      if (estimateMissing && Number(obj.estimateMin || 0) > 0) {
+        est = Math.max(10, Math.min(480, Math.round(Number(obj.estimateMin))));
+      }
+      if (linkSuggestions && obj.suggestedGoalId && typeof obj.suggestedGoalId === 'string') {
+        suggestion = String(obj.suggestedGoalId);
+      }
+    } catch {}
+    const ref = db.collection('tasks').doc(t.id);
+    const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (estimateMissing && est > 0) { patch.estimateMin = est; estimatesAdded++; }
+    if (linkSuggestions && suggestion) { patch.suggestedGoalId = suggestion; linksSuggested++; }
+    if (patch.estimateMin || patch.suggestedGoalId) { batch.set(ref, patch, { merge: true }); updated++; }
+  }
+  if (updated) await batch.commit();
+
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'task',
+      entityId: `tasks_${uid}`,
+      activityType: 'auto_enrich_tasks',
+      userId: uid,
+      description: `Auto-enriched ${updated} tasks (estimates: ${estimatesAdded}, links: ${linksSuggested})`,
+      metadata: redact({ updated, estimatesAdded, linksSuggested, limit }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
+
+  return { processed: candidates.length, updated, estimatesAdded, linksSuggested };
+});
+
+exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const autoApply = !!req?.data?.autoApply;
+  const taskIds = Array.isArray(req?.data?.taskIds) ? req.data.taskIds.map(String) : [];
+
+  let suggestions = [];
+  try {
+    if (exports.suggestTaskStoryConversions?.run) {
+      const res = await exports.suggestTaskStoryConversions.run({ auth: { uid }, data: { taskIds, limit: 12 } });
+      suggestions = res?.suggestions || res?.result?.suggestions || [];
+    }
+  } catch (e) {
+    console.warn('[taskStoryConversion] suggest failed', e?.message || e);
+  }
+
+  let converted = [];
+  if (autoApply) {
+    const toConvert = suggestions.filter(s => (s.convert === true) && s.taskId).map(s => s.taskId);
+    if (toConvert.length && exports.convertTasksToStories?.run) {
+      try {
+        const res2 = await exports.convertTasksToStories.run({ auth: { uid }, data: { taskIds: toConvert } });
+        converted = res2?.results || res2?.result?.results || [];
+      } catch (e2) {
+        console.warn('[taskStoryConversion] convert failed', e2?.message || e2);
+      }
+    }
+  }
+
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'task',
+      entityId: `tasks_${uid}`,
+      activityType: 'task_story_conversion',
+      userId: uid,
+      description: `Suggested ${suggestions.length}, converted ${converted.filter(r=>r.status==='converted').length}`,
+      metadata: redact({ suggested: suggestions.length, converted: converted.length }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
+
+  return { suggestions, converted };
+});
+
+exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const persona = String(req?.data?.persona || 'personal');
+  const horizonDays = Math.max(1, Math.min(Number(req?.data?.horizonDays || 1), 14));
+  if (!exports.planCalendar?.run) throw new httpsV2.HttpsError('failed-precondition', 'planner not available');
+  const res = await exports.planCalendar.run({ auth: { uid }, data: { startDate: day, persona, horizonDays } });
+  return res?.result || res;
 });
 
 async function fetchGoogleBusy(uid, start, end) {
@@ -6285,9 +6468,11 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
     const toPush = tasks.filter(t => !t.reminderId && t.status !== 2 && ((t.dueDate||0) <= (start.getTime()+24*3600*1000)));
     const payload = toPush.map(t => {
-      const themeLabel = t.theme || t.theme_id || 'General';
+      const themeLabel = themeLabelFromValue(t.theme || t.theme_id || 'General');
       const title = `[${themeLabel}] – ${t.title || 'Task'}`;
-      const url = t.deepLink || (t.ref ? `/tasks?ref=${encodeURIComponent(t.ref)}` : `/tasks?taskId=${encodeURIComponent(t.id)}`);
+      // Prefer canonical /tasks/:ref deep link; fall back to id
+      const rel = t.ref ? `/tasks/${encodeURIComponent(t.ref)}` : `/tasks/${encodeURIComponent(t.id)}`;
+      const url = buildAbsoluteUrl(t.deepLink || rel);
       const noteLines = [
         t.reminderNote || '',
         `BOB: ${url}`,
@@ -6336,6 +6521,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       const reminderId = u.reminderId ? String(u.reminderId) : null;
       const completed = !!u.completed;
       const title = String(u.title || '');
+      const iosTags = Array.isArray(u.tags) ? u.tags.filter(x=>typeof x==='string').slice(0,12) : [];
       if (!id && !reminderId) continue;
       let ref = null;
       if (id) ref = db.collection('tasks').doc(id);
@@ -6348,6 +6534,14 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type };
         if (reminderId) data['reminderId'] = reminderId;
         if (completed) data['status'] = 2;
+        if (iosTags.length) {
+          try {
+            const snap = await ref.get();
+            const existing = (snap.exists && Array.isArray((snap.data()||{}).tags)) ? (snap.data().tags) : [];
+            const merged = Array.from(new Set([...(existing||[]), ...iosTags])).slice(0, 12);
+            data['tags'] = merged;
+          } catch {}
+        }
         await ref.set(data, { merge: true });
         updated++;
       } else if (reminderId || title) {
@@ -6367,6 +6561,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           reminderCreatedAt: Date.now(),
           createdAt: Date.now(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          ...(iosTags.length ? { tags: iosTags } : {}),
         }, { merge: true });
         updated++;
       }
@@ -8321,4 +8516,111 @@ exports.runDailySchedulerAdjustments = schedulerV2.onSchedule({
       }, { merge: true });
     }
   }
+});
+function themeLabelFromValue(v) {
+  if (typeof v === 'number') {
+    return ({1:'Health',2:'Growth',3:'Wealth',4:'Tribe',5:'Home'})[v] || 'Growth';
+  }
+  const s = String(v||'').trim();
+  if (!s) return 'Growth';
+  const lower = s.toLowerCase();
+  if (['health','growth','wealth','tribe','home'].includes(lower)) {
+    return lower.charAt(0).toUpperCase()+lower.slice(1);
+  }
+  return s;
+}
+
+function buildAbsoluteUrl(path) {
+  const origin = process.env.APP_BASE_URL || 'https://bob.jc1.tech';
+  if (!path) return origin;
+  if (path.startsWith('http')) return path;
+  if (!path.startsWith('/')) return `${origin}/${path}`;
+  return `${origin}${path}`;
+}
+
+async function buildTaskContext(db, task) {
+  const ctx = { themeName: null, sprintRef: null, storyRef: null, goalRef: null };
+  // Theme direct or via story/goal
+  if (task.theme != null) ctx.themeName = themeLabelFromValue(task.theme);
+  let goalId = task.goalId || null;
+  let storyId = task.storyId || task.parentId || null;
+  if (storyId && !goalId) {
+    try { const s = await db.collection('stories').doc(String(storyId)).get(); if (s.exists) { const d = s.data()||{}; goalId = d.goalId || goalId; ctx.storyRef = d.ref || null; if (d.sprintId) { try { const sp = await db.collection('sprints').doc(String(d.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data()||{}).ref || (sp.data()||{}).name || sp.id; } catch {} } } } catch {}
+  }
+  if (goalId) {
+    try { const g = await db.collection('goals').doc(String(goalId)).get(); if (g.exists) { const gd = g.data()||{}; ctx.goalRef = gd.ref || g.id; if (!ctx.themeName && gd.theme != null) ctx.themeName = themeLabelFromValue(gd.theme); } } catch {}
+  }
+  // Fallback sprint from task
+  if (!ctx.sprintRef && task.sprintId) {
+    try { const sp = await db.collection('sprints').doc(String(task.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data()||{}).ref || (sp.data()||{}).name || sp.id; } catch {}
+  }
+  return ctx;
+}
+
+function mergeTags(existing, toAdd) {
+  const set = new Set(Array.isArray(existing) ? existing : []);
+  for (const t of toAdd) {
+    const s = String(t||'').trim();
+    if (s) set.add(s);
+  }
+  // Limit to 12 tags to keep Reminders tidy
+  return Array.from(set).slice(0, 12);
+}
+
+exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const now = Date.now();
+  const cutoff = now - 24*60*60*1000; // process tasks touched in last 24h
+  let processed = 0, updated = 0;
+  try {
+    const snap = await db.collection('tasks').orderBy('updatedAt','desc').limit(500).get();
+    const batch = db.batch();
+    for (const docSnap of snap.docs) {
+      const t = docSnap.data() || {};
+      processed += 1;
+      // Skip very old if updatedAt is numeric and older than cutoff
+      if (typeof t.updatedAt === 'number' && t.updatedAt < cutoff) continue;
+      const ctx = await buildTaskContext(db, t);
+      const themeTag = ctx.themeName ? `theme-${ctx.themeName}` : null;
+      const sprintTag = ctx.sprintRef ? `sprint-${ctx.sprintRef}` : null;
+      const storyTag = ctx.storyRef ? `story-${ctx.storyRef}` : null;
+      const goalTag  = ctx.goalRef ? `goal-${ctx.goalRef}` : null;
+      const newTags = mergeTags(t.tags, [themeTag, sprintTag, storyTag, goalTag].filter(Boolean));
+
+      // Deep links (absolute) for task + parents
+      const taskRef = t.ref || t.referenceNumber || t.reference || t.id;
+      const taskUrl = buildAbsoluteUrl(`/tasks/${encodeURIComponent(taskRef)}`);
+      const storyUrl = ctx.storyRef ? buildAbsoluteUrl(`/stories/${encodeURIComponent(ctx.storyRef)}`) : null;
+      const goalUrl  = ctx.goalRef  ? buildAbsoluteUrl(`/goals/${encodeURIComponent(ctx.goalRef)}`)  : null;
+      const themeLabel = ctx.themeName || 'Growth';
+      const reminderTitle = `[${themeLabel}] – ${t.title || 'Task'}`;
+      const noteLines = [
+        `Task: ${taskUrl}`,
+        storyUrl ? `Story: ${storyUrl}` : null,
+        goalUrl ? `Goal: ${goalUrl}` : null,
+        '',
+        '-------',
+        `BOB: taskRef=${taskRef}${ctx.storyRef?` storyRef=${ctx.storyRef}`:''}${ctx.goalRef?` goalRef=${ctx.goalRef}`:''} list=${t.list||''}`,
+        ctx.sprintRef ? `#sprint: ${ctx.sprintRef}` : null,
+        ctx.themeName ? `#theme: ${ctx.themeName}` : null,
+        ctx.storyRef ? `#story: ${ctx.storyRef}` : null,
+        `#task: ${taskRef}`,
+        ctx.goalRef ? `#goal: ${ctx.goalRef}` : null,
+      ].filter(Boolean).join('\n');
+
+      const updates = {
+        tags: newTags,
+        deepLink: taskUrl,
+        reminderTitle,
+        reminderNote: noteLines,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      batch.set(docSnap.ref, updates, { merge: true });
+      updated += 1;
+    }
+    if (updated) await batch.commit();
+  } catch (e) {
+    console.error('tagTasksAndBuildDeepLinks error', e?.message || e);
+  }
+  return { processed, updated };
 });

@@ -324,6 +324,7 @@ export class DnDMutationHandler {
         backlog: 0,
         planned: 1,
         active: 2,
+        'in-progress': 2,
         testing: 3,
         done: 4,
       };

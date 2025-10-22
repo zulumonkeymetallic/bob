@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Goal, Story, Task } from '../types';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 type EntityType = 'goal' | 'story' | 'task';
 
@@ -24,6 +25,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
   const [editForm, setEditForm] = useState<any>({});
   const [loading, setLoading] = useState(false);
   const [resolvedThemeHex, setResolvedThemeHex] = useState<string>('#6b7280');
+  const { themes: globalThemes } = useGlobalThemes();
 
   // Resolve theme color based on entity (goal direct; story->goal; task->story->goal)
   useEffect(() => {
@@ -59,9 +61,15 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
                 if (goalSnap.exists()) {
                   const themeId = migrateThemeValue((goalSnap.data() as any).theme);
                   if (!cancelled) setResolvedThemeHex(getThemeById(themeId).color);
+                  return;
                 }
               }
             }
+          }
+          // Fallback: use task's own theme if present
+          const ownTheme = migrateThemeValue((item as any).theme);
+          if (ownTheme) {
+            if (!cancelled) setResolvedThemeHex(getThemeById(ownTheme).color);
           }
         }
       } catch {}
@@ -219,6 +227,29 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
             </div>
           </div>
 
+          {/* Theme (tasks without a story can set theme directly) */}
+          {type === 'task' && (!((item as any)?.parentId) || (item as any)?.parentType !== 'story') && (
+            <div>
+              <label style={{ fontWeight: 500 }}>Theme</label>
+              {isEditing ? (
+                <Form.Select
+                  value={migrateThemeValue(editForm.theme) || ''}
+                  onChange={(e) => setEditForm({ ...editForm, theme: Number(e.target.value) })}
+                >
+                  {globalThemes.map(t => (
+                    <option key={t.id} value={t.id}>{t.label || t.name}</option>
+                  ))}
+                </Form.Select>
+              ) : (
+                <Badge bg="secondary">{(() => {
+                  const themeId = migrateThemeValue((item as any).theme);
+                  const found = globalThemes.find(t => t.id === themeId);
+                  return found?.label || found?.name || '—';
+                })()}</Badge>
+              )}
+            </div>
+          )}
+
           {/* Activity Stream */}
           <div>
             <label style={{ fontWeight: 600 }}>Activity</label>
@@ -260,4 +291,3 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide }) => {
 };
 
 export default EntityDetailModal;
-

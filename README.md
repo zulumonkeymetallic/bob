@@ -38,6 +38,7 @@
 - Integrations (n8n): `docs/integrations/n8n/`
 - Gaps & TODOs: `docs/ROADMAP_GAPS.md`
 - Action Plan: `CRITICAL_ACTION_PLAN.md`
+- AI Scheduling & Enrichment: `docs/ai-scheduling.md`
 
 ## 📞 Support & Contributing
 
@@ -51,6 +52,7 @@
 
 **Current Focus**
 - Scheduling & Routines: Auto-scheduler, Daily Summary, Reminders bridge (#226, #218, #215, #227)
+- AI Scheduling & Enrichment Layer Epic (see issues/epic-ai-scheduling-and-enrichment-layer.md)
 - Finance Platform: Monzo ingestion → Budget engine → Dashboards (#220–#225)
 - Roadmap V3 polish and performance (#181, #203–#212)
 

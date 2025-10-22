@@ -25,9 +25,8 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
   const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
   
   const columns = [
-    { id: 'planned', title: 'Planned', status: 1 },
+    { id: 'backlog', title: 'Backlog', status: 0 },
     { id: 'in-progress', title: 'In Progress', status: 2 },
-    { id: 'testing', title: 'Testing', status: 3 },
     { id: 'done', title: 'Done', status: 4 }
   ];
 
@@ -160,7 +159,7 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
         <DragDropContext onDragEnd={handleDragEnd}>
           <Row className="g-2">
             {columns.map(column => (
-              <Col key={column.id} xs={3}>
+              <Col key={column.id} xs={4}>
                 <div className="kanban-column">
                   <div className="d-flex justify-content-between align-items-center mb-2">
                     <small className="fw-bold text-muted">{column.title}</small>

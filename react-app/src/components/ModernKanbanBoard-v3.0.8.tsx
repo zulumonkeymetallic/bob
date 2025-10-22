@@ -800,10 +800,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
             <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '700', color: 'var(--brand)' }}>
-                  {stories.filter(s => isStatus(s.status, 'active')).length}
+                  {stories.filter(s => isStatus(s.status, 'in-progress')).length}
                 </h3>
                 <p style={{ margin: 0, color: 'var(--muted)', fontSize: '14px', fontWeight: '500' }}>
-                  Active Stories
+                  In Progress Stories
                 </p>
               </Card.Body>
             </Card>
@@ -971,10 +971,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                   onChange={(e) => setEditForm({...editForm, status: e.target.value})}
                 >
                   <option value="backlog">Backlog</option>
-                  <option value="active">Active</option>
+                  <option value="in-progress">In Progress</option>
                   <option value="done">Done</option>
-                  {selectedType === 'task' && <option value="in-progress">In Progress</option>}
-                  {selectedType === 'task' && <option value="blocked">Blocked</option>}
                 </Form.Select>
               </Form.Group>
             </Form>
@@ -1022,9 +1020,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                 onChange={(e) => setAddForm({...addForm, status: e.target.value})}
               >
                 <option value="backlog">Backlog</option>
-                <option value="active">Active</option>
+                <option value="in-progress">In Progress</option>
                 <option value="done">Done</option>
-                {addType === 'task' && <option value="in-progress">In Progress</option>}
               </Form.Select>
             </Form.Group>
           </Form>

@@ -217,35 +217,43 @@ export class ActivityStreamService {
       orderBy('timestamp', 'desc')
     );
 
-    return onSnapshot(q, (snapshot) => {
-      const raw = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
-      // Filter out non-CRUD/noise events (viewed/clicked/imported/exported) and misclassified view notes
-      const allowed = new Set([
-        'created',
-        'updated',
-        'deleted',
-        'note_added',
-        'status_changed',
-        'sprint_changed',
-        'priority_changed',
-        'task_to_story_conversion',
-      ]);
-      const activities = raw.filter((a) => {
-        const t = String(a.activityType || '').toLowerCase();
-        if (!allowed.has(t)) return false;
-        // Exclude any entries that are effectively view-only interactions
-        const desc = String(a.description || '').toLowerCase();
-        if (t === 'note_added' && (desc.startsWith('viewed ') || desc.startsWith('opened activity'))) return false;
-        return true;
-      }) as ActivityEntry[];
-      // Safety: ensure newest first even if some timestamps resolve later
-      const sorted = activities.sort((a,b) => {
-        const ta = (a.timestamp as any)?.toMillis ? (a.timestamp as any).toMillis() : 0;
-        const tb = (b.timestamp as any)?.toMillis ? (b.timestamp as any).toMillis() : 0;
-        return tb - ta;
-      });
-      callback(sorted);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const raw = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        // Filter out non-CRUD/noise events (viewed/clicked/imported/exported) and misclassified view notes
+        const allowed = new Set([
+          'created',
+          'updated',
+          'deleted',
+          'note_added',
+          'status_changed',
+          'sprint_changed',
+          'priority_changed',
+          'task_to_story_conversion',
+        ]);
+        const activities = raw.filter((a) => {
+          const t = String(a.activityType || '').toLowerCase();
+          if (!allowed.has(t)) return false;
+          // Exclude any entries that are effectively view-only interactions
+          const desc = String(a.description || '').toLowerCase();
+          if (t === 'note_added' && (desc.startsWith('viewed ') || desc.startsWith('opened activity'))) return false;
+          return true;
+        }) as ActivityEntry[];
+        // Safety: ensure newest first even if some timestamps resolve later
+        const sorted = activities.sort((a,b) => {
+          const ta = (a.timestamp as any)?.toMillis ? (a.timestamp as any).toMillis() : 0;
+          const tb = (b.timestamp as any)?.toMillis ? (b.timestamp as any).toMillis() : 0;
+          return tb - ta;
+        });
+        callback(sorted);
+      },
+      (error) => {
+        // Gracefully degrade on permission issues instead of throwing
+        console.warn('Activity stream subscribe error', error?.message || error);
+        callback([]);
+      }
+    );
   }
 
   // Get activity stream for multiple entities (for dashboard views)
@@ -260,16 +268,19 @@ export class ActivityStreamService {
       orderBy('timestamp', 'desc')
     );
 
-    return onSnapshot(q, (snapshot) => {
-      const activities = snapshot.docs
-        .slice(0, limit)
-        .map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as ActivityEntry[];
-      
-      callback(activities);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const activities = snapshot.docs
+          .slice(0, limit)
+          .map(doc => ({ id: doc.id, ...(doc.data() as any) })) as ActivityEntry[];
+        callback(activities);
+      },
+      (error) => {
+        console.warn('User activity stream subscribe error', error?.message || error);
+        callback([]);
+      }
+    );
   }
 
   // Utility to format activity description with icons
