@@ -8,6 +8,7 @@ import { Goal, Story, Task } from '../types';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { ChoiceHelper } from '../config/choices';
 
 type EntityType = 'goal' | 'story' | 'task';
 
@@ -101,8 +102,6 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
     setIsEditing(false);
   }, [item]);
 
-  if (!item) return null;
-
   const headerStyle: React.CSSProperties = {
     background: resolvedThemeHex,
     color: themeVars.onAccent as string,
@@ -169,11 +168,14 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
     }
   };
 
-  const statusOptions = type === 'goal'
-    ? [ 'new', 'active', 'paused', 'done', 'dropped' ]
-    : type === 'story'
-      ? [ 'backlog', 'active', 'done', 'defect' ]
-      : [ 'todo', 'planned', 'in-progress', 'blocked', 'done' ];
+  // Canonical numeric status options per entity
+  const statusOptions = useMemo(() => {
+    if (type === 'goal') return ChoiceHelper.getOptions('goal', 'status');
+    if (type === 'story') return ChoiceHelper.getOptions('story', 'status');
+    return ChoiceHelper.getOptions('task', 'status');
+  }, [type]);
+
+  if (!item) return null;
 
   return (
     <Modal show={show} onHide={onHide} size="lg" centered>
@@ -211,13 +213,26 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
             <div style={{ flex: 1 }}>
               <label style={{ fontWeight: 500 }}>Status</label>
               {isEditing ? (
-                <Form.Select value={editForm.status ?? ''} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
+                <Form.Select
+                  value={typeof editForm.status === 'number' ? editForm.status : (Number(editForm.status) || '')}
+                  onChange={(e) => setEditForm({ ...editForm, status: Number(e.target.value) })}
+                >
                   {statusOptions.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </Form.Select>
               ) : (
-                <Badge bg="secondary">{String((item as any).status ?? '—')}</Badge>
+                <Badge bg="secondary">
+                  {(() => {
+                    const v = (item as any).status;
+                    const n = typeof v === 'number' ? v : Number(v);
+                    if (Number.isFinite(n)) {
+                      const table = type === 'goal' ? 'goal' : type === 'story' ? 'story' : 'task';
+                      return ChoiceHelper.getLabel(table, 'status', n);
+                    }
+                    return String(v ?? '—');
+                  })()}
+                </Badge>
               )}
             </div>
             <div style={{ flex: 1 }}>

@@ -594,6 +594,19 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }
     });
   } catch {}
 
+  // Optional: immediately trigger a short planning backfill after enrichment
+  try {
+    const settingsSnap = await db.collection('user_settings').doc(uid).get();
+    const enabled = settingsSnap.exists && settingsSnap.data() && settingsSnap.data().backfillAfterEnrichment === true;
+    if (enabled && updated > 0 && exports.plannerLLM?.run) {
+      try {
+        await exports.plannerLLM.run({ auth: { uid }, data: { horizonDays: 2 } });
+      } catch (e) {
+        console.warn('[autoEnrichTasks] backfill trigger failed', e?.message || e);
+      }
+    }
+  } catch {}
+
   return { processed: candidates.length, updated, estimatesAdded, linksSuggested };
 });
 
@@ -4759,6 +4772,44 @@ async function getLatestMaintenanceSummary({ db, userId }) {
   }
 }
 
+// ===== Weekly summaries (AUD-3)
+exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
+  const db = ensureFirestore();
+  const now = new Date();
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+  const profiles = await db.collection('profiles').get().catch(() => ({ empty: true, docs: [] }));
+  for (const doc of profiles.docs) {
+    const uid = doc.id;
+    try {
+      const q = await db.collection('activity_stream')
+        .where('userId', '==', uid)
+        .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(periodStart))
+        .get();
+      const counts = {};
+      let total = 0;
+      q.docs.forEach(d => {
+        const t = String(d.data()?.activityType || 'unknown');
+        counts[t] = (counts[t] || 0) + 1;
+        total += 1;
+      });
+      const weekKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7)).toISOString().slice(0,10);
+      const summaryRef = db.collection('weekly_summaries').doc(`${uid}_${weekKey}`);
+      await summaryRef.set({
+        id: summaryRef.id,
+        userId: uid,
+        week: weekKey,
+        total,
+        byType: counts,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[weekly summaries] failed for user', uid, e?.message || e);
+    }
+  }
+  return { ok: true, users: profiles.docs.length };
+});
+
 async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId }) {
   const duplicateReminders = await detectDuplicateRemindersForUser({ db, userId });
 
@@ -5938,6 +5989,33 @@ exports.calendarStatus = httpsV2.onCall(async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const doc = await admin.firestore().collection("tokens").doc(req.auth.uid).get();
   return { connected: doc.exists && !!doc.data().refresh_token };
+});
+
+// Callable: disconnect Google Calendar by removing stored refresh token
+exports.disconnectGoogle = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  try {
+    await db.collection('tokens').doc(uid).delete();
+  } catch (e) {
+    // fallback: clear refresh_token if delete fails due to rules
+    try { await db.collection('tokens').doc(uid).set({ refresh_token: admin.firestore.FieldValue.delete(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+  }
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'calendar',
+      entityId: `calendar_${uid}`,
+      activityType: 'calendar_disconnect',
+      userId: uid,
+      description: 'Disconnected Google Calendar',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
+  return { ok: true };
 });
 
 async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
@@ -8089,6 +8167,27 @@ async function generateUserDigest(userId, userData) {
     console.error(`Error generating digest for user ${userId}:`, error);
   }
 }
+
+// Manual trigger for daily digest (per-user)
+exports.sendDailyDigestNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  // Try to load profile then fallback to users/{uid}
+  let email = null;
+  try {
+    const p = await db.collection('profiles').doc(uid).get();
+    if (p.exists) email = p.data()?.email || null;
+  } catch {}
+  if (!email) {
+    try {
+      const u = await db.collection('users').doc(uid).get();
+      if (u.exists) email = u.data()?.email || null;
+    } catch {}
+  }
+  await generateUserDigest(uid, { email });
+  return { ok: true };
+});
 
 // Test Authentication Functions
 exports.generateTestToken = httpsV2.onCall(async (request) => {

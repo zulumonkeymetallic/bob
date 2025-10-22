@@ -79,7 +79,7 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['todo', 'planned', 'in-progress', 'blocked', 'done']
+    options: ['0','1','2','3']
   },
   { 
     key: 'priority', 
@@ -88,7 +88,7 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['low', 'med', 'high']
+    options: ['1','2','3']
   },
   { 
     key: 'effort', 
@@ -148,7 +148,18 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const handleCellSave = async (key: string) => {
-    const updates: Partial<Task> = { [key]: editValue };
+    let updates: Partial<Task>;
+    if (key === 'status') {
+      const next = Number(editValue);
+      updates = { status: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
+    } else if (key === 'priority') {
+      const next = Number(editValue);
+      updates = { priority: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
+    } else if (key === 'dueDate') {
+      updates = { dueDate: editValue ? new Date(editValue).getTime() : null } as any;
+    } else {
+      updates = { [key]: editValue } as any;
+    }
     await onTaskUpdate(task.id, updates);
     setEditingCell(null);
   };
@@ -165,7 +176,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const isEditing = editingCell === column.key;
 
     if (isEditing && column.editable) {
-      if (column.type === 'select' && column.options) {
+      if (column.type === 'select') {
         return (
           <td key={column.key} style={{ width: column.width }}>
             <div className="relative">
@@ -185,9 +196,24 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 }}
                 autoFocus
               >
-                {column.options.map(option => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
+                {column.key === 'status' ? (
+                  <>
+                    <option value={'0'}>To Do</option>
+                    <option value={'1'}>In Progress</option>
+                    <option value={'2'}>Done</option>
+                    <option value={'3'}>Blocked</option>
+                  </>
+                ) : column.key === 'priority' ? (
+                  <>
+                    <option value={'1'}>High</option>
+                    <option value={'2'}>Medium</option>
+                    <option value={'3'}>Low</option>
+                  </>
+                ) : (
+                  (column.options || []).map(option => (
+                    <option key={option} value={option}>{option}</option>
+                  ))
+                )}
               </select>
             </div>
           </td>

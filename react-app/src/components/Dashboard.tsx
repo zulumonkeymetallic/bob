@@ -94,6 +94,7 @@ const Dashboard: React.FC = () => {
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
+  const [weeklySummary, setWeeklySummary] = useState<{ total: number; byType: Record<string, number> } | null>(null);
 
   const decodeToDate = (value: any): Date | null => {
     if (value == null) return null;
@@ -129,6 +130,25 @@ const Dashboard: React.FC = () => {
     console.log('🔍 Dashboard: Loading dashboard data for user:', currentUser.uid);
     loadDashboardData();
   }, [currentUser, currentPersona]);
+
+  // Load weekly summary for current user
+  useEffect(() => {
+    const loadWeekly = async () => {
+      try {
+        if (!currentUser) return;
+        const now = new Date();
+        const day = now.getDay() || 7; // Monday=1
+        const monday = new Date(now);
+        monday.setDate(monday.getDate() - (day - 1));
+        const weekKey = monday.toISOString().slice(0, 10);
+        const ref = doc(db, 'weekly_summaries', `${currentUser.uid}_${weekKey}`);
+        const snap = await getDoc(ref);
+        if (snap.exists()) setWeeklySummary({ total: snap.data().total || 0, byType: snap.data().byType || {} });
+        else setWeeklySummary(null);
+      } catch {}
+    };
+    loadWeekly();
+  }, [currentUser]);
 
   const loadDashboardData = async () => {
     if (!currentUser) return;
@@ -647,7 +667,16 @@ const Dashboard: React.FC = () => {
                     <div className="text-muted">Focus recommendations will appear after reprioritisation runs.</div>
                   )}
 
-                  <div className="text-uppercase text-muted small fw-semibold mb-2">Next up</div>
+                  <div className="d-flex justify-content-between align-items-center mb-2">
+                    <div className="text-uppercase text-muted small fw-semibold">Next up</div>
+                    {(() => {
+                      const stamps = upcomingFocus.map((t:any)=> Number(t.serverUpdatedAt || t.updatedAt || 0)).filter(Number.isFinite);
+                      const max = stamps.length ? Math.max(...stamps) : null;
+                      return (
+                        <div className="text-muted small">Last recompute {max ? new Date(max).toLocaleTimeString() : '—'}</div>
+                      );
+                    })()}
+                  </div>
                   {upcomingFocus.length ? (
                     <ul className="list-unstyled mb-0">
                       {upcomingFocus.map((task) => {
@@ -667,7 +696,12 @@ const Dashboard: React.FC = () => {
                         }
                         return (
                           <li key={task.id} className="mb-2">
-                            <div className="fw-semibold">{task.title}</div>
+                            <div className="fw-semibold d-flex align-items-center gap-2">
+                              <span>{task.title}</span>
+                              {reasons.length > 0 && (
+                                <span title={`Why: ${reasons.join(', ')}`} style={{ cursor: 'help', fontSize: 12, color: 'var(--muted)' }}>Why?</span>
+                              )}
+                            </div>
                             <div className="text-muted small">{formatDueLabel(task)}{reasons.length ? ` • ${reasons.join(' · ')}` : ''}</div>
                           </li>
                         );
@@ -706,6 +740,27 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
             <Col xl={4} md={12}>
+              {/* Weekly Summary */}
+              <Card className="h-100 shadow-sm border-0 mb-3">
+                <Card.Header className="fw-semibold">Weekly Summary</Card.Header>
+                <Card.Body>
+                  {weeklySummary ? (
+                    <>
+                      <div className="d-flex justify-content-between mb-2">
+                        <span className="text-muted">Total activities</span>
+                        <span className="fw-semibold">{weeklySummary.total}</span>
+                      </div>
+                      <ul className="list-unstyled small mb-0">
+                        {Object.entries(weeklySummary.byType).sort((a,b)=> (b[1] as number)-(a[1] as number)).slice(0,3).map(([k,v]) => (
+                          <li key={k} className="d-flex justify-content-between"><span>{k}</span><span className="fw-semibold">{v as number}</span></li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <div className="text-muted small">Summary will appear after next weekly run.</div>
+                  )}
+                </Card.Body>
+              </Card>
               <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="fw-semibold">Automation Snapshot</Card.Header>
                 <Card.Body>

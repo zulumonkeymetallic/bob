@@ -277,6 +277,7 @@ const UnifiedPlannerPage: React.FC = () => {
   const [activeEvent, setActiveEvent] = useState<PlannerCalendarEvent | null>(null);
   const [planning, setPlanning] = useState(false);
   const [rebalanceLoading, setRebalanceLoading] = useState(false);
+  const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
 
   useEffect(() => {
     setBlockForm((prev) => {
@@ -788,6 +789,88 @@ const UnifiedPlannerPage: React.FC = () => {
     };
   }, [events]);
 
+  // Simple overlap/conflict detection for a given event
+  const isConflicting = useCallback((event: PlannerCalendarEvent | null) => {
+    if (!event) return false;
+    const start = event.start.getTime();
+    const end = event.end.getTime();
+    return events.some(e => e.id !== event.id && e.type !== 'external' && event.type !== 'external' && e.start.getTime() < end && start < e.end.getTime());
+  }, [events]);
+
+  const applyEventTiming = useCallback(async (event: PlannerCalendarEvent, start: Date, end: Date) => {
+    setLastActionPatch({ id: event.id, prevStart: event.start, prevEnd: event.end });
+    if (event.type === 'block') {
+      await updateBlockTiming(event, start, end);
+      // Attempt Google sync if block configured
+      try {
+        const block: any = event.block || {};
+        if (block.syncToGoogle) {
+          const startIso = start.toISOString();
+          const endIso = end.toISOString();
+          if (block.googleEventId) {
+            const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+            await updateEv({ eventId: block.googleEventId, start: startIso, end: endIso });
+          }
+        }
+      } catch {}
+    } else if (event.type === 'instance') {
+      await updateInstanceTiming(event, start, end);
+      // Attempt Google sync if linked
+      try {
+        const eid = event.instance?.external?.gcalEventId;
+        if (eid) {
+          const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+          await updateEv({ eventId: eid, start: start.toISOString(), end: end.toISOString() });
+        }
+      } catch {}
+    }
+  }, [functions, updateBlockTiming, updateInstanceTiming]);
+
+  const findNextFreeSlot = useCallback((event: PlannerCalendarEvent) => {
+    const duration = event.end.getTime() - event.start.getTime();
+    const sorted = events
+      .filter(e => e.id !== event.id && e.type !== 'external')
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
+    // search from current end forward in 15-min increments up to the same day
+    const limit = new Date(event.start);
+    limit.setHours(23, 59, 0, 0);
+    for (let t = new Date(event.end).getTime(); t + duration <= limit.getTime(); t += 15 * 60 * 1000) {
+      const s = t, e = t + duration;
+      const overlaps = sorted.some(x => x.start.getTime() < e && s < x.end.getTime());
+      if (!overlaps) return { start: new Date(s), end: new Date(e) };
+    }
+    return null;
+  }, [events]);
+
+  const handleConflictMoveNext = useCallback(async () => {
+    if (!activeEvent) return;
+    const next = findNextFreeSlot(activeEvent);
+    if (!next) { setFeedback({ variant: 'info', message: 'No free slot found today.' }); return; }
+    await applyEventTiming(activeEvent, next.start, next.end);
+    setFeedback({ variant: 'success', message: 'Moved to next free slot.' });
+  }, [activeEvent, applyEventTiming, findNextFreeSlot]);
+
+  const handleConflictShorten = useCallback(async (minutes: number) => {
+    if (!activeEvent) return;
+    const newEnd = new Date(Math.max(activeEvent.start.getTime() + 5 * 60 * 1000, activeEvent.end.getTime() - minutes * 60 * 1000));
+    await applyEventTiming(activeEvent, activeEvent.start, newEnd);
+    setFeedback({ variant: 'success', message: `Shortened by ${minutes}m.` });
+  }, [activeEvent, applyEventTiming]);
+
+  const handleConflictShift = useCallback(async (minutes: number) => {
+    if (!activeEvent) return;
+    const delta = minutes * 60 * 1000;
+    await applyEventTiming(activeEvent, new Date(activeEvent.start.getTime() + delta), new Date(activeEvent.end.getTime() + delta));
+    setFeedback({ variant: 'success', message: `Shifted by +${minutes}m.` });
+  }, [activeEvent, applyEventTiming]);
+
+  const handleUndoLast = useCallback(async () => {
+    if (!activeEvent || !lastActionPatch || lastActionPatch.id !== activeEvent.id) return;
+    await applyEventTiming(activeEvent, lastActionPatch.prevStart, lastActionPatch.prevEnd);
+    setFeedback({ variant: 'info', message: 'Reverted last change.' });
+    setLastActionPatch(null);
+  }, [activeEvent, lastActionPatch, applyEventTiming]);
+
   const clearFeedback = useCallback(() => setFeedback(null), []);
 
   const handleRebalanceNextDay = useCallback(async () => {
@@ -899,8 +982,8 @@ const UnifiedPlannerPage: React.FC = () => {
                     <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))}>
                       + New Block
                     </Button>
-                  </div>
-                  <DragAndDropCalendar
+                </div>
+                <DragAndDropCalendar
                     localizer={localizer}
                     events={events}
                     view={view}
@@ -920,13 +1003,23 @@ const UnifiedPlannerPage: React.FC = () => {
                     style={{ height: 'calc(100vh - 220px)' }}
                     min={new Date(1970, 1, 1, 5, 0)}
                     max={new Date(1970, 1, 1, 23, 30)}
-                    formats={{
-                      timeGutterFormat: (date) => format(date, 'HH:mm'),
-                      eventTimeRangeFormat: ({ start, end }) => `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`,
-                    }}
-                  />
-                </div>
-              )}
+                  formats={{
+                    timeGutterFormat: (date) => format(date, 'HH:mm'),
+                    eventTimeRangeFormat: ({ start, end }) => `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`,
+                  }}
+                />
+                {/* Conflict resolution panel */}
+                {isConflicting(activeEvent) && (
+                  <div className="d-flex align-items-center gap-2 p-2 border-top" style={{ background: '#fffbe6' }}>
+                    <span className="text-danger fw-semibold">Resolve conflict:</span>
+                    <Button size="sm" variant="outline-primary" onClick={handleConflictMoveNext}>Move to next free slot</Button>
+                    <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShorten(15)}>Shorten by 15m</Button>
+                    <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShift(15)}>Shift +15m</Button>
+                    <Button size="sm" variant="outline-dark" disabled={!lastActionPatch} onClick={handleUndoLast}>Undo</Button>
+                  </div>
+                )}
+              </div>
+            )}
             </Card.Body>
           </Card>
         </Col>
@@ -982,6 +1075,49 @@ const UnifiedPlannerPage: React.FC = () => {
                   );
                 })
               )}
+            </Card.Body>
+          </Card>
+
+          <Card className="shadow-sm border-0 mb-4">
+            <Card.Header className="fw-semibold">Planner Audit</Card.Header>
+            <Card.Body className="p-3">
+              {(() => {
+                const total = planner.instances.length;
+                const unscheduled = planner.instances.filter(i => i.status === 'unscheduled');
+                const lastUpdated = planner.instances.reduce<number>((acc, i) => {
+                  const t = Number((i as any).updatedAt || 0);
+                  return Number.isFinite(t) && t > acc ? t : acc;
+                }, 0);
+                const reasonCounts = new Map<string, number>();
+                unscheduled.forEach(i => {
+                  const r = String((i as any).statusReason || 'unknown');
+                  reasonCounts.set(r, (reasonCounts.get(r) || 0) + 1);
+                });
+                const topReasons = Array.from(reasonCounts.entries()).sort((a,b) => b[1]-a[1]).slice(0,3);
+                return (
+                  <div>
+                    <div className="d-flex justify-content-between mb-2">
+                      <span className="text-muted">Instances in window</span>
+                      <span className="fw-semibold">{total}</span>
+                    </div>
+                    <div className="d-flex justify-content-between mb-2">
+                      <span className="text-muted">Unscheduled</span>
+                      <span className="fw-semibold">{unscheduled.length}</span>
+                    </div>
+                    {topReasons.length > 0 && (
+                      <div className="mb-2">
+                        <div className="text-muted small">Top reasons</div>
+                        <ul className="small mb-0">
+                          {topReasons.map(([label, count]) => (
+                            <li key={label}>{label} — {count}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <div className="text-muted small">Last update {lastUpdated ? new Date(lastUpdated).toLocaleString() : '—'}</div>
+                  </div>
+                );
+              })()}
             </Card.Body>
           </Card>
 

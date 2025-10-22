@@ -7,6 +7,8 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
 import CalendarSyncManager from './CalendarSyncManager';
+import { functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { Settings, Palette, Database, Calendar } from 'lucide-react';
 
 interface GlobalThemeSettings {
@@ -27,6 +29,7 @@ const SettingsPage: React.FC = () => {
   const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
   const [editingTheme, setEditingTheme] = useState<GlobalTheme | null>(null);
   const [showThemeModal, setShowThemeModal] = useState(false);
+  const [backfillAfterEnrichment, setBackfillAfterEnrichment] = useState<boolean>(false);
 
   // Migration state
   const [migrationStats, setMigrationStats] = useState({
@@ -82,6 +85,14 @@ const SettingsPage: React.FC = () => {
           const data = docSnap.data() as GlobalThemeSettings;
           setGlobalThemes(data.themes || GLOBAL_THEMES);
         }
+        // Load user setting for planner backfill after enrichment
+        try {
+          const usRef = doc(db, 'user_settings', currentUser.uid);
+          const usSnap = await getDoc(usRef);
+          if (usSnap.exists()) {
+            setBackfillAfterEnrichment(!!usSnap.data().backfillAfterEnrichment);
+          }
+        } catch {}
         
         // Check migration status
         await checkMigrationStatus();
@@ -398,12 +409,74 @@ const SettingsPage: React.FC = () => {
                         <option value="dark">Dark</option>
                         <option value="system">System</option>
                       </Form.Select>
+                  </Form.Group>
+
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="switch"
+                        id="switch-backfill-after-enrichment"
+                        label="Backfill planner after task enrichment"
+                        checked={backfillAfterEnrichment}
+                        onChange={async (e) => {
+                          const next = e.target.checked;
+                          setBackfillAfterEnrichment(next);
+                          try {
+                            if (currentUser) {
+                              await setDoc(doc(db, 'user_settings', currentUser.uid), { backfillAfterEnrichment: next, updatedAt: serverTimestamp() }, { merge: true });
+                            }
+                          } catch (error) {
+                            console.error('Failed to save user settings', error);
+                          }
+                        }}
+                      />
+                      <div className="text-muted small mt-1">When enabled, AI-estimate updates trigger a small immediate replanning.</div>
                     </Form.Group>
 
                     <Alert variant="info">
                       <strong>Current Theme:</strong> {theme} mode
                       {theme === 'system' && ` (resolved to ${isDark ? 'dark' : 'light'})`}
                     </Alert>
+
+                    <hr />
+                    <h5 className="mb-3" style={{ color: colors.primary }}>Automation</h5>
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="switch"
+                        id="switch-daily-digest"
+                        label="Email me a daily priorities summary (06:30)"
+                        onChange={async (e) => {
+                          try {
+                            if (!currentUser) return;
+                            // Write to both profiles/ and users/ to satisfy legacy checks
+                            const pref = { dailyDigestEnabled: e.target.checked, updatedAt: serverTimestamp() } as any;
+                            await setDoc(doc(db, 'profiles', currentUser.uid), pref, { merge: true });
+                            await setDoc(doc(db, 'users', currentUser.uid), { emailDigest: e.target.checked, updatedAt: serverTimestamp() }, { merge: true });
+                          } catch (err) {
+                            console.error('Failed to save daily digest preference', err);
+                          }
+                        }}
+                      />
+                      <div className="text-muted small mt-1">Sends a concise AI-powered list of your top priorities, overdue and due-today items.</div>
+                    </Form.Group>
+
+                    <div className="d-flex gap-2">
+                      <Button
+                        variant="outline-primary"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const fn = httpsCallable(functions, 'sendDailyDigestNow');
+                            await fn({});
+                            alert('Daily digest requested. Check your inbox shortly.');
+                          } catch (e) {
+                            console.error('Failed to trigger digest', e);
+                            alert('Failed to trigger digest.');
+                          }
+                        }}
+                      >
+                        Send me a digest now
+                      </Button>
+                    </div>
                   </Card.Body>
                 </Card>
               </Tab.Pane>

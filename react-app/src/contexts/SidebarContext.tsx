@@ -23,7 +23,11 @@ export const SidebarProvider: React.FC<SidebarProviderProps> = ({ children }) =>
   const [selectedItem, setSelectedItem] = useState<Story | Task | Goal | null>(null);
   const [selectedType, setSelectedType] = useState<'story' | 'task' | 'goal' | null>(null);
   const [isVisible, setIsVisible] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('globalSidebarCollapsed') === '1';
+    } catch { return false; }
+  });
   const [updateHandler, setUpdateHandler] = useState<((item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => Promise<void>) | null>(null);
 
   const showSidebar = (item: Story | Task | Goal, type: 'story' | 'task' | 'goal') => {
@@ -40,7 +44,11 @@ export const SidebarProvider: React.FC<SidebarProviderProps> = ({ children }) =>
   };
 
   const toggleCollapse = () => {
-    setIsCollapsed(!isCollapsed);
+    setIsCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('globalSidebarCollapsed', next ? '1' : '0'); } catch {}
+      return next;
+    });
   };
 
   const updateItem = async (updates: any) => {
