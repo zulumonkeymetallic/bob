@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Container, Row, Col, Card, Button, Modal, Form, Alert, Table, Badge } from 'react-bootstrap';
 import { 
   Calendar as CalendarIcon, 
@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
+import { httpsCallable } from 'firebase/functions';
+import { functions, firebaseConfig } from '../../firebase';
 
 // BOB v3.5.2 - Calendar Integration
 // FTR-03 Implementation - Scaffold with Google Calendar integration
@@ -93,14 +95,41 @@ const CalendarIntegrationView: React.FC = () => {
     }
   });
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [gcalConnected, setGcalConnected] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewType, setViewType] = useState<'day' | 'week' | 'month'>('week');
+  // Event modal refs (simple approach without full controlled form)
+  const titleRef = useRef<HTMLInputElement | null>(null);
+  const descRef = useRef<HTMLTextAreaElement | null>(null);
+  const startRef = useRef<HTMLInputElement | null>(null);
+  const endRef = useRef<HTMLInputElement | null>(null);
+  const calRef = useRef<HTMLSelectElement | null>(null);
   
-  // Load dummy data
+  // Load status + dummy data for initial render
   useEffect(() => {
+    refreshCalendarStatus();
     loadDummyData();
   }, []);
+
+  const refreshCalendarStatus = async () => {
+    if (!currentUser) return;
+    try {
+      const statusFn = httpsCallable(functions, 'calendarStatus');
+      const res: any = await statusFn({});
+      const connected = !!res?.data?.connected;
+      setGcalConnected(connected);
+      setConfig(prev => ({ ...prev, googleCalendarEnabled: connected }));
+    } catch (e) {
+      // Non-fatal if status isn't available
+      console.warn('calendarStatus failed', e);
+    }
+  };
+
+  const getOauthStartUrl = () => {
+    const projectId = firebaseConfig.projectId || 'bob20250810';
+    return `https://europe-west2-${projectId}.cloudfunctions.net/oauthStart`;
+  };
   
   const loadDummyData = () => {
     // Dummy goals, stories, tasks
@@ -175,29 +204,45 @@ const CalendarIntegrationView: React.FC = () => {
   
   // Calendar sync functions
   const handleGoogleCalendarAuth = async () => {
-    setSyncStatus('syncing');
-    
+    if (!currentUser) return;
+    const nonce = Math.random().toString(36).slice(2);
+    const url = `${getOauthStartUrl()}?uid=${encodeURIComponent(currentUser.uid)}&nonce=${encodeURIComponent(nonce)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    // Refresh status shortly after
+    setTimeout(() => { refreshCalendarStatus(); }, 5000);
+  };
+
+  const createOrUpdateEvent = async () => {
+    if (!currentUser) return;
+    const summary = titleRef.current?.value?.trim() || 'New Event';
+    const start = startRef.current?.value ? new Date(startRef.current.value).toISOString() : new Date().toISOString();
+    const end = endRef.current?.value ? new Date(endRef.current.value).toISOString() : new Date(Date.now() + 60*60*1000).toISOString();
     try {
-      // Mock Google Calendar OAuth flow
-      console.log('🔗 Initiating Google Calendar OAuth...');
-      
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Mock successful auth
-      setConfig(prev => ({ ...prev, googleCalendarEnabled: true }));
-      setSyncStatus('success');
-      
-      // Mock calendar list retrieval
-      console.log('📅 Google Calendars found:', [
-        { id: 'primary', name: 'Primary Calendar' },
-        { id: 'work', name: 'Work Calendar' },
-        { id: 'personal', name: 'Personal Calendar' }
-      ]);
-      
-    } catch (error) {
-      console.error('❌ Google Calendar auth failed:', error);
-      setSyncStatus('error');
+      if (selectedEvent) {
+        const updateFn = httpsCallable(functions, 'updateCalendarEvent');
+        await updateFn({ eventId: selectedEvent.id, summary, start, end });
+      } else {
+        const createFn = httpsCallable(functions, 'createCalendarEvent');
+        await createFn({ summary, start, end });
+      }
+      await loadUpcomingFromGoogle();
+      setShowEventModal(false);
+    } catch (e) {
+      console.error('create/update event failed', e);
+      alert('Failed to save event');
+    }
+  };
+
+  const deleteEvent = async () => {
+    if (!currentUser || !selectedEvent) return;
+    try {
+      const delFn = httpsCallable(functions, 'deleteCalendarEvent');
+      await delFn({ eventId: selectedEvent.id });
+      await loadUpcomingFromGoogle();
+      setShowEventModal(false);
+    } catch (e) {
+      console.error('delete event failed', e);
+      alert('Failed to delete event');
     }
   };
   
@@ -220,37 +265,44 @@ const CalendarIntegrationView: React.FC = () => {
   };
   
   const syncCalendars = async () => {
+    if (!currentUser) return;
     setSyncStatus('syncing');
-    
     try {
-      console.log('🔄 Syncing calendars...');
-      
-      // Mock API calls to fetch events
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Mock fetched events (would normally come from calendar APIs)
-      const newEvents: CalendarEvent[] = [
-        {
-          id: 'event-4',
-          title: 'Team Meeting',
-          startTime: new Date('2025-09-03T10:00:00'),
-          endTime: new Date('2025-09-03T11:00:00'),
-          calendarId: 'work',
-          isGoalRelated: false,
-          source: 'google',
-          reminderMinutes: 10
-        }
-      ];
-      
-      setEvents(prev => [...prev, ...newEvents]);
+      const syncFn = httpsCallable(functions, 'syncCalendarAndTasks');
+      await syncFn({ direction: 'both' });
+      await loadUpcomingFromGoogle();
       setLastSyncTime(new Date());
       setSyncStatus('success');
-      
-      console.log('✅ Calendar sync completed');
-      
     } catch (error) {
       console.error('❌ Calendar sync failed:', error);
       setSyncStatus('error');
+    }
+  };
+
+  const loadUpcomingFromGoogle = async () => {
+    try {
+      const listFn = httpsCallable(functions, 'listUpcomingEvents');
+      const res: any = await listFn({ maxResults: 25 });
+      const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+      const mapped: CalendarEvent[] = items.map((ev: any) => ({
+        id: ev.id,
+        title: ev.summary || 'Event',
+        description: ev.description || '',
+        startTime: new Date(ev.start?.dateTime || ev.start?.date),
+        endTime: new Date(ev.end?.dateTime || ev.end?.date),
+        calendarId: 'primary',
+        isGoalRelated: !!(ev.extendedProperties?.private?.['bob-block-id'] || ev.extendedProperties?.private?.['bob-goal-id']),
+        linkedGoalId: ev.extendedProperties?.private?.['bob-goal-id'] || undefined,
+        source: 'google',
+        reminderMinutes: undefined,
+      }));
+      setEvents(prev => {
+        const byId = new Map(prev.map(e => [e.id, e] as const));
+        for (const m of mapped) byId.set(m.id, m);
+        return Array.from(byId.values());
+      });
+    } catch (e) {
+      console.warn('listUpcomingEvents failed', e);
     }
   };
   
@@ -569,7 +621,7 @@ const CalendarIntegrationView: React.FC = () => {
             <Card.Body>
               <div className="d-flex justify-content-between align-items-center mb-2">
                 <span>Google Calendar</span>
-                {config.googleCalendarEnabled ? (
+                {gcalConnected ? (
                   <Badge bg="success">Connected</Badge>
                 ) : (
                   <Button size="sm" variant="outline-primary" onClick={handleGoogleCalendarAuth}>
@@ -656,13 +708,14 @@ const CalendarIntegrationView: React.FC = () => {
                     type="text" 
                     defaultValue={selectedEvent?.title || ''}
                     placeholder="Enter event title"
+                    ref={titleRef}
                   />
                 </Form.Group>
               </Col>
               <Col md={6}>
                 <Form.Group className="mb-3">
                   <Form.Label>Calendar</Form.Label>
-                  <Form.Select defaultValue={selectedEvent?.calendarId || config.defaultCalendarId}>
+                  <Form.Select defaultValue={selectedEvent?.calendarId || config.defaultCalendarId} ref={calRef}>
                     <option value="primary">Primary Calendar</option>
                     <option value="work">Work Calendar</option>
                     <option value="personal">Personal Calendar</option>
@@ -671,15 +724,16 @@ const CalendarIntegrationView: React.FC = () => {
               </Col>
             </Row>
             
-            <Form.Group className="mb-3">
-              <Form.Label>Description</Form.Label>
-              <Form.Control 
-                as="textarea" 
-                rows={3}
-                defaultValue={selectedEvent?.description || ''}
-                placeholder="Event description (optional)"
-              />
-            </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control 
+                  as="textarea" 
+                  rows={3}
+                  defaultValue={selectedEvent?.description || ''}
+                  placeholder="Event description (optional)"
+                  ref={descRef}
+                />
+              </Form.Group>
             
             <Row>
               <Col md={6}>
@@ -688,6 +742,7 @@ const CalendarIntegrationView: React.FC = () => {
                   <Form.Control 
                     type="datetime-local" 
                     defaultValue={selectedEvent?.startTime.toISOString().slice(0, 16) || ''}
+                    ref={startRef}
                   />
                 </Form.Group>
               </Col>
@@ -697,6 +752,7 @@ const CalendarIntegrationView: React.FC = () => {
                   <Form.Control 
                     type="datetime-local" 
                     defaultValue={selectedEvent?.endTime.toISOString().slice(0, 16) || ''}
+                    ref={endRef}
                   />
                 </Form.Group>
               </Col>
@@ -763,7 +819,12 @@ const CalendarIntegrationView: React.FC = () => {
           <Button variant="secondary" onClick={() => setShowEventModal(false)}>
             Cancel
           </Button>
-          <Button variant="primary">
+          {selectedEvent && (
+            <Button variant="outline-danger" onClick={deleteEvent}>
+              Delete
+            </Button>
+          )}
+          <Button variant="primary" onClick={createOrUpdateEvent}>
             {selectedEvent ? 'Update Event' : 'Create Event'}
           </Button>
         </Modal.Footer>

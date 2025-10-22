@@ -9,6 +9,9 @@ interface PlannerPrefs {
   nightlyMaintenanceEnabled: boolean;
   dailySummaryEnabled: boolean;
   dataQualityEmailEnabled: boolean;
+  quietHoursStart?: number; // 0-23
+  quietHoursEnd?: number;   // 0-23
+  minBlockMinutes?: number; // planning hint
 }
 
 const SettingsPlannerPage: React.FC = () => {
@@ -17,6 +20,9 @@ const SettingsPlannerPage: React.FC = () => {
     nightlyMaintenanceEnabled: true,
     dailySummaryEnabled: true,
     dataQualityEmailEnabled: true,
+    quietHoursStart: 6,
+    quietHoursEnd: 22,
+    minBlockMinutes: 30,
   });
   const [loadingPrefs, setLoadingPrefs] = useState(false);
   const [prefsMessage, setPrefsMessage] = useState('');
@@ -44,9 +50,12 @@ const SettingsPlannerPage: React.FC = () => {
             nightlyMaintenanceEnabled: data?.nightlyMaintenanceEnabled !== false,
             dailySummaryEnabled: data?.dailySummaryEnabled !== false,
             dataQualityEmailEnabled: data?.dataQualityEmailEnabled !== false,
+            quietHoursStart: Number.isFinite(data?.quietHoursStart) ? data.quietHoursStart : 6,
+            quietHoursEnd: Number.isFinite(data?.quietHoursEnd) ? data.quietHoursEnd : 22,
+            minBlockMinutes: Number.isFinite(data?.minBlockMinutes) ? data.minBlockMinutes : 30,
           });
         } else {
-          setPrefs({ nightlyMaintenanceEnabled: true, dailySummaryEnabled: true, dataQualityEmailEnabled: true });
+          setPrefs({ nightlyMaintenanceEnabled: true, dailySummaryEnabled: true, dataQualityEmailEnabled: true, quietHoursStart: 6, quietHoursEnd: 22, minBlockMinutes: 30 });
         }
       } catch (error: any) {
         console.error('[settings-planner] load prefs failed', error);
@@ -81,6 +90,9 @@ const SettingsPlannerPage: React.FC = () => {
         nightlyMaintenanceEnabled: next.nightlyMaintenanceEnabled,
         dailySummaryEnabled: next.dailySummaryEnabled,
         dataQualityEmailEnabled: next.dataQualityEmailEnabled,
+        quietHoursStart: next.quietHoursStart,
+        quietHoursEnd: next.quietHoursEnd,
+        minBlockMinutes: next.minBlockMinutes,
       }, { merge: true });
       setPrefsMessage('Preferences updated');
     } catch (error: any) {
@@ -181,6 +193,46 @@ const SettingsPlannerPage: React.FC = () => {
                 onChange={(e) => updatePreference({ dataQualityEmailEnabled: e.target.checked })}
               />
               <Form.Text className="text-muted">Sends health checks for tasks and goals.</Form.Text>
+            </Col>
+          </Row>
+          <hr />
+          <h6 className="mt-2">Scheduling Preferences</h6>
+          <Row className="g-3">
+            <Col md={4}>
+              <Form.Label>Quiet Hours: Start</Form.Label>
+              <Form.Select
+                value={prefs.quietHoursStart}
+                onChange={(e) => updatePreference({ quietHoursStart: parseInt(e.target.value) })}
+                disabled={loadingPrefs}
+              >
+                {Array.from({ length: 24 }).map((_, i) => (
+                  <option key={i} value={i}>{`${i.toString().padStart(2,'0')}:00`}</option>
+                ))}
+              </Form.Select>
+            </Col>
+            <Col md={4}>
+              <Form.Label>Quiet Hours: End</Form.Label>
+              <Form.Select
+                value={prefs.quietHoursEnd}
+                onChange={(e) => updatePreference({ quietHoursEnd: parseInt(e.target.value) })}
+                disabled={loadingPrefs}
+              >
+                {Array.from({ length: 24 }).map((_, i) => (
+                  <option key={i} value={i}>{`${i.toString().padStart(2,'0')}:00`}</option>
+                ))}
+              </Form.Select>
+            </Col>
+            <Col md={4}>
+              <Form.Label>Minimum Block Length (minutes)</Form.Label>
+              <Form.Control
+                type="number"
+                min={15}
+                max={240}
+                step={5}
+                value={prefs.minBlockMinutes}
+                disabled={loadingPrefs}
+                onChange={(e) => updatePreference({ minBlockMinutes: parseInt(e.target.value) })}
+              />
             </Col>
           </Row>
           <div className="mt-3">
