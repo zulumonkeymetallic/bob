@@ -15,6 +15,7 @@ interface VersionStatus {
 export class VersionTimeoutService {
   private static instance: VersionTimeoutService;
   private checkInterval: NodeJS.Timeout | null = null;
+  private onVisibilityChangeRef: ((this: Document, ev: Event) => any) | null = null;
   private readonly TIMEOUT_DURATION = 30 * 60 * 1000; // 30 minutes
   private readonly CHECK_INTERVAL = 5 * 60 * 1000; // Check every 5 minutes
   private readonly SERVER_CHECK_ENDPOINT = '/version.json';
@@ -46,11 +47,12 @@ export class VersionTimeoutService {
     this.performVersionCheck();
     
     // Listen for visibility changes to check when user returns
-    document.addEventListener('visibilitychange', () => {
+    this.onVisibilityChangeRef = () => {
       if (!document.hidden) {
         this.performVersionCheck();
       }
-    });
+    };
+    document.addEventListener('visibilitychange', this.onVisibilityChangeRef);
   }
 
   private startPeriodicChecks(): void {
@@ -233,6 +235,10 @@ export class VersionTimeoutService {
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
+    }
+    if (this.onVisibilityChangeRef) {
+      document.removeEventListener('visibilitychange', this.onVisibilityChangeRef);
+      this.onVisibilityChangeRef = null;
     }
   }
 }

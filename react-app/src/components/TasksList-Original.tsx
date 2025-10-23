@@ -147,10 +147,12 @@ const TasksList: React.FC = () => {
       const estimateMin = newTask.effort === 'S' ? 30 : newTask.effort === 'M' ? 60 : 120;
       const estimatedHours = Math.round((estimateMin / 60) * 100) / 100;
 
+      const priorityMap: Record<string, number> = { high: 1, med: 2, low: 3 };
       await addDoc(collection(db, 'tasks'), {
         ...newTask,
         persona: currentPersona,
-        status: 'planned',
+        status: 0,
+        priority: priorityMap[String((newTask as any).priority).toLowerCase()] ?? 2,
         alignedToGoal: currentPersona === 'personal' && newTask.parentType === 'story',
         hasGoal: currentPersona === 'personal' && newTask.parentType === 'story',
         source: 'web',

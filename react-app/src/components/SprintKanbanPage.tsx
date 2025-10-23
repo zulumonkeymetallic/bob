@@ -12,6 +12,7 @@ import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3 } from 'lucide-r
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
+import { useSidebar } from '../contexts/SidebarContext';
 
 interface SprintKanbanPageProps {
   showSidebar?: boolean;
@@ -35,6 +36,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const [loading, setLoading] = useState(true);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
+  const { isCollapsed, toggleCollapse } = useSidebar();
 
   // Update selected sprint when prop changes
   useEffect(() => {
@@ -236,8 +238,16 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
               </Badge>
             </div>
 
-            {/* Sprint Selector */}
+            {/* Sprint Selector + Sidebar collapse */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                title={isCollapsed ? 'Expand details panel' : 'Collapse details panel'}
+                onClick={toggleCollapse}
+              >
+                {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+              </Button>
               <Button
                 variant="outline-secondary"
                 size="sm"

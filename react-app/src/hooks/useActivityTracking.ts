@@ -136,7 +136,8 @@ export const useActivityTracking = () => {
 
     return ActivityStreamService.subscribeToActivityStream(
       entityId,
-      callback
+      callback,
+      currentUser.uid
     );
   };
 

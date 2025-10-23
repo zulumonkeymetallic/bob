@@ -28,11 +28,12 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     description: '',
     goalId: '',
     priority: 2,
-    status: 1,
+    status: 0,
     theme: 1,
     points: 0,
     acceptanceCriteria: '',
-    sprintId: '' as string | ''
+    sprintId: '' as string | '',
+    blocked: false as boolean
   });
   
   const [loading, setLoading] = useState(false);
@@ -50,13 +51,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         description: story.description || '',
         goalId: story.goalId || '',
         priority: story.priority || 2,
-        status: story.status || 1,
+        status: (typeof story.status === 'number' ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0) : 0),
         theme: story.theme || 1,
         points: story.points || 0,
         acceptanceCriteria: Array.isArray(story.acceptanceCriteria) 
           ? story.acceptanceCriteria.join('\n') 
           : story.acceptanceCriteria || '',
-        sprintId: (story as any).sprintId || ''
+        sprintId: (story as any).sprintId || '',
+        blocked: Boolean((story as any).blocked)
       });
       setError(null);
       const currentGoal = goals.find(g => g.id === story.goalId);
@@ -98,6 +100,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         goalId: editedStory.goalId || null,
         priority: editedStory.priority,
         status: editedStory.status,
+        blocked: !!editedStory.blocked,
         points: editedStory.points,
         sprintId: editedStory.sprintId || null,
         acceptanceCriteria: editedStory.acceptanceCriteria.trim() 
@@ -231,11 +234,22 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   onChange={(e) => handleInputChange('status', parseInt(e.target.value))}
                 >
                   <option value={0}>Backlog</option>
-                  <option value={1}>Planned</option>
                   <option value={2}>In Progress</option>
-                  <option value={3}>Testing</option>
                   <option value={4}>Done</option>
                 </Form.Select>
+              </Form.Group>
+            </Col>
+
+            <Col md={2}>
+              <Form.Group className="mb-3">
+                <Form.Label>&nbsp;</Form.Label>
+                <Form.Check
+                  type="checkbox"
+                  id="story-blocked-checkbox"
+                  label="Blocked"
+                  checked={!!editedStory.blocked}
+                  onChange={(e) => handleInputChange('blocked', e.target.checked)}
+                />
               </Form.Group>
             </Col>
 

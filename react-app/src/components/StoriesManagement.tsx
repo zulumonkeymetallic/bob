@@ -134,6 +134,8 @@ const StoriesManagement: React.FC = () => {
       
       console.log('📊 Setting stories state with:', normalizedStories.length, 'stories');
       setStories(normalizedStories);
+    }, (error) => {
+      console.warn('[StoriesManagement] stories subscribe error', error?.message || error);
     });
     
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
@@ -151,6 +153,8 @@ const StoriesManagement: React.FC = () => {
       console.log('📊 Setting goals state with:', goalsData.length, 'goals');
       console.log('🎯 Goals details:', goalsData.map(g => ({ id: g.id, title: g.title })));
       setGoals(goalsData);
+    }, (error) => {
+      console.warn('[StoriesManagement] goals subscribe error', error?.message || error);
     });
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
@@ -164,6 +168,8 @@ const StoriesManagement: React.FC = () => {
         } as Task;
       });
       setTasks(tasksData);
+    }, (error) => {
+      console.warn('[StoriesManagement] tasks subscribe error', error?.message || error);
     });
 
     // Load sprints to determine the active sprint (status === 1)

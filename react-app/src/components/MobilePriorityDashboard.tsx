@@ -111,6 +111,26 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
     isPriority(story.priority, 'High') && isStatus(story.status, 'in-progress')
   );
 
+  const computeReasons = (task: any): string[] => {
+    const reasons: string[] = [];
+    const due = task?.dueDate ? new Date(task.dueDate) : null;
+    const now = new Date();
+    if (due) {
+      const startOfToday = new Date();
+      startOfToday.setHours(0,0,0,0);
+      if (due.getTime() < startOfToday.getTime()) reasons.push('Overdue');
+      else if (due.toDateString() === now.toDateString()) reasons.push('Due today');
+    }
+    if (isPriority(task.priority, 'high')) reasons.push('High priority');
+    if (task.storyId) reasons.push('Story-linked');
+    const createdMs = task.createdAt ? new Date(task.createdAt).getTime() : null;
+    if (createdMs) {
+      const ageDays = Math.floor((Date.now() - createdMs) / 86400000);
+      if (ageDays >= 14) reasons.push(`${ageDays}d old`);
+    }
+    return reasons;
+  };
+
   if (!deviceInfo.isMobile) {
     return (
       <Card className="mb-4">
@@ -206,9 +226,19 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
                 
                 <div className="flex-grow-1">
                   <div className="d-flex align-items-center mb-1">
-                    <span className={`task-title ${isStatus(task.status, 'done') ? 'text-decoration-line-through text-muted' : ''}`}>
-                      {task.title}
-                    </span>
+                    {(() => {
+                      const reasons = computeReasons(task);
+                      return (
+                        <>
+                          <span className={`task-title ${isStatus(task.status, 'done') ? 'text-decoration-line-through text-muted' : ''}`}>
+                            {task.title}
+                          </span>
+                          {reasons.length > 0 && (
+                            <span title={`Why: ${reasons.join(', ')}`} style={{ cursor: 'help', fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>Why?</span>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                   
                   {task.description && (

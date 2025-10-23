@@ -330,7 +330,7 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
               priority: selectedPriority,
               estimateMin: 45,
               estimatedHours: 0.75,
-              status: 'planned',
+              status: 0,
               theme: selectedTheme,
               hasGoal: !!selectedGoalId,
               alignedToGoal: !!selectedGoalId,

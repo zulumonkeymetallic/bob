@@ -110,7 +110,8 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['Backlog', 'Planned', 'In Progress', 'Testing', 'Done']
+    // Canonical story statuses only
+    options: ['Backlog', 'In Progress', 'Done']
   },
   { 
     key: 'priority', 
@@ -406,14 +407,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
         const match = goals.find(g => g.id === editValue || g.title === editValue);
         valueToSave = match ? match.id : editValue;
       } else if (actualKey === 'status') {
-        // Map human label to numeric status
+        // Map human label to canonical numeric status (0,2,4)
         const label = String(editValue).toLowerCase();
         const map: Record<string, number> = {
           'backlog': 0,
-          'planned': 1,
           'in progress': 2,
           'in-progress': 2,
-          'testing': 3,
           'done': 4
         };
         valueToSave = map[label] ?? editValue;

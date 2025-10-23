@@ -18,12 +18,25 @@ const ModernKanbanPage: React.FC = () => {
   const [showEditStory, setShowEditStory] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   
-  // Configurable swim lanes
+  // Configurable swim lanes (canonical numeric buckets)
   const [swimLanes] = useState([
-    { id: 'backlog', title: 'Backlog', status: 0 }, // 0 = Backlog
-    { id: 'active', title: 'Active', status: 2 }, // 2 = In Progress
-    { id: 'done', title: 'Done', status: 4 } // 4 = Done
+    { id: 'backlog', title: 'Backlog', status: 0 }, // 0/1 -> Backlog
+    { id: 'active', title: 'Active', status: 2 },   // 2/3 -> In Progress
+    { id: 'done', title: 'Done', status: 4 }        // 4    -> Done
   ]);
+
+  // Normalize story status (string/number) to canonical lane bucket 0,2,4
+  const storyBucket = (s: any): 0 | 2 | 4 => {
+    if (typeof s === 'number') {
+      if (s >= 4) return 4; // Done
+      if (s >= 2) return 2; // In Progress (2 or 3)
+      return 0;             // Backlog (0 or 1)
+    }
+    const v = String(s || '').trim().toLowerCase().replace(/_/g, '-');
+    if (['done','complete','completed','finished','closed'].includes(v)) return 4;
+    if (['in-progress','in progress','active','wip','testing','qa','review','blocked','paused','on-hold','onhold','stalled','waiting'].includes(v)) return 2;
+    return 0;
+  };
 
   const [newStory, setNewStory] = useState({
     title: '',
@@ -66,6 +79,8 @@ const ModernKanbanPage: React.FC = () => {
         ...doc.data()
       })) as Goal[];
       setGoals(goalsData);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] goals subscribe error', error?.message || error);
     });
 
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -74,6 +89,8 @@ const ModernKanbanPage: React.FC = () => {
         ...doc.data()
       })) as Story[];
       setStories(storiesData);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] stories subscribe error', error?.message || error);
     });
 
     return () => {
@@ -99,6 +116,8 @@ const ModernKanbanPage: React.FC = () => {
         ...doc.data()
       })) as Task[];
       setTasks(tasksData);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] tasks subscribe error', error?.message || error);
     });
 
     return unsubscribe;
@@ -144,7 +163,7 @@ const ModernKanbanPage: React.FC = () => {
         parentId: selectedStory.id,
         title: newTask.title,
         description: newTask.description,
-        status: 'planned',
+        status: 0,
         effort: newTask.effort,
         priority: newTask.priority,
         estimateMin: 0,
@@ -332,12 +351,12 @@ const ModernKanbanPage: React.FC = () => {
                 <Card.Header className="bg-light">
                   <h5 className="mb-0">{lane.title}</h5>
                   <small className="text-muted">
-                    {stories.filter(s => s.status === lane.status).length} stories
+                    {stories.filter(s => storyBucket((s as any).status) === lane.status).length} stories
                   </small>
                 </Card.Header>
                 <Card.Body style={{ maxHeight: '60vh', overflowY: 'auto' }}>
                   {stories
-                    .filter(story => story.status === lane.status)
+                    .filter(story => storyBucket((story as any).status) === lane.status)
                     .map((story) => {
                       const goalTheme = getGoalTheme(story.goalId);
                       const taskCount = getTaskCount(story.id);
@@ -347,7 +366,10 @@ const ModernKanbanPage: React.FC = () => {
                         <Card 
                           key={story.id}
                           className={`mb-3 shadow-sm ${isSelected ? 'border-primary' : ''}`}
-                          style={{ cursor: 'pointer' }}
+                          style={{ 
+                            cursor: 'pointer',
+                            boxShadow: (story as any).blocked ? '0 0 0 2px rgba(220, 38, 38, 0.35)' : undefined
+                          }}
                           onClick={() => handleStoryClick(story)}
                         >
                           <Card.Body className="p-3">
@@ -433,7 +455,7 @@ const ModernKanbanPage: React.FC = () => {
                       );
                     })}
 
-                  {stories.filter(s => s.status === lane.status).length === 0 && (
+                  {stories.filter(s => storyBucket((s as any).status) === lane.status).length === 0 && (
                     <div className="text-center text-muted py-4">
                       <p>No stories in {lane.title.toLowerCase()}</p>
                     </div>

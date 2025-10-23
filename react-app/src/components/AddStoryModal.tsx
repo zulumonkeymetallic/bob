@@ -75,6 +75,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     // Load goals and sprints when modal opens
   useEffect(() => {
     if (show && currentUser) {
+      let mounted = true;
       const loadData = async () => {
         try {
           console.log('🔄 AddStoryModal: Starting data load for modal', {
@@ -109,7 +110,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             goals: goalsData.map(g => ({ id: g.id, title: g.title }))
           });
           
-          setGoals(goalsData);
+          if (mounted) setGoals(goalsData);
 
           // Load all sprints for current user (simplified query to avoid index issues)
           const sprintsQuery = query(
@@ -136,7 +137,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             sprints: sprintsData.map(s => ({ id: s.id, name: s.name, status: s.status }))
           });
           
-          setSprints(sprintsData);
+          if (mounted) setSprints(sprintsData);
           
           console.log('🎉 AddStoryModal: All data loaded successfully', {
             action: 'modal_data_load_complete',
@@ -155,6 +156,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         }
       };
       loadData();
+      return () => { mounted = false; };
     }
   }, [show, currentUser, currentPersona]);
 

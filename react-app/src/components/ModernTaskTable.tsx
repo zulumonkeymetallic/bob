@@ -104,7 +104,9 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['todo', 'planned', 'in-progress', 'blocked', 'done']
+    // values are numeric-as-string for editing; labels are rendered via taskStatusText
+    // Standardize to Backlog/To Do (0), In Progress (1), Done (2)
+    options: ['0','1','2']
   },
   { 
     key: 'priority', 
@@ -113,7 +115,7 @@ const defaultColumns: Column[] = [
     visible: true, 
     editable: true, 
     type: 'select',
-    options: ['low', 'med', 'high']
+    options: ['1','2','3']
   },
   { 
     key: 'effort', 
@@ -264,6 +266,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
         } else if (key === 'dueDate') {
           const normalizedValue = editValue ? new Date(editValue).getTime() : null;
           updates = { dueDate: normalizedValue ?? null };
+        } else if (key === 'status') {
+          const next = Number(editValue);
+          updates = { status: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
+        } else if (key === 'priority') {
+          const next = Number(editValue);
+          updates = { priority: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
         } else {
           // Regular field update
           updates = { [key]: editValue };
@@ -333,7 +341,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const isEditing = editingCell === column.key;
 
     if (isEditing && column.editable) {
-      if (column.type === 'select' && column.options) {
+      if (column.type === 'select') {
         return (
           <td key={column.key} style={{ width: column.width }}>
             <div className="relative">
@@ -354,9 +362,24 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 }}
                 autoFocus
               >
-                {column.options.map(option => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
+                {column.key === 'status' ? (
+                  <>
+                    <option value={'0'}>To Do</option>
+                    <option value={'1'}>In Progress</option>
+                    <option value={'2'}>Done</option>
+                    <option value={'3'}>Blocked</option>
+                  </>
+                ) : column.key === 'priority' ? (
+                  <>
+                    <option value={'1'}>High</option>
+                    <option value={'2'}>Medium</option>
+                    <option value={'3'}>Low</option>
+                  </>
+                ) : (
+                  (column.options || []).map(option => (
+                    <option key={option} value={option}>{option}</option>
+                  ))
+                )}
               </select>
             </div>
           </td>
@@ -1038,7 +1061,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             <button
               onClick={() => {
                 setEditingTask(null);
-                setEditForm({ title: '', description: '', priority: 2, status: 'planned' as any });
+                setEditForm({ title: '', description: '', priority: 2, status: 0 as any });
                 setStorySearch('');
                 setShowEditModal(true);
               }}

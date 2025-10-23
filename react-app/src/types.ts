@@ -39,6 +39,7 @@ export interface Story {
   goalId: string;
   theme?: number; // Inherited from goal: 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
   status: number; // 0=Backlog, 1=Planned, 2=In Progress, 3=Testing, 4=Done
+  blocked?: boolean; // Separate flag: when true, UI shows subtle red outline
   priority: number; // 1=P1, 2=P2, 3=P3
   points: number;
   wipLimit: number;

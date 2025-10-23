@@ -433,15 +433,17 @@ const TasksList: React.FC = () => {
       const estimatedHoursRounded = roundHours(estimatedHoursValue);
       const estimateMinutes = Math.max(5, Math.round(estimatedHoursRounded * 60));
 
+      const statusMap: Record<string, number> = { planned: 0, in_progress: 1, done: 2 };
+      const priorityMap: Record<string, number> = { high: 1, med: 2, low: 3 };
       const taskData: any = {
         ref: ref, // Add reference number
         title: newTask.title,
         description: newTask.description,
-        priority: newTask.priority,
+        priority: priorityMap[String(newTask.priority).toLowerCase()] ?? 2,
         effort: newTask.effort,
         estimatedHours: estimatedHoursRounded,
         estimateMin: estimateMinutes,
-        status: newTask.status,
+        status: statusMap[String(newTask.status).toLowerCase()] ?? 0,
         theme: newTask.theme,
         persona: currentPersona,
         ownerUid: currentUser.uid, // Ensure ownerUid is included

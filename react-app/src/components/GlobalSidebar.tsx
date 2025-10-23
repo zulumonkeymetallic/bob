@@ -136,7 +136,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       // Subscribe to activity stream for this item
       const unsubscribe = ActivityStreamService.subscribeToActivityStream(
         selectedItem.id,
-        setActivities
+        setActivities,
+        currentUser?.uid
       );
       
       return unsubscribe;
@@ -676,33 +677,30 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   </label>
                   {isEditing ? (
                     <Form.Select
-                      value={editForm.status || ''}
-                      onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                      value={typeof editForm.status === 'number' ? editForm.status : Number(editForm.status) || 0}
+                      onChange={(e) => setEditForm({ ...editForm, status: Number(e.target.value) })}
                     >
                       {selectedType === 'goal' && (
                         <>
-                          <option value="new">New</option>
-                          <option value="active">Active</option>
-                          <option value="paused">Paused</option>
-                          <option value="done">Done</option>
-                          <option value="dropped">Dropped</option>
+                          <option value={0}>New</option>
+                          <option value={1}>Work in Progress</option>
+                          <option value={3}>Blocked</option>
+                          <option value={2}>Complete</option>
+                          <option value={4}>Deferred</option>
                         </>
                       )}
                       {selectedType === 'story' && (
                         <>
-                          <option value="backlog">Backlog</option>
-                          <option value="active">Active</option>
-                          <option value="done">Done</option>
-                          <option value="defect">Defect</option>
+                          <option value={0}>Backlog</option>
+                          <option value={2}>In Progress</option>
+                          <option value={4}>Done</option>
                         </>
                       )}
                       {selectedType === 'task' && (
                         <>
-                          <option value="todo">Todo</option>
-                          <option value="planned">Planned</option>
-                          <option value="in-progress">In Progress</option>
-                          <option value="blocked">Blocked</option>
-                          <option value="done">Done</option>
+                          <option value={0}>To Do</option>
+                          <option value={1}>In Progress</option>
+                          <option value={2}>Done</option>
                         </>
                       )}
                     </Form.Select>

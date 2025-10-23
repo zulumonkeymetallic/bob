@@ -48,10 +48,9 @@ export const CHOICES: ChoiceTable = {
   // Story choices
   story: {
     status: [
+      // Canonical lanes only: Backlog, In Progress, Done
       { value: 0, label: 'Backlog', color: themeVars.muted as string, description: 'Not yet planned' },
-      { value: 1, label: 'Planned', color: themeVars.brand as string, description: 'Planned for sprint' },
       { value: 2, label: 'In Progress', color: 'var(--orange)', description: 'Currently being worked' },
-      { value: 3, label: 'Testing', color: 'var(--purple)', description: 'Under review/testing' },
       { value: 4, label: 'Done', color: 'var(--green)', description: 'Completed successfully' }
     ],
     priority: [
@@ -64,10 +63,10 @@ export const CHOICES: ChoiceTable = {
   // Task choices
   task: {
     status: [
+      // Standardize to three states; blocked is a separate flag where needed
       { value: 0, label: 'To Do', color: themeVars.muted as string, description: 'Not started' },
       { value: 1, label: 'In Progress', color: themeVars.brand as string, description: 'Currently working' },
-      { value: 2, label: 'Done', color: 'var(--green)', description: 'Completed' },
-      { value: 3, label: 'Blocked', color: 'var(--red)', description: 'Cannot proceed' }
+      { value: 2, label: 'Done', color: 'var(--green)', description: 'Completed' }
     ],
     priority: [
       { value: 1, label: 'High', color: 'var(--red)', description: 'Urgent priority' },
@@ -149,9 +148,10 @@ export const GoalStatus = {
 
 export const StoryStatus = {
   BACKLOG: 0,
-  PLANNED: 1,
+  // Map removed states to nearest canonical bucket
+  PLANNED: 0,
   IN_PROGRESS: 2,
-  TESTING: 3,
+  TESTING: 2,
   DONE: 4,
   
   getLabel: (value: number) => ChoiceHelper.getLabel('story', 'status', value),

@@ -16,6 +16,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { httpsCallable } from 'firebase/functions';
 import { functions, firebaseConfig } from '../../firebase';
+import { ActivityStreamService, ActivityEntry } from '../../services/ActivityStreamService';
 
 // BOB v3.5.2 - Calendar Integration
 // FTR-03 Implementation - Scaffold with Google Calendar integration
@@ -99,6 +100,8 @@ const CalendarIntegrationView: React.FC = () => {
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewType, setViewType] = useState<'day' | 'week' | 'month'>('week');
+  const [auditEntries, setAuditEntries] = useState<ActivityEntry[]>([]);
+  const [auditFilter, setAuditFilter] = useState<'all' | 'created' | 'updated' | 'deleted' | 'calendar_sync'>('all');
   // Event modal refs (simple approach without full controlled form)
   const titleRef = useRef<HTMLInputElement | null>(null);
   const descRef = useRef<HTMLTextAreaElement | null>(null);
@@ -110,6 +113,14 @@ const CalendarIntegrationView: React.FC = () => {
   useEffect(() => {
     refreshCalendarStatus();
     loadDummyData();
+    // Subscribe to recent user activity for calendar
+    if (currentUser) {
+      const unsub = ActivityStreamService.subscribeToUserActivityStream(currentUser.uid, (items) => {
+        const filtered = items.filter((a) => (a.entityType === 'calendar_block' || String(a.activityType).includes('calendar')));
+        setAuditEntries(filtered);
+      }, 50);
+      return () => { try { unsub(); } catch {} };
+    }
   }, []);
 
   const refreshCalendarStatus = async () => {
@@ -622,7 +633,18 @@ const CalendarIntegrationView: React.FC = () => {
               <div className="d-flex justify-content-between align-items-center mb-2">
                 <span>Google Calendar</span>
                 {gcalConnected ? (
-                  <Badge bg="success">Connected</Badge>
+                  <div className="d-flex gap-2 align-items-center">
+                    <Badge bg="success">Connected</Badge>
+                    <Button size="sm" variant="outline-danger" onClick={async ()=>{
+                      try {
+                        const fn = httpsCallable(functions, 'disconnectGoogle');
+                        await fn({});
+                        await refreshCalendarStatus();
+                      } catch (e) {
+                        console.warn('disconnect failed', e);
+                      }
+                    }}>Disconnect</Button>
+                  </div>
                 ) : (
                   <Button size="sm" variant="outline-primary" onClick={handleGoogleCalendarAuth}>
                     Connect
@@ -685,6 +707,36 @@ const CalendarIntegrationView: React.FC = () => {
                       </div>
                     );
                   })
+              )}
+            </Card.Body>
+          </Card>
+
+          {/* Calendar/Planner Audit */}
+          <Card>
+            <Card.Header className="d-flex justify-content-between align-items-center">
+              <h6 className="mb-0">Recent Calendar Activity</h6>
+              <Form.Select size="sm" style={{ maxWidth: 180 }} value={auditFilter} onChange={(e)=>setAuditFilter(e.target.value as any)}>
+                <option value="all">All</option>
+                <option value="created">Created</option>
+                <option value="updated">Updated</option>
+                <option value="deleted">Deleted</option>
+                <option value="calendar_sync">Sync</option>
+              </Form.Select>
+            </Card.Header>
+            <Card.Body style={{ maxHeight: 300, overflow: 'auto' }}>
+              {auditEntries.filter(e => auditFilter==='all' || String(e.activityType)===auditFilter).slice(0,20).map((e) => (
+                <div key={e.id} className="border-bottom py-2">
+                  <div style={{ fontSize: 13 }}>
+                    <Badge bg="light" text="dark" className="me-1">{String(e.activityType)}</Badge>
+                    <span>{e.description}</span>
+                  </div>
+                  <div className="text-muted" style={{ fontSize: 11 }}>
+                    {ActivityStreamService.formatTimestamp(e.timestamp)}{e.userEmail ? ` • ${e.userEmail.split('@')[0]}` : ''}
+                  </div>
+                </div>
+              ))}
+              {auditEntries.length === 0 && (
+                <div className="text-muted small">No recent activity.</div>
               )}
             </Card.Body>
           </Card>

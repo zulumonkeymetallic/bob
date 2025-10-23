@@ -209,13 +209,22 @@ export class ActivityStreamService {
   // Get activity stream for entity
   static subscribeToActivityStream(
     entityId: string,
-    callback: (activities: ActivityEntry[]) => void
+    callback: (activities: ActivityEntry[]) => void,
+    userId?: string
   ): () => void {
-    const q = query(
-      collection(db, 'activity_stream'),
-      where('entityId', '==', entityId),
-      orderBy('timestamp', 'desc')
-    );
+    // Include ownerUid guard when caller provides userId to satisfy stricter rules
+    const q = userId
+      ? query(
+          collection(db, 'activity_stream'),
+          where('ownerUid', '==', userId),
+          where('entityId', '==', entityId),
+          orderBy('timestamp', 'desc')
+        )
+      : query(
+          collection(db, 'activity_stream'),
+          where('entityId', '==', entityId),
+          orderBy('timestamp', 'desc')
+        );
 
     return onSnapshot(
       q,
@@ -264,6 +273,7 @@ export class ActivityStreamService {
   ): () => void {
     const q = query(
       collection(db, 'activity_stream'),
+      where('ownerUid', '==', userId),
       where('userId', '==', userId),
       orderBy('timestamp', 'desc')
     );

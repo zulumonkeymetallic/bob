@@ -14,6 +14,8 @@ import { isStatus, getThemeName } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
+import { useSidebar } from '../contexts/SidebarContext';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -32,6 +34,7 @@ const GoalsManagement: React.FC = () => {
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const { selectedSprintId, setSelectedSprintId } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
+  const { isCollapsed, toggleCollapse } = useSidebar();
 
   useEffect(() => {
     if (!currentUser) return;
@@ -241,6 +244,14 @@ const GoalsManagement: React.FC = () => {
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Button
+              size="sm"
+              variant="outline-secondary"
+              title={isCollapsed ? 'Expand details panel' : 'Collapse details panel'}
+              onClick={toggleCollapse}
+            >
+              {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+            </Button>
             {/* View Mode Toggle */}
             <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
               <Button

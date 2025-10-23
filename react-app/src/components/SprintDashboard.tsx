@@ -149,7 +149,7 @@ const SprintDashboard: React.FC = () => {
       
       // Calculate sprint metrics
       const totalStories = storiesData.length;
-      const activeStories = storiesData.filter(s => s.status === StoryStatus.IN_PROGRESS || s.status === StoryStatus.PLANNED).length;
+      const activeStories = storiesData.filter(s => (typeof s.status === 'number' ? (s.status >= 2 && s.status < 4) : false)).length;
       const doneStories = storiesData.filter(s => s.status === StoryStatus.DONE).length;
       const defectStories = 0; // No defect status in new system
       
