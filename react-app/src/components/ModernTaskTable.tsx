@@ -105,7 +105,8 @@ const defaultColumns: Column[] = [
     editable: true, 
     type: 'select',
     // values are numeric-as-string for editing; labels are rendered via taskStatusText
-    options: ['0','1','2','3']
+    // Standardize to Backlog/To Do (0), In Progress (1), Done (2)
+    options: ['0','1','2']
   },
   { 
     key: 'priority', 
@@ -1060,7 +1061,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
             <button
               onClick={() => {
                 setEditingTask(null);
-                setEditForm({ title: '', description: '', priority: 2, status: 'planned' as any });
+                setEditForm({ title: '', description: '', priority: 2, status: 0 as any });
                 setStorySearch('');
                 setShowEditModal(true);
               }}

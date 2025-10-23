@@ -177,7 +177,7 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
 
   useEffect(() => {
     if (!activityGoalId) return;
-    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems);
+    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems, currentUser?.uid || undefined);
     return () => unsub();
   }, [activityGoalId]);
 

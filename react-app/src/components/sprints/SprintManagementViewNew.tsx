@@ -268,9 +268,7 @@ const SprintManagementView: React.FC = () => {
   // Swim lanes for kanban board
   const swimLanes = [
     { id: 'backlog', title: 'Backlog', status: 0 },
-    { id: 'planned', title: 'Planned', status: 1 },
     { id: 'in-progress', title: 'In Progress', status: 2 },
-    { id: 'testing', title: 'Testing', status: 3 },
     { id: 'done', title: 'Done', status: 4 }
   ];
 

@@ -52,12 +52,10 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   } as const;
 
   const getStoryStatusName = (status: number): string => {
-    switch (status) {
-      case 0: return 'Backlog';
-      case 1: return 'Active';
-      case 2: return 'Done';
-      default: return 'Backlog';
-    }
+    // Canonical mapping 0/2/4
+    if (status >= 4) return 'Done';
+    if (status >= 2) return 'Active';
+    return 'Backlog';
   };
 
   const getGoalForStory = (storyGoalId: string): Goal | undefined => {
@@ -117,7 +115,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   };
 
   const handleStatusChange = (storyId: string, newStatus: 'Backlog' | 'Active' | 'Done') => {
-    const numericStatus = newStatus === 'Backlog' ? 0 : newStatus === 'Active' ? 1 : 2;
+    const numericStatus = newStatus === 'Backlog' ? 0 : newStatus === 'Active' ? 2 : 4;
     onStoryUpdate(storyId, { status: numericStatus });
   };
 
@@ -275,13 +273,14 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
 
                   {/* Goal Link */}
                   {parentGoal && (
-                    <div style={{ 
-                      marginBottom: '16px',
-                      padding: '10px',
-                      backgroundColor: 'var(--card)',
-                      border: `1px solid ${themeColor}`,
-                      borderRadius: '6px'
-                    }}>
+                  <div style={{ 
+                    marginBottom: '16px',
+                    padding: '10px',
+                    backgroundColor: 'var(--card)',
+                    border: `1px solid ${themeColor}`,
+                    borderRadius: '6px',
+                    boxShadow: (story as any).blocked ? '0 0 0 2px rgba(220, 38, 38, 0.35)' : undefined
+                  }}>
                       <div style={{ 
                         fontSize: '11px', 
                         fontWeight: '600', 

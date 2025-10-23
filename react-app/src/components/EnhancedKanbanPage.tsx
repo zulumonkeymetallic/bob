@@ -53,8 +53,8 @@ const EnhancedKanbanPage: React.FC = () => {
   // Swim lanes configuration
   const swimLanes = [
     { id: 'backlog', title: 'Backlog', status: 0, color: themeVars.muted },
-    { id: 'active', title: 'Active', status: 1, color: themeVars.brand },
-    { id: 'done', title: 'Done', status: 2, color: 'var(--green)' }
+    { id: 'in-progress', title: 'In Progress', status: 2, color: themeVars.brand },
+    { id: 'done', title: 'Done', status: 4, color: 'var(--green)' }
   ];
 
   useEffect(() => {

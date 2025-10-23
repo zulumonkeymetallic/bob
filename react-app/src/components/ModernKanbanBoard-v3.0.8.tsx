@@ -339,9 +339,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
 
   // Swim lanes configuration (Blocked is not a separate lane; it renders as red border within In Progress)
   const swimLanes = [
-    { id: 'backlog', title: 'Backlog', status: 'backlog', color: themeVars.muted },
-    { id: 'in-progress', title: 'In Progress', status: 'in-progress', color: themeVars.brand },
-    { id: 'done', title: 'Done', status: 'done', color: 'var(--green)' },
+    { id: 'backlog', title: 'Backlog', status: 0 as any, color: themeVars.muted },
+    { id: 'in-progress', title: 'In Progress', status: 2 as any, color: themeVars.brand },
+    { id: 'done', title: 'Done', status: 4 as any, color: 'var(--green)' },
   ];
 
   // Theme colors (simplified for demo)
@@ -368,38 +368,24 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     return tasks.filter(task => task.parentId === storyId);
   };
 
-  const getStoriesForLane = (status: string): Story[] => {
+  const getStoriesForLane = (status: number): Story[] => {
     const s = status;
     return stories.filter(story => {
       const st = (story as any).status;
-      if (s === 'backlog') {
-        return isStatus(st, 'backlog') || isStatus(st, 'planned') || isStatus(st, 'todo') || st === 0 || st === 1;
-      }
-      if (s === 'in-progress') {
-        // Include blocked in the In Progress lane (visualized by red border)
-        return isStatus(st, 'in-progress') || isStatus(st, 'active') || isStatus(st, 'testing') || isStatus(st, 'blocked') || st === 2 || st === 3;
-      }
-      if (s === 'done') {
-        return isStatus(st, 'done') || st === 4;
-      }
-      return isStatus(st, s);
+      if (s === 0) return (typeof st === 'number') ? (st < 2) : isStatus(st, 'backlog');
+      if (s === 2) return (typeof st === 'number') ? (st >= 2 && st < 4) : isStatus(st, 'in-progress');
+      if (s === 4) return (typeof st === 'number') ? (st >= 4) : isStatus(st, 'done');
+      return false;
     });
   };
 
-  const getTasksForLane = (status: string): Task[] => {
+  const getTasksForLane = (status: number): Task[] => {
     return tasks.filter(task => {
       const st = (task as any).status;
-      if (status === 'backlog') {
-        return isStatus(st, 'backlog') || isStatus(st, 'planned') || isStatus(st, 'todo') || st === 0;
-      }
-      if (status === 'in-progress') {
-        // Include blocked tasks in the In Progress lane
-        return isStatus(st, 'in-progress') || isStatus(st, 'blocked') || st === 1 || st === 3;
-      }
-      if (status === 'done') {
-        return isStatus(st, 'done') || st === 2;
-      }
-      return isStatus(st, status);
+      if (status === 0) return (typeof st === 'number') ? (st === 0) : isStatus(st, 'todo') || isStatus(st, 'planned');
+      if (status === 2) return (typeof st === 'number') ? (st === 1 || st === 3) : isStatus(st, 'in-progress') || isStatus(st, 'blocked');
+      if (status === 4) return (typeof st === 'number') ? (st >= 2) : isStatus(st, 'done');
+      return false;
     });
   };
 
@@ -967,12 +953,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
               <Form.Group className="mb-3">
                 <Form.Label>Status</Form.Label>
                 <Form.Select
-                  value={editForm.status || ''}
-                  onChange={(e) => setEditForm({...editForm, status: e.target.value})}
+                  value={typeof editForm.status === 'number' ? editForm.status : Number(editForm.status) || 0}
+                  onChange={(e) => setEditForm({...editForm, status: Number(e.target.value)})}
                 >
-                  <option value="backlog">Backlog</option>
-                  <option value="in-progress">In Progress</option>
-                  <option value="done">Done</option>
+                  <option value={0}>Backlog</option>
+                  <option value={2}>In Progress</option>
+                  <option value={4}>Done</option>
                 </Form.Select>
               </Form.Group>
             </Form>
@@ -1016,12 +1002,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
             <Form.Group className="mb-3">
               <Form.Label>Status</Form.Label>
               <Form.Select
-                value={addForm.status || 'backlog'}
-                onChange={(e) => setAddForm({...addForm, status: e.target.value})}
+                value={typeof addForm.status === 'number' ? addForm.status : Number(addForm.status) || 0}
+                onChange={(e) => setAddForm({...addForm, status: Number(e.target.value)})}
               >
-                <option value="backlog">Backlog</option>
-                <option value="in-progress">In Progress</option>
-                <option value="done">Done</option>
+                <option value={0}>Backlog</option>
+                <option value={2}>In Progress</option>
+                <option value={4}>Done</option>
               </Form.Select>
             </Form.Group>
           </Form>

@@ -9,6 +9,7 @@ import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { ChoiceHelper } from '../config/choices';
+import { storyStatusText } from '../utils/storyCardFormatting';
 
 type EntityType = 'goal' | 'story' | 'task';
 
@@ -84,8 +85,8 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
   // Subscribe to activity stream for this entity
   useEffect(() => {
     if (!item) { setActivities([]); return; }
-    return ActivityStreamService.subscribeToActivityStream(item.id, setActivities);
-  }, [item?.id]);
+    return ActivityStreamService.subscribeToActivityStream(item.id, setActivities, currentUser?.uid);
+  }, [item?.id, currentUser?.uid]);
 
   // If requested, scroll to activity on open
   useEffect(() => {
@@ -226,6 +227,9 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
                   {(() => {
                     const v = (item as any).status;
                     const n = typeof v === 'number' ? v : Number(v);
+                    if (type === 'story') {
+                      return storyStatusText(n);
+                    }
                     if (Number.isFinite(n)) {
                       const table = type === 'goal' ? 'goal' : type === 'story' ? 'story' : 'task';
                       return ChoiceHelper.getLabel(table, 'status', n);

@@ -157,7 +157,7 @@ const ModernKanbanPage: React.FC = () => {
         parentId: selectedStory.id,
         title: newTask.title,
         description: newTask.description,
-        status: 'planned',
+        status: 0,
         effort: newTask.effort,
         priority: newTask.priority,
         estimateMin: 0,
@@ -360,7 +360,10 @@ const ModernKanbanPage: React.FC = () => {
                         <Card 
                           key={story.id}
                           className={`mb-3 shadow-sm ${isSelected ? 'border-primary' : ''}`}
-                          style={{ cursor: 'pointer' }}
+                          style={{ 
+                            cursor: 'pointer',
+                            boxShadow: (story as any).blocked ? '0 0 0 2px rgba(220, 38, 38, 0.35)' : undefined
+                          }}
                           onClick={() => handleStoryClick(story)}
                         >
                           <Card.Body className="p-3">

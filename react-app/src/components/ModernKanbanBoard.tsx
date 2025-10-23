@@ -120,7 +120,7 @@ const SortableStoryCard: React.FC<{
     <div ref={setNodeRef} style={style}>
       <div
         className={`kanban-card kanban-card--story kanban-card__clickable${isDragging ? ' dragging' : ''}`}
-        style={{ borderLeft: `3px solid ${isStatus((story as any).status, 'blocked') ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb')}` }}
+        style={{ borderLeft: `3px solid ${((story as any).blocked ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb'))}` }}
         role="button"
         tabIndex={0}
         onClick={handleCardClick}
@@ -1168,24 +1168,13 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                     <Form.Group className="mb-3">
                       <Form.Label>Status</Form.Label>
                       <Form.Select
-                        value={(editForm as any).status ?? ''}
-                        onChange={(e) => setEditForm({ ...(editForm as any), status: (typeof (selectedItem as any).status === 'number') ? Number(e.target.value) : e.target.value })}
+                        value={typeof (editForm as any).status === 'number' ? (editForm as any).status : Number((editForm as any).status) || 0}
+                        onChange={(e) => setEditForm({ ...(editForm as any), status: Number(e.target.value) })}
                       >
-                        {typeof (selectedItem as any).status === 'number' ? (
-                          <>
-                            <option value={0}>Backlog</option>
-                            <option value={1}>In Progress</option>
-                            <option value={2}>Done</option>
-                            <option value={3}>Blocked</option>
-                          </>
-                        ) : (
-                          <>
-                            <option value={'backlog'}>Backlog</option>
-                            <option value={'in-progress'}>In Progress</option>
-                            <option value={'blocked'}>Blocked</option>
-                            <option value={'done'}>Done</option>
-                          </>
-                        )}
+                        <option value={0}>Backlog</option>
+                        <option value={1}>In Progress</option>
+                        <option value={2}>Done</option>
+                        <option value={3}>Blocked</option>
                       </Form.Select>
                     </Form.Group>
                   </Col>
@@ -1247,15 +1236,25 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Status</Form.Label>
-              <Form.Select
-                value={addForm.status || 'backlog'}
-                onChange={(e) => setAddForm({...addForm, status: e.target.value})}
-              >
-                <option value="backlog">Backlog</option>
-                <option value="in-progress">In Progress</option>
-                <option value="blocked">Blocked</option>
-                <option value="done">Done</option>
-              </Form.Select>
+              {addType === 'story' ? (
+                <Form.Select
+                  value={addForm.status ?? 0}
+                  onChange={(e) => setAddForm({ ...addForm, status: Number(e.target.value) })}
+                >
+                  <option value={0}>Backlog</option>
+                  <option value={2}>In Progress</option>
+                  <option value={4}>Done</option>
+                </Form.Select>
+              ) : (
+                <Form.Select
+                  value={addForm.status ?? 0}
+                  onChange={(e) => setAddForm({ ...addForm, status: Number(e.target.value) })}
+                >
+                  <option value={0}>To Do</option>
+                  <option value={1}>In Progress</option>
+                  <option value={2}>Done</option>
+                </Form.Select>
+              )}
             </Form.Group>
           </Form>
         </Modal.Body>
