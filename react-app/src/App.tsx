@@ -116,6 +116,12 @@ function AppContent() {
   const [showAssistant, setShowAssistant] = useState(false);
   const [forceRender, setForceRender] = useState(0);
   
+  // Root path redirect that is mobile-aware
+  const RootRedirect: React.FC = () => {
+    const dev = useDeviceInfo();
+    return <Navigate to={dev?.isMobile ? '/mobile' : '/sprints/kanban'} replace />;
+  };
+  
   // Data for the global sidebar
   const [goals, setGoals] = useState([]);
   const [stories, setStories] = useState([]);
@@ -214,7 +220,7 @@ function AppContent() {
           
           <div key={`${location.pathname}-${forceRender}`}>
             <Routes>
-              <Route path="/" element={<Navigate to="/sprints/kanban" replace />} />
+              <Route path="/" element={<RootRedirect />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/tasks" element={<TaskListView />} />
               <Route path="/tasks/:id" element={<DeepLinkTask />} />
