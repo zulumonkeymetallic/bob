@@ -431,7 +431,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           ...doc.data()
         })) as Goal[];
         setGoals(goalsData);
-      });
+      }, (error) => console.warn('[Kanban v3.0.8] goals subscribe error', error?.message || error));
 
       const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
         const storiesData = snapshot.docs.map(doc => ({
@@ -439,7 +439,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           ...doc.data()
         })) as Story[];
         setStories(storiesData);
-      });
+      }, (error) => console.warn('[Kanban v3.0.8] stories subscribe error', error?.message || error));
 
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
         const tasksData = snapshot.docs.map(doc => ({
@@ -448,7 +448,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         })) as Task[];
         setTasks(tasksData);
         setLoading(false);
-      });
+      }, (error) => console.warn('[Kanban v3.0.8] tasks subscribe error', error?.message || error));
 
       const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
         const sprintsData = snapshot.docs.map(doc => ({
@@ -456,7 +456,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
           ...doc.data()
         })) as Sprint[];
         setSprints(sprintsData);
-      });
+      }, (error) => console.warn('[Kanban v3.0.8] sprints subscribe error', error?.message || error));
 
       return () => {
         unsubscribeGoals();

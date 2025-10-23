@@ -273,6 +273,7 @@ export class ActivityStreamService {
   ): () => void {
     const q = query(
       collection(db, 'activity_stream'),
+      where('ownerUid', '==', userId),
       where('userId', '==', userId),
       orderBy('timestamp', 'desc')
     );

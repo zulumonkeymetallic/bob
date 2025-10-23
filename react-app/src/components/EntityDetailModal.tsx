@@ -231,7 +231,9 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
                       return storyStatusText(n);
                     }
                     if (Number.isFinite(n)) {
-                      const table = type === 'goal' ? 'goal' : type === 'story' ? 'story' : 'task';
+                      // At this point, type is not 'story' (handled above),
+                      // so it's safe to map only 'goal' | 'task'
+                      const table: 'goal' | 'task' = type === 'goal' ? 'goal' : 'task';
                       return ChoiceHelper.getLabel(table, 'status', n);
                     }
                     return String(v ?? '—');

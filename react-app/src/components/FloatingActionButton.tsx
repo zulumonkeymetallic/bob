@@ -250,7 +250,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           priority: quickAddData.priority,
           estimateMin: estimateMinutes,
           estimatedHours,
-          status: 'planned',
+          status: 0,
           theme: quickAddData.theme,
           hasGoal: false,
           alignedToGoal: false,

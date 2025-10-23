@@ -79,6 +79,8 @@ const ModernKanbanPage: React.FC = () => {
         ...doc.data()
       })) as Goal[];
       setGoals(goalsData);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] goals subscribe error', error?.message || error);
     });
 
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -87,6 +89,8 @@ const ModernKanbanPage: React.FC = () => {
         ...doc.data()
       })) as Story[];
       setStories(storiesData);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] stories subscribe error', error?.message || error);
     });
 
     return () => {
@@ -112,6 +116,8 @@ const ModernKanbanPage: React.FC = () => {
         ...doc.data()
       })) as Task[];
       setTasks(tasksData);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] tasks subscribe error', error?.message || error);
     });
 
     return unsubscribe;

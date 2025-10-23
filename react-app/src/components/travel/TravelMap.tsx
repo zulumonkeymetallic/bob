@@ -258,7 +258,7 @@ const TravelMap: React.FC = () => {
       description: `Travel log for ${g.displayName}.`,
       goalId: goalToUse?.id || '',
       theme: goalToUse?.theme || 7,
-      status: 1,
+      status: 0,
       priority: 2,
       points: 1,
       wipLimit: 3,
