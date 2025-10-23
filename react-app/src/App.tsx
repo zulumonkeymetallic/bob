@@ -53,6 +53,7 @@ import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
+import MobileHome from './components/MobileHome';
 import HabitsManagement from './components/HabitsManagement';
 import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
@@ -136,7 +137,7 @@ function AppContent() {
     setForceRender(prev => prev + 1);
   }, [location.pathname, location.key]);
 
-  // Auto-route to mobile checklist on mobile devices when landing on dashboard/home
+  // Auto-route to mobile Home on mobile devices when landing on dashboard/home
   useEffect(() => {
     if (!currentUser) return;
     const isMobile = deviceInfo?.isMobile;
@@ -144,7 +145,7 @@ function AppContent() {
     const onHome = path === '/' || path === '/dashboard';
     const alreadyMobile = path.startsWith('/mobile');
     if (isMobile && onHome && !alreadyMobile) {
-      navigate('/mobile-checklist', { replace: true });
+      navigate('/mobile', { replace: true });
     }
   }, [currentUser, deviceInfo?.isMobile, location.pathname]);
 
@@ -243,8 +244,9 @@ function AppContent() {
             <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
             
             <Route path="/tasks-management" element={<TasksManagement />} />
-            <Route path="/mobile-view" element={<MobileView />} />
-            <Route path="/mobile-checklist" element={<MobileChecklistView />} />
+              <Route path="/mobile" element={<MobileHome />} />
+              <Route path="/mobile-view" element={<MobileView />} />
+              <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<HabitsManagement />} />
             <Route path="/routines" element={<RoutinesChoresManager />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
