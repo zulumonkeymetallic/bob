@@ -84,10 +84,10 @@ const StoryBacklog: React.FC = () => {
     return domainThemePrimaryVar(theme);
   };
 
-  const updateStoryStatus = async (storyId: string, newStatus: string) => {
+  const updateStoryStatus = async (storyId: string, newStatus: string | number) => {
     try {
       await updateDoc(doc(db, 'stories', storyId), {
-        status: newStatus,
+        status: typeof newStatus === 'number' ? newStatus : (newStatus === 'done' ? 4 : newStatus === 'in-progress' ? 2 : 0),
         updatedAt: new Date()
       });
     } catch (error) {
