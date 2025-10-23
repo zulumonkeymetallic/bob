@@ -10,6 +10,7 @@ import { GLOBAL_THEMES } from '../constants/globalThemes';
 import '../styles/MaterialDesign.css';
 import BulkCreateModal from './BulkCreateModal';
 import GoalChatModal from './GoalChatModal';
+import AddStoryModal from './AddStoryModal';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -453,7 +454,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         </Modal.Footer>
       </Modal>
 
-      {/* Quick Add Modal */}
+      {/* Quick Add Modal: if adding a Story, reuse the shared AddStoryModal for consistency */}
+      {quickAddType === 'story' ? (
+        <AddStoryModal show={showQuickAdd} onClose={() => setShowQuickAdd(false)} goalId={quickAddData.goalId || undefined} />
+      ) : (
       <Modal show={showQuickAdd} onHide={() => setShowQuickAdd(false)} centered>
         <Modal.Header closeButton>
           <Modal.Title>
@@ -498,87 +502,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               </Form.Group>
             )}
 
-            {quickAddType === 'story' && (
-              <>
-                <Form.Group className="mb-3">
-                  <Form.Label>Link to Goal</Form.Label>
-                  <Form.Select
-                    value={quickAddData.goalId}
-                    onChange={(e) => {
-                      console.log('🎯 FloatingActionButton: Goal selection changed', {
-                        action: 'fab_goal_select_change',
-                        element: 'fab_goal_dropdown',
-                        quickAddType: quickAddType,
-                        previousValue: quickAddData.goalId,
-                        newValue: e.target.value,
-                        selectedGoal: goals.find(g => g.id === e.target.value),
-                        availableGoals: goals.length,
-                        timestamp: new Date().toISOString()
-                      });
-                      setQuickAddData({ ...quickAddData, goalId: e.target.value });
-                    }}
-                    onClick={() => {
-                      console.log('🖱️ FloatingActionButton: Goal dropdown clicked', {
-                        action: 'fab_goal_dropdown_click',
-                        element: 'fab_goal_select',
-                        currentValue: quickAddData.goalId,
-                        availableOptions: goals.length,
-                        timestamp: new Date().toISOString()
-                      });
-                    }}
-                  >
-                    <option value="">Select a goal (optional)</option>
-                    {goals.map(goal => (
-                      <option key={goal.id} value={goal.id}>
-                        {goal.title} ({goal.theme})
-                      </option>
-                    ))}
-                  </Form.Select>
-                  <Form.Text className="text-muted">
-                    Stories linked to goals contribute to goal progress
-                  </Form.Text>
-                </Form.Group>
-
-                <Form.Group className="mb-3">
-                  <Form.Label>Assign to Sprint</Form.Label>
-                  <Form.Select
-                    value={quickAddData.sprintId}
-                    onChange={(e) => {
-                      console.log('🏃‍♂️ FloatingActionButton: Sprint selection changed', {
-                        action: 'fab_sprint_select_change',
-                        element: 'fab_sprint_dropdown',
-                        quickAddType: quickAddType,
-                        previousValue: quickAddData.sprintId,
-                        newValue: e.target.value,
-                        selectedSprint: sprints.find(s => s.id === e.target.value),
-                        availableSprints: sprints.length,
-                        timestamp: new Date().toISOString()
-                      });
-                      setQuickAddData({ ...quickAddData, sprintId: e.target.value });
-                    }}
-                    onClick={() => {
-                      console.log('🖱️ FloatingActionButton: Sprint dropdown clicked', {
-                        action: 'fab_sprint_dropdown_click',
-                        element: 'fab_sprint_select',
-                        currentValue: quickAddData.sprintId,
-                        availableOptions: sprints.length,
-                        timestamp: new Date().toISOString()
-                      });
-                    }}
-                  >
-                    <option value="">No sprint (backlog)</option>
-                    {sprints.map(sprint => (
-                      <option key={sprint.id} value={sprint.id}>
-                        {sprint.name} ({sprint.status})
-                      </option>
-                    ))}
-                  </Form.Select>
-                  <Form.Text className="text-muted">
-                    Assign to a sprint for sprint planning
-                  </Form.Text>
-                </Form.Group>
-              </>
-            )}
+            {/* Story-specific fields are handled by AddStoryModal; this quick-add modal is for goal/task only */}
 
             {quickAddType === 'task' && (
               <Form.Group className="mb-3">
@@ -596,7 +520,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               </Form.Group>
             )}
 
-            {(quickAddType === 'story' || quickAddType === 'task') && (
+            {quickAddType === 'task' && (
               <Form.Group className="mb-3">
                 <Form.Label>Priority</Form.Label>
                 <Form.Select
@@ -630,6 +554,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           </Button>
         </Modal.Footer>
       </Modal>
+      )}
 
       <BulkCreateModal
         show={showBulkCreate}
@@ -645,5 +570,3 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
 };
 
 export default FloatingActionButton;
-
-export {};

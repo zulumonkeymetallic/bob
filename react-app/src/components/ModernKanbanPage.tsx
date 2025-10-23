@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table, Dropdown } from 'react-bootstrap';
+import AddStoryModal from './AddStoryModal';
 import ModernTaskTable from './ModernTaskTable';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy } from 'firebase/firestore';
@@ -521,91 +522,8 @@ const ModernKanbanPage: React.FC = () => {
         </Row>
       )}
 
-      {/* Add Story Modal */}
-      <Modal show={showAddStory} onHide={() => setShowAddStory(false)} size="lg">
-        <Modal.Header closeButton>
-          <Modal.Title>Add New Story</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <Form>
-            <Form.Group className="mb-3">
-              <Form.Label>Goal</Form.Label>
-              <Form.Select
-                value={newStory.goalId}
-                onChange={(e) => setNewStory({...newStory, goalId: e.target.value})}
-              >
-                <option value="">Select a goal...</option>
-                {goals.map((goal) => (
-                  <option key={goal.id} value={goal.id}>
-                    {goal.title} ({goal.category})
-                  </option>
-                ))}
-              </Form.Select>
-            </Form.Group>
-            
-            <Form.Group className="mb-3">
-              <Form.Label>Title</Form.Label>
-              <Form.Control
-                type="text"
-                value={newStory.title}
-                onChange={(e) => setNewStory({...newStory, title: e.target.value})}
-                placeholder="Enter story title..."
-              />
-            </Form.Group>
-
-            <Form.Group className="mb-3">
-              <Form.Label>Description</Form.Label>
-              <Form.Control
-                as="textarea"
-                rows={3}
-                value={newStory.description}
-                onChange={(e) => setNewStory({...newStory, description: e.target.value})}
-                placeholder="Enter story description..."
-              />
-            </Form.Group>
-
-            <Row>
-              <Col md={6}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Priority</Form.Label>
-                  <Form.Select
-                    value={newStory.priority}
-                    onChange={(e) => setNewStory({...newStory, priority: parseInt(e.target.value)})}
-                  >
-                    <option value="1">P1 - High</option>
-                    <option value="2">P2 - Medium</option>
-                    <option value="3">P3 - Low</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={6}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Story Points</Form.Label>
-                  <Form.Select
-                    value={newStory.points}
-                    onChange={(e) => setNewStory({...newStory, points: parseInt(e.target.value)})}
-                  >
-                    <option value={1}>1</option>
-                    <option value={2}>2</option>
-                    <option value={3}>3</option>
-                    <option value={5}>5</option>
-                    <option value={8}>8</option>
-                    <option value={13}>13</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-            </Row>
-          </Form>
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowAddStory(false)}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={handleAddStory}>
-            Add Story
-          </Button>
-        </Modal.Footer>
-      </Modal>
+      {/* Add Story Modal (shared component) */}
+      <AddStoryModal show={showAddStory} onClose={() => setShowAddStory(false)} />
 
       {/* Edit Story Modal */}
       <Modal show={showEditStory} onHide={() => setShowEditStory(false)} size="lg">
