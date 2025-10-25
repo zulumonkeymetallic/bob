@@ -54,6 +54,7 @@ import CurrentSprintKanban from './components/CurrentSprintKanban';
 import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
 import MobileHome from './components/MobileHome';
+import ChoresTasksPage from './components/ChoresTasksPage';
 import HabitsManagement from './components/HabitsManagement';
 import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
@@ -250,6 +251,7 @@ function AppContent() {
             <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
             
             <Route path="/tasks-management" element={<TasksManagement />} />
+            <Route path="/chores" element={<ChoresTasksPage />} />
               <Route path="/mobile" element={<MobileHome />} />
               <Route path="/mobile-view" element={<MobileView />} />
               <Route path="/mobile-checklist" element={<MobileChecklistView />} />

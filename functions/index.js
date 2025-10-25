@@ -106,6 +106,150 @@ function toMillis(value) {
   return null;
 }
 
+// === Helpers for chores/routines on tasks
+function inferTaskType(data) {
+  const rawTitle = String(data?.title || '').toLowerCase();
+  const rawList = String(data?.reminderListName || data?.reminderListId || '').toLowerCase();
+  const tags = Array.isArray(data?.tags) ? data.tags.map((t) => String(t || '').toLowerCase()) : [];
+  const note = String(data?.note || '').toLowerCase();
+  const candidates = [rawTitle, rawList, note, ...tags];
+  if (candidates.some((s) => s.includes('routine'))) return 'routine';
+  if (candidates.some((s) => s.includes('chore'))) return 'chore';
+  return null;
+}
+
+function normaliseRecurrence(data) {
+  // Accepts either already-normalised fields or EventKit-mapped hints
+  const out = {};
+  let changed = false;
+  const freq = data?.repeatFrequency;
+  const interval = Number(data?.repeatInterval || 1) || 1;
+  const days = Array.isArray(data?.daysOfWeek) ? data.daysOfWeek : null;
+  if (!freq && data?.rrule) {
+    const r = String(data.rrule).toUpperCase();
+    if (r.includes('WEEKLY')) {
+      out.repeatFrequency = 'weekly';
+      changed = true;
+      const m = r.match(/BYDAY=([^;]+)/);
+      if (m) {
+        const map = { SU: 'sun', MO: 'mon', TU: 'tue', WE: 'wed', TH: 'thu', FR: 'fri', SA: 'sat' };
+        out.daysOfWeek = m[1].split(',').map((s) => map[s] || null).filter(Boolean);
+      }
+    } else if (r.includes('DAILY')) {
+      out.repeatFrequency = 'daily';
+      changed = true;
+    } else if (r.includes('MONTHLY')) {
+      out.repeatFrequency = 'monthly';
+      changed = true;
+    } else if (r.includes('YEARLY') || r.includes('ANNUAL')) {
+      out.repeatFrequency = 'yearly';
+      changed = true;
+    }
+  }
+  if (!('repeatInterval' in data) && interval !== 1) { out.repeatInterval = interval; changed = true; }
+  if (freq && !['daily','weekly','monthly','yearly'].includes(freq)) {
+    out.repeatFrequency = undefined; // strip invalid
+    changed = true;
+  }
+  if (freq === 'weekly' && days && days.length) {
+    const valid = ['sun','mon','tue','wed','thu','fri','sat'];
+    const cleaned = days.map((d)=>String(d||'').toLowerCase()).filter((d)=>valid.includes(d));
+    if (JSON.stringify(cleaned) !== JSON.stringify(days)) { out.daysOfWeek = cleaned; changed = true; }
+  }
+  return { changed, patch: out };
+}
+
+function* iterateNextDays(startDate, count) {
+  const d = new Date(startDate);
+  for (let i = 0; i < count; i++) {
+    const nd = new Date(d.getTime() + i * 24 * 60 * 60 * 1000);
+    yield nd;
+  }
+}
+
+function dayOfWeekKey(date) {
+  return ['sun','mon','tue','wed','thu','fri','sat'][date.getDay()];
+}
+
+function toISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function shouldScheduleOnDay(task, date) {
+  const freq = task?.repeatFrequency;
+  const interval = Number(task?.repeatInterval || 1) || 1;
+  if (!freq) return false;
+  if (freq === 'daily') {
+    // If we have a baseline, respect interval
+    const base = toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now();
+    const daysDiff = Math.floor((startOfDay(date).getTime() - startOfDay(new Date(base)).getTime()) / (24*60*60*1000));
+    return daysDiff % interval === 0;
+  }
+  if (freq === 'weekly') {
+    const allowed = Array.isArray(task?.daysOfWeek) ? task.daysOfWeek : [];
+    return allowed.includes(dayOfWeekKey(date));
+  }
+  if (freq === 'monthly') {
+    const base = new Date(toMillis(task?.createdAt) || Date.now());
+    return date.getDate() === base.getDate();
+  }
+  if (freq === 'yearly') {
+    const base = new Date(toMillis(task?.createdAt) || Date.now());
+    return date.getMonth() === base.getMonth() && date.getDate() === base.getDate();
+  }
+  return false;
+}
+
+function startOfDay(d) {
+  const nd = new Date(d);
+  nd.setHours(0,0,0,0);
+  return nd;
+}
+
+async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
+  if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
+  const ownerUid = task.ownerUid;
+  const today = startOfDay(new Date());
+  const snoozedUntil = toMillis(task?.snoozedUntil) || 0;
+  let created = 0, updated = 0;
+  for (const day of iterateNextDays(today, lookaheadDays)) {
+    if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
+    if (!shouldScheduleOnDay(task, day)) continue;
+    const dayKey = toDayKey(day);
+    const iso = toISODate(day);
+    const docId = `chore_${task.id}_${dayKey}`;
+    const ref = db.collection('calendar_blocks').doc(docId);
+    const snap = await ref.get();
+    const base = {
+      ownerUid,
+      entityType: 'chore',
+      taskId: task.id,
+      date: iso,
+      title: task.title || 'Chore',
+      status: 'planned',
+      start: startOfDay(day).getTime(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      metadata: {
+        frequency: task.repeatFrequency || null,
+        interval: Number(task.repeatInterval || 1) || 1,
+        daysOfWeek: Array.isArray(task.daysOfWeek) ? task.daysOfWeek : null,
+      },
+    };
+    if (snap.exists) {
+      const existing = snap.data() || {};
+      const needsUpdate = existing.title !== base.title || existing.status === undefined || existing.ownerUid !== ownerUid;
+      if (needsUpdate) { await ref.set({ ...existing, ...base }, { merge: true }); updated++; }
+    } else {
+      await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      created++;
+    }
+  }
+  return { created, updated };
+}
+
 function makeRef(type) {
   const prefixMap = { story: 'ST', task: 'TK', goal: 'GR', sprint: 'SP' };
   const prefix = prefixMap[type] || 'ID';
@@ -5596,8 +5740,174 @@ function assembleDailyChecklist(summaryData) {
       reason: story.goal ? `Goal ${story.goal}` : null,
       deepLink: story.deepLink || null,
       checkable: false,
-    });
   });
+});
+
+// ===== Tasks normalizer + chore/routine calendar materializer
+exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async (event) => {
+  const db = admin.firestore();
+  const id = event?.params?.id;
+  const before = event?.data?.before?.data() || null;
+  const after = event?.data?.after?.data() || null;
+  if (!after) return; // deleted
+
+  const ref = event.data.after.ref;
+  const patch = {};
+  let needsPatch = false;
+
+  // Ensure updatedAt
+  patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+  needsPatch = true;
+
+  // completedAt when transitioning to done (status=2)
+  const beforeStatus = Number(before?.status ?? null);
+  const afterStatus = Number(after?.status ?? null);
+  if ((beforeStatus !== 2) && (afterStatus === 2) && !after?.completedAt) {
+    patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+    needsPatch = true;
+  }
+
+  // One-time type inference if missing
+  if (!after?.type) {
+    const inferred = inferTaskType(after);
+    if (inferred) { patch.type = inferred; patch.typeInferredAt = admin.firestore.FieldValue.serverTimestamp(); needsPatch = true; }
+  }
+
+  // Recurrence normalization
+  const { changed, patch: norm } = normaliseRecurrence(after);
+  if (changed) { Object.assign(patch, norm); needsPatch = true; }
+
+  if (needsPatch) {
+    // Avoid infinite loops: keep patch minimal and idempotent
+    await ref.set(patch, { merge: true });
+  }
+
+  // Materialize chore/routine calendar blocks for next 14 days (active only)
+  const type = (after?.type || patch?.type || '').toLowerCase();
+  const active = Number(afterStatus) !== 2;
+  const isChoreLike = type === 'chore' || type === 'routine';
+  if (isChoreLike && active) {
+    const task = { id, ...(after || {}), ...(patch || {}) };
+    await upsertChoreBlocksForTask(db, task, 14);
+  }
+
+  // If just completed, mark nearest block done and update lastDoneAt
+  if ((beforeStatus !== 2) && (afterStatus === 2) && isChoreLike) {
+    const today = startOfDay(new Date());
+    const todayKey = toDayKey(today);
+    const blockId = `chore_${id}_${todayKey}`;
+    const blockRef = db.collection('calendar_blocks').doc(blockId);
+    const snap = await blockRef.get();
+    if (snap.exists) {
+      await blockRef.set({ status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+    await ref.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  }
+});
+
+// ===== Nightly archiver: tasks -> tasks_archive after 30d completed
+exports.archiveCompletedTasksNightly = schedulerV2.onSchedule('every day 02:30', async () => {
+  const db = admin.firestore();
+  const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const snap = await db.collection('tasks')
+    .where('status', '==', 2)
+    .where('completedAt', '<=', cutoff)
+    .get();
+
+  let archived = 0, errors = 0;
+  for (const doc of snap.docs) {
+    try {
+      const data = doc.data() || {};
+      const archiveRef = db.collection('tasks_archive').doc(doc.id);
+      const ttl = admin.firestore.Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
+      await archiveRef.set({
+        ...data,
+        sourceTaskId: doc.id,
+        archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+        deleteAt: ttl,
+      }, { merge: true });
+      await doc.ref.delete();
+      archived++;
+    } catch (err) {
+      console.error('[archiver] failed', { id: doc.id, error: err?.message || String(err) });
+      errors++;
+    }
+  }
+  try {
+    const activityRef = db.collection('activity_stream').doc();
+    await activityRef.set({
+      id: activityRef.id,
+      entityType: 'archiver',
+      activityType: 'tasks_archived',
+      description: `Archived ${archived} tasks (errors: ${errors})`,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
+});
+
+// ===== Hourly: ensure next 14 days of chore/routine blocks exist
+exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
+  const db = admin.firestore();
+  let scanned = 0, created = 0, updated = 0;
+  for (const t of ['chore','routine']) {
+    // Only open tasks (status == 0)
+    const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
+    for (const doc of snap.docs) {
+      scanned++;
+      const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data()||{}) }, 14);
+      created += res.created; updated += res.updated;
+    }
+  }
+  try {
+    const activityRef = admin.firestore().collection('activity_stream').doc();
+    await activityRef.set({
+      id: activityRef.id,
+      entityType: 'chore_blocks',
+      activityType: 'ensure_blocks',
+      description: `Ensured blocks: scanned=${scanned}, created=${created}, updated=${updated}`,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch {}
+});
+
+// ===== Callables: complete/snooze chore task
+exports.completeChoreTask = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const taskId = String(req?.data?.taskId || '').trim();
+  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+  const db = admin.firestore();
+  const taskRef = db.collection('tasks').doc(taskId);
+  const snap = await taskRef.get();
+  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+  const task = snap.data() || {};
+  if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+  const type = String(task?.type || '').toLowerCase();
+  if (type !== 'chore' && type !== 'routine') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine');
+  const todayKey = toDayKey(new Date());
+  const blockId = `chore_${taskId}_${todayKey}`;
+  await db.collection('calendar_blocks').doc(blockId)
+    .set({ ownerUid: uid, taskId, entityType: 'chore', status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await taskRef.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { ok: true };
+});
+
+exports.snoozeChoreTask = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const taskId = String(req?.data?.taskId || '').trim();
+  const days = Math.max(1, Math.min(14, Number(req?.data?.days || 1)));
+  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+  const db = admin.firestore();
+  const taskRef = db.collection('tasks').doc(taskId);
+  const snap = await taskRef.get();
+  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+  const task = snap.data() || {};
+  if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+  const until = startOfDay(new Date(Date.now() + days * 24 * 60 * 60 * 1000)).getTime();
+  await taskRef.set({ snoozedUntil: until, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { ok: true, snoozedUntil: until };
+});
 
   return {
     generatedAt: nowIso,
