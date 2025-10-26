@@ -5,6 +5,12 @@ service cloud.firestore {
     function isSignedIn() { return request.auth != null; }
     function isOwner() { return isSignedIn() && request.auth.uid == resource.data.ownerUid; }
     function isOwnerForCreate() { return isSignedIn() && request.resource.data.ownerUid == request.auth.uid; }
+    function activityOwned() {
+      return isSignedIn() && (
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid) ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid)
+      );
+    }
 
     match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -42,7 +48,11 @@ service cloud.firestore {
     match /metrics_workouts/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /taxonomies/{id} { allow read: if isSignedIn(); allow create: if isOwnerForCreate(); allow update, delete: if isOwner(); }
-    match /activity_stream/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /activity_stream/{id} {
+      allow create: if isOwnerForCreate();
+      allow read: if activityOwned();
+      allow update, delete: if activityOwned();
+    }
     // Per-user integration logs (e.g., google/strava/monzo)
     match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

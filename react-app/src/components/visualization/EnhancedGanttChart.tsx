@@ -418,10 +418,14 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Subscribe to activity when opening modal
   useEffect(() => {
-    if (!activityGoalId) return;
-    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems, currentUser?.uid || undefined);
+    if (!activityGoalId || !currentUser?.uid) return;
+    const unsub = ActivityStreamService.subscribeToActivityStream(
+      activityGoalId,
+      setActivityItems,
+      currentUser.uid
+    );
     return () => unsub();
-  }, [activityGoalId]);
+  }, [activityGoalId, currentUser?.uid]);
 
   // Load data with real-time subscriptions
   useEffect(() => {
