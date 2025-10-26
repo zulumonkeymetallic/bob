@@ -1,8 +1,10 @@
 const functionsV2 = require('firebase-functions/v2');
 const httpsV2 = require('firebase-functions/v2/https');
+const { defineSecret } = require('firebase-functions/params');
 const schedulerV2 = require('firebase-functions/v2/scheduler');
 const firestoreV2 = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
+const { ensureBudget } = require('./utils/usageGuard');
 
 functionsV2.setGlobalOptions({ region: 'europe-west2', maxInstances: 10 });
 if (!admin.apps.length) admin.initializeApp();
@@ -115,7 +117,7 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     const docId = `chore_${task.id}_${dayKey}`;
     const ref = db.collection('calendar_blocks').doc(docId);
     const snap = await ref.get();
-    const base = {
+  const base = {
       ownerUid,
       entityType: 'chore',
       taskId: task.id,
@@ -123,7 +125,6 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
       title: task.title || 'Chore',
       status: 'planned',
       start: startOfDay(day).getTime(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       metadata: {
         frequency: task.repeatFrequency || null,
         interval: Number(task.repeatInterval || 1) || 1,
@@ -132,10 +133,13 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     };
     if (snap.exists) {
       const existing = snap.data() || {};
-      const needsUpdate = existing.title !== base.title || existing.ownerUid !== ownerUid || existing.status === undefined;
-      if (needsUpdate) { await ref.set({ ...existing, ...base }, { merge: true }); updated++; }
+      const needsUpdate = existing.title !== base.title || existing.ownerUid !== ownerUid || existing.status === undefined || existing.start !== base.start;
+      if (needsUpdate) {
+        await ref.set({ ...existing, ...base, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        updated++;
+      }
     } else {
-      await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       created++;
     }
   }
@@ -150,8 +154,8 @@ exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async
   if (!after) return; // deleted
   const ref = event.data.after.ref;
 
-  const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
-  let needsPatch = true;
+  const patch = {};
+  let needsPatch = false;
 
   const beforeStatus = Number(before?.status ?? null);
   const afterStatus = Number(after?.status ?? null);
@@ -165,7 +169,10 @@ exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async
   }
   const { changed, patch: norm } = normaliseRecurrence(after);
   if (changed) { Object.assign(patch, norm); needsPatch = true; }
-  if (needsPatch) { await ref.set(patch, { merge: true }); }
+  if (needsPatch) {
+    patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set(patch, { merge: true });
+  }
 
   const type = String(after?.type || patch?.type || '').toLowerCase();
   const active = Number(afterStatus) !== 2;
@@ -187,6 +194,7 @@ exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async
 
 exports.archiveCompletedTasksNightly = schedulerV2.onSchedule('every day 02:30', async () => {
   const db = admin.firestore();
+  await ensureBudget(db, 'archiveCompletedTasksNightly', { reads: 2000, writes: 500 });
   const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const snap = await db.collection('tasks').where('status', '==', 2).where('completedAt', '<=', cutoff).get();
   let archived = 0, errors = 0;
@@ -207,6 +215,7 @@ exports.archiveCompletedTasksNightly = schedulerV2.onSchedule('every day 02:30',
 
 exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
   const db = admin.firestore();
+  await ensureBudget(db, 'ensureChoreBlocksHourly', { reads: 2000, writes: 500 });
   let scanned = 0, created = 0, updated = 0;
   for (const t of ['chore','routine']) {
     const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
@@ -244,3 +253,34 @@ exports.snoozeChoreTask = httpsV2.onCall(async (req) => {
   return { ok: true, snoozedUntil: until };
 });
 
+// ===== Email: test + raw (Brevo)
+const { sendEmail } = require('./lib/email');
+const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
+
+exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
+  // Auth optional for testing, but recommended; enforce if needed:
+  const to = String(req?.data?.to || '').trim();
+  const subject = String(req?.data?.subject || 'BOB · Test Email');
+  const from = req?.data?.from ? String(req.data.from).trim() : undefined;
+  if (!to) throw new httpsV2.HttpsError('invalid-argument', 'to required');
+  const html = `<p>This is a test email from BOB.</p><p>Sent at ${new Date().toISOString()}</p>`;
+  const result = await sendEmail({ to, subject, html, from });
+  return { ok: true, messageId: result?.messageId || null };
+});
+
+exports.sendRawEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
+  const to = req?.data?.to;
+  const subject = req?.data?.subject || '(no subject)';
+  const html = req?.data?.html || null;
+  const text = req?.data?.text || null;
+  const from = req?.data?.from || undefined;
+  if (!to) throw new httpsV2.HttpsError('invalid-argument', 'to is required');
+  if (!html && !text) throw new httpsV2.HttpsError('invalid-argument', 'html or text required');
+  const result = await sendEmail({ to, subject, html, text, from });
+  return { ok: true, messageId: result?.messageId || null };
+});
+
+// ===== Daily Email Summary (scheduled + on-demand)
+const { dailyEmailSummary, sendDailySummaryNow } = require('./summary');
+exports.dailyEmailSummary = dailyEmailSummary;
+exports.sendDailySummaryNow = sendDailySummaryNow;
