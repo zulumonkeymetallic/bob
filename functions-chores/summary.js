@@ -3,6 +3,7 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { https } = require('firebase-functions/v2');
 const { defineSecret } = require('firebase-functions/params');
 const { sendEmail } = require('./lib/email');
+const { ensureBudget, increment } = require('./utils/usageGuard');
 
 // Daily email summary (ported from existing generator without logic changes)
 
@@ -24,6 +25,8 @@ exports.dailyEmailSummary = onSchedule({
     const userId = userDoc.id;
     if (userProfile.dailyDigestEnabled === false) continue;
     try {
+      // Guard: estimate ~25 reads + 2 writes per user (queries + digest + emailSent flag)
+      await ensureBudget(db, 'dailyEmailSummary', { reads: 25, writes: 2 });
       const userData = await gatherUserData(db, userId, today);
       const aiInsights = await generateAIInsights(userData);
       const digestContent = await createDigestHTML(userData, aiInsights);
@@ -50,6 +53,7 @@ exports.dailyEmailSummary = onSchedule({
         for (const d of snap.docs) {
           await d.ref.update({ emailSent: true, emailSentAt: admin.firestore.FieldValue.serverTimestamp() });
         }
+        await increment(db, 'dailyEmailSummary', { reads: 5, writes: 2 });
       }
       console.log(`✅ Digest generated for ${userId}`);
     } catch (e) {
@@ -63,6 +67,7 @@ exports.sendDailySummaryNow = https.onCall({ secrets: [defineSecret('BREVO_API_K
   if (!uid) throw new https.HttpsError('invalid-argument', 'userId or auth required');
   const db = admin.firestore();
   const today = new Date();
+  await ensureBudget(db, 'sendDailySummaryNow', { reads: 25, writes: 2 });
   const userData = await gatherUserData(db, uid, today);
   const aiInsights = await generateAIInsights(userData);
   const digestContent = await createDigestHTML(userData, aiInsights);
@@ -157,4 +162,3 @@ async function sendDigestEmail(email, htmlContent, userData) {
   if (!email) return;
   await sendEmail({ to: email, subject: `BOB Daily Digest – ${userData?.date || new Date().toLocaleDateString()}`, html: htmlContent });
 }
-

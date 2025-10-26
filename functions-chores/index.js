@@ -4,6 +4,7 @@ const { defineSecret } = require('firebase-functions/params');
 const schedulerV2 = require('firebase-functions/v2/scheduler');
 const firestoreV2 = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
+const { ensureBudget } = require('./utils/usageGuard');
 
 functionsV2.setGlobalOptions({ region: 'europe-west2', maxInstances: 10 });
 if (!admin.apps.length) admin.initializeApp();
@@ -193,6 +194,7 @@ exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async
 
 exports.archiveCompletedTasksNightly = schedulerV2.onSchedule('every day 02:30', async () => {
   const db = admin.firestore();
+  await ensureBudget(db, 'archiveCompletedTasksNightly', { reads: 2000, writes: 500 });
   const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const snap = await db.collection('tasks').where('status', '==', 2).where('completedAt', '<=', cutoff).get();
   let archived = 0, errors = 0;
@@ -213,6 +215,7 @@ exports.archiveCompletedTasksNightly = schedulerV2.onSchedule('every day 02:30',
 
 exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
   const db = admin.firestore();
+  await ensureBudget(db, 'ensureChoreBlocksHourly', { reads: 2000, writes: 500 });
   let scanned = 0, created = 0, updated = 0;
   for (const t of ['chore','routine']) {
     const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
