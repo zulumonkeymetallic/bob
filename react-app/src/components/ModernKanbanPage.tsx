@@ -3,7 +3,7 @@ import { Container, Row, Col, Card, Button, Form, Modal, Badge, Table, Dropdown 
 import AddStoryModal from './AddStoryModal';
 import ModernTaskTable from './ModernTaskTable';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Task } from '../types';
 import { useSprint } from '../contexts/SprintContext';
@@ -67,11 +67,15 @@ const ModernKanbanPage: React.FC = () => {
 
     const goalsQuery = query(
       collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('updatedAt', 'desc'),
+      limit(1000)
     );
     const storiesQuery = query(
       collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('updatedAt', 'desc'),
+      limit(1000)
     );
 
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
@@ -106,6 +110,7 @@ const ModernKanbanPage: React.FC = () => {
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
       orderBy('createdAt', 'desc'),
+      limit(1000)
     );
     if (selectedSprintId) {
       tasksQuery = query(tasksQuery, where('sprintId', '==', selectedSprintId));

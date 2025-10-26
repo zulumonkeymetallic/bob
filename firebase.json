@@ -1,7 +1,8 @@
 {
-  "functions": {
-    "source": "functions"
-  },
+  "functions": [
+    { "source": "functions", "codebase": "default" },
+    { "source": "functions-chores", "codebase": "chores" }
+  ],
   "hosting": {
     "site": "bob20250810",
     "public": "react-app/build",
