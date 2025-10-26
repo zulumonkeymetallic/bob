@@ -4936,8 +4936,11 @@ async function getLatestMaintenanceSummary({ db, userId }) {
 }
 
 // ===== Weekly summaries (AUD-3)
+const { ensureBudget: ensureBudgetDefault } = require('./utils/usageGuard');
+
 exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
   const db = ensureFirestore();
+  try { await ensureBudgetDefault(db, 'generateWeeklySummaries', { reads: 3000, writes: 500 }); } catch (e) { console.warn('[weekly summaries] budget exceeded, skipping run'); return { ok: false, skipped: true }; }
   const now = new Date();
   const periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
   const profiles = await db.collection('profiles').get().catch(() => ({ empty: true, docs: [] }));
