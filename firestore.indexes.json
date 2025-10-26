@@ -375,5 +375,11 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "tasks_archive",
+      "fieldPath": "deleteAt",
+      "ttl": "ENABLED"
+    }
+  ]
 }
