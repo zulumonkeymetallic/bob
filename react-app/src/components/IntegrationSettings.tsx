@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Badge, Button, Card, Col, Collapse, Form, ListGroup, Row, Spinner, Table } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
@@ -87,6 +87,23 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [traktMessage, setTraktMessage] = useState<string | null>(null);
   const [traktLoading, setTraktLoading] = useState(false);
   const [traktUserInput, setTraktUserInput] = useState('');
+  const popupTimersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      popupTimersRef.current.forEach((id) => clearInterval(id));
+      popupTimersRef.current = [];
+    };
+  }, []);
+
+  const trackPopupTimer = (timerId: number) => {
+    popupTimersRef.current.push(timerId);
+  };
+
+  const clearPopupTimer = (timerId: number) => {
+    clearInterval(timerId);
+    popupTimersRef.current = popupTimersRef.current.filter((id) => id !== timerId);
+  };
 
 
   useEffect(() => {
@@ -214,11 +231,12 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     const url = `https://${region}-${projectId}.cloudfunctions.net/oauthStart?uid=${currentUser.uid}&nonce=${nonce}`;
     const popup = window.open(url, 'google-oauth', 'width=500,height=600');
     if (popup) {
-      const timer = setInterval(() => {
+      const timer = window.setInterval(() => {
         if (popup.closed) {
-          clearInterval(timer);
+          clearPopupTimer(timer);
         }
       }, 800);
+      trackPopupTimer(timer);
     }
   };
 
@@ -244,11 +262,12 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     const url = `${window.location.origin}/api/monzo/start?uid=${currentUser.uid}&nonce=${nonce}`;
     const popup = window.open(url, 'monzo-oauth', 'width=480,height=720');
     if (popup) {
-      const timer = setInterval(() => {
+      const timer = window.setInterval(() => {
         if (popup.closed) {
-          clearInterval(timer);
+          clearPopupTimer(timer);
         }
       }, 800);
+      trackPopupTimer(timer);
     }
   };
 
@@ -328,11 +347,12 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     const url = `https://${region}-${projectId}.cloudfunctions.net/stravaOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
     const popup = window.open(url, 'strava-oauth', 'width=480,height=720');
     if (popup) {
-      const timer = setInterval(() => {
+      const timer = window.setInterval(() => {
         if (popup.closed) {
-          clearInterval(timer);
+          clearPopupTimer(timer);
         }
       }, 800);
+      trackPopupTimer(timer);
     }
   };
 
