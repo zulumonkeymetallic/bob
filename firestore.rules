@@ -100,10 +100,18 @@ service cloud.firestore {
       allow create: if isOwnerForCreate();
       allow read, update, delete: if isOwner();
     }
-    // Planner job coordination (per-user documents)
+    // Planner job coordination (per-user documents keyed by userId)
     match /planning_jobs/{id} {
-      allow create, update, delete: if isOwner();
-      allow read: if isOwner();
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+      allow update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
     }
 
     // Archive of completed tasks (server-managed)
