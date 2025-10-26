@@ -25,7 +25,7 @@ import { Edit3, Trash2, Target, BookOpen, Activity, SquarePlus, ListTodo, Kanban
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -676,28 +676,32 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         collection(db, 'goals'),
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc')
+        orderBy('createdAt', 'desc'),
+        limit(1000)
       );
 
       const storiesQuery = query(
         collection(db, 'stories'),
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc')
+        orderBy('createdAt', 'desc'),
+        limit(1000)
       );
 
       const tasksQuery = query(
         collection(db, 'tasks'),
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc')
+        orderBy('createdAt', 'desc'),
+        limit(1000)
       );
 
       const sprintsQuery = query(
         collection(db, 'sprints'),
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc')
+        orderBy('createdAt', 'desc'),
+        limit(500)
       );
 
       const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {

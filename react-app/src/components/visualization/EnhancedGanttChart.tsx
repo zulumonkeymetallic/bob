@@ -429,52 +429,88 @@ const EnhancedGanttChart: React.FC = () => {
 
     const unsubscribes: (() => void)[] = [];
 
-    // Subscribe to goals
+    // Subscribe to goals (order + cap to avoid huge reads)
     const goalsQuery = query(
       collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('updatedAt', 'desc'),
+      limit(1000)
     );
-    const unsubGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const goalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
-      setGoals(goalsData);
-      logger.debug('gantt', 'Goals snapshot', { count: goalsData.length });
-    });
+    const unsubGoals = onSnapshot(
+      goalsQuery,
+      (snapshot) => {
+        const goalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
+        setGoals(goalsData);
+        logger.debug('gantt', 'Goals snapshot', { count: goalsData.length });
+      },
+      (error) => {
+        logger.warn('gantt', 'Goals snapshot error', error);
+        setGoals([]);
+      }
+    );
     unsubscribes.push(unsubGoals);
 
-    // Subscribe to sprints
+    // Subscribe to sprints (ordered + cap)
     const sprintsQuery = query(
       collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('startDate', 'desc'),
+      limit(200)
     );
-    const unsubSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
-      setSprints(sprintsData);
-      logger.debug('gantt', 'Sprints snapshot', { count: sprintsData.length });
-    });
+    const unsubSprints = onSnapshot(
+      sprintsQuery,
+      (snapshot) => {
+        const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
+        setSprints(sprintsData);
+        logger.debug('gantt', 'Sprints snapshot', { count: sprintsData.length });
+      },
+      (error) => {
+        logger.warn('gantt', 'Sprints snapshot error', error);
+        setSprints([]);
+      }
+    );
     unsubscribes.push(unsubSprints);
 
-    // Subscribe to stories
+    // Subscribe to stories (order + cap)
     const storiesQuery = query(
       collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('updatedAt', 'desc'),
+      limit(1000)
     );
-    const unsubStories = onSnapshot(storiesQuery, (snapshot) => {
-      const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
-      setStories(storiesData);
-      logger.debug('gantt', 'Stories snapshot', { count: storiesData.length });
-    });
+    const unsubStories = onSnapshot(
+      storiesQuery,
+      (snapshot) => {
+        const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
+        setStories(storiesData);
+        logger.debug('gantt', 'Stories snapshot', { count: storiesData.length });
+      },
+      (error) => {
+        logger.warn('gantt', 'Stories snapshot error', error);
+        setStories([]);
+      }
+    );
     unsubscribes.push(unsubStories);
 
-    // Subscribe to tasks
+    // Subscribe to tasks (order + cap)
     const tasksQuery = query(
       collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('updatedAt', 'desc'),
+      limit(1000)
     );
-    const unsubTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
-      setTasks(tasksData);
-      logger.debug('gantt', 'Tasks snapshot', { count: tasksData.length });
-    });
+    const unsubTasks = onSnapshot(
+      tasksQuery,
+      (snapshot) => {
+        const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
+        setTasks(tasksData);
+        logger.debug('gantt', 'Tasks snapshot', { count: tasksData.length });
+      },
+      (error) => {
+        logger.warn('gantt', 'Tasks snapshot error', error);
+        setTasks([]);
+      }
+    );
     unsubscribes.push(unsubTasks);
 
     setLoading(false);

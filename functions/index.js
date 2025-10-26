@@ -1556,6 +1556,25 @@ exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req)
   return { ok: true, to: email };
 });
 
+// Diagnostics: quick check that sprints are readable for the current user
+exports.debugSprintsNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const snap = await db.collection('sprints').where('ownerUid', '==', uid).orderBy('startDate', 'desc').limit(10).get();
+  const items = snap.docs.map((d) => {
+    const data = d.data() || {};
+    return {
+      id: d.id,
+      name: data.name || null,
+      status: data.status || null,
+      startDate: data.startDate || null,
+      persona: data.persona || null,
+    };
+  });
+  return { ok: true, count: snap.size, items };
+});
+
 // Assistant Chat: aggregates calendar + backlog + goals to provide insights and suggested actions
 exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -8289,7 +8308,7 @@ exports.previewDataQualityReport = httpsV2.onCall(async (req) => {
   return { ok: true, snapshot, html };
 });
 
-exports.sendTestEmail = httpsV2.onCall(async (req) => {
+exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 

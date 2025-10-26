@@ -6,7 +6,8 @@ import {
   orderBy,
   onSnapshot,
   serverTimestamp,
-  Timestamp
+  Timestamp,
+  limit as fslimit
 } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -275,14 +276,14 @@ export class ActivityStreamService {
       collection(db, 'activity_stream'),
       where('ownerUid', '==', userId),
       where('userId', '==', userId),
-      orderBy('timestamp', 'desc')
+      orderBy('timestamp', 'desc'),
+      fslimit(limit)
     );
 
     return onSnapshot(
       q,
       (snapshot) => {
         const activities = snapshot.docs
-          .slice(0, limit)
           .map(doc => ({ id: doc.id, ...(doc.data() as any) })) as ActivityEntry[];
         callback(activities);
       },

@@ -43,9 +43,17 @@ service cloud.firestore {
     match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /taxonomies/{id} { allow read: if isSignedIn(); allow create: if isOwnerForCreate(); allow update, delete: if isOwner(); }
     match /activity_stream/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Per-user integration logs (e.g., google/strava/monzo)
+    match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /steam/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+
+    // Travel map entries (per-user visits/locations)
+    match /travel/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
 
     // Finance collections
     match /finance_budgets/{uid} {
@@ -73,11 +81,30 @@ service cloud.firestore {
                     request.resource.data.ownerUid == resource.data.ownerUid;
     }
 
+    // Per-user goal alignment summary for finance dashboard
+    match /monzo_goal_alignment/{uid} {
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow read:   if isSignedIn() && request.auth.uid == uid;
+      allow update: if isSignedIn() && request.auth.uid == uid;
+      allow delete: if isSignedIn() && request.auth.uid == uid;
+    }
+
     // New scheduler-related collections
     match /themes/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /chores/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /routines/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     // Alias for blocks in new schema (calendar_blocks already exists separately)
     match /blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Scheduled instances produced by the planner
+    match /scheduled_instances/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+    // Planner job coordination (per-user documents)
+    match /planning_jobs/{id} {
+      allow create, update, delete: if isOwner();
+      allow read: if isOwner();
+    }
 
     // Archive of completed tasks (server-managed)
     match /tasks_archive/{id} {
@@ -90,6 +117,26 @@ service cloud.firestore {
     match /activity/{id} {
       allow create: if isOwnerForCreate();
       allow read, update, delete: if isOwner();
+    }
+
+    // Daily summary + reports (owner-scoped by userId)
+    match /daily_summaries/{id} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+    match /data_quality_reports/{id} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Automation status/runs (owner-scoped by userId; these docs do not carry ownerUid)
+    match /automation_status/{id} {
+      allow create, update: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+    match /automation_runs/{id} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
     // Plans -> per-day document with assignments subcollection
@@ -134,6 +181,10 @@ service cloud.firestore {
 
     // Per-user app settings
     match /user_settings/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+    // Per-user theme settings (legacy hook)
+    match /theme_settings/{uid} {
       allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
 
