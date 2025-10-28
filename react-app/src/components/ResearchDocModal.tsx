@@ -40,7 +40,7 @@ const ResearchDocModal: React.FC<ResearchDocModalProps> = ({ show, onHide, goalI
       if (rows.length && !selectedId) setSelectedId(rows[0].id);
     });
     return () => unsub();
-  }, [show, goalId, storyId]);
+  }, [show, goalId, storyId, selectedId]);
 
   const selected = useMemo(() => docs.find((d) => d.id === selectedId) || null, [docs, selectedId]);
 

@@ -1,12 +1,13 @@
 {
   "name": "bob-root",
-  "version": "4.0.2",
+  "version": "4.3.0",
   "private": true,
   "dependencies": {
     "react-dnd": "^16.0.1",
     "react-dnd-html5-backend": "^16.0.1"
   },
   "devDependencies": {
+    "firebase-admin": "^12.6.0",
     "@playwright/test": "^1.47.2",
     "concurrently": "^9.0.1",
     "cross-env": "^7.0.3",

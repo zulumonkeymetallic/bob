@@ -6,12 +6,12 @@ import { db } from '../firebase';
 import { Goal, Story, Task, Sprint } from '../types';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { useSprint } from '../contexts/SprintContext';
 
 interface TestData {
   goals: Goal[];
   stories: Story[];
   tasks: Task[];
-  sprints: Sprint[];
 }
 
 interface TestResults {
@@ -29,11 +29,11 @@ interface TestResults {
 const ComprehensiveTest: React.FC = () => {
   const { currentUser } = useAuth();
   const { isTestMode, toggleTestMode } = useTestMode();
+  const { sprints } = useSprint();
   const [testData, setTestData] = useState<TestData>({
     goals: [],
     stories: [],
     tasks: [],
-    sprints: []
   });
   const [testResults, setTestResults] = useState<TestResults>({
     auth: false,
@@ -95,11 +95,6 @@ const ComprehensiveTest: React.FC = () => {
       where('ownerUid', '==', currentUser.uid)
     );
 
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -128,20 +123,10 @@ const ComprehensiveTest: React.FC = () => {
       setTestResults(prev => ({ ...prev, dataLoad: true }));
     });
 
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      setTestData(prev => ({ ...prev, sprints: sprintsData }));
-      addLog(`📊 Sprints loaded: ${sprintsData.length} items`);
-    });
-
     return () => {
       unsubscribeGoals();
       unsubscribeStories();
       unsubscribeTasks();
-      unsubscribeSprints();
     };
   }, [currentUser]);
 
@@ -271,7 +256,7 @@ const ComprehensiveTest: React.FC = () => {
         }
       }
 
-      for (const sprint of testData.sprints) {
+      for (const sprint of sprints) {
         if (sprint.name.includes('Test Sprint')) {
           await deleteDoc(doc(db, 'sprints', sprint.id));
           addLog(`🗑️ Deleted test sprint: ${sprint.id}`);
@@ -386,7 +371,7 @@ const ComprehensiveTest: React.FC = () => {
                     </div>
                     <div className="list-group-item d-flex justify-content-between align-items-center">
                       Sprints
-                      <span className="badge bg-danger rounded-pill">{testData.sprints.length}</span>
+                      <span className="badge bg-danger rounded-pill">{sprints.length}</span>
                     </div>
                   </div>
                   

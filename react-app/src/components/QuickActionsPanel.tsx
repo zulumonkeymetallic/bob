@@ -12,6 +12,7 @@ import { Story, Goal, Sprint } from '../types';
 import AddGoalModal from './AddGoalModal';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
+import { useSprint } from '../contexts/SprintContext';
 
 interface QuickActionsProps {
   onAction?: (type: string, data: any) => void;
@@ -20,6 +21,7 @@ interface QuickActionsProps {
 const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   
   // Debug logging for QuickActionsPanel
   if (logger.isEnabled('debug', 'quick')) {
@@ -46,7 +48,6 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
   // Data for linking
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
 
   // Load data for linking
@@ -64,19 +65,9 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         const goalsSnapshot = await getDocs(goalsQuery);
         const goalsData = goalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
         setGoals(goalsData);
-
-        // Load sprints
-        const sprintsQuery = query(
-          collection(db, 'sprints'),
-          where('ownerUid', '==', currentUser.uid),
-          orderBy('createdAt', 'desc')
-        );
-        const sprintsSnapshot = await getDocs(sprintsQuery);
-        const sprintsData = sprintsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
-        setSprints(sprintsData);
         
         // Find active sprint
-        const active = sprintsData.find(sprint => sprint.status === 1); // 1 = Active
+        const active = sprints.find(sprint => sprint.status === 1); // 1 = Active
         setActiveSprint(active || null);
 
         // Load stories
@@ -95,7 +86,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
     };
 
     loadData();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, sprints]);
 
   // Helper functions
   const getStoryTheme = (storyId: string): number => {

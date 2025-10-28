@@ -34,37 +34,36 @@ const PersonalListsManagement: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    loadPersonalItems();
-  }, [currentUser, currentPersona]);
+    const loadPersonalItems = () => {
+      if (!currentUser) return;
+      
+      setLoading(true);
+      
+      // Load personal items data
+      const itemsQuery = query(
+        collection(db, 'personalItems'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        orderBy('createdAt', 'desc')
+      );
+      
+      // Subscribe to real-time updates
+      const unsubscribeItems = onSnapshot(itemsQuery, (snapshot) => {
+        const itemsData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as PersonalItem[];
+        setItems(itemsData);
+        setLoading(false);
+      });
 
-  const loadPersonalItems = async () => {
-    if (!currentUser) return;
-    
-    setLoading(true);
-    
-    // Load personal items data
-    const itemsQuery = query(
-      collection(db, 'personalItems'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc')
-    );
-    
-    // Subscribe to real-time updates
-    const unsubscribeItems = onSnapshot(itemsQuery, (snapshot) => {
-      const itemsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as PersonalItem[];
-      setItems(itemsData);
-    });
-
-    setLoading(false);
-
-    return () => {
-      unsubscribeItems();
+      return () => {
+        unsubscribeItems();
+      };
     };
-  };
+    const unsubscribe = loadPersonalItems();
+    return unsubscribe;
+  }, [currentUser, currentPersona]);
 
   // Handler functions for ModernPersonalListsTable
   const handleItemUpdate = async (itemId: string, updates: Partial<PersonalItem>) => {

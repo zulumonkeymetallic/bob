@@ -74,7 +74,7 @@ const ThemeColorManager: React.FC = () => {
       let needsMigration = false;
 
       for (const collectionName of collections) {
-        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
         const snapshot = await getDocs(q);
         
         const count = snapshot.size;
@@ -112,13 +112,13 @@ const ThemeColorManager: React.FC = () => {
       
       // First count total items
       for (const collectionName of collections) {
-        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
         const snapshot = await getDocs(q);
         totalItems += snapshot.size;
       }
       
       for (const collectionName of collections) {
-        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
         const snapshot = await getDocs(q);
         
         snapshot.docs.forEach(docSnapshot => {

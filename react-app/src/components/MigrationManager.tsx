@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { DatabaseMigration } from '../utils/databaseMigration';
@@ -16,13 +16,7 @@ export const MigrationManager: React.FC<MigrationManagerProps> = ({ children }) 
   const [migrationStatus, setMigrationStatus] = useState<'checking' | 'needed' | 'running' | 'complete' | 'error'>('checking');
   const [errorMessage, setErrorMessage] = useState('');
 
-  useEffect(() => {
-    if (currentUser && currentPersona) {
-      checkAndRunMigration();
-    }
-  }, [currentUser, currentPersona]);
-
-  const checkAndRunMigration = async () => {
+  const checkAndRunMigration = useCallback(async () => {
     if (!currentUser || !currentPersona) return;
 
     try {
@@ -46,7 +40,13 @@ export const MigrationManager: React.FC<MigrationManagerProps> = ({ children }) 
       setMigrationStatus('error');
       setErrorMessage('Failed to check migration status');
     }
-  };
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (currentUser && currentPersona) {
+      checkAndRunMigration();
+    }
+  }, [currentUser, currentPersona, checkAndRunMigration]);
 
   const runMigration = async () => {
     if (!currentUser || !currentPersona) return;

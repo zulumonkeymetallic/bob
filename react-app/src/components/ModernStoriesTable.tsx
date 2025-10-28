@@ -818,7 +818,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
-  const { selectedSprintId } = useSprint();
+  const { selectedSprintId, sprints } = useSprint();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -826,7 +826,6 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     filters: false,
     display: false,
   });
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   
   // New story row state
@@ -873,36 +872,18 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     console.log('📊 Persona:', currentPersona);
   }, [stories, goalId, goals, currentUser, currentPersona]);
 
-  // Load sprints for the sprint dropdown
   useEffect(() => {
-    if (!currentUser) return;
-
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc')
-    );
-
-    const unsubscribe = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        ...doc.data() 
-      } as Sprint));
-      setSprints(sprintsData);
-      
-      // Update the sprint column options
-      setColumns(prev => prev.map(col => 
-        col.key === 'sprintId' 
-          ? { 
-              ...col, 
-              options: ['', ...sprintsData.map(sprint => sprint.id)]
+    setColumns(prev =>
+      prev.map(col =>
+        col.key === 'sprintId'
+          ? {
+              ...col,
+              options: ['', ...sprints.map(sprint => sprint.id)]
             }
           : col
-      ));
-    });
-
-    return unsubscribe;
-  }, [currentUser]);
+      )
+    );
+  }, [sprints]);
 
   // Handle adding new story row
   const handleAddNewStory = () => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Row, Col, Card, Button, Form, Modal, Alert, Nav, Tab, Badge } from 'react-bootstrap';
 import { db, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -190,7 +190,7 @@ const SettingsPage: React.FC = () => {
   };
 
   // Check if database needs migration to new theme system
-  const checkMigrationStatus = async () => {
+  const checkMigrationStatus = useCallback(async () => {
     if (!currentUser) return;
 
     try {
@@ -198,7 +198,7 @@ const SettingsPage: React.FC = () => {
       let needsMigration = false;
 
       for (const collectionName of collections) {
-        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
         const snapshot = await getDocs(q);
         
         const count = snapshot.size;
@@ -220,7 +220,7 @@ const SettingsPage: React.FC = () => {
     } catch (error) {
       console.error('Error checking migration status:', error);
     }
-  };
+  }, [currentUser]);
 
   // Load global theme settings from Firebase
   useEffect(() => {
@@ -260,7 +260,7 @@ const SettingsPage: React.FC = () => {
     };
 
     loadGlobalThemes();
-  }, [currentUser]);
+  }, [currentUser, checkMigrationStatus]);
 
   useEffect(() => {
     if (!maintenanceStatus) return;
@@ -293,13 +293,13 @@ const SettingsPage: React.FC = () => {
       
       // First count total items
       for (const collectionName of collections) {
-        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
         const snapshot = await getDocs(q);
         totalItems += snapshot.size;
       }
       
       for (const collectionName of collections) {
-        const q = query(collection(db, collectionName), where('userId', '==', currentUser.uid));
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
         const snapshot = await getDocs(q);
         
         snapshot.docs.forEach(docSnapshot => {

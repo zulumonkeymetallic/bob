@@ -5,13 +5,14 @@ import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import ModernTaskTable from '../ModernTaskTable';
 import type { Task, Story, Goal, Sprint } from '../../types';
+import { useSprint } from '../../contexts/SprintContext';
 
 const TaskCleanupPage: React.FC = () => {
   const { currentUser } = useAuth();
+  const { sprints } = useSprint();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
 
   const [showDirty, setShowDirty] = useState(true);
   const [showDeleted, setShowDeleted] = useState(true);
@@ -25,8 +26,7 @@ const TaskCleanupPage: React.FC = () => {
     const unsubT = onSnapshot(tq, snap => setTasks(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[]));
     const unsubS = onSnapshot(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)), snap => setStories(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[]));
     const unsubG = onSnapshot(query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid)), snap => setGoals(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[]));
-    const unsubSp = onSnapshot(query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid)), snap => setSprints(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[]));
-    return () => { unsubT(); unsubS(); unsubG(); unsubSp(); };
+    return () => { unsubT(); unsubS(); unsubG(); };
   }, [currentUser]);
 
   const duplicateIds = useMemo(() => {

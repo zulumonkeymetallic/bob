@@ -1,8 +1,8 @@
 // Version tracking for cache busting
 // Align version with branch build
-export const VERSION = '4.0.2';
+export const VERSION = '4.3.0';
 export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'entity-audit-logging-4.0.2';
+export const BUILD_HASH = 'ownership-standardization-4.3.0';
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
 console.log(`✅ Status: Entity audit coverage`);

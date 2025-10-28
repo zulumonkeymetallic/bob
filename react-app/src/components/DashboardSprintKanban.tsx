@@ -4,9 +4,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Story, Sprint } from '../types';
+import { Story } from '../types';
 import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import { useNavigate } from 'react-router-dom';
+import { useSprint } from '../contexts/SprintContext';
 
 interface DashboardSprintKanbanProps {
   maxStories?: number;
@@ -22,8 +23,8 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
   const navigate = useNavigate();
   
   const [stories, setStories] = useState<Story[]>([]);
-  const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
-  
+  const { sprints } = useSprint();
+
   const columns = [
     { id: 'backlog', title: 'Backlog', status: 0 },
     { id: 'in-progress', title: 'In Progress', status: 2 },
@@ -34,30 +35,8 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
     if (!currentUser || !currentPersona) return;
 
     let unsubscribeStories: (() => void) | undefined;
-    let unsubscribeSprints: (() => void) | undefined;
 
     try {
-      // Load active sprint
-      const sprintsQuery = query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid),
-        where('status', '==', 1) // Active sprints only
-      );
-      
-      unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        
-        if (sprintsData.length > 0) {
-          setActiveSprint(sprintsData[0]);
-        }
-      }, (error) => {
-        console.error('Dashboard sprint subscription error:', error);
-      });
-
-      // Load stories for active sprint
       const storiesQuery = query(
         collection(db, 'stories'),
         where('ownerUid', '==', currentUser.uid),
@@ -70,14 +49,17 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
           ...doc.data()
         })) as Story[];
         
-        // Filter to selected sprint and limit count
+        const activeSprintId = (() => {
+          if (selectedSprintId && selectedSprintId !== '') return selectedSprintId;
+          const sprint = sprints.find((s) => s.status === 1) || sprints[0];
+          return sprint ? sprint.id : undefined;
+        })();
+
         const sprintStories = storiesData
           .filter(story => {
-            // All sprints selected => do not filter by sprint
             if (selectedSprintId === '') return true;
             if (selectedSprintId) return story.sprintId === selectedSprintId;
-            if (activeSprint) return story.sprintId === activeSprint.id;
-            return true;
+            return activeSprintId ? story.sprintId === activeSprintId : true;
           })
           .slice(0, maxStories);
         
@@ -92,12 +74,11 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
     return () => {
       try {
         unsubscribeStories?.();
-        unsubscribeSprints?.();
       } catch (error) {
         console.error('Error cleaning up dashboard subscriptions:', error);
       }
     };
-  }, [currentUser, currentPersona, activeSprint?.id, maxStories, selectedSprintId]);
+  }, [currentUser, currentPersona, maxStories, selectedSprintId, sprints]);
 
   const handleDragEnd = async (result: DropResult) => {
     if (!result.destination) return;
@@ -141,11 +122,18 @@ const DashboardSprintKanban: React.FC<DashboardSprintKanbanProps> = ({
       <Card.Header className="d-flex justify-content-between align-items-center">
         <h5 className="mb-0">Sprint Board</h5>
         <div>
-          {activeSprint && (
+          {(() => {
+            if (selectedSprintId === '') return null;
+            const sprintMatch = selectedSprintId
+              ? sprints.find((s) => s.id === selectedSprintId)
+              : sprints.find((s) => s.status === 1) || sprints[0];
+            if (!sprintMatch) return null;
+            return (
             <Badge bg="primary" className="me-2">
-              {activeSprint.name || activeSprint.id}
+                {sprintMatch.name || sprintMatch.id}
             </Badge>
-          )}
+            );
+          })()}
           <Button 
             variant="outline-primary" 
             size="sm"

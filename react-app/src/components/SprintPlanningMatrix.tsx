@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
 import { 
   DndContext, 
@@ -247,10 +248,10 @@ const SprintColumn: React.FC<{
 const SprintPlanningMatrix: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   
   // State
   const [stories, setStories] = useState<Story[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -284,21 +285,6 @@ const SprintPlanningMatrix: React.FC = () => {
         setStories(storiesData);
       });
 
-      // Sprints subscription
-      const sprintsQuery = query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid),
-        orderBy('startDate', 'desc')
-      );
-
-      const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        setSprints(sprintsData);
-      });
-
       // Goals subscription
       const goalsQuery = query(
         collection(db, 'goals'),
@@ -319,7 +305,6 @@ const SprintPlanningMatrix: React.FC = () => {
 
       return () => {
         unsubscribeStories();
-        unsubscribeSprints();
         unsubscribeGoals();
       };
     };

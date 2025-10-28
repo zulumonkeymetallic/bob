@@ -3,8 +3,13 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isSignedIn() { return request.auth != null; }
-    function isOwner() { return isSignedIn() && request.auth.uid == resource.data.ownerUid; }
-    function isOwnerForCreate() { return isSignedIn() && request.resource.data.ownerUid == request.auth.uid; }
+    // Canonical ownership: ownerUid only
+    function isOwner() {
+      return isSignedIn() && (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid);
+    }
+    function isOwnerForCreate() {
+      return isSignedIn() && (request.resource.data.ownerUid != null && request.resource.data.ownerUid == request.auth.uid);
+    }
     function activityOwned() {
       return isSignedIn() && (
         (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid) ||
@@ -49,9 +54,12 @@ service cloud.firestore {
     match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /taxonomies/{id} { allow read: if isSignedIn(); allow create: if isOwnerForCreate(); allow update, delete: if isOwner(); }
     match /activity_stream/{id} {
-      allow create: if isOwnerForCreate();
-      allow read: if activityOwned();
-      allow update, delete: if activityOwned();
+      // Service/telemetry collection: accept ownerUid or userId for historical compatibility
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if activityOwned();
     }
     // Per-user integration logs (e.g., google/strava/monzo)
     match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

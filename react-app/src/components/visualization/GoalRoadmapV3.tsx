@@ -37,7 +37,7 @@ const pluralize = (word: string, count: number) => (count === 1 ? word : `${word
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { showSidebar } = useSidebar();
   const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
@@ -48,7 +48,6 @@ const GoalRoadmapV3: React.FC = () => {
   const [customRange, setCustomRange] = useState<{ start: Date; end: Date } | null>(null);
 
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   // Embedded activity feed removed in favor of global sidebar stream
   const [noteGoalId, setNoteGoalId] = useState<string | null>(null);
@@ -362,17 +361,6 @@ const GoalRoadmapV3: React.FC = () => {
     });
     return () => unsub();
   }, [currentUser?.uid, storyMeta, selectedSprintId]);
-
-  // Subscribe to sprints (for overlay labels & bands) – used on weeks/months views
-  useEffect(() => {
-    if (!currentUser?.uid) return;
-    const q = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
-    const unsub = onSnapshot(q, snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as Sprint));
-      setSprints(data);
-    });
-    return () => unsub();
-  }, [currentUser?.uid]);
 
   // Subscribe to latest goal notes across the activity stream (for bar preview)
   useEffect(() => {

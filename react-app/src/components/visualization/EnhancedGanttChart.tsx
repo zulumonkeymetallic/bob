@@ -82,7 +82,7 @@ type ActiveDrag = {
 
 const EnhancedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { theme } = useTheme();
   const { showSidebar } = useSidebar();
   
@@ -90,7 +90,6 @@ const EnhancedGanttChart: React.FC = () => {
 
   // Core data
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -453,27 +452,6 @@ const EnhancedGanttChart: React.FC = () => {
       }
     );
     unsubscribes.push(unsubGoals);
-
-    // Subscribe to sprints (ordered + cap)
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc'),
-      limit(200)
-    );
-    const unsubSprints = onSnapshot(
-      sprintsQuery,
-      (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
-        setSprints(sprintsData);
-        logger.debug('gantt', 'Sprints snapshot', { count: sprintsData.length });
-      },
-      (error) => {
-        logger.warn('gantt', 'Sprints snapshot error', error);
-        setSprints([]);
-      }
-    );
-    unsubscribes.push(unsubSprints);
 
     // Subscribe to stories (order + cap)
     const storiesQuery = query(

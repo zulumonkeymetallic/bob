@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Row, Col, Card, Button, Table, Badge, Alert, Form, ProgressBar } from 'react-bootstrap';
 import { 
   collection, query, orderBy, limit, onSnapshot, where, 
@@ -81,36 +81,8 @@ const AIUsageDashboard = () => {
   const [functionBreakdown, setFunctionBreakdown] = useState<BreakdownData[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadRecentLogs = useCallback(async () => {
     if (!currentUser) return;
-    loadAIUsageData();
-  }, [currentUser, dateRange, selectedFunction]);
-
-  const loadAIUsageData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      console.log('🤖 Loading AI usage analytics...');
-      
-      // Load recent usage logs
-      await loadRecentLogs();
-      
-      // Load daily aggregates
-      await loadDailyAggregates();
-      
-      // Calculate summary metrics
-      await calculateSummaryMetrics();
-      
-    } catch (error: any) {
-      console.error('❌ Failed to load AI usage data:', error);
-      setError(`Failed to load analytics: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadRecentLogs = async () => {
     try {
       const logsRef = collection(db, 'ai_usage_logs');
       let logsQuery = query(
@@ -142,9 +114,61 @@ const AIUsageDashboard = () => {
     } catch (error) {
       console.error('Failed to load recent logs:', error);
     }
-  };
+  }, [currentUser, selectedFunction]);
 
-  const loadDailyAggregates = async () => {
+  const processServiceBreakdown = useCallback((aggregates: DailyAggregate[]) => {
+    const serviceData: Record<string, BreakdownData> = {};
+    aggregates.forEach(day => {
+      if (day.byService) {
+        Object.entries(day.byService).forEach(([service, data]) => {
+          if (!serviceData[service]) {
+            serviceData[service] = { name: service, requests: 0, tokens: 0, costUSD: 0 };
+          }
+          serviceData[service].requests += data.requests || 0;
+          serviceData[service].tokens += data.tokens || 0;
+          serviceData[service].costUSD += data.costUSD || 0;
+        });
+      }
+    });
+    setServiceBreakdown(Object.values(serviceData));
+  }, []);
+
+  const processModelBreakdown = useCallback((aggregates: DailyAggregate[]) => {
+    const modelData: Record<string, BreakdownData> = {};
+    aggregates.forEach(day => {
+      if (day.byModel) {
+        Object.entries(day.byModel).forEach(([model, data]) => {
+          if (!modelData[model]) {
+            modelData[model] = { name: model, requests: 0, tokens: 0, costUSD: 0 };
+          }
+          modelData[model].requests += data.requests || 0;
+          modelData[model].tokens += data.tokens || 0;
+          modelData[model].costUSD += data.costUSD || 0;
+        });
+      }
+    });
+    setModelBreakdown(Object.values(modelData));
+  }, []);
+
+  const processFunctionBreakdown = useCallback((aggregates: DailyAggregate[]) => {
+    const functionData: Record<string, BreakdownData> = {};
+    aggregates.forEach(day => {
+      if (day.byFunction) {
+        Object.entries(day.byFunction).forEach(([func, data]) => {
+          if (!functionData[func]) {
+            functionData[func] = { name: func, requests: 0, tokens: 0, costUSD: 0 };
+          }
+          functionData[func].requests += data.requests || 0;
+          functionData[func].tokens += data.tokens || 0;
+          functionData[func].costUSD += data.costUSD || 0;
+        });
+      }
+    });
+    setFunctionBreakdown(Object.values(functionData));
+  }, []);
+
+  const loadDailyAggregates = useCallback(async () => {
+    if (!currentUser) return;
     try {
       const aggregatesRef = collection(db, 'ai_usage_aggregates');
       const aggregatesQuery = query(
@@ -170,10 +194,23 @@ const AIUsageDashboard = () => {
     } catch (error) {
       console.error('Failed to load daily aggregates:', error);
     }
-  };
+  }, [currentUser, dateRange, processServiceBreakdown, processModelBreakdown, processFunctionBreakdown]);
 
-  const calculateSummaryMetrics = () => {
-    if (usageLogs.length === 0) return;
+  const calculateSummaryMetrics = useCallback(() => {
+    if (usageLogs.length === 0) {
+      setSummary(prev => ({
+        ...prev,
+        totalRequests: 0,
+        totalTokens: 0,
+        totalCostUSD: 0,
+        avgLatency: 0,
+        topFunction: '',
+        topModel: '',
+        currentMonthCost: 0,
+        projectedMonthlyCost: 0
+      }));
+      return;
+    }
 
     const totalRequests = usageLogs.length;
     const totalTokens = usageLogs.reduce((sum, log) => sum + (log.usage?.totalTokens || 0), 0);
@@ -214,58 +251,35 @@ const AIUsageDashboard = () => {
       currentMonthCost,
       projectedMonthlyCost
     });
-  };
+  }, [usageLogs]);
 
-  const processServiceBreakdown = (aggregates: DailyAggregate[]) => {
-    const serviceData: Record<string, BreakdownData> = {};
-    aggregates.forEach(day => {
-      if (day.byService) {
-        Object.entries(day.byService).forEach(([service, data]) => {
-          if (!serviceData[service]) {
-            serviceData[service] = { name: service, requests: 0, tokens: 0, costUSD: 0 };
-          }
-          serviceData[service].requests += data.requests || 0;
-          serviceData[service].tokens += data.tokens || 0;
-          serviceData[service].costUSD += data.costUSD || 0;
-        });
-      }
-    });
-    setServiceBreakdown(Object.values(serviceData));
-  };
+  useEffect(() => {
+    if (!currentUser) return;
 
-  const processModelBreakdown = (aggregates: DailyAggregate[]) => {
-    const modelData: Record<string, BreakdownData> = {};
-    aggregates.forEach(day => {
-      if (day.byModel) {
-        Object.entries(day.byModel).forEach(([model, data]) => {
-          if (!modelData[model]) {
-            modelData[model] = { name: model, requests: 0, tokens: 0, costUSD: 0 };
-          }
-          modelData[model].requests += data.requests || 0;
-          modelData[model].tokens += data.tokens || 0;
-          modelData[model].costUSD += data.costUSD || 0;
-        });
+    const loadAIUsageData = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        
+        console.log('🤖 Loading AI usage analytics...');
+        
+        await loadRecentLogs();
+        await loadDailyAggregates();
+        
+      } catch (error: any) {
+        console.error('❌ Failed to load AI usage data:', error);
+        setError(`Failed to load analytics: ${error.message}`);
+      } finally {
+        setLoading(false);
       }
-    });
-    setModelBreakdown(Object.values(modelData));
-  };
+    };
 
-  const processFunctionBreakdown = (aggregates: DailyAggregate[]) => {
-    const functionData: Record<string, BreakdownData> = {};
-    aggregates.forEach(day => {
-      if (day.byFunction) {
-        Object.entries(day.byFunction).forEach(([func, data]) => {
-          if (!functionData[func]) {
-            functionData[func] = { name: func, requests: 0, tokens: 0, costUSD: 0 };
-          }
-          functionData[func].requests += data.requests || 0;
-          functionData[func].tokens += data.tokens || 0;
-          functionData[func].costUSD += data.costUSD || 0;
-        });
-      }
-    });
-    setFunctionBreakdown(Object.values(functionData));
-  };
+    loadAIUsageData();
+  }, [currentUser, dateRange, selectedFunction, loadRecentLogs, loadDailyAggregates]);
+
+  useEffect(() => {
+    calculateSummaryMetrics();
+  }, [calculateSummaryMetrics]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-US', {

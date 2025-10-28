@@ -55,6 +55,16 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "persona", "order": "ASCENDING" },
+        { "fieldPath": "sprintId", "order": "ASCENDING" },
+        { "fieldPath": "orderIndex", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "stories",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     },
@@ -161,6 +171,16 @@
       "fields": [
         { "fieldPath": "ownerUid", "order": "ASCENDING" },
         { "fieldPath": "persona", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "persona", "order": "ASCENDING" },
+        { "fieldPath": "sprintId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     },

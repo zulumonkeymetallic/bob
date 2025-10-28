@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -95,8 +95,9 @@ const Dashboard: React.FC = () => {
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
   const [weeklySummary, setWeeklySummary] = useState<{ total: number; byType: Record<string, number> } | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
-  const decodeToDate = (value: any): Date | null => {
+  const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
     if (value instanceof Date) return value;
     if (typeof value === 'object' && typeof value.toDate === 'function') {
@@ -111,7 +112,7 @@ const Dashboard: React.FC = () => {
       if (!Number.isNaN(parsed)) return new Date(parsed);
     }
     return null;
-  };
+  }, []);
   const dailyBrief = () => {
     const parts: string[] = [];
     if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
@@ -120,42 +121,20 @@ const Dashboard: React.FC = () => {
     return parts.length ? parts.join(' · ') : 'No urgent items. Plan or review your goals.';
   };
 
+  const loadDashboardData = useCallback(() => {
+    setRefreshToken((prev) => prev + 1);
+    setLastUpdated(new Date());
+  }, []);
+
   useEffect(() => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
     if (!currentUser) {
       console.log('🔍 Dashboard: No currentUser, returning early');
       return;
     }
-    
-    console.log('🔍 Dashboard: Loading dashboard data for user:', currentUser.uid);
-    loadDashboardData();
-  }, [currentUser, currentPersona]);
 
-  // Load weekly summary for current user
-  useEffect(() => {
-    const loadWeekly = async () => {
-      try {
-        if (!currentUser) return;
-        const now = new Date();
-        const day = now.getDay() || 7; // Monday=1
-        const monday = new Date(now);
-        monday.setDate(monday.getDate() - (day - 1));
-        const weekKey = monday.toISOString().slice(0, 10);
-        const ref = doc(db, 'weekly_summaries', `${currentUser.uid}_${weekKey}`);
-        const snap = await getDoc(ref);
-        if (snap.exists()) setWeeklySummary({ total: snap.data().total || 0, byType: snap.data().byType || {} });
-        else setWeeklySummary(null);
-      } catch {}
-    };
-    loadWeekly();
-  }, [currentUser]);
-
-  const loadDashboardData = async () => {
-    if (!currentUser) return;
-    
     setLoading(true);
-    
-    // Load stories
+
     const storiesQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
@@ -169,8 +148,7 @@ const Dashboard: React.FC = () => {
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
-    
-    // Load tasks (simplified query while indexes are building)
+
     const tasksQuery = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
@@ -184,16 +162,13 @@ const Dashboard: React.FC = () => {
         return {
           id: doc.id,
           ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
         };
       }) as Story[];
       setRecentStories(storiesData.slice(0, 5));
-
       const activeStories = storiesData.filter(story => !isStatus(story.status, 'done')).length;
       const doneStories = storiesData.filter(story => isStatus(story.status, 'done')).length;
-
       setStats(prev => ({
         ...prev,
         activeStories,
@@ -211,7 +186,6 @@ const Dashboard: React.FC = () => {
           dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
         } as Goal;
       });
-
       const activeGoals = goalData.filter(goal => !isStatus(goal.status, 'Complete')).length;
       const now = new Date();
       const soon = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
@@ -219,7 +193,6 @@ const Dashboard: React.FC = () => {
         const due = decodeToDate(goal.targetDate || goal.dueDate);
         return due ? due >= now && due <= soon : false;
       }).length;
-
       setStats(prev => ({
         ...prev,
         activeGoals,
@@ -233,17 +206,13 @@ const Dashboard: React.FC = () => {
         return {
           id: doc.id,
           ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
           dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
         };
       }) as Task[];
-
       const activeTaskList = allTasks.filter(task => !isStatus(task.status, 'done'));
-      const nextTasks = activeTaskList.slice(0, 5);
-      setUpcomingTasks(nextTasks);
-
+      setUpcomingTasks(activeTaskList.slice(0, 5));
       const openTasks = allTasks.filter(task => !isStatus(task.status, 'done')).length;
       const todayCompleted = allTasks.filter(task => {
         if (!isStatus(task.status, 'done') || !task.updatedAt) return false;
@@ -252,7 +221,6 @@ const Dashboard: React.FC = () => {
         const today = new Date();
         return completedDate.toDateString() === today.toDateString();
       }).length;
-
       const unlinkedCount = allTasks.filter(task => !task.storyId).length;
       const now = new Date();
       const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -260,12 +228,10 @@ const Dashboard: React.FC = () => {
         const due = decodeToDate(task.dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs);
         return due ? due >= now && due <= soon : false;
       }).length;
-
       const sprintTasks = selectedSprintId
         ? allTasks.filter(task => task.sprintId === selectedSprintId)
         : allTasks.filter(task => task.sprintId);
       const sprintDone = sprintTasks.filter(task => isStatus(task.status, 'done')).length;
-
       setStats(prev => ({
         ...prev,
         pendingTasks: openTasks,
@@ -277,27 +243,32 @@ const Dashboard: React.FC = () => {
       }));
     });
 
+    const loadAdditionalData = async () => {
+      if (!currentUser) return;
+      try {
+        await Promise.all([
+          loadLLMPriority(),
+          loadTodayBlocks(),
+          countTasksDueToday(),
+          loadRemindersDueToday(),
+          loadChecklistDueToday(),
+          loadMonzoSummary()
+        ]);
+      } catch (error) {
+        console.error("Error loading additional dashboard data:", error);
+      }
+    };
+
+    loadAdditionalData();
     setLastUpdated(new Date());
     setLoading(false);
-
-    // After basic data, load LLM priority, today's schedule and due counts in parallel
-    try {
-      await Promise.all([
-        loadLLMPriority(),
-        loadTodayBlocks(),
-        countTasksDueToday(),
-        loadRemindersDueToday(),
-        loadChecklistDueToday(),
-        loadMonzoSummary()
-      ]);
-    } catch {}
 
     return () => {
       unsubscribeStories();
       unsubscribeGoals();
       unsubscribeTasks();
     };
-  };
+  }, [currentUser, currentPersona, selectedSprintId, refreshToken, decodeToDate]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -587,7 +558,11 @@ const Dashboard: React.FC = () => {
             </div>
             <div className="d-flex align-items-center gap-2">
               <small className="text-muted">Last updated {lastUpdated.toLocaleTimeString()}</small>
-              <Button variant="outline-primary" size="sm" onClick={loadDashboardData}>
+              <Button
+                variant="outline-primary"
+                size="sm"
+                onClick={() => loadDashboardData()}
+              >
                 Refresh
               </Button>
             </div>

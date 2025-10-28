@@ -17,11 +17,12 @@ import {
   BarChart3
 } from 'lucide-react';
 import { db } from '../../firebase';
-import { collection, query, where, onSnapshot, updateDoc, doc, addDoc, deleteDoc, serverTimestamp, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, doc, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../../types';
+import { useSprint } from '../../contexts/SprintContext';
 import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
 import SprintMetricsPanel from '../SprintMetricsPanel';
@@ -34,13 +35,12 @@ const SprintManagementView = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
+  const { sprints, sprintsById, selectedSprintId, setSelectedSprintId } = useSprint();
   
   // State management
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [selectedSprint, setSelectedSprint] = useState<Sprint | null>(null);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [showSprintModal, setShowSprintModal] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
@@ -55,6 +55,8 @@ const SprintManagementView = () => {
     estimatedHours: 1
   });
 
+  const selectedSprint: Sprint | null = selectedSprintId ? (sprintsById[selectedSprintId] ?? null) : null;
+
   // Load real data from Firebase
   useEffect(() => {
     if (!currentUser || !currentPersona) return;
@@ -62,7 +64,6 @@ const SprintManagementView = () => {
     let unsubscribeGoals: (() => void) | undefined;
     let unsubscribeStories: (() => void) | undefined;
     let unsubscribeTasks: (() => void) | undefined;
-    let unsubscribeSprints: (() => void) | undefined;
 
     try {
       // Load goals with error handling
@@ -116,27 +117,6 @@ const SprintManagementView = () => {
         console.error('Tasks subscription error:', error);
       });
 
-      // Load sprints with simplified query
-      const sprintsQuery = query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid)
-      );
-      
-      unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        setSprints(sprintsData);
-        
-        // Set default selected sprint (most recent active one)
-        if (sprintsData.length > 0 && !selectedSprint) {
-          const activeSprint = sprintsData.find(s => s.status === 1) || sprintsData[0];
-          setSelectedSprint(activeSprint);
-        }
-      }, (error) => {
-        console.error('Sprints subscription error:', error);
-      });
     } catch (error) {
       console.error('Error setting up subscriptions:', error);
     }
@@ -146,12 +126,20 @@ const SprintManagementView = () => {
         unsubscribeGoals?.();
         unsubscribeStories?.();
         unsubscribeTasks?.();
-        unsubscribeSprints?.();
       } catch (error) {
         console.error('Error cleaning up subscriptions:', error);
       }
     };
-  }, [currentUser, currentPersona, selectedSprint]);
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (!sprints.length) return;
+    if (selectedSprintId && sprintsById[selectedSprintId]) return;
+    const activeSprint = sprints.find((s) => (s.status ?? 0) === 1) || sprints[0];
+    if (activeSprint) {
+      setSelectedSprintId(activeSprint.id);
+    }
+  }, [sprints, selectedSprintId, sprintsById, setSelectedSprintId]);
 
   // Helper functions
   const getGoalTitle = (goalId: string) => {
@@ -342,10 +330,10 @@ const SprintManagementView = () => {
                 <Row className="align-items-center">
                   <Col md={4}>
                     <Form.Select 
-                      value={selectedSprint?.id || ''}
+                      value={selectedSprintId || ''}
                       onChange={(e) => {
                         const sprint = sprints.find(s => s.id === e.target.value);
-                        setSelectedSprint(sprint || null);
+                        setSelectedSprintId(sprint?.id || '');
                         setSelectedStory(null); // Reset selected story when switching sprints
                       }}
                     >
@@ -417,16 +405,13 @@ const SprintManagementView = () => {
         <Row>
           <Col>
             <ModernSprintsTable 
-              selectedSprintId={selectedSprint?.id}
+              selectedSprintId={selectedSprintId || undefined}
               onSprintSelect={(sprintId) => {
-                const sprint = sprints.find(s => s.id === sprintId);
-                setSelectedSprint(sprint || null);
+                setSelectedSprintId(sprintId || '');
               }}
               onSprintChange={(sprint) => {
-                // Update the sprint in our local state
-                setSprints(prev => prev.map(s => s.id === sprint.id ? sprint : s));
-                if (selectedSprint?.id === sprint.id) {
-                  setSelectedSprint(sprint);
+                if (selectedSprintId === sprint.id) {
+                  setSelectedSprintId(sprint.id);
                 }
               }}
             />

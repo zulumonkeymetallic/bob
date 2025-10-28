@@ -98,7 +98,7 @@ const WorkoutsDashboard: React.FC = () => {
       if (pr && !eventSlug) setEventSlug(pr.eventSlug!);
     };
     load();
-  }, [currentUser, workouts, eventSlug]);
+  }, [currentUser, workouts, eventSlug, startRun]);
 
   const filtered = useMemo(() => {
     return workouts.filter(w => {

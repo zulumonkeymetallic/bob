@@ -28,6 +28,7 @@ import {
 import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useSprint } from '../contexts/SprintContext';
 import { Sprint, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, getStatusName } from '../utils/statusHelpers';
@@ -65,10 +66,9 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
   onSprintChange
 }) => {
   const { currentUser } = useAuth();
-  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const { sprints, loading } = useSprint();
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingSprint, setEditingSprint] = useState<Sprint | null>(null);
   const [message, setMessage] = useState('');
@@ -80,28 +80,6 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     endDate: '',
     status: '0'
   });
-
-  // Load sprints
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const q = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const sprintData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      setSprints(sprintData);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [currentUser]);
 
   // Load stories for metrics
   useEffect(() => {

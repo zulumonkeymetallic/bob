@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Card, Button, Alert, Row, Col, Form, Badge, ListGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { httpsCallable } from 'firebase/functions';
@@ -42,15 +42,7 @@ const CalendarSyncManager: React.FC = () => {
   const [calendarBlocks, setCalendarBlocks] = useState<CalendarBlock[]>([]);
   const [lastSync, setLastSync] = useState<string>('');
 
-  // Check connection status on load and fetch calendar blocks
-  useEffect(() => {
-    if (currentUser) {
-      checkConnectionStatus();
-      fetchCalendarBlocks();
-    }
-  }, [currentUser]);
-
-  const checkConnectionStatus = async () => {
+  const checkConnectionStatus = useCallback(async () => {
     if (!currentUser) return;
 
     try {
@@ -64,7 +56,45 @@ const CalendarSyncManager: React.FC = () => {
       console.error('Failed to check connection status:', error);
       setIsConnected(false);
     }
-  };
+  }, [currentUser]);
+
+  const fetchCalendarBlocks = useCallback(async () => {
+    if (!currentUser) return;
+
+    try {
+      // Query calendar blocks from Firestore
+      const blocksQuery = query(
+        collection(db, 'calendar_blocks'),
+        where('ownerUid', '==', currentUser.uid),
+        where('startTime', '>=', new Date().toISOString()), // Only future blocks
+        orderBy('startTime', 'asc'),
+        limit(20)
+      );
+
+      // Set up real-time listener
+      const unsubscribe = onSnapshot(blocksQuery, (snapshot) => {
+        const blocks = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as CalendarBlock[];
+        
+        setCalendarBlocks(blocks);
+      });
+
+      // Return unsubscribe function for cleanup
+      return unsubscribe;
+    } catch (error) {
+      console.error('Failed to fetch calendar blocks:', error);
+    }
+  }, [currentUser]);
+
+  // Check connection status on load and fetch calendar blocks
+  useEffect(() => {
+    if (currentUser) {
+      checkConnectionStatus();
+      fetchCalendarBlocks();
+    }
+  }, [currentUser, checkConnectionStatus, fetchCalendarBlocks]);
 
   const initiateGoogleCalendarConnection = async () => {
     if (!currentUser) return;
@@ -137,36 +167,6 @@ const CalendarSyncManager: React.FC = () => {
       setSyncStatus('❌ AI planning error: ' + error.message);
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const fetchCalendarBlocks = async () => {
-    if (!currentUser) return;
-
-    try {
-      // Query calendar blocks from Firestore
-      const blocksQuery = query(
-        collection(db, 'calendar_blocks'),
-        where('ownerUid', '==', currentUser.uid),
-        where('startTime', '>=', new Date().toISOString()), // Only future blocks
-        orderBy('startTime', 'asc'),
-        limit(20)
-      );
-
-      // Set up real-time listener
-      const unsubscribe = onSnapshot(blocksQuery, (snapshot) => {
-        const blocks = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as CalendarBlock[];
-        
-        setCalendarBlocks(blocks);
-      });
-
-      // Return unsubscribe function for cleanup
-      return unsubscribe;
-    } catch (error) {
-      console.error('Failed to fetch calendar blocks:', error);
     }
   };
 

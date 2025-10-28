@@ -28,6 +28,7 @@ import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDo
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useSprint } from '../contexts/SprintContext';
 import { Story, Goal, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getStatusName, getThemeName, getPriorityName } from '../utils/statusHelpers';
 import { generateRef } from '../utils/referenceGenerator';
@@ -302,12 +303,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar, setUpdateHandler } = useSidebar();
+  const { sprints } = useSprint();
   
   // Data state
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   
   // UI state
@@ -418,13 +419,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         orderBy('createdAt', 'desc')
       );
 
-      const sprintsQuery = query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc')
-      );
-
       const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
         const goalsData = snapshot.docs.map(doc => ({
           id: doc.id,
@@ -450,19 +444,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         setLoading(false);
       }, (error) => console.warn('[Kanban v3.0.8] tasks subscribe error', error?.message || error));
 
-      const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        setSprints(sprintsData);
-      }, (error) => console.warn('[Kanban v3.0.8] sprints subscribe error', error?.message || error));
-
       return () => {
         unsubscribeGoals();
         unsubscribeStories();
         unsubscribeTasks();
-        unsubscribeSprints();
       };
     };
 

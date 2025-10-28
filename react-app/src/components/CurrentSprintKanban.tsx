@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, addDoc, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Task, Goal } from '../types';
 import { Container, Row, Col, Card, Dropdown, Button } from 'react-bootstrap';
 import ModernTaskTable from './ModernTaskTable';
@@ -11,8 +12,8 @@ import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
 
 const CurrentSprintKanban: React.FC = () => {
     const { currentUser } = useAuth();
+    const { sprints } = useSprint();
     const [stories, setStories] = useState<Story[]>([]);
-    const [sprints, setSprints] = useState<Sprint[]>([]);
     const [tasks, setTasks] = useState<Task[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
     const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
@@ -35,15 +36,10 @@ const CurrentSprintKanban: React.FC = () => {
     useEffect(() => {
         if (!currentUser) return;
 
-        const sprintsQuery = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
         const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
         
-        const unsubscribeSprints = onSnapshot(sprintsQuery, snapshot => {
-            const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
-            setSprints(sprintsData);
-            const currentSprint = sprintsData.find(s => s.status === 1); // Sprint Active = 1
-            setActiveSprint(currentSprint || null);
-        });
+        const currentSprint = sprints.find(s => s.status === 1); // Sprint Active = 1
+        setActiveSprint(currentSprint || null);
 
         const unsubscribeGoals = onSnapshot(goalsQuery, snapshot => {
             const goalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Goal));
@@ -51,10 +47,9 @@ const CurrentSprintKanban: React.FC = () => {
         });
 
         return () => {
-            unsubscribeSprints();
             unsubscribeGoals();
         };
-    }, [currentUser]);
+    }, [currentUser, sprints]);
 
     useEffect(() => {
         if (!currentUser || !activeSprint) {

@@ -4,6 +4,7 @@ import { Clock, Target, CheckCircle, AlertTriangle, TrendingUp } from 'lucide-re
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useSprint } from '../contexts/SprintContext';
 import { Sprint, Story, Task } from '../types';
 
 interface CompactSprintMetricsProps {
@@ -20,9 +21,10 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
+  const { sprints, sprintsById } = useSprint();
   const [resolvedSprintId, setResolvedSprintId] = useState<string | undefined>(undefined);
 
-  // Resolve sprint: use provided ID or auto-detect active sprint
+  // Resolve sprint: use provided ID or auto-detect active sprint using shared context data
   useEffect(() => {
     if (!currentUser) {
       setResolvedSprintId(undefined);
@@ -31,63 +33,38 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       return;
     }
 
-    // If caller provided an ID, use it directly
     if (selectedSprintId === '') {
-      // Explicit "All Sprints" selection disables auto-detection
       setResolvedSprintId(undefined);
       setSprint(null);
       setLoading(false);
       return;
     }
+
     if (selectedSprintId) {
       setResolvedSprintId(selectedSprintId);
+      setSprint(sprintsById[selectedSprintId] ?? null);
+      setLoading(false);
       return;
     }
 
-    // Auto-detect active sprint when not supplied
-    const activeQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      where('status', '==', 1)
-    );
-
-    const unsub = onSnapshot(activeQuery, (snapshot) => {
-      if (!snapshot.empty) {
-        const docSnap = snapshot.docs[0];
-        setResolvedSprintId(docSnap.id);
-        setSprint({ id: docSnap.id, ...docSnap.data() } as Sprint);
-      } else {
-        setResolvedSprintId(undefined);
-        setSprint(null);
-      }
+    if (!sprints.length) {
+      setResolvedSprintId(undefined);
+      setSprint(null);
       setLoading(false);
-    });
+      return;
+    }
 
-    return () => unsub();
-  }, [selectedSprintId, currentUser]);
+    const activeSprint = sprints.find((item) => (item.status ?? 0) === 1) || sprints[0];
+    setResolvedSprintId(activeSprint?.id);
+    setSprint(activeSprint ?? null);
+    setLoading(false);
+  }, [selectedSprintId, currentUser, sprints, sprintsById]);
 
-  // Load sprint by resolved ID when provided
+  // Keep sprint reference in sync with shared cache updates
   useEffect(() => {
-    if (!resolvedSprintId || !currentUser) return;
-
-    const sprintQuery = query(
-      collection(db, 'sprints'),
-      where('__name__', '==', resolvedSprintId),
-      where('ownerUid', '==', currentUser.uid)
-    );
-
-    const unsubscribe = onSnapshot(sprintQuery, (snapshot) => {
-      if (!snapshot.empty) {
-        const doc = snapshot.docs[0];
-        setSprint({ id: doc.id, ...doc.data() } as Sprint);
-      } else {
-        setSprint(null);
-      }
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [resolvedSprintId, currentUser]);
+    if (!resolvedSprintId) return;
+    setSprint(sprintsById[resolvedSprintId] ?? null);
+  }, [resolvedSprintId, sprintsById]);
 
   // Load stories: if a sprint is selected, filter by sprint; otherwise load all owner's stories
   useEffect(() => {
@@ -227,7 +204,7 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       standaloneTasksCount: standaloneTasks.length,
       sprint
     };
-  }, [sprint, stories, tasks, selectedSprintId]);
+  }, [sprint, stories, tasks, selectedSprintId, resolvedSprintId]);
 
   if (loading) return null;
 

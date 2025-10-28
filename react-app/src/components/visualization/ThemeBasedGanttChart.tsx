@@ -25,6 +25,7 @@ import EditGoalModal from '../EditGoalModal';
 import { GLOBAL_THEMES, getThemeById } from '../../constants/globalThemes';
 import useThemeAwareColors, { getThemeAwareGoalColor } from '../../hooks/useThemeAwareColors';
 import './EnhancedGanttChart.css';
+import { useSprint } from '../../contexts/SprintContext';
 
 interface GanttGoal extends Goal {
   width?: number;
@@ -56,7 +57,6 @@ const ThemeBasedGanttChart: React.FC = () => {
   
   // Core data
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   
   // UI State
@@ -118,35 +118,9 @@ const ThemeBasedGanttChart: React.FC = () => {
       setLoading(false);
     });
 
-    // Load sprints for timeline markers
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-    
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
-          createdAt: data.createdAt?.toDate?.() || data.createdAt,
-          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
-          startDate: data.startDate?.toDate?.() || data.startDate,
-          endDate: data.endDate?.toDate?.() || data.endDate,
-        };
-      }) as Sprint[];
-      setSprints(sprintsData);
-      console.log('🏃 ThemeBasedGanttChart: Loaded sprints:', sprintsData.length);
-    }, (error) => {
-      console.error('Error loading sprints:', error);
-    });
-
     // Return cleanup function directly from useEffect
     return () => {
       unsubscribeGoals();
-      unsubscribeSprints();
     };
   }, [currentUser]);
 
@@ -1000,3 +974,4 @@ const ThemeBasedGanttChart: React.FC = () => {
 };
 
 export default ThemeBasedGanttChart;
+  const { sprints } = useSprint();

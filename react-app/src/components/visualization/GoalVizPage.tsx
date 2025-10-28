@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Calendar, 
   ZoomIn, 
@@ -13,11 +13,13 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useSprint } from '../../contexts/SprintContext';
 import { getGoalsData } from '../../services/dataService';
 import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
 import { Goal, Sprint, Story, Theme } from './types';
+import type { Sprint as SprintDoc } from '../../types';
 import GoalTimelineGrid from './GoalTimelineGrid';
 import SprintMarkers from './SprintMarkers';
 import ShareLinkDialog from './ShareLinkDialog';
@@ -27,10 +29,10 @@ import './GoalVisualization.css';
 const GoalVizPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
+  const { sprints: sprintDocs } = useSprint();
   
   // State
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -44,6 +46,44 @@ const GoalVizPage: React.FC = () => {
   const [shareDialogVisible, setShareDialogVisible] = useState(false);
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [pendingChanges, setPendingChanges] = useState<any>(null);
+
+  const sprints = useMemo<Sprint[]>(() => {
+    return sprintDocs.map((doc: SprintDoc) => {
+      const statusValue = typeof doc.status === 'number' ? doc.status : Number(doc.status);
+      let statusLabel = 'planned';
+      switch (statusValue) {
+        case 1:
+          statusLabel = 'active';
+          break;
+        case 2:
+          statusLabel = 'completed';
+          break;
+        case 3:
+          statusLabel = 'cancelled';
+          break;
+        case 0:
+        default:
+          statusLabel = 'planned';
+          break;
+      }
+
+      const fallbackRef = `SP-${doc.id.slice(-6).toUpperCase()}`;
+      const ref = doc.ref || fallbackRef;
+      const title = doc.name || doc.notes || doc.ref || fallbackRef;
+
+      const startDate = typeof doc.startDate === 'number' && doc.startDate > 0 ? doc.startDate : Date.now();
+      const endDate = typeof doc.endDate === 'number' && doc.endDate > 0 ? doc.endDate : startDate + 14 * 24 * 60 * 60 * 1000;
+
+      return {
+        id: doc.id,
+        ref,
+        title: title || fallbackRef,
+        startDate,
+        endDate,
+        status: statusLabel,
+      };
+    });
+  }, [sprintDocs]);
 
   // BOB Platform Themes
   const themes = [
@@ -80,24 +120,6 @@ const GoalVizPage: React.FC = () => {
         ownerUid: goal.ownerUid
       }));
 
-      // Load sprints data
-      const sprintsQuery = query(
-        collection(db, 'sprints'), 
-        where('ownerUid', '==', currentUser.uid)
-      );
-      const sprintsSnapshot = await getDocs(sprintsQuery);
-      const loadedSprints = sprintsSnapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ref: data.ref || data.referenceNumber || `SP-${doc.id.slice(-6).toUpperCase()}`,
-          title: data.title || data.sprintName || 'Untitled Sprint',
-          startDate: data.startDate || Date.now(),
-          endDate: data.endDate || (Date.now() + (14 * 24 * 60 * 60 * 1000)), // Default 2 weeks
-          status: data.status || 'planned'
-        };
-      });
-
       // Load stories data for goal-story relationships
       const storiesQuery = query(
         collection(db, 'stories'),
@@ -117,12 +139,11 @@ const GoalVizPage: React.FC = () => {
       });
 
       setGoals(loadedGoals);
-      setSprints(loadedSprints);
       setStories(loadedStories);
       
       console.log('📊 Goal Visualization data loaded:', {
         goals: loadedGoals.length,
-        sprints: loadedSprints.length,
+        sprints: sprintDocs.length,
         stories: loadedStories.length
       });
 
@@ -130,7 +151,6 @@ const GoalVizPage: React.FC = () => {
       console.error('Error loading visualization data:', error);
       // Fallback to empty arrays
       setGoals([]);
-      setSprints([]);
       setStories([]);
     } finally {
       setLoading(false);
