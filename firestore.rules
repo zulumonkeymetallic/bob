@@ -16,6 +16,11 @@ service cloud.firestore {
         (resource.data.userId != null && resource.data.userId == request.auth.uid)
       );
     }
+    function isGoalOwner(goalId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/goals/$(goalId)) &&
+        get(/databases/$(database)/documents/goals/$(goalId)).data.ownerUid == request.auth.uid;
+    }
 
     match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -212,6 +217,14 @@ service cloud.firestore {
     // Per-user theme settings (legacy hook)
     match /theme_settings/{uid} {
       allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    match /goal_chats/{goalId} {
+      match /messages/{messageId} {
+        allow read: if isGoalOwner(goalId);
+        allow create: if isGoalOwner(goalId) && request.resource.data.ownerUid == request.auth.uid;
+        allow update, delete: if false;
+      }
     }
 
     // No client access to tokens by default (server-only)

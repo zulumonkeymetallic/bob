@@ -340,6 +340,14 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "ownerUid", "order": "ASCENDING" },
+        { "fieldPath": "start", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "calendar_blocks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ownerUid", "order": "ASCENDING" },
         { "fieldPath": "persona", "order": "ASCENDING" },
         { "fieldPath": "start", "order": "ASCENDING" }
       ]
@@ -395,11 +403,5 @@
       ]
     }
   ],
-  "fieldOverrides": [
-    {
-      "collectionGroup": "tasks_archive",
-      "fieldPath": "deleteAt",
-      "ttl": "ENABLED"
-    }
-  ]
+  "fieldOverrides": []
 }

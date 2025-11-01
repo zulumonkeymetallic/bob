@@ -1,11 +1,82 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { collection, onSnapshot, orderBy, query, where, limit } from 'firebase/firestore';
+import { collection, onSnapshot, orderBy, query, where, limit, getDocs } from 'firebase/firestore';
 import type { FirestoreError } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
 import { usePersona } from './PersonaContext';
 import type { Sprint } from '../types';
 import logger from '../utils/logger';
+
+const SPRINT_CACHE_NAMESPACE = 'bob_sprint_cache_v1';
+const SPRINT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes – keeps dev refresh fast without going stale
+
+type CachedSprint = Omit<Sprint, 'createdAt' | 'updatedAt'> & {
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
+interface SprintCachePayload {
+  uid: string;
+  persona: string;
+  updatedAt: number;
+  sprints: CachedSprint[];
+  allSprints: CachedSprint[];
+  selectedSprintId?: string;
+}
+
+function cacheKey(uid: string, persona: string) {
+  return `${SPRINT_CACHE_NAMESPACE}:${uid}:${persona}`;
+}
+
+function toCachedSprint(sprint: Sprint): CachedSprint {
+  return {
+    ...sprint,
+    createdAt: sprint.createdAt ? sprint.createdAt.toISOString() : null,
+    updatedAt: sprint.updatedAt ? sprint.updatedAt.toISOString() : null,
+  };
+}
+
+function fromCachedSprint(cached: CachedSprint): Sprint {
+  return {
+    ...cached,
+    createdAt: cached.createdAt ? new Date(cached.createdAt) : null,
+    updatedAt: cached.updatedAt ? new Date(cached.updatedAt) : null,
+  };
+}
+
+function loadCachedSprints(uid: string, persona: string) {
+  try {
+    const raw = localStorage.getItem(cacheKey(uid, persona));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SprintCachePayload;
+    if (parsed.uid !== uid || parsed.persona !== persona) return null;
+    if (Date.now() - parsed.updatedAt > SPRINT_CACHE_TTL_MS) return null;
+    return {
+      ...parsed,
+      sprints: parsed.sprints.map(fromCachedSprint),
+      allSprints: parsed.allSprints.map(fromCachedSprint),
+    };
+  } catch (e) {
+    logger.debug('SprintContext', 'failed to load sprint cache', { message: (e as Error)?.message });
+    return null;
+  }
+}
+
+function persistSprintsToCache(uid: string, persona: string, data: { sprints: Sprint[]; allSprints: Sprint[]; selectedSprintId?: string }) {
+  try {
+    const payload: SprintCachePayload = {
+      uid,
+      persona,
+      updatedAt: Date.now(),
+      sprints: data.sprints.map(toCachedSprint),
+      allSprints: data.allSprints.map(toCachedSprint),
+      selectedSprintId: data.selectedSprintId,
+    };
+    localStorage.setItem(cacheKey(uid, persona), JSON.stringify(payload));
+  } catch (e) {
+    logger.debug('SprintContext', 'failed to persist sprint cache', { message: (e as Error)?.message });
+  }
+}
 
 interface SprintContextValue {
   selectedSprintId: string;
@@ -27,6 +98,8 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const didFallbackCheckRef = React.useRef(false);
+  const cacheHydratedRef = React.useRef(false);
 
   useEffect(() => {
     const saved = localStorage.getItem('bob_selected_sprint');
@@ -40,13 +113,35 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   useEffect(() => {
     if (!currentUser?.uid || !currentPersona) {
+      cacheHydratedRef.current = false;
+      return;
+    }
+
+    const cached = loadCachedSprints(currentUser.uid, currentPersona);
+    if (cached) {
+      cacheHydratedRef.current = true;
+      didFallbackCheckRef.current = false;
+      setAllSprints(cached.allSprints);
+      setSprints(cached.sprints);
+      if (!selectedSprintId && cached.selectedSprintId) {
+        setSelectedSprintId(cached.selectedSprintId);
+      }
+      setError(null);
+      setLoading(false);
+    } else {
+      cacheHydratedRef.current = false;
+    }
+  }, [currentUser?.uid, currentPersona, selectedSprintId]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
       setSprints([]);
       setLoading(false);
       setError(null);
       return;
     }
 
-    setLoading(true);
+    setLoading(!cacheHydratedRef.current);
     setError(null);
 
     logger.debug('SprintContext', 'subscribing to sprints', {
@@ -169,16 +264,60 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           performance.clearMeasures('sprints_attach');
         } catch {}
 
+        let nextSelectedId = selectedSprintId;
         if (!selectedSprintId && deduped.length > 0) {
-          setSelectedSprintId(deduped[0].id);
+          nextSelectedId = deduped[0].id;
+          setSelectedSprintId(nextSelectedId);
         } else if (
           selectedSprintId &&
           !deduped.some((s) => s.id === selectedSprintId)
         ) {
           const replacement = deduped[0];
           if (replacement) {
-            setSelectedSprintId(replacement.id);
+            nextSelectedId = replacement.id;
+            setSelectedSprintId(nextSelectedId);
           }
+        }
+
+        if (currentUser?.uid && currentPersona) {
+          persistSprintsToCache(currentUser.uid, currentPersona, {
+            sprints: deduped,
+            allSprints: data,
+            selectedSprintId: nextSelectedId,
+          });
+          cacheHydratedRef.current = true;
+        }
+
+        // Dev-only guardrail: if persona-scoped query returns 0 with no error,
+        // probe ownerUid-only to detect orphaned/mismatched persona docs and log guidance.
+        if (
+          process.env.REACT_APP_SPRINT_DEV_GUARDRAIL === 'true' &&
+          !didFallbackCheckRef.current &&
+          deduped.length === 0
+        ) {
+          didFallbackCheckRef.current = true;
+          (async () => {
+            try {
+              const ownerOnly = query(
+                collection(db, 'sprints'),
+                where('ownerUid', '==', currentUser.uid),
+                orderBy('startDate', 'desc'),
+                limit(20)
+              );
+              const snap = await getDocs(ownerOnly);
+              const allMine = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+              const personaMismatch = allMine.filter((d) => (d as any).persona !== currentPersona);
+              if (allMine.length > 0 && personaMismatch.length > 0) {
+                logger.warn('SprintContext', 'Detected sprints owned by user but not matching current persona. Consider backfilling persona.', {
+                  totalOwned: allMine.length,
+                  mismatchedCount: personaMismatch.length,
+                  currentPersona,
+                });
+              }
+            } catch (e: any) {
+              logger.warn('SprintContext', 'Owner-only probe failed', { code: e?.code, message: e?.message });
+            }
+          })();
         }
       },
       (err) => {

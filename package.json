@@ -9,19 +9,27 @@
   "devDependencies": {
     "firebase-admin": "^12.6.0",
     "@playwright/test": "^1.47.2",
+    "playwright": "^1.47.2",
     "concurrently": "^9.0.1",
     "cross-env": "^7.0.3",
-    "firebase-tools": "^13.19.1",
+    "firebase-tools": "^13.24.0",
     "serve": "^14.2.4",
     "wait-on": "^7.2.0"
   },
   "scripts": {
+    "deploy:rules": "firebase deploy --only firestore:rules --project bob20250810",
+    "deploy:indexes": "firebase deploy --only firestore:indexes --project bob20250810",
+    "deploy:firestore": "firebase deploy --only firestore:rules,firestore:indexes --project bob20250810",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "emulators": "firebase emulators:start --only firestore,auth --project bob20250810",
     "react:dev": "cross-env BROWSER=none PORT=3000 REACT_APP_USE_FIREBASE_EMULATOR=true npm start --prefix react-app",
+    "react:dev:fast": "cross-env BROWSER=none PORT=3000 REACT_APP_FIRESTORE_FORCE_LONG_POLLING=true npm start --prefix react-app",
+    "react:dev:guardrail": "cross-env BROWSER=none PORT=3000 REACT_APP_FIRESTORE_FORCE_LONG_POLLING=true REACT_APP_SPRINT_DEV_GUARDRAIL=true npm start --prefix react-app",
     "dev:test": "concurrently -k -s first \"npm:emulators\" \"npm:react:dev\"",
     "preview:build": "serve -s react-app/build -l 4173",
-    "preview:test": "concurrently -k -s first \"npm:emulators\" \"npm:preview:build\""
+    "preview:test": "concurrently -k -s first \"npm:emulators\" \"npm:preview:build\"",
+    "backfill:sprint-persona": "node scripts/backfill-sprint-persona.js",
+    "validate:sprints": "node scripts/validate-sprints-perf.js --serviceAccount=/Users/jim/GitHub/secrets/bob20250810-firebase-adminsdk-fbsvc-e80020e8a4.json --uid=3L3nnXSuTPfr08c8DTXG5zYX37A2 --project=bob20250810"
   }
 }

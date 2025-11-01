@@ -24,6 +24,7 @@ export const emergencyCreateTask = async (
       const docRef = await addDoc(collection(db, 'tasks'), {
         ...taskData,
         userId,
+        ownerUid: userId,
         createdAt: new Date(),
         updatedAt: new Date(),
         emergencyCreated: true,
@@ -55,6 +56,7 @@ export const emergencyCreateTask = async (
       await setDoc(taskRef, {
         ...taskData,
         userId,
+        ownerUid: userId,
         createdAt: new Date(),
         updatedAt: new Date(),
         emergencyCreated: true,
@@ -122,6 +124,7 @@ export const syncEmergencyTasks = async (userId: string) => {
         const { id, needsSync, ...taskData } = task;
         return await addDoc(collection(db, 'tasks'), {
           ...taskData,
+          ownerUid: userId,
           syncedAt: new Date(),
           originalLocalId: id
         });

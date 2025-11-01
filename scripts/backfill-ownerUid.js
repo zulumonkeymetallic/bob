@@ -40,6 +40,9 @@ function init() {
   }
 }
 
+const assignArgIndex = process.argv.indexOf('--assign');
+const ASSIGN_UID = assignArgIndex !== -1 ? String(process.argv[assignArgIndex + 1] || '').trim() : '';
+
 async function backfillCollection(db, name) {
   const col = db.collection(name);
   let fixed = 0;
@@ -55,10 +58,14 @@ async function backfillCollection(db, name) {
     const d = doc.data() || {};
     const hasOwner = d.ownerUid != null && String(d.ownerUid).trim() !== '';
     const hasUser = d.userId != null && String(d.userId).trim() !== '';
-    if (!hasOwner && hasUser) {
-      updates.push({ ref: doc.ref, ownerUid: String(d.userId) });
-    } else if (!hasOwner && !hasUser) {
-      missing++;
+    if (!hasOwner) {
+      if (hasUser) {
+        updates.push({ ref: doc.ref, ownerUid: String(d.userId) });
+      } else if (ASSIGN_UID) {
+        updates.push({ ref: doc.ref, ownerUid: ASSIGN_UID });
+      } else {
+        missing++;
+      }
     }
   }
 
@@ -98,11 +105,10 @@ async function main() {
   const total = results.reduce((a, r) => a + r.scanned, 0);
   const fixed = results.reduce((a, r) => a + r.fixed, 0);
   const missing = results.reduce((a, r) => a + r.missing, 0);
-  console.log('✅ Backfill complete:', { total, fixed, missing });
+  console.log('✅ Backfill complete:', { total, fixed, missing, assignedFallback: ASSIGN_UID ? true : false });
 }
 
 main().catch((e) => {
   console.error('Backfill failed:', e);
   process.exit(1);
 });
-
