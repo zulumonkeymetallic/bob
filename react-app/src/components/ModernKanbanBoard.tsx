@@ -634,7 +634,19 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const handleEdit = (item: Story | Task, type: 'story' | 'task') => {
     setSelectedItem(item);
     setSelectedType(type);
-    setEditForm(item);
+    if (type === 'task') {
+      const task = item as Task;
+      const storyId = task.storyId || (task.parentType === 'story' ? task.parentId : '');
+      setEditForm({
+        ...task,
+        storyId,
+        parentId: storyId || task.parentId || '',
+        parentType: storyId ? 'story' : task.parentType,
+        dueDate: task.dueDate ?? (task as any).dueDateMs ?? task.targetDate ?? null,
+      });
+    } else {
+      setEditForm(item);
+    }
     setShowEditModal(true);
   };
 
@@ -681,6 +693,35 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
               } catch {}
             }
           }
+        }
+        const normalizeDueDate = (value: any) => {
+          if (value == null || value === '') return null;
+          if (typeof value === 'number') return value;
+          if (typeof value === 'string') {
+            const parsed = Date.parse(value);
+            return Number.isNaN(parsed) ? null : parsed;
+          }
+          return null;
+        };
+        payload.dueDate = normalizeDueDate(payload.dueDate ?? payload.targetDate ?? null);
+        const storyId = (editForm as any).storyId || '';
+        if (storyId) {
+          payload.storyId = storyId;
+          payload.parentId = storyId;
+          payload.parentType = 'story';
+          const parentStory = stories.find((s) => s.id === storyId);
+          if (parentStory) {
+            payload.goalId = parentStory.goalId;
+            if (parentStory.theme != null) payload.theme = parentStory.theme;
+          }
+          payload.alignedToGoal = true;
+        } else {
+          payload.storyId = null;
+          if ((selectedItem as Task).parentType === 'story') {
+            payload.parentId = null;
+            payload.parentType = 'project';
+          }
+          payload.alignedToGoal = false;
         }
       }
 
@@ -971,6 +1012,33 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                     onChange={(e) => setEditForm({ ...(editForm as any), description: e.target.value })}
                   />
                 </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Parent Story</Form.Label>
+                  <Form.Select
+                    value={(editForm as any).storyId || (editForm as any).parentId || ''}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (!value) {
+                        setEditForm({ ...(editForm as any), storyId: null, parentId: null, parentType: 'project', alignedToGoal: false });
+                      } else {
+                        const parentStory = stories.find((s) => s.id === value);
+                        setEditForm({
+                          ...(editForm as any),
+                          storyId: value,
+                          parentId: value,
+                          parentType: 'story',
+                          goalId: parentStory?.goalId ?? (editForm as any).goalId,
+                          alignedToGoal: true,
+                        });
+                      }
+                    }}
+                  >
+                    <option value="">No parent story</option>
+                    {stories.map((s) => (
+                      <option key={s.id} value={s.id}>{s.title}</option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
                 <Row>
                   <Col md={4}>
                     <Form.Group className="mb-3">
@@ -988,12 +1056,15 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                   </Col>
                   <Col md={4}>
                     <Form.Group className="mb-3">
-                      <Form.Label>Due Date</Form.Label>
-                      <Form.Control
-                        type="date"
-                        value={(editForm as any).dueDate ? new Date((editForm as any).dueDate).toISOString().slice(0,10) : ''}
-                        onChange={(e) => setEditForm({ ...(editForm as any), dueDate: e.target.value ? new Date(e.target.value).getTime() : null })}
-                      />
+                      <Form.Label>Priority</Form.Label>
+                      <Form.Select
+                        value={String((editForm as any).priority ?? '2')}
+                        onChange={(e) => setEditForm({ ...(editForm as any), priority: Number(e.target.value) })}
+                      >
+                        <option value="1">High</option>
+                        <option value="2">Medium</option>
+                        <option value="3">Low</option>
+                      </Form.Select>
                     </Form.Group>
                   </Col>
                   <Col md={4}>
@@ -1003,6 +1074,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                     </Form.Group>
                   </Col>
                 </Row>
+                <Form.Group className="mb-3">
+                  <Form.Label>Due Date</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={(editForm as any).dueDate ? new Date((editForm as any).dueDate).toISOString().slice(0,10) : ''}
+                    onChange={(e) => setEditForm({ ...(editForm as any), dueDate: e.target.value ? new Date(e.target.value).getTime() : null })}
+                  />
+                </Form.Group>
               </Form>
             )}
           </Modal.Body>

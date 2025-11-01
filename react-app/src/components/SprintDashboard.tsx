@@ -260,6 +260,8 @@ const SprintDashboard: React.FC = () => {
         planningDate: startDate,
         retroDate: endDate,
         ownerUid: currentUser.uid,
+        // Ensure sprints align with Persona-scoped queries
+        persona: currentPersona,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });

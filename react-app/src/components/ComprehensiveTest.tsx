@@ -7,6 +7,7 @@ import { Goal, Story, Task, Sprint } from '../types';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useSprint } from '../contexts/SprintContext';
+import { usePersona } from '../contexts/PersonaContext';
 
 interface TestData {
   goals: Goal[];
@@ -30,6 +31,7 @@ const ComprehensiveTest: React.FC = () => {
   const { currentUser } = useAuth();
   const { isTestMode, toggleTestMode } = useTestMode();
   const { sprints } = useSprint();
+  const { currentPersona } = usePersona();
   const [testData, setTestData] = useState<TestData>({
     goals: [],
     stories: [],
@@ -182,6 +184,7 @@ const ComprehensiveTest: React.FC = () => {
         endDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
         status: 'active' as const,
         ownerUid: currentUser.uid,
+        persona: currentPersona,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };

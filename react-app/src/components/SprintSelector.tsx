@@ -21,6 +21,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
     loading,
     selectedSprintId: contextSprintId,
     setSelectedSprintId,
+    error,
   } = useSprint();
 
   const effectiveSelectedId = selectedSprintId ?? contextSprintId;
@@ -65,6 +66,15 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           <span className="visually-hidden">Loading...</span>
         </div>
         <span>Loading sprints...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className={`d-flex align-items-center ${className}`}>
+        <span className="me-2">⚠️</span>
+        <span className="text-danger">Error loading sprints: {error.code || error.message}</span>
       </div>
     );
   }

@@ -94,6 +94,10 @@ export const useEntityAudit = (options: AuditOptions | null) => {
 
   useEffect(() => {
     if (!options?.currentUserId) return;
+    if (process.env.REACT_APP_DISABLE_ENTITY_AUDIT === 'true') {
+      logger.info('audit', 'Entity audit disabled via REACT_APP_DISABLE_ENTITY_AUDIT');
+      return;
+    }
 
     const unsubscribes = COLLECTIONS.map((collectionName) => {
       const constraints = [

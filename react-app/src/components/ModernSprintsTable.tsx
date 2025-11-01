@@ -29,6 +29,7 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { Sprint, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, getStatusName } from '../utils/statusHelpers';
@@ -67,6 +68,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const { sprints, loading } = useSprint();
+  const { currentPersona } = usePersona();
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [showModal, setShowModal] = useState(false);
@@ -90,13 +92,20 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       where('ownerUid', '==', currentUser.uid)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const storyData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Story[];
-      setStories(storyData);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const storyData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Story[];
+        setStories(storyData);
+      },
+      (err) => {
+        console.warn('ModernSprintsTable: stories subscription error', err?.code || err?.message || err);
+        setStories([]);
+      }
+    );
 
     return () => unsubscribe();
   }, [currentUser]);
@@ -110,13 +119,20 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       where('ownerUid', '==', currentUser.uid)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const taskData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
-      setTasks(taskData);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const taskData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Task[];
+        setTasks(taskData);
+      },
+      (err) => {
+        console.warn('ModernSprintsTable: tasks subscription error', err?.code || err?.message || err);
+        setTasks([]);
+      }
+    );
 
     return () => unsubscribe();
   }, [currentUser]);
@@ -138,6 +154,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
         status: Number.isFinite(statusNumber) ? statusNumber : 0,
         ref: generateRef('sprint', existingRefs),
         ownerUid: currentUser.uid,
+        persona: currentPersona,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         createdBy: currentUser.email,

@@ -41,12 +41,16 @@ async function auditCollection(db, name) {
   const snap = await col.get();
   let missingOwner = 0;
   let total = snap.size;
+  const missingIds = [];
   for (const doc of snap.docs) {
     const d = doc.data() || {};
     const hasOwner = d.ownerUid != null && String(d.ownerUid).trim() !== '';
-    if (!hasOwner) missingOwner++;
+    if (!hasOwner) {
+      missingOwner++;
+      missingIds.push({ id: doc.id, hasUserId: !!d.userId, createdAt: d.createdAt || d.created_at || null, title: d.title || d.name || null });
+    }
   }
-  return { name, total, missingOwner };
+  return { name, total, missingOwner, missingIds };
 }
 
 async function main() {
@@ -57,6 +61,11 @@ async function main() {
     try {
       const r = await auditCollection(db, c);
       console.log(`${c.padEnd(24)} total=${String(r.total).padStart(5)} missingOwner=${String(r.missingOwner).padStart(5)}`);
+      if (r.missingOwner > 0) {
+        const list = r.missingIds.slice(0, 50).map(x => `${x.id}${x.hasUserId ? ' (userId present)' : ''}${x.title ? ' - '+x.title : ''}`).join(', ');
+        console.log(`  ↳ Missing ownerUid in ${c}: ${list}`);
+        if (r.missingIds.length > 50) console.log(`  ↳ ...and ${r.missingIds.length - 50} more`);
+      }
       results.push(r);
     } catch (e) {
       console.error(`${c}: error:`, e.message);
@@ -71,4 +80,3 @@ async function main() {
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
-

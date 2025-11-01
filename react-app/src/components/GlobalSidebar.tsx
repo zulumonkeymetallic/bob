@@ -121,12 +121,44 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
-  const hexToRgba = (hex: string, a: number) => {
-    const v = hex.replace('#','');
-    const b = parseInt(v.length === 3 ? v.split('').map(c=>c+c).join('') : v, 16);
-    const r = (b >> 16) & 255, g = (b >> 8) & 255, bl = b & 255;
-    return `rgba(${r}, ${g}, ${bl}, ${a})`;
-  };
+const hexToRgba = (hex: string, a: number) => {
+  const v = hex.replace('#','');
+  const b = parseInt(v.length === 3 ? v.split('').map(c=>c+c).join('') : v, 16);
+  const r = (b >> 16) & 255, g = (b >> 8) & 255, bl = b & 255;
+  return `rgba(${r}, ${g}, ${bl}, ${a})`;
+};
+
+const extractMillis = (value: any): number | null => {
+  if (value == null) return null;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (typeof value === 'object') {
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    if (typeof value.toDate === 'function') {
+      const date = value.toDate();
+      return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : null;
+    }
+  }
+  return null;
+};
+
+const formatDateOnly = (value: any): string => {
+  const ms = extractMillis(value);
+  if (ms == null) return 'Not set';
+  return new Date(ms).toLocaleDateString();
+};
+
+const dateInputValue = (value: any): string => {
+  const ms = extractMillis(value);
+  if (ms == null) return '';
+  const date = new Date(ms);
+  const offsetMinutes = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offsetMinutes * 60000);
+  return local.toISOString().slice(0, 10);
+};
 
   React.useEffect(() => {
     if (!selectedItem) {
@@ -343,6 +375,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const themeId = goal?.theme != null ? migrateThemeValue(goal.theme as any) : null;
   const themeHex = themeId != null ? getThemeById(themeId).color : '#6b7280';
   const themeColor = themeHex; // use hex for colors/gradients
+  const sprintForStory = story && (story as Story).sprintId ? sprints.find((s) => s.id === (story as Story).sprintId) : undefined;
+  const selectedTask = selectedType === 'task' ? (selectedItem as Task) : null;
+  const selectedGoal = selectedType === 'goal' ? (selectedItem as Goal) : null;
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return 'Not set';
@@ -783,6 +818,124 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   >
                     {(selectedItem as Goal).theme}
                   </Badge>
+
+                  <Row style={{ marginTop: '16px' }}>
+                    <Col xs={6}>
+                      <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
+                        Start Date
+                      </label>
+                      {isEditing ? (
+                        <Form.Control
+                          type="date"
+                          value={dateInputValue(editForm.startDate)}
+                          onChange={(e) => setEditForm({ ...editForm, startDate: e.target.value ? new Date(e.target.value).getTime() : null })}
+                        />
+                      ) : (
+                        <div style={{ color: themeVars.muted }}>{formatDateOnly(selectedGoal?.startDate)}</div>
+                      )}
+                    </Col>
+                    <Col xs={6}>
+                      <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
+                        End Date
+                      </label>
+                      {isEditing ? (
+                        <Form.Control
+                          type="date"
+                          value={dateInputValue(editForm.endDate ?? editForm.targetDate)}
+                          onChange={(e) => setEditForm({ ...editForm, endDate: e.target.value ? new Date(e.target.value).getTime() : null })}
+                        />
+                      ) : (
+                        <div style={{ color: themeVars.muted }}>{formatDateOnly(selectedGoal?.endDate ?? selectedGoal?.targetDate)}</div>
+                      )}
+                    </Col>
+                  </Row>
+                </div>
+              )}
+
+              {selectedType === 'story' && (
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
+                    Parent Goal
+                  </label>
+                  {isEditing ? (
+                    <Form.Select
+                      value={editForm.goalId || ''}
+                      onChange={(e) => setEditForm({ ...editForm, goalId: e.target.value || null })}
+                    >
+                      <option value="">No parent goal</option>
+                      {goals.map((g) => (
+                        <option key={g.id} value={g.id}>{g.title}</option>
+                      ))}
+                    </Form.Select>
+                  ) : (
+                    <div style={{ color: themeVars.muted }}>{goal?.title || 'No parent goal'}</div>
+                  )}
+
+                  <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block', marginTop: '16px' }}>
+                    Sprint
+                  </label>
+                  {isEditing ? (
+                    <Form.Select
+                      value={editForm.sprintId || ''}
+                      onChange={(e) => setEditForm({ ...editForm, sprintId: e.target.value || null })}
+                    >
+                      <option value="">No sprint</option>
+                      {sprints.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </Form.Select>
+                  ) : (
+                    <div style={{ color: themeVars.muted }}>{sprintForStory ? sprintForStory.name : 'No sprint'}</div>
+                  )}
+                </div>
+              )}
+
+              {selectedType === 'task' && (
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
+                    Parent Story
+                  </label>
+                  {isEditing ? (
+                    <Form.Select
+                      value={editForm.storyId || editForm.parentId || ''}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (!value) {
+                          setEditForm({ ...editForm, storyId: null, parentId: null, parentType: 'project', alignedToGoal: false });
+                        } else {
+                          const parentStory = stories.find((s) => s.id === value);
+                          setEditForm({
+                            ...editForm,
+                            storyId: value,
+                            parentId: value,
+                            parentType: 'story',
+                            goalId: parentStory?.goalId ?? editForm.goalId,
+                            alignedToGoal: true,
+                          });
+                        }
+                      }}
+                    >
+                      <option value="">No parent story</option>
+                      {stories.map((s) => (
+                        <option key={s.id} value={s.id}>{s.title}</option>
+                      ))}
+                    </Form.Select>
+                  ) : (
+                    <div style={{ color: themeVars.muted }}>{story?.title || 'No parent story'}</div>
+                  )}
+
+                  <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', marginTop: '16px', display: 'block' }}>
+                    Due Date
+                  </label>
+                  {isEditing ? (
+                    <Form.Control
+                      type="date"
+                      value={dateInputValue(editForm.dueDate ?? editForm.targetDate ?? editForm.dueDateMs)}
+                      onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value ? new Date(e.target.value).getTime() : null })}
+                    />
+                  ) : (
+                    <div style={{ color: themeVars.muted }}>{formatDateOnly(selectedTask?.dueDate ?? (selectedTask as any)?.dueDateMs ?? selectedTask?.targetDate)}</div>
+                  )}
                 </div>
               )}
 

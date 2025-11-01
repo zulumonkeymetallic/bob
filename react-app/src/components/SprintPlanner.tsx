@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
@@ -237,6 +238,8 @@ const SprintPlanner: React.FC = () => {
         }
     };
 
+    const { currentPersona } = usePersona();
+
     const createSprint = async () => {
         if (!currentUser || !newSprint.name || !newSprint.startDate || !newSprint.endDate) {
             alert('Please fill in all required fields');
@@ -251,6 +254,7 @@ const SprintPlanner: React.FC = () => {
                 startDate: newSprint.startDate,
                 endDate: newSprint.endDate,
                 ownerUid: currentUser.uid,
+                persona: currentPersona,
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
             });

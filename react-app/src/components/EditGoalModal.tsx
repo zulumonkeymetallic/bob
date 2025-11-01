@@ -159,6 +159,7 @@ const [themeInput, setThemeInput] = useState('');
     try {
       const qref = query(
         collection(db, 'activity_stream'),
+        where('ownerUid', '==', goal.ownerUid || currentUserId),
         where('entityType','==','goal'),
         where('entityId','==', goal.id),
         orderBy('createdAt','desc'),

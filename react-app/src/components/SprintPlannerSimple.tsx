@@ -3,12 +3,14 @@ import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, serverTim
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
 
 const SprintPlannerSimple: React.FC = () => {
     const { currentUser } = useAuth();
     const { sprints } = useSprint();
+    const { currentPersona } = usePersona();
     const [stories, setStories] = useState<Story[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
@@ -94,6 +96,8 @@ const SprintPlannerSimple: React.FC = () => {
                 endDate: newSprint.endDate ? new Date(newSprint.endDate).getTime() : null,
                 status: 'planned',
                 ownerUid: currentUser.uid,
+                // Add persona to satisfy SprintContext filter
+                persona: currentPersona,
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
             });

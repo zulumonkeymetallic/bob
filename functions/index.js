@@ -895,7 +895,7 @@ async function getRoutinesCollection(uid) {
   return snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
 }
 
-exports.planBlocksV2 = httpsV2.onCall(async (req) => {
+exports.planBlocksV2 = httpsV2.onCall({ region: 'europe-west2', memory: '512Mi', concurrency: 10, secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
