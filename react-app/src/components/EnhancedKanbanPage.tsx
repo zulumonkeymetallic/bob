@@ -12,17 +12,18 @@ import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import { Settings, Eye, EyeOff, Plus, Edit, Trash2, Move } from 'lucide-react';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import ModernTaskTable from './ModernTaskTable';
+import { useSprint } from '../contexts/SprintContext';
 
 const EnhancedKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { sprints } = useSprint();
   
   // State management
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [selectedSprint, setSelectedSprint] = useState<string>('all');
   const [loading, setLoading] = useState(true);
@@ -59,14 +60,9 @@ const EnhancedKanbanPage: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    loadData();
-  }, [currentUser, currentPersona]);
 
-  const loadData = async () => {
-    if (!currentUser) return;
-    
     setLoading(true);
-    
+
     // Load goals
     const goalsQuery = query(
       collection(db, 'goals'),
@@ -74,7 +70,7 @@ const EnhancedKanbanPage: React.FC = () => {
       where('persona', '==', currentPersona),
       orderBy('createdAt', 'desc')
     );
-    
+
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => sanitizeFirestoreData({
         id: doc.id,
@@ -89,7 +85,7 @@ const EnhancedKanbanPage: React.FC = () => {
       where('ownerUid', '==', currentUser.uid),
       orderBy('createdAt', 'desc')
     );
-    
+
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
       const storiesData = snapshot.docs.map(doc => sanitizeFirestoreData({
         id: doc.id,
@@ -104,7 +100,7 @@ const EnhancedKanbanPage: React.FC = () => {
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
-    
+
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
       const tasksData = snapshot.docs.map(doc => sanitizeFirestoreData({
         id: doc.id,
@@ -113,31 +109,14 @@ const EnhancedKanbanPage: React.FC = () => {
       setTasks(tasksData);
     });
 
-    // Load sprints
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc')
-    );
-    
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => sanitizeFirestoreData({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      setSprints(sprintsData);
-    });
-
     setLoading(false);
 
     return () => {
       unsubscribeGoals();
       unsubscribeStories();
       unsubscribeTasks();
-      unsubscribeSprints();
     };
-  };
+  }, [currentUser, currentPersona]);
 
   // Filter stories by selected sprint
   const getFilteredStories = () => {

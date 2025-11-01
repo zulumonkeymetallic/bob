@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
 import { generateRef } from '../utils/referenceGenerator';
 
 interface AddStoryModalProps {
@@ -18,17 +19,11 @@ interface Goal {
   theme: number;
 }
 
-interface Sprint {
-  id: string;
-  name: string;
-  status: string;
-}
-
 const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -51,7 +46,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       const g = goals.find(gl => gl.id === goalId);
       setGoalInput(g?.title || '');
     }
-  }, [goalId]);
+  }, [goalId, goals]);
 
   // Log modal open/close state changes
   useEffect(() => {
@@ -111,38 +106,10 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
           });
           
           if (mounted) setGoals(goalsData);
-
-          // Load all sprints for current user (simplified query to avoid index issues)
-          const sprintsQuery = query(
-            collection(db, 'sprints'),
-            where('ownerUid', '==', currentUser.uid),
-            orderBy('startDate', 'desc')
-          );
-          
-          console.log('📊 AddStoryModal: Loading sprints...', {
-            action: 'sprints_query_start',
-            user: currentUser.uid
-          });
-          
-          const sprintsSnapshot = await getDocs(sprintsQuery);
-          const sprintsData = sprintsSnapshot.docs.map(doc => ({
-            id: doc.id,
-            name: doc.data().name,
-            status: doc.data().status
-          }));
-          
-          console.log('✅ AddStoryModal: Sprints loaded successfully', {
-            action: 'sprints_loaded',
-            count: sprintsData.length,
-            sprints: sprintsData.map(s => ({ id: s.id, name: s.name, status: s.status }))
-          });
-          
-          if (mounted) setSprints(sprintsData);
           
           console.log('🎉 AddStoryModal: All data loaded successfully', {
             action: 'modal_data_load_complete',
             goalsCount: goalsData.length,
-            sprintsCount: sprintsData.length
           });
           
         } catch (error) {

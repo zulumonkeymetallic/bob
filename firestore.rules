@@ -3,8 +3,24 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isSignedIn() { return request.auth != null; }
-    function isOwner() { return isSignedIn() && request.auth.uid == resource.data.ownerUid; }
-    function isOwnerForCreate() { return isSignedIn() && request.resource.data.ownerUid == request.auth.uid; }
+    // Canonical ownership: ownerUid only
+    function isOwner() {
+      return isSignedIn() && (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid);
+    }
+    function isOwnerForCreate() {
+      return isSignedIn() && (request.resource.data.ownerUid != null && request.resource.data.ownerUid == request.auth.uid);
+    }
+    function activityOwned() {
+      return isSignedIn() && (
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid) ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid)
+      );
+    }
+    function isGoalOwner(goalId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/goals/$(goalId)) &&
+        get(/databases/$(database)/documents/goals/$(goalId)).data.ownerUid == request.auth.uid;
+    }
 
     match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -42,7 +58,14 @@ service cloud.firestore {
     match /metrics_workouts/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /taxonomies/{id} { allow read: if isSignedIn(); allow create: if isOwnerForCreate(); allow update, delete: if isOwner(); }
-    match /activity_stream/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /activity_stream/{id} {
+      // Service/telemetry collection: accept ownerUid or userId for historical compatibility
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if activityOwned();
+    }
     // Per-user integration logs (e.g., google/strava/monzo)
     match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -194,6 +217,14 @@ service cloud.firestore {
     // Per-user theme settings (legacy hook)
     match /theme_settings/{uid} {
       allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    match /goal_chats/{goalId} {
+      match /messages/{messageId} {
+        allow read: if isGoalOwner(goalId);
+        allow create: if isGoalOwner(goalId) && request.resource.data.ownerUid == request.auth.uid;
+        allow update, delete: if false;
+      }
     }
 
     // No client access to tokens by default (server-only)

@@ -257,17 +257,6 @@ exports.snoozeChoreTask = httpsV2.onCall(async (req) => {
 const { sendEmail } = require('./lib/email');
 const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
 
-exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
-  // Auth optional for testing, but recommended; enforce if needed:
-  const to = String(req?.data?.to || '').trim();
-  const subject = String(req?.data?.subject || 'BOB · Test Email');
-  const from = req?.data?.from ? String(req.data.from).trim() : undefined;
-  if (!to) throw new httpsV2.HttpsError('invalid-argument', 'to required');
-  const html = `<p>This is a test email from BOB.</p><p>Sent at ${new Date().toISOString()}</p>`;
-  const result = await sendEmail({ to, subject, html, from });
-  return { ok: true, messageId: result?.messageId || null };
-});
-
 exports.sendRawEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
   const to = req?.data?.to;
   const subject = req?.data?.subject || '(no subject)';
@@ -281,6 +270,5 @@ exports.sendRawEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) 
 });
 
 // ===== Daily Email Summary (scheduled + on-demand)
-const { dailyEmailSummary, sendDailySummaryNow } = require('./summary');
+const { dailyEmailSummary } = require('./summary');
 exports.dailyEmailSummary = dailyEmailSummary;
-exports.sendDailySummaryNow = sendDailySummaryNow;

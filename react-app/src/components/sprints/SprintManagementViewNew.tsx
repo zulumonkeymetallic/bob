@@ -33,10 +33,9 @@ const SprintManagementView: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   
   // State management
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -112,48 +111,31 @@ const SprintManagementView: React.FC = () => {
       setTasks(tasksData);
     });
 
-    // Load sprints
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc')
-    );
-    
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      setSprints(sprintsData);
-      
-      // Set default selected sprint (most recent active one)
-      if (selectedSprintId) {
-        const match = sprintsData.find(s => s.id === selectedSprintId);
-        if (match) setSelectedSprint(match);
-      } else if (sprintsData.length > 0 && !selectedSprint) {
-        const activeSprint = sprintsData.find(s => s.status === 1) || sprintsData[0];
-        setSelectedSprint(activeSprint);
-        if (activeSprint) setSelectedSprintId(activeSprint.id);
-      }
-    });
-
     return () => {
       unsubscribeGoals();
       unsubscribeStories();
       unsubscribeTasks();
-      unsubscribeSprints();
     };
   }, [currentUser, currentPersona, selectedSprintId, setSelectedSprintId, selectedSprint]);
 
   useEffect(() => {
-    if (!selectedSprintId && selectedSprint) {
-      setSelectedSprintId(selectedSprint.id);
+    if (sprints.length === 0) {
+      setSelectedSprint(null);
+      return;
     }
-    if (selectedSprintId && (!selectedSprint || selectedSprint.id !== selectedSprintId)) {
-      const sprint = sprints.find(s => s.id === selectedSprintId) || null;
-      if (sprint) setSelectedSprint(sprint);
+
+    if (selectedSprintId) {
+      const sprint = sprints.find((s) => s.id === selectedSprintId) || null;
+      setSelectedSprint(sprint);
+      return;
     }
-  }, [selectedSprintId, selectedSprint, sprints, setSelectedSprintId]);
+
+    const activeSprint = sprints.find((s) => s.status === 1) || sprints[0];
+    setSelectedSprint(activeSprint || null);
+    if (activeSprint) {
+      setSelectedSprintId(activeSprint.id);
+    }
+  }, [sprints, selectedSprintId, setSelectedSprintId]);
 
   // Helper functions
   const getGoalTitle = (goalId: string) => {

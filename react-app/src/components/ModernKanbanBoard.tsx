@@ -23,8 +23,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Edit3, Trash2, Target, BookOpen, Activity, SquarePlus, ListTodo, KanbanSquare, Maximize2, Minimize2, GripVertical, Wand2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { db, functions } from '../firebase';
-import { httpsCallable } from 'firebase/functions';
+import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -40,6 +39,7 @@ import { DnDMutationHandler } from '../utils/dndMutations';
 import { themeVars } from '../utils/themeVars';
 import '../styles/KanbanCards.css';
 import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, goalThemeColor, colorWithAlpha } from '../utils/storyCardFormatting';
+import SortableStoryCard from './stories/SortableStoryCard';
 
 interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
@@ -62,181 +62,6 @@ const DroppableArea: React.FC<{
       style={{ minHeight: '100px', ...style }}
     >
       {children}
-    </div>
-  );
-};
-
-// Sortable Story Card Component
-const SortableStoryCard: React.FC<{
-  story: Story;
-  goal?: Goal;
-  taskCount: number;
-  themeColor: string;
-  onEdit: (story: Story) => void;
-  onDelete: (story: Story) => void;
-  onItemClick: (story: Story) => void;
-}> = ({ story, goal, taskCount, themeColor, onEdit, onDelete, onItemClick }) => {
-  const { showSidebar } = useSidebar();
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: story.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
-  const handleCardClick = () => onItemClick(story);
-  const handleCardKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onItemClick(story);
-    }
-  };
-
-  const refLabel = (() => {
-    const shortRef = (story as any).referenceNumber || story.ref;
-    return shortRef && validateRef(shortRef, 'story')
-      ? shortRef
-      : displayRefForEntity('story', story.id);
-  })();
-
-  const statusLabel = storyStatusText((story as any).status);
-  const priorityClass = priorityPillClass(story.priority);
-  const priorityLabel = formatPriorityLabel(story.priority);
-  const accentColor = themeColor || '#2563eb';
-  const handleStyle: React.CSSProperties = {
-    color: accentColor,
-    borderColor: colorWithAlpha(accentColor, 0.45),
-    backgroundColor: colorWithAlpha(accentColor, 0.12)
-  };
-
-  return (
-    <div ref={setNodeRef} style={style}>
-      <div
-        className={`kanban-card kanban-card--story kanban-card__clickable${isDragging ? ' dragging' : ''}`}
-        style={{ borderLeft: `3px solid ${((story as any).blocked ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb'))}` }}
-        role="button"
-        tabIndex={0}
-        onClick={handleCardClick}
-        onKeyDown={handleCardKeyDown}
-      >
-        <button
-          type="button"
-          className="kanban-card__handle"
-          style={handleStyle}
-          {...attributes}
-          {...listeners}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <GripVertical size={16} />
-        </button>
-
-        <div className="kanban-card__content">
-          <div className="kanban-card__header">
-            <span className="kanban-card__ref" style={{ color: themeColor || '#2563eb' }}>
-              {refLabel}
-            </span>
-            <div className="kanban-card__actions">
-              <Button
-                variant="link"
-                size="sm"
-                className="p-0"
-                style={{ width: 24, height: 24, color: themeVars.muted }}
-                title="Activity stream"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  showSidebar(story, 'story');
-                }}
-              >
-                <Activity size={12} />
-              </Button>
-              <Button
-                variant="link"
-                size="sm"
-                className="p-0"
-                style={{ width: 24, height: 24, color: themeVars.muted }}
-                title="AI: Generate tasks for this story"
-                onClick={async (event) => {
-                  event.stopPropagation();
-                  try {
-                    const callable = httpsCallable(functions, 'orchestrateStoryPlanning');
-                    await callable({ storyId: (story as any).id });
-                  } catch (e) {
-                    // best-effort; surface minimal alert to user
-                    alert((e as any)?.message || 'Failed to orchestrate story planning');
-                  }
-                }}
-              >
-                <Wand2 size={12} />
-              </Button>
-              <Button
-                variant="link"
-                size="sm"
-                className="p-0"
-                style={{ width: 24, height: 24, color: themeVars.muted }}
-                title="Edit story"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onEdit(story);
-                }}
-              >
-                <Edit3 size={12} />
-              </Button>
-              <Button
-                variant="link"
-                size="sm"
-                className="p-0"
-                style={{ width: 24, height: 24, color: 'var(--red)' }}
-                title="Delete story"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDelete(story);
-                }}
-              >
-                <Trash2 size={12} />
-              </Button>
-            </div>
-          </div>
-
-          <div className="kanban-card__title" title={story.title || 'Untitled story'}>
-            {story.title || 'Untitled story'}
-          </div>
-
-          {story.description && story.description.trim().length > 0 && (
-            <div className="kanban-card__description">
-              {story.description}
-            </div>
-          )}
-
-          <div className="kanban-card__meta">
-            <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
-              {priorityLabel}
-            </span>
-            <span className="kanban-card__meta-badge" title="Story points">
-              {(story.points ?? 0)} pts
-            </span>
-            <span className="kanban-card__meta-text" title="Status">
-              {statusLabel}
-            </span>
-          </div>
-
-          <div className="kanban-card__goal">
-            <Target size={12} color={themeColor || '#2563eb'} />
-            <span title={goal?.title || 'No goal linked'}>
-              {goal?.title || 'No goal'}
-            </span>
-            <span className="kanban-card__meta-text" style={{ marginLeft: 'auto' }}>
-              {taskCount} task{taskCount === 1 ? '' : 's'}
-            </span>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };
@@ -405,7 +230,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const { sprints } = useSprint();
   const [loading, setLoading] = useState(true);
   
   // UI state
@@ -668,84 +493,62 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
   useEffect(() => {
     if (!currentUser || !currentPersona) return;
 
-    const setupData = async () => {
-      setLoading(true);
+    setLoading(true);
 
-      // Set up real-time listeners
-      const goalsQuery = query(
-        collection(db, 'goals'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc'),
-        limit(1000)
-      );
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
 
-      const storiesQuery = query(
-        collection(db, 'stories'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc'),
-        limit(1000)
-      );
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
 
-      const tasksQuery = query(
-        collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc'),
-        limit(1000)
-      );
+    const tasksQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
 
-      const sprintsQuery = query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc'),
-        limit(500)
-      );
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      const goalsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Goal[];
+      setGoals(goalsData);
+    }, (error) => console.warn('[Kanban] goals subscribe error', error?.message || error));
 
-      const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-        const goalsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Goal[];
-        setGoals(goalsData);
-      }, (error) => console.warn('[Kanban] goals subscribe error', error?.message || error));
+    const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+      const storiesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Story[];
+      setStories(storiesData);
+    }, (error) => console.warn('[Kanban] stories subscribe error', error?.message || error));
 
-      const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
-        const storiesData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Story[];
-        setStories(storiesData);
-      }, (error) => console.warn('[Kanban] stories subscribe error', error?.message || error));
+    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+      const tasksData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Task[];
+      setTasks(tasksData);
+      setLoading(false);
+    }, (error) => console.warn('[Kanban] tasks subscribe error', error?.message || error));
 
-      const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-        const tasksData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Task[];
-        setTasks(tasksData);
-        setLoading(false);
-      }, (error) => console.warn('[Kanban] tasks subscribe error', error?.message || error));
-
-      const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        setSprints(sprintsData);
-      }, (error) => console.warn('[Kanban] sprints subscribe error', error?.message || error));
-
-      return () => {
-        unsubscribeGoals();
-        unsubscribeStories();
-        unsubscribeTasks();
-        unsubscribeSprints();
-      };
+    return () => {
+      unsubscribeGoals();
+      unsubscribeStories();
+      unsubscribeTasks();
     };
-
-    setupData();
   }, [currentUser, currentPersona]);
 
   // DnD handlers

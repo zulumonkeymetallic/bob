@@ -50,7 +50,7 @@ const AIStoryKPISettings: React.FC = () => {
       }
     };
     load();
-  }, [currentUser?.uid]);
+  }, [currentUser]);
 
   const save = async () => {
     if (!currentUser) return;

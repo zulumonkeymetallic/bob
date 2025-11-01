@@ -176,10 +176,14 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
   }, [currentUser]);
 
   useEffect(() => {
-    if (!activityGoalId) return;
-    const unsub = ActivityStreamService.subscribeToActivityStream(activityGoalId, setActivityItems, currentUser?.uid || undefined);
+    if (!activityGoalId || !currentUser?.uid) return;
+    const unsub = ActivityStreamService.subscribeToActivityStream(
+      activityGoalId,
+      setActivityItems,
+      currentUser.uid
+    );
     return () => unsub();
-  }, [activityGoalId]);
+  }, [activityGoalId, currentUser?.uid]);
 
   const computeStoryProgress = (g: Goal) => {
     const total = storiesByGoal[g.id] || 0;

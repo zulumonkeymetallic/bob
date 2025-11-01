@@ -5,6 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
 import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
@@ -35,10 +36,10 @@ const buildCoverUrl = (appid: number) => `https://steamcdn-a.akamaihd.net/steam/
 const GamesBacklog: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
   const [games, setGames] = useState<SteamGame[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'unconverted' | 'converted'>('all');
   const [selectedGame, setSelectedGame] = useState<SteamGame | null>(null);
@@ -84,18 +85,13 @@ const GamesBacklog: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona));
-    const sprintsQuery = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
 
     const unsubGoals = onSnapshot(goalsQuery, snap => {
       setGoals(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[]);
     });
-    const unsubSprints = onSnapshot(sprintsQuery, snap => {
-      setSprints(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[]);
-    });
 
     return () => {
       unsubGoals();
-      unsubSprints();
     };
   }, [currentUser, currentPersona]);
 

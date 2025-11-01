@@ -4,7 +4,8 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { Task, Story, Goal, Sprint } from '../types';
+import { useSprint } from '../contexts/SprintContext';
+import { Task, Story, Goal } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import { useSidebar } from '../contexts/SidebarContext';
 import { BookOpen, Target, Calendar, Plus, Filter, Search, Upload } from 'lucide-react';
@@ -13,13 +14,13 @@ import ImportModal from './ImportModal';
 const TasksManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const { showSidebar } = useSidebar();
   
   // State
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
   
@@ -34,90 +35,71 @@ const TasksManagement: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
-    const setupSubscriptions = () => {
-      // Tasks subscription
-      const tasksQuery = query(
-        collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('serverUpdatedAt', 'desc')
-      );
+    // Tasks subscription
+    const tasksQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('serverUpdatedAt', 'desc')
+    );
 
-      const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-        const tasksData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Task[];
-        setTasks(tasksData);
-      });
+    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+      const tasksData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Task[];
+      setTasks(tasksData);
+    });
 
-      // Stories subscription for linking
-      const storiesQuery = query(
-        collection(db, 'stories'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('orderIndex', 'asc')
-      );
+    // Stories subscription for linking
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('orderIndex', 'asc')
+    );
 
-      const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
-        const storiesData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Story[];
-        setStories(storiesData);
-      });
+    const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+      const storiesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Story[];
+      setStories(storiesData);
+    });
 
-      // Goals subscription for context
-      const goalsQuery = query(
-        collection(db, 'goals'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('createdAt', 'desc')
-      );
+    // Goals subscription for context
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc')
+    );
 
-      const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-        const goalsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Goal[];
-        setGoals(goalsData);
-      });
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      const goalsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Goal[];
+      setGoals(goalsData);
+    });
 
-      // Sprints subscription
-      const sprintsQuery = query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid),
-        orderBy('startDate', 'desc')
-      );
+    setLoading(false);
 
-      const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        setSprints(sprintsData);
-        // Default filter to active sprint once loaded
-        if (!initializedSprintDefault) {
-          const active = sprintsData.find(s => s.status === 1);
-          if (active) {
-            setFilterSprint(active.id);
-            setInitializedSprintDefault(true);
-          }
-        }
-      });
-
-      setLoading(false);
-
-      return () => {
-        unsubscribeTasks();
-        unsubscribeStories();
-        unsubscribeGoals();
-        unsubscribeSprints();
-      };
+    return () => {
+      unsubscribeTasks();
+      unsubscribeStories();
+      unsubscribeGoals();
     };
-
-    return setupSubscriptions();
   }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (initializedSprintDefault) return;
+    const active = sprints.find(s => (s.status ?? 0) === 1);
+    if (active) {
+      setFilterSprint(active.id);
+      setInitializedSprintDefault(true);
+    }
+  }, [sprints, initializedSprintDefault]);
 
   // Filter tasks based on story/goal/sprint relationships
   const filteredTasks = tasks.filter(task => {

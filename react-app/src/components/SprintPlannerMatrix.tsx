@@ -15,9 +15,26 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useThemeColors, getThemeColorById } from '../hooks/useThemeColor';
 import { getThemeName } from '../utils/statusHelpers';
-import StoryCard from './StoryCard';
-import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { useSprint } from '../contexts/SprintContext';
+import SortableStoryCard from './stories/SortableStoryCard';
+import SprintSelector from './SprintSelector';
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+  UniqueIdentifier,
+  useDroppable
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 
 interface PlannerRowExpansion {
   [themeId: string]: {
@@ -35,7 +52,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   currentPersona
 }) => {
   // Data state
-  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const { sprints, selectedSprintId, setSelectedSprintId } = useSprint();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [subGoals, setSubGoals] = useState<SubGoal[]>([]);
   const [stories, setStories] = useState<EnhancedStory[]>([]);
@@ -55,31 +72,84 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   // Theme system
   const { themes } = useThemeColors();
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const getCellId = useCallback((sprintId: string, goalId: string, subGoalId?: string) => {
+    return `cell::${sprintId || 'backlog'}::${goalId || 'none'}::${subGoalId || ''}`;
+  }, []);
+
+  const parseCellId = useCallback((value: UniqueIdentifier) => {
+    if (typeof value !== 'string') return null;
+    if (!value.startsWith('cell::')) return null;
+    const [, sprintPart = 'backlog', goalPart = 'none', subGoalPart = ''] = value.split('::');
+    return {
+      sprintId: sprintPart === 'backlog' ? null : sprintPart,
+      goalId: goalPart === 'none' ? '' : goalPart,
+      subGoalId: subGoalPart || undefined,
+    };
+  }, []);
+
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over) return;
+
+      const activeStory = stories.find((story) => story.id === active.id);
+      if (!activeStory) return;
+
+      let target = parseCellId(over.id);
+      if (!target) {
+        const overStory = stories.find((story) => story.id === over.id);
+        if (overStory) {
+          target = {
+            sprintId: overStory.sprintId ?? null,
+            goalId: overStory.goalId,
+            subGoalId: (overStory as any).subGoalId ?? undefined,
+          };
+        }
+      }
+
+      if (!target) return;
+
+      const { sprintId, goalId, subGoalId } = target;
+      const normalizedGoalId = goalId || activeStory.goalId || '';
+      const normalizedSubGoalId = subGoalId ?? (activeStory as any).subGoalId ?? null;
+      const currentSprintId = activeStory.sprintId ?? null;
+      const currentGoalId = activeStory.goalId ?? '';
+      const currentSubGoalId = (activeStory as any).subGoalId ?? null;
+
+      if (
+        currentSprintId === (sprintId ?? null) &&
+        currentGoalId === normalizedGoalId &&
+        currentSubGoalId === normalizedSubGoalId
+      ) {
+        return;
+      }
+
+      try {
+        await updateDoc(doc(db, 'stories', activeStory.id), {
+          sprintId: sprintId ?? null,
+          goalId: normalizedGoalId,
+          subGoalId: normalizedSubGoalId || null,
+          updatedAt: serverTimestamp(),
+        } as Partial<Story>);
+      } catch (error) {
+        console.error('SprintPlannerMatrix: failed to update story position', error);
+      }
+    },
+    [stories, parseCellId]
+  );
+
   // Load data - using real Firebase data
   useEffect(() => {
     if (!currentUser) return;
 
     const unsubscribes: (() => void)[] = [];
-
-    // Load sprints
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'asc')
-    );
-    
-    const sprintsUnsub = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      setSprints(sprintsData);
-      const cap: Record<string, number> = {};
-      sprintsData.forEach(s => { cap[s.id] = (s as any).capacityPoints || 20; });
-      setCapacityBySprint(cap);
-      console.log('SprintPlannerMatrix: Loaded', sprintsData.length, 'sprints');
-    });
-    unsubscribes.push(sprintsUnsub);
 
     // Load goals
     const goalsQuery = query(
@@ -136,6 +206,14 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
       unsubscribes.forEach(unsub => unsub());
     };
   }, [currentUser, activePersona]);
+
+  useEffect(() => {
+    const capacityMap: Record<string, number> = {};
+    sprints.forEach((sprint) => {
+      capacityMap[sprint.id] = (sprint as any).capacityPoints || 20;
+    });
+    setCapacityBySprint(capacityMap);
+  }, [sprints]);
 
   // Save expansion state
   const saveExpansionState = useCallback((newExpansion: PlannerRowExpansion) => {
@@ -203,33 +281,52 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   // Render matrix cell component
   const MatrixCell: React.FC<{
     sprintId: string;
-    goalId: string;
-    subGoalId?: string;
-  }> = React.memo(({ sprintId, goalId, subGoalId }) => {
-    const cellStories = getStoriesForCell(sprintId, goalId, subGoalId);
+    goal: Goal;
+    themeColor: string;
+    subGoal?: SubGoal;
+  }> = React.memo(({ sprintId, goal, themeColor, subGoal }) => {
+    const cellStories = getStoriesForCell(sprintId, goal.id, subGoal?.id);
+    const droppableId = getCellId(sprintId, goal.id, subGoal?.id);
+    const { setNodeRef, isOver } = useDroppable({ id: droppableId });
 
     return (
-      <Card 
-        className="matrix-cell h-100"
-        style={{ 
+      <Card
+        className={`matrix-cell h-100${isOver ? ' is-over' : ''}`}
+        style={{
           minHeight: '120px',
-          border: '1px solid var(--line)',
-          backgroundColor: cellStories.length > 0 ? 'var(--card)' : 'var(--panel)'
+          border: isOver ? `2px dashed ${themeColor}` : '1px solid var(--line)',
+          backgroundColor: cellStories.length > 0 ? 'var(--card)' : 'var(--panel)',
+          transition: 'border-color 0.15s ease',
         }}
-        data-testid={`planner-cell-${sprintId}-${goalId}-${subGoalId || 'root'}`}
+        data-testid={`planner-cell-${sprintId}-${goal.id}-${subGoal?.id || 'root'}`}
       >
         <Card.Body className="p-2">
-          <div style={{ minHeight: '80px' }}>
-            {cellStories.map((story, index) => (
-              <div key={story.id} className="mb-1">
-                <StoryCard
-                  story={story}
-                  index={index}
-                />
+          <div ref={setNodeRef}>
+            <SortableContext
+              items={cellStories.map((story) => story.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div style={{ minHeight: '80px' }}>
+                {cellStories.map((story) => {
+                  const taskCount = Array.isArray((story as any).tasks)
+                    ? (story as any).tasks.length
+                    : Number((story as any).taskCount ?? 0);
+
+                  return (
+                    <div key={story.id} className="mb-1">
+                      <SortableStoryCard
+                        story={story as unknown as Story}
+                        goal={goal}
+                        taskCount={taskCount}
+                        themeColor={themeColor}
+                      />
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            </SortableContext>
           </div>
-          
+
           {cellStories.length === 0 && (
             <div className="text-muted text-center py-3" style={{ fontSize: '0.8em' }}>
               Drop stories here
@@ -251,9 +348,10 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   }
 
   return (
-    <div className="sprint-planner-matrix">
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+      <div className="sprint-planner-matrix">
       {/* Header */}
-      <Row className="mb-3">
+      <Row className="mb-3 align-items-center">
         <Col>
           <h4 className="d-flex align-items-center gap-2">
             <Calendar size={20} />
@@ -263,6 +361,9 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
           <p className="text-muted mb-0">
             2-D view: Themes → Goals → SubGoals (rows) × Sprints (columns)
           </p>
+        </Col>
+        <Col xs="auto" className="text-end">
+          <SprintSelector className="d-inline-block" />
         </Col>
       </Row>
 
@@ -283,9 +384,18 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
                 const cap = capacityBySprint[sprint.id] || 20;
                 const total = stories.filter(st => (st as any).sprintId === sprint.id).reduce((sum, st) => sum + (st.points || 1), 0);
                 const over = total > cap;
+                const isSelected = selectedSprintId ? selectedSprintId === sprint.id : false;
                 return (
                   <Col key={sprint.id} className="text-center">
-                    <Card className="sprint-header">
+                    <Card
+                      className={`sprint-header ${isSelected ? 'border-primary shadow-sm' : ''}`}
+                      role="button"
+                      onClick={() => setSelectedSprintId(sprint.id)}
+                      style={{
+                        cursor: 'pointer',
+                        border: isSelected ? '2px solid var(--bs-primary)' : undefined,
+                      }}
+                    >
                       <Card.Body className="p-2">
                         <div className="fw-bold">{sprint.name}</div>
                         <small className="text-muted d-block mb-1">
@@ -363,7 +473,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
                                 )}
                                 <Bullseye size={16} style={{ color: goalColor.primary }} />
                                 <span className="fw-medium">{goal.title}</span>
-                                {goalSubGoals.length > 0 && (
+                            {goalSubGoals.length > 0 && (
                                   <Badge bg="light" text="dark">{goalSubGoals.length}</Badge>
                                 )}
                               </div>
@@ -372,7 +482,8 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
                               <Col key={`${goal.id}-${sprint.id}`}>
                                 <MatrixCell
                                   sprintId={sprint.id}
-                                  goalId={goal.id}
+                                  goal={goal}
+                                  themeColor={goalColor.primary}
                                 />
                               </Col>
                             ))}
@@ -391,8 +502,9 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
                                 <Col key={`${subGoal.id}-${sprint.id}`}>
                                   <MatrixCell
                                     sprintId={sprint.id}
-                                    goalId={goal.id}
-                                    subGoalId={subGoal.id}
+                                    goal={goal}
+                                    subGoal={subGoal}
+                                    themeColor={goalColor.primary}
                                   />
                                 </Col>
                               ))}
@@ -439,12 +551,13 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
           <br />
           <strong>Status:</strong> Using live Firebase data with real-time updates
           <br />
-          <strong>Features:</strong> Reference numbers (STRY-###), theme colors, priority display, data persistence
+          <strong>Features:</strong> Reference numbers (STRY-###), theme colors, priority display, drag &amp; drop reassignment, data persistence
           <br />
-          <strong>Next iterations:</strong> Drag & drop functionality, SubGoal management, enhanced cell interactions
+          <strong>Next iterations:</strong> SubGoal management, enhanced cell interactions, matrix analytics
         </small>
       </div>
-    </div>
+      </div>
+    </DndContext>
   );
 };
 

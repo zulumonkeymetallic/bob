@@ -96,7 +96,7 @@ const SettingsPage: React.FC = () => {
         await setDoc(docRef, {
           ...newColors,
           updatedAt: serverTimestamp(),
-          userId: currentUser.uid
+          ownerUid: currentUser.uid
         });
         console.log('Theme colors saved successfully');
       } catch (error) {

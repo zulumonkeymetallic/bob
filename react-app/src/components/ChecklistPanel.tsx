@@ -201,7 +201,7 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
           }
         });
 
-        const habitsSnap = await getDocs(query(collection(db, 'habits'), where('userId', '==', currentUser.uid), where('isActive', '==', true)));
+        const habitsSnap = await getDocs(query(collection(db, 'habits'), where('ownerUid', '==', currentUser.uid), where('isActive', '==', true)));
         for (const hDoc of habitsSnap.docs) {
           const h: any = hDoc.data();
           if (h.frequency === 'daily') {
@@ -215,7 +215,7 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
       }
     };
     loadLoose();
-  }, [currentUser, todayKey]);
+  }, [currentUser, todayKey, todayIso]);
 
   useEffect(() => {
     if (!currentUser) return;

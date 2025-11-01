@@ -4,6 +4,7 @@ import { collection, query, getDocs, where, orderBy, updateDoc, doc, serverTimes
 import { db } from '../firebase';
 import { Story, Goal, Sprint } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import { useSprint } from '../contexts/SprintContext';
 import { getPriorityName, getStatusName, getThemeName } from '../utils/statusHelpers';
 
 interface EditStoryModalProps {
@@ -23,6 +24,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   onStoryUpdated,
   container
 }) => {
+  const { sprints } = useSprint();
   const [editedStory, setEditedStory] = useState({
     title: '',
     description: '',
@@ -39,7 +41,6 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [goalInput, setGoalInput] = useState('');
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const { currentUser } = useAuth();
 
   // Initialize form when story changes
@@ -65,21 +66,6 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       setGoalInput(currentGoal?.title || '');
     }
   }, [story, goals]);
-
-  // Load sprints for the selector
-  useEffect(() => {
-    if (!currentUser) return;
-    const q = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc')
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const data = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[];
-      setSprints(data);
-    });
-    return () => unsub();
-  }, [currentUser]);
 
   const handleSave = async () => {
     if (!story || !editedStory.title.trim()) {

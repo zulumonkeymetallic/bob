@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup, Badge } from 'react-bootstrap';
 import { Plus, Upload, List, Grid } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Story, Goal, Task, Sprint } from '../types';
+import { Story, Goal, Task } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
 import AddStoryModal from './AddStoryModal';
 import EditStoryModal from './EditStoryModal';
@@ -19,10 +19,12 @@ import { themeVars } from '../utils/themeVars';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useSprint } from '../contexts/SprintContext';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -73,38 +75,29 @@ const StoriesManagement: React.FC = () => {
     }
   }, [location, navigate]);
 
-  useEffect(() => {
-    if (!currentUser) return;
-    loadStoriesData();
-  }, [currentUser, currentPersona]);
+  const loadStoriesData = useCallback(() => {
+    if (!currentUser) return undefined;
 
-  const loadStoriesData = async () => {
-    if (!currentUser) return;
-    
     setLoading(true);
-    
-    // Load stories data - simplified query to avoid index requirements
+
     const storiesQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
-    
-    // Load goals data for relationships
+
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
 
-    // Load tasks for selected story panels and consistency
     const tasksQuery = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
-    
-    // Subscribe to real-time updates
+
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
       console.log('🔄 Stories snapshot received, docs count:', snapshot.docs.length);
       const rawStories = snapshot.docs.map(doc => {
@@ -112,7 +105,6 @@ const StoriesManagement: React.FC = () => {
         const baseStory = {
           id: doc.id,
           ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
         } as Story;
@@ -131,13 +123,13 @@ const StoriesManagement: React.FC = () => {
               : (typeof story.priority === 'number' ? story.priority * 1000 : index * 1000),
         }))
         .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
-      
+
       console.log('📊 Setting stories state with:', normalizedStories.length, 'stories');
       setStories(normalizedStories);
     }, (error) => {
       console.warn('[StoriesManagement] stories subscribe error', error?.message || error);
     });
-    
+
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       console.log('🎯 Goals snapshot received, docs count:', snapshot.docs.length);
       const goalsData = snapshot.docs.map(doc => {
@@ -145,7 +137,6 @@ const StoriesManagement: React.FC = () => {
         return {
           id: doc.id,
           ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
           updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
         };
@@ -172,27 +163,26 @@ const StoriesManagement: React.FC = () => {
       console.warn('[StoriesManagement] tasks subscribe error', error?.message || error);
     });
 
-    // Load sprints to determine the active sprint (status === 1)
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[];
-      const active = sprintsData.find(s => s.status === 1);
-      setActiveSprintId(active?.id || null);
-    });
-
     setLoading(false);
 
     return () => {
       unsubscribeStories();
       unsubscribeGoals();
       unsubscribeTasks();
-      unsubscribeSprints();
     };
-  };
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    const unsubscribe = loadStoriesData();
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [currentUser, loadStoriesData]);
+
+  useEffect(() => {
+    const active = sprints.find((s) => (s.status ?? 0) === 1);
+    setActiveSprintId(active?.id ?? null);
+  }, [sprints]);
 
   // Handler functions for ModernStoriesTable
   const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {

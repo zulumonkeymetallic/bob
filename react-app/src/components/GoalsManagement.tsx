@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Goal, Story, Sprint } from '../types';
+import { Goal, Story } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import GoalsCardView from './GoalsCardView';
 import EditGoalModal from './EditGoalModal';
@@ -29,84 +29,75 @@ const GoalsManagement: React.FC = () => {
   const [cardLayout, setCardLayout] = useState<'grid' | 'comfortable'>('grid');
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
-  const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
   const { isCollapsed, toggleCollapse } = useSidebar();
 
   useEffect(() => {
     if (!currentUser) return;
+    const loadGoalsData = async () => {
+      if (!currentUser) return;
+      
+      setLoading(true);
+      
+      // Load goals data
+      const goalsQuery = query(
+        collection(db, 'goals'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        orderBy('createdAt', 'desc')
+      );
+      
+      // Subscribe to real-time updates
+      const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+        const rawGoals = snapshot.docs.map(doc => {
+          const data = doc.data();
+          const baseGoal = {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+            updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+            targetDate: data.targetDate?.toDate 
+              ? data.targetDate.toDate().getTime() 
+              : (typeof data.targetDate === 'object' && data.targetDate?.seconds != null
+                  ? (data.targetDate.seconds * 1000 + Math.floor((data.targetDate.nanoseconds || 0) / 1e6))
+                  : data.targetDate)
+          } as Goal;
+          if (typeof (baseGoal as any).orderIndex !== 'number') {
+            (baseGoal as any).orderIndex = data.priority ?? data.rank ?? 0;
+          }
+          return baseGoal;
+        }) as Goal[];
+
+        const normalizedGoals = rawGoals
+          .map((goal, index) => ({
+            ...goal,
+            orderIndex:
+              typeof goal.orderIndex === 'number'
+                ? goal.orderIndex
+                : (goal.priority !== undefined ? Number(goal.priority) * 1000 : index * 1000),
+          }))
+          .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+        setGoals(normalizedGoals);
+      });
+
+      setLoading(false);
+
+      return () => {
+        unsubscribeGoals();
+      };
+    };
     loadGoalsData();
   }, [currentUser, currentPersona]);
 
-  const loadGoalsData = async () => {
-    if (!currentUser) return;
-    
-    setLoading(true);
-    
-    // Load goals data
-    const goalsQuery = query(
-      collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc')
-    );
-    
-    // Subscribe to real-time updates
-    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const rawGoals = snapshot.docs.map(doc => {
-        const data = doc.data();
-        const baseGoal = {
-          id: doc.id,
-          ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
-          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
-          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
-          targetDate: data.targetDate?.toDate 
-            ? data.targetDate.toDate().getTime() 
-            : (typeof data.targetDate === 'object' && data.targetDate?.seconds != null
-                ? (data.targetDate.seconds * 1000 + Math.floor((data.targetDate.nanoseconds || 0) / 1e6))
-                : data.targetDate)
-        } as Goal;
-        if (typeof (baseGoal as any).orderIndex !== 'number') {
-          (baseGoal as any).orderIndex = data.priority ?? data.rank ?? 0;
-        }
-        return baseGoal;
-      }) as Goal[];
-
-      const normalizedGoals = rawGoals
-        .map((goal, index) => ({
-          ...goal,
-          orderIndex:
-            typeof goal.orderIndex === 'number'
-              ? goal.orderIndex
-              : (goal.priority !== undefined ? Number(goal.priority) * 1000 : index * 1000),
-        }))
-        .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
-
-      setGoals(normalizedGoals);
-    });
-
-    setLoading(false);
-
-    return () => {
-      unsubscribeGoals();
-    };
-  };
-
-  // Load active sprint id, then find goals with stories in that sprint
-  useEffect(() => {
-    if (!currentUser) return;
-    const sprintsQ = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
-    const unsubS = onSnapshot(sprintsQ, (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[];
-      const active = list.find(s => s.status === 1);
-      setActiveSprintId(active?.id || null);
-    });
-    return unsubS;
-  }, [currentUser]);
+  const activeSprintId = useMemo(() => {
+    const active = sprints.find((s) => s.status === 1);
+    return active?.id || null;
+  }, [sprints]);
 
   useEffect(() => {
     const sprintId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);

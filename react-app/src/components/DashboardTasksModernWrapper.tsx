@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
+import { useSprint } from '../contexts/SprintContext';
 
 interface DashboardTasksModernWrapperProps {
   title?: string;
@@ -15,11 +16,11 @@ interface DashboardTasksModernWrapperProps {
 const DashboardTasksModernWrapper: React.FC<DashboardTasksModernWrapperProps> = ({ title = 'Tasks', maxTasks }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -39,10 +40,6 @@ const DashboardTasksModernWrapper: React.FC<DashboardTasksModernWrapperProps> = 
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
-    const spq = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
-    );
 
     const u1 = onSnapshot(tq, (snap) => {
       let data = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[];
@@ -51,9 +48,8 @@ const DashboardTasksModernWrapper: React.FC<DashboardTasksModernWrapperProps> = 
     });
     const u2 = onSnapshot(sq, (snap) => setStories(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[]));
     const u3 = onSnapshot(gq, (snap) => setGoals(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[]));
-    const u4 = onSnapshot(spq, (snap) => setSprints(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Sprint[]));
 
-    return () => { u1(); u2(); u3(); u4(); };
+    return () => { u1(); u2(); u3(); };
   }, [currentUser, currentPersona, maxTasks]);
 
   const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {

@@ -13,13 +13,12 @@ type TabKey = 'tasks' | 'stories' | 'goals';
 
 const MobileHome: React.FC = () => {
   const { currentUser } = useAuth();
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
 
   const [activeTab, setActiveTab] = useState<TabKey>('tasks');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<SprintType[]>([]);
   const [summary, setSummary] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [noteModal, setNoteModal] = useState<{ type: 'task'|'story'|'goal'; id: string; show: boolean } | null>(null);
@@ -38,16 +37,6 @@ const MobileHome: React.FC = () => {
     const unsub = onSnapshot(q, (snap) => {
       const doc0 = snap.docs[0]?.data() as any;
       setSummary(doc0?.summary || null);
-    });
-    return () => unsub();
-  }, [currentUser?.uid]);
-
-  // Subscribe to Sprints for dropdown
-  useEffect(() => {
-    if (!currentUser?.uid) { setSprints([]); return; }
-    const q = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid), orderBy('startDate', 'desc'));
-    const unsub = onSnapshot(q, (snap) => {
-      setSprints(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as SprintType[]);
     });
     return () => unsub();
   }, [currentUser?.uid]);

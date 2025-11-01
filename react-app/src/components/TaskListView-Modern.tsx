@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Task, Story, Goal, Sprint } from '../types';
+import { Task, Story, Goal } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { useSprint } from '../contexts/SprintContext';
@@ -15,12 +15,11 @@ const TaskListView: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
 
   useEffect(() => {
     if (!currentUser) return;
@@ -43,12 +42,6 @@ const TaskListView: React.FC = () => {
 
     const goalsQuery = query(
       collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
-    );
-
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
@@ -78,19 +71,10 @@ const TaskListView: React.FC = () => {
       setGoals(goalsData);
     });
 
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      setSprints(sprintsData);
-    });
-
     return () => {
       unsubscribeTasks();
       unsubscribeStories();
       unsubscribeGoals();
-      unsubscribeSprints();
     };
   }, [currentUser, currentPersona, selectedSprintId]);
 

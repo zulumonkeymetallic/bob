@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Row, Col, Badge, Button, Dropdown, Alert } from 'react-bootstrap';
 import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, Plus, Clock, ArrowRight } from 'lucide-react';
 import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
@@ -67,7 +67,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
     return themeColorForGoal(parentGoal);
   };
 
-  const loadLatestActivityForStory = async (storyId: string) => {
+  const loadLatestActivityForStory = useCallback(async (storyId: string) => {
     if (!currentUser) return;
 
     try {
@@ -99,14 +99,14 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
       }
       console.error('Error loading latest activity for story:', storyId, error);
     }
-  };
+  }, [currentUser]);
 
   useEffect(() => {
     // Load latest activity for each story
     stories.forEach(story => {
       loadLatestActivityForStory(story.id);
     });
-  }, [stories, currentUser]);
+  }, [stories, currentUser, loadLatestActivityForStory]);
 
   const handleViewActivityStream = (story: Story, event: React.MouseEvent) => {
     event.stopPropagation();

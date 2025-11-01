@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
 
 const SprintPlannerSimple: React.FC = () => {
     const { currentUser } = useAuth();
+    const { sprints } = useSprint();
     const [stories, setStories] = useState<Story[]>([]);
-    const [sprints, setSprints] = useState<Sprint[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
     const [showSprintModal, setShowSprintModal] = useState(false);
@@ -27,7 +28,6 @@ const SprintPlannerSimple: React.FC = () => {
         
         try {
             const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
-            const sprintsQuery = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
             const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
 
             const unsubscribeStories = onSnapshot(storiesQuery, 
@@ -40,17 +40,6 @@ const SprintPlannerSimple: React.FC = () => {
                 error => {
                     console.error('SprintPlanner: Error loading stories:', error);
                     setLoading(false);
-                }
-            );
-
-            const unsubscribeSprints = onSnapshot(sprintsQuery,
-                snapshot => {
-                    const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
-                    console.log('SprintPlanner: Loaded sprints:', sprintsData.length);
-                    setSprints(sprintsData.sort((a, b) => (a.startDate || 0) - (b.startDate || 0)));
-                },
-                error => {
-                    console.error('SprintPlanner: Error loading sprints:', error);
                 }
             );
 
@@ -67,7 +56,6 @@ const SprintPlannerSimple: React.FC = () => {
 
             return () => {
                 unsubscribeStories();
-                unsubscribeSprints();
                 unsubscribeGoals();
             };
         } catch (error) {

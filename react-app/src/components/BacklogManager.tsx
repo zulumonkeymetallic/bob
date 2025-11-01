@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Row, Col, Card, Button, Badge, ListGroup, Nav, Tab, Form, Modal, Dropdown } from 'react-bootstrap';
 import { Plus, List, Grid3x3Gap, Search, Filter } from 'react-bootstrap-icons';
 import { useAuth } from '../contexts/AuthContext';
@@ -6,9 +6,10 @@ import { usePersona } from '../contexts/PersonaContext';
 import { db, functions as fbFunctions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Goal, Sprint } from '../types';
+import { Goal } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
+import { useSprint } from '../contexts/SprintContext';
 
 
 interface BacklogItem {
@@ -46,6 +47,7 @@ type BacklogType = 'games' | 'movies' | 'shows' | 'books' | 'custom';
 const BacklogManager: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const [activeTab, setActiveTab] = useState<BacklogType>('games');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [backlogs, setBacklogs] = useState<Record<BacklogType, BacklogItem[]>>({
@@ -56,7 +58,6 @@ const BacklogManager: React.FC = () => {
     custom: []
   });
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -69,6 +70,18 @@ const BacklogManager: React.FC = () => {
     tags: '',
     source: 'manual' as const
   });
+
+  const loadBacklogs = useCallback(() => {
+    const cacheKey = `backlogs_${currentUser?.uid ?? 'anon'}`;
+    const saved = localStorage.getItem(cacheKey);
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved);
+      setBacklogs(parsed);
+    } catch (error) {
+      console.error('Error loading backlogs:', error);
+    }
+  }, [currentUser?.uid]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -83,11 +96,6 @@ const BacklogManager: React.FC = () => {
       where('persona', '==', currentPersona)
     );
     
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-    
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -96,40 +104,18 @@ const BacklogManager: React.FC = () => {
       setGoals(goalsData);
     });
     
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      setSprints(sprintsData);
-    });
-    
     return () => {
       unsubscribeGoals();
-      unsubscribeSprints();
     };
-  }, [currentUser, currentPersona]);
+  }, [currentUser, currentPersona, loadBacklogs]);
 
   // Clear selection when switching tabs
   useEffect(() => { setSelectedIds([]); }, [activeTab]);
 
-  const loadBacklogs = () => {
-    // For now, load from localStorage
-    // TODO: Integrate with Firebase
-    const saved = localStorage.getItem(`backlogs_${currentUser?.uid}`);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setBacklogs(parsed);
-      } catch (error) {
-        console.error('Error loading backlogs:', error);
-      }
-    }
-  };
-
   const saveBacklogs = (newBacklogs: Record<BacklogType, BacklogItem[]>) => {
     setBacklogs(newBacklogs);
-    localStorage.setItem(`backlogs_${currentUser?.uid}`, JSON.stringify(newBacklogs));
+    const cacheKey = `backlogs_${currentUser?.uid ?? 'anon'}`;
+    localStorage.setItem(cacheKey, JSON.stringify(newBacklogs));
   };
 
   const toggleSelected = (id: string) => {

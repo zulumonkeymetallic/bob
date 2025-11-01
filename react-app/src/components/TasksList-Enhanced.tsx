@@ -4,10 +4,11 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { Task, Goal, Story, WorkProject, Sprint } from '../types';
+import { Task, Goal, Story, WorkProject } from '../types';
+import { useSprint } from '../contexts/SprintContext';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 import { taskStatusText } from '../utils/storyCardFormatting';
-import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
+import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint } from '../utils/taskSprintHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 interface TaskWithContext extends Task {
@@ -20,12 +21,12 @@ interface TaskWithContext extends Task {
 const TasksList: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints, sprintsById } = useSprint();
   const [rawTasks, setRawTasks] = useState<Task[]>([]);
   const [tasks, setTasks] = useState<TaskWithContext[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [projects, setProjects] = useState<WorkProject[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [filteredTasks, setFilteredTasks] = useState<TaskWithContext[]>([]);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showEditTask, setShowEditTask] = useState(false);
@@ -208,6 +209,7 @@ const TasksList: React.FC = () => {
         );
         const parentGoal = goals.find((g) => g.id === (parentStory?.goalId || task.goalId));
         const derivedSprintId = effectiveSprintId(task, stories, sprints);
+        const sprint = derivedSprintId ? sprintsById[derivedSprintId] : undefined;
         return {
           ...task,
           sprintId: derivedSprintId ?? null,
@@ -216,32 +218,12 @@ const TasksList: React.FC = () => {
           referenceNumber: generateReferenceNumber(task, index),
           storyTitle: parentStory?.title || '',
           goalTitle: parentGoal?.title || '',
-          sprintName: sprintNameForId(sprints, derivedSprintId)
+          sprintName: sprint?.name ?? ''
         };
       });
 
     setTasks(tasksWithContext);
   }, [rawTasks, stories, goals, sprints, currentPersona]);
-
-  // Load sprints
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-
-    const unsubscribe = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData: Sprint[] = [];
-      snapshot.forEach((doc) => {
-        sprintsData.push({ id: doc.id, ...doc.data() } as Sprint);
-      });
-      setSprints(sprintsData);
-    });
-
-    return unsubscribe;
-  }, [currentUser]);
 
   // Apply filters
   useEffect(() => {

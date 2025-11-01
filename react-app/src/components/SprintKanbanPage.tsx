@@ -32,8 +32,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const [loading, setLoading] = useState(true);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const { isCollapsed, toggleCollapse } = useSidebar();
@@ -127,31 +126,12 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
         setGoals(goalsData);
       });
 
-      // Sprints subscription
-      const sprintsQuery = query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid),
-        orderBy('startDate', 'desc')
-      );
-
-      const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        setSprints(sprintsData);
-        
-        // Do not auto-select active sprint when user chose "All" (empty string)
-        // Keep current selection as-is
-      });
-
       setLoading(false);
 
       return () => {
         unsubscribeStories();
         unsubscribeTasks();
         unsubscribeGoals();
-        unsubscribeSprints();
       };
     };
 

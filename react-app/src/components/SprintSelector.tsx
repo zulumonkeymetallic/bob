@@ -1,110 +1,62 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Dropdown } from 'react-bootstrap';
-import { collection, query, where, orderBy, onSnapshot, limit } from 'firebase/firestore';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { Sprint } from '../types';
 import { isStatus } from '../utils/statusHelpers';
 import logger from '../utils/logger';
-import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
+import type { Sprint } from '../types';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
-  onSprintChange: (sprintId: string) => void;
+  onSprintChange?: (sprintId: string) => void;
   className?: string;
 }
 
 const SprintSelector: React.FC<SprintSelectorProps> = ({
   selectedSprintId,
   onSprintChange,
-  className = ''
+  className = '',
 }) => {
-  const [sprints, setSprints] = useState<Sprint[]>([]);
-  const [loading, setLoading] = useState(true);
-  const { currentUser } = useAuth();
-  const { currentPersona } = usePersona();
+  const {
+    sprints,
+    loading,
+    selectedSprintId: contextSprintId,
+    setSelectedSprintId,
+  } = useSprint();
+
+  const effectiveSelectedId = selectedSprintId ?? contextSprintId;
+
+  const selectedSprint = useMemo<Sprint | undefined>(() => {
+    if (!effectiveSelectedId) return undefined;
+    return sprints.find((s) => s.id === effectiveSelectedId);
+  }, [sprints, effectiveSelectedId]);
 
   useEffect(() => {
-    if (!currentUser || !currentPersona) {
-      setLoading(false);
-      return;
+    if (loading) return;
+    if (sprints.length === 0) return;
+    // If nothing selected (null/undefined) try to auto-select an active/planned sprint.
+    if (effectiveSelectedId !== undefined && effectiveSelectedId !== null) return;
+
+    const activeSprint = sprints.find((sprint) => isStatus(sprint.status, 'active'));
+    const plannedSprint = sprints.find((sprint) => isStatus(sprint.status, 'planned'));
+    const fallbackSprint = sprints[0];
+    const preferred = activeSprint || plannedSprint || fallbackSprint;
+
+    if (preferred) {
+      logger.info('sprint', 'Auto-selecting sprint', {
+        id: preferred.id,
+        name: preferred.name,
+        status: preferred.status,
+      });
+      setSelectedSprintId(preferred.id);
+      onSprintChange?.(preferred.id);
     }
+  }, [effectiveSelectedId, loading, onSprintChange, setSelectedSprintId, sprints]);
 
-    logger.debug('sprint', 'Setting up sprint listener for user', { uid: currentUser.uid, persona: currentPersona });
-
-    const q = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc'),
-      limit(50)
-    );
-
-    const unsubscribe = onSnapshot(q, 
-      (snapshot) => {
-        logger.debug('sprint', 'Received sprint data', { count: snapshot.docs.length });
-        const sprintData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        const filtered = sprintData.filter((sprint) => {
-          const persona = (sprint as any)?.persona;
-          if (!persona) return true;
-          return persona === currentPersona;
-        });
-        logger.debug('sprint', 'Filtered sprint results', { total: sprintData.length, matchedPersona: filtered.length, persona: currentPersona });
-        
-        setSprints(filtered);
-        setLoading(false);
-
-        // Always try to select active sprint first, then fall back to most recent
-        if (filtered.length > 0) {
-          // Look for active sprint (status = 1) or 'active' string
-          const activeSprint = filtered.find(sprint => 
-            (typeof sprint.status === 'number' && sprint.status === 1) || 
-            (typeof sprint.status === 'string' && sprint.status === 'active') || 
-            isStatus(sprint.status, 'active')
-          );
-          // Look for planned sprint (status = 0) or 'planned' string
-          const plannedSprint = filtered.find(sprint => 
-            (typeof sprint.status === 'number' && sprint.status === 0) || 
-            (typeof sprint.status === 'string' && sprint.status === 'planned') || 
-            isStatus(sprint.status, 'planned')
-          );
-          const fallbackSprint = filtered[0]; // Most recent by start date
-          
-          const preferredSprint = activeSprint || plannedSprint || fallbackSprint;
-
-          // Respect explicit "All Sprints" only if user saved it.
-          // Initial state may be '' before any selection is saved in localStorage.
-          const saved = (typeof window !== 'undefined') ? localStorage.getItem('bob_selected_sprint') : null;
-          const isExplicitAll = selectedSprintId === '' && saved === '';
-
-          // If no sprint is selected (undefined/null) or current selection is not found, select preferred
-          if (!isExplicitAll && (!selectedSprintId || !filtered.find(s => s.id === selectedSprintId))) {
-            if (preferredSprint) {
-              logger.info('sprint', 'Auto-selecting sprint', { name: preferredSprint.name, status: preferredSprint.status });
-              onSprintChange(preferredSprint.id);
-            }
-          }
-        }
-      },
-      (error) => {
-        logger.error('sprint', 'Error loading sprints', error);
-        logger.debug('sprint', 'Error details', {
-          code: error.code,
-          message: error.message,
-          userUid: currentUser?.uid,
-          timestamp: new Date().toISOString()
-        });
-        setLoading(false);
-        setSprints([]);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [currentUser, currentPersona, selectedSprintId, onSprintChange]);
-
-  const selectedSprint = sprints.find(sprint => sprint.id === selectedSprintId);
+  const handleSprintChange = (id: string) => {
+    if (id === effectiveSelectedId) return;
+    setSelectedSprintId(id);
+    onSprintChange?.(id);
+  };
 
   if (loading) {
     return (
@@ -151,8 +103,8 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
       <Dropdown.Menu align="end" style={{ minWidth: '300px' }}>
         <Dropdown.Header>Available Sprints</Dropdown.Header>
         <Dropdown.Item
-          active={selectedSprintId === ''}
-          onClick={() => onSprintChange('')}
+          active={effectiveSelectedId === ''}
+          onClick={() => handleSprintChange('')}
         >
           All Sprints
         </Dropdown.Item>
@@ -165,8 +117,8 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           sprints.map(sprint => (
             <Dropdown.Item
               key={sprint.id}
-              active={sprint.id === selectedSprintId}
-              onClick={() => onSprintChange(sprint.id)}
+              active={sprint.id === effectiveSelectedId}
+              onClick={() => handleSprintChange(sprint.id)}
             >
               <div>
                 <strong>{sprint.name}</strong>

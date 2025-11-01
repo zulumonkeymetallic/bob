@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -18,154 +18,112 @@ const TaskListView: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [dueFilter, setDueFilter] = useState<'all' | 'today'>('all');
   const [loading, setLoading] = useState(true);
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints: rawSprints } = useSprint();
   const location = useLocation();
   const navigate = useNavigate();
 
+  const sprints = useMemo<Sprint[]>(() => {
+    return rawSprints.map((s) => {
+      const startDate = (s as any)?.startDate?.toDate?.() || s.startDate;
+      const endDate = (s as any)?.endDate?.toDate?.() || s.endDate;
+      const createdAt = (s as any)?.createdAt?.toDate?.() || s.createdAt;
+      const updatedAt = (s as any)?.updatedAt?.toDate?.() || s.updatedAt;
+      return { ...s, startDate, endDate, createdAt, updatedAt } as Sprint;
+    });
+  }, [rawSprints]);
+
   useEffect(() => {
     if (!currentUser) return;
+    const loadTaskData = () => {
+      if (!currentUser) return;
+
+      setLoading(true);
+
+      // Load all related data
+      const tasksQuery = selectedSprintId
+        ? query(
+            collection(db, 'tasks'),
+            where('ownerUid', '==', currentUser.uid),
+            where('sprintId', '==', selectedSprintId),
+            orderBy('priority', 'desc')
+          )
+        : query(
+            collection(db, 'tasks'),
+            where('ownerUid', '==', currentUser.uid),
+            orderBy('priority', 'desc')
+          );
+      
+      const storiesQuery = query(
+        collection(db, 'stories'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona)
+      );
+      
+      const goalsQuery = query(
+        collection(db, 'goals'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona)
+      );
+      
+      // Subscribe to real-time updates
+      const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+        const tasksData = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate?.() || data.createdAt,
+            updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+            dueDate: data.dueDate?.toDate?.() || data.dueDate,
+          };
+        }) as Task[];
+        setTasks(tasksData);
+      });
+      
+      const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+        const storiesData = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate?.() || data.createdAt,
+            updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+          };
+        }) as Story[];
+        setStories(storiesData);
+      });
+      
+      const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+        const goalsData = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate?.() || data.createdAt,
+            updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+          };
+        }) as Goal[];
+        setGoals(goalsData);
+      });
+      
+      setLoading(false);
+
+      return () => {
+        unsubscribeTasks();
+        unsubscribeStories();
+        unsubscribeGoals();
+      };
+    };
     return loadTaskData();
   }, [currentUser, currentPersona, selectedSprintId]);
-
-  useEffect(() => {
-    const state = ((location as unknown) as { state?: { preset?: string } | null }).state ?? null;
-    if (state?.preset === 'dueToday') {
-      setDueFilter('today');
-      navigate(location.pathname, { replace: true, state: null });
-    }
-  }, [location, navigate]);
-
-  // Set up the update handler for the global sidebar
-  useEffect(() => {
-    const handleItemUpdate = async (item: Task | Story | Goal, type: 'task' | 'story' | 'goal', updates: any) => {
-      try {
-        const collection_name = type === 'story' ? 'stories' : type === 'goal' ? 'goals' : 'tasks';
-        await updateDoc(doc(db, collection_name, item.id), {
-          ...updates,
-          updatedAt: serverTimestamp()
-        });
-        console.log(`${type} updated successfully`);
-      } catch (error) {
-        console.error('Error updating item:', error);
-        throw error;
-      }
-    };
-
-    setUpdateHandler(handleItemUpdate);
-  }, [setUpdateHandler]);
-
-  const loadTaskData = () => {
-    if (!currentUser) return;
-
-    setLoading(true);
-
-    // Load all related data
-    const tasksQuery = selectedSprintId
-      ? query(
-          collection(db, 'tasks'),
-          where('ownerUid', '==', currentUser.uid),
-          where('sprintId', '==', selectedSprintId),
-          orderBy('priority', 'desc')
-        )
-      : query(
-          collection(db, 'tasks'),
-          where('ownerUid', '==', currentUser.uid),
-          orderBy('priority', 'desc')
-        );
-    
-    const storiesQuery = query(
-      collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
-    );
-    
-    const goalsQuery = query(
-      collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
-    );
-    
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
-    );
-    
-    // Subscribe to real-time updates
-    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
-          createdAt: data.createdAt?.toDate?.() || data.createdAt,
-          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
-          dueDate: data.dueDate?.toDate?.() || data.dueDate,
-        };
-      }) as Task[];
-      setTasks(tasksData);
-    });
-    
-    const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
-      const storiesData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
-          createdAt: data.createdAt?.toDate?.() || data.createdAt,
-          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
-        };
-      }) as Story[];
-      setStories(storiesData);
-    });
-    
-    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const goalsData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
-          createdAt: data.createdAt?.toDate?.() || data.createdAt,
-          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
-        };
-      }) as Goal[];
-      setGoals(goalsData);
-    });
-    
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
-          createdAt: data.createdAt?.toDate?.() || data.createdAt,
-          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
-          startDate: data.startDate?.toDate?.() || data.startDate,
-          endDate: data.endDate?.toDate?.() || data.endDate,
-        };
-      }) as Sprint[];
-      setSprints(sprintsData);
-    });
-
-    setLoading(false);
-
-    return () => {
-      unsubscribeTasks();
-      unsubscribeStories();
-      unsubscribeGoals();
-      unsubscribeSprints();
-    };
-  };
 
   // Handler functions for ModernTaskTable
   const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {

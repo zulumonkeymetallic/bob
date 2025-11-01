@@ -609,6 +609,7 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
     entityType: 'plan',
     activityType: 'scheduler_plan_built',
     userId: uid,
+    ownerUid: uid,
     description: `Built plan with ${assignments.length} assignments for ${dayKey}`,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -665,6 +666,7 @@ exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID
         entityId: `calendar_${uid}`,
         activityType: 'calendar_sync',
         userId: uid,
+        ownerUid: uid,
         description: `Calendar sync completed: pulled ${reconciled}, pushed ${pushed}`,
         metadata: redact({ direction, reconciled, pushed }),
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -731,6 +733,7 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }
       entityId: `tasks_${uid}`,
       activityType: 'auto_enrich_tasks',
       userId: uid,
+      ownerUid: uid,
       description: `Auto-enriched ${updated} tasks (estimates: ${estimatesAdded}, links: ${linksSuggested})`,
       metadata: redact({ updated, estimatesAdded, linksSuggested, limit }),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -792,6 +795,7 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
       entityId: `tasks_${uid}`,
       activityType: 'task_story_conversion',
       userId: uid,
+      ownerUid: uid,
       description: `Suggested ${suggestions.length}, converted ${converted.filter(r=>r.status==='converted').length}`,
       metadata: redact({ suggested: suggestions.length, converted: converted.length }),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1543,17 +1547,6 @@ exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
   } catch {}
 
   return { ok: true, ...stats, changeCount: stats.changes.length };
-});
-
-// Diagnostics: send test email via Brevo
-exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
-  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = ensureFirestore();
-  const snap = await db.collection('profiles').doc(uid).get();
-  const email = snap.exists ? (snap.data() || {}).email : null;
-  if (!email) throw new httpsV2.HttpsError('failed-precondition', 'Profile email not set');
-  await sendEmail({ to: email, subject: 'BOB · Test Email', html: '<p>This is a test email from BOB diagnostics (Brevo).</p>' });
-  return { ok: true, to: email };
 });
 
 // Diagnostics: quick check that sprints are readable for the current user
@@ -4487,6 +4480,7 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
       entityType: 'task',
       activityType: 'deduplicate_tasks',
       userId,
+      ownerUid: userId,
       actor: activityActor,
       description: `Resolved ${duplicateUpdates.length} duplicate tasks across ${summary.length} groups`,
       metadata: { groups: summary, hardDelete, runId },
@@ -4624,6 +4618,7 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
         activityType: 'ai_priority_update',
         actor: 'AI_Agent',
         userId,
+        ownerUid: userId,
         description: `AI reprioritised ${updates.length} tasks`,
         metadata: {
           runId,
@@ -5026,6 +5021,7 @@ async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId
       activityType: 'nightly_task_maintenance',
       actor: 'AI_Agent',
       userId,
+      ownerUid: userId,
       description: `Nightly maintenance reprioritised ${priorityResult.updated} tasks and adjusted ${dueDateAdjustments.adjustedTop} due dates.`,
       metadata: maintenanceSummary,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -5309,6 +5305,7 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
     entityType: 'task',
     activityType: 'task_to_story_conversion',
     userId: uid,
+    ownerUid: uid,
     description: `Converted ${convertedCount} tasks into stories`,
     metadata: { results },
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -6342,6 +6339,7 @@ exports.disconnectGoogle = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
       entityId: `calendar_${uid}`,
       activityType: 'calendar_disconnect',
       userId: uid,
+      ownerUid: uid,
       description: 'Disconnected Google Calendar',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -6779,6 +6777,7 @@ exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
       activityType: 'calendar_event_created',
       description: 'Created Google event',
       userId: req.auth.uid,
+      ownerUid: req.auth.uid,
       metadata: redact({ id: ev?.id, start, end }),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -6811,6 +6810,7 @@ exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
       activityType: 'calendar_event_updated',
       description: 'Updated Google event',
       userId: req.auth.uid,
+      ownerUid: req.auth.uid,
       metadata: redact({ id: eventId, hasSummary: !!summary, hasStart: !!start, hasEnd: !!end }),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -6849,6 +6849,7 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
       activityType: 'calendar_event_deleted',
       description: 'Deleted Google event',
       userId: req.auth.uid,
+      ownerUid: req.auth.uid,
       metadata: redact({ id: eventId }),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -7904,6 +7905,7 @@ async function _autoRescheduleMissedForUser(uid, { limit = 10 } = {}) {
       activityType: 'auto_reschedule_missed',
       description: `Auto-rescheduled ${rescheduled} items`,
       userId: uid,
+      ownerUid: uid,
       metadata: redact({ rescheduled, limit }),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -8759,6 +8761,7 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
     activityType: 'task_to_story_conversion',
     actor: 'AI_Agent',
     userId,
+    ownerUid: userId,
     description: `Auto-converted task ${task.ref || taskDoc.id} to story ${storyRefValue}`,
     metadata: {
       taskId: taskDoc.id,
@@ -9002,6 +9005,7 @@ async function updateTaskDueDate(db, taskId, { newDueDateMs, reason, userId, run
     activityType: 'scheduler_due_date_adjustment',
     actor: 'AI_Scheduler',
     userId,
+    ownerUid: userId,
     description: `Scheduler moved ${itemRef || taskId} due date (${reason}).`,
     metadata: { taskId, reason, runId, dueDate: newDueDateMs },
     createdAt: admin.firestore.FieldValue.serverTimestamp(),

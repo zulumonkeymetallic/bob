@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
 import { generateRef } from '../utils/referenceGenerator';
 import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
@@ -22,15 +23,10 @@ interface Goal {
   theme: string;
 }
 
-interface Sprint {
-  id: string;
-  name: string;
-  status: string;
-}
-
 const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportClick }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const [showMenu, setShowMenu] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [showBulkCreate, setShowBulkCreate] = useState(false);
@@ -47,7 +43,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [showIntake, setShowIntake] = useState(false);
   const [intakeTitle, setIntakeTitle] = useState('');
   const [intakeTheme, setIntakeTheme] = useState('Growth');
@@ -63,12 +58,12 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
 
   // Load goals and sprints when component mounts or when quickAddType changes to 'story'
   useEffect(() => {
-    const loadGoalsAndSprints = async () => {
+    const loadGoals = async () => {
       if (!currentUser || quickAddType !== 'story') return;
 
       try {
-        console.log('📊 FloatingActionButton: Loading goals and sprints for story creation', {
-          action: 'load_goals_sprints_start',
+        console.log('📊 FloatingActionButton: Loading goals for story creation', {
+          action: 'load_goals_start',
           user: currentUser.uid,
           persona: currentPersona
         });
@@ -86,37 +81,22 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           theme: doc.data().theme
         }));
 
-        // Load sprints
-        const sprintsQuery = query(
-          collection(db, 'sprints'),
-          where('ownerUid', '==', currentUser.uid),
-          orderBy('startDate', 'desc')
-        );
-        const sprintsSnapshot = await getDocs(sprintsQuery);
-        const sprintsData = sprintsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          name: doc.data().name,
-          status: doc.data().status
-        }));
-
         setGoals(goalsData);
-        setSprints(sprintsData);
 
-        console.log('✅ FloatingActionButton: Goals and sprints loaded successfully', {
-          action: 'load_goals_sprints_success',
+        console.log('✅ FloatingActionButton: Goals loaded successfully', {
+          action: 'load_goals_success',
           goalsCount: goalsData.length,
-          sprintsCount: sprintsData.length
         });
 
       } catch (error) {
-        console.error('❌ FloatingActionButton: Failed to load goals and sprints', {
-          action: 'load_goals_sprints_error',
+        console.error('❌ FloatingActionButton: Failed to load goals', {
+          action: 'load_goals_error',
           error: error.message
         });
       }
     };
 
-    loadGoalsAndSprints();
+    loadGoals();
   }, [currentUser, currentPersona, quickAddType]);
 
   const handleQuickAdd = async () => {

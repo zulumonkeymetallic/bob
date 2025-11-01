@@ -109,102 +109,101 @@ const VisualCanvas: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
-    generateCanvas();
-  }, [goals, stories, tasks, viewMode]);
+    const generateCanvas = () => {
+      const newNodes: CanvasNode[] = [];
+      const newConnections: CanvasConnection[] = [];
 
-  const generateCanvas = () => {
-    const newNodes: CanvasNode[] = [];
-    const newConnections: CanvasConnection[] = [];
+      let yOffset = 50;
+      const goalSpacing = 300;
+      const storySpacing = 200;
+      const taskSpacing = 150;
 
-    let yOffset = 50;
-    const goalSpacing = 300;
-    const storySpacing = 200;
-    const taskSpacing = 150;
+      // Filter data based on view mode
+      const filteredGoals = viewMode === 'active-only' 
+        ? goals.filter(g => isStatus(g.status, 'Work in Progress'))
+        : goals;
 
-    // Filter data based on view mode
-    const filteredGoals = viewMode === 'active-only' 
-      ? goals.filter(g => isStatus(g.status, 'Work in Progress'))
-      : goals;
+      const filteredStories = viewMode === 'active-only'
+        ? stories.filter(s => isStatus(s.status, 'active'))
+        : stories;
 
-    const filteredStories = viewMode === 'active-only'
-      ? stories.filter(s => isStatus(s.status, 'active'))
-      : stories;
+      const filteredTasks = viewMode === 'active-only'
+        ? tasks.filter(t => isStatus(t.status, 'in_progress'))
+        : tasks;
 
-    const filteredTasks = viewMode === 'active-only'
-      ? tasks.filter(t => isStatus(t.status, 'in_progress'))
-      : tasks;
+      // Create goal nodes
+      filteredGoals.forEach((goal, index) => {
+        const goalNode: CanvasNode = {
+          id: goal.id,
+          type: 'goal',
+          x: 50,
+          y: yOffset + (index * goalSpacing),
+          width: 200,
+          height: 80,
+          title: goal.title,
+          data: goal,
+          connections: []
+        };
+        newNodes.push(goalNode);
 
-    // Create goal nodes
-    filteredGoals.forEach((goal, index) => {
-      const goalNode: CanvasNode = {
-        id: goal.id,
-        type: 'goal',
-        x: 50,
-        y: yOffset + (index * goalSpacing),
-        width: 200,
-        height: 80,
-        title: goal.title,
-        data: goal,
-        connections: []
-      };
-      newNodes.push(goalNode);
-
-      if (viewMode !== 'goals-only') {
-        // Create story nodes for this goal
-        const goalStories = filteredStories.filter(s => s.goalId === goal.id);
-        goalStories.forEach((story, storyIndex) => {
-          const storyNode: CanvasNode = {
-            id: story.id,
-            type: 'story',
-            x: 300,
-            y: yOffset + (index * goalSpacing) + (storyIndex * storySpacing),
-            width: 180,
-            height: 60,
-            title: story.title,
-            data: story,
-            connections: [goal.id]
-          };
-          newNodes.push(storyNode);
-
-          // Create connection from goal to story
-          newConnections.push({
-            id: `${goal.id}-${story.id}`,
-            fromId: goal.id,
-            toId: story.id,
-            type: 'goal-story'
-          });
-
-          // Create task nodes for this story
-          const storyTasks = filteredTasks.filter(t => t.storyId === story.id);
-          storyTasks.forEach((task, taskIndex) => {
-            const taskNode: CanvasNode = {
-              id: task.id!,
-              type: 'task',
-              x: 520,
-              y: yOffset + (index * goalSpacing) + (storyIndex * storySpacing) + (taskIndex * taskSpacing),
-              width: 160,
-              height: 50,
-              title: task.title,
-              data: task,
-              connections: [story.id]
+        if (viewMode !== 'goals-only') {
+          // Create story nodes for this goal
+          const goalStories = filteredStories.filter(s => s.goalId === goal.id);
+          goalStories.forEach((story, storyIndex) => {
+            const storyNode: CanvasNode = {
+              id: story.id,
+              type: 'story',
+              x: 300,
+              y: yOffset + (index * goalSpacing) + (storyIndex * storySpacing),
+              width: 180,
+              height: 60,
+              title: story.title,
+              data: story,
+              connections: [goal.id]
             };
-            newNodes.push(taskNode);
+            newNodes.push(storyNode);
 
-            // Create connection from story to task
+            // Create connection from goal to story
             newConnections.push({
-              id: `${story.id}-${task.id}`,
-              fromId: story.id,
-              toId: task.id!,
-              type: 'story-task'
+              id: `${goal.id}-${story.id}`,
+              fromId: goal.id,
+              toId: story.id,
+              type: 'goal-story'
+            });
+
+            // Create task nodes for this story
+            const storyTasks = filteredTasks.filter(t => t.storyId === story.id);
+            storyTasks.forEach((task, taskIndex) => {
+              const taskNode: CanvasNode = {
+                id: task.id!,
+                type: 'task',
+                x: 520,
+                y: yOffset + (index * goalSpacing) + (storyIndex * storySpacing) + (taskIndex * taskSpacing),
+                width: 160,
+                height: 50,
+                title: task.title,
+                data: task,
+                connections: [story.id]
+              };
+              newNodes.push(taskNode);
+
+              // Create connection from story to task
+              newConnections.push({
+                id: `${story.id}-${task.id}`,
+                fromId: story.id,
+                toId: task.id!,
+                type: 'story-task'
+              });
             });
           });
-        });
-      }
-    });
+        }
+      });
 
-    setNodes(newNodes);
-    setConnections(newConnections);
-  };
+      setNodes(newNodes);
+      setConnections(newConnections);
+    };
+    generateCanvas();
+  }, [goals, stories, tasks, viewMode]);
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();

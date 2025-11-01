@@ -27,12 +27,11 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { selectedSprintId } = useSprint();
+  const { selectedSprintId, sprints } = useSprint();
   
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState({
     openTasks: 0,
@@ -135,28 +134,12 @@ const DashboardModernTaskTable: React.FC<DashboardModernTaskTableProps> = ({
         setGoals(goalsData.filter(goal => !(goal as any).deleted));
       });
 
-      // Sprints subscription
-      const sprintsQuery = query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona)
-      );
-      
-      const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-        const sprintsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Sprint[];
-        setSprints(sprintsData);
-      });
-
       setLoading(false);
 
       return () => {
         unsubscribeTasks();
         unsubscribeStories();
         unsubscribeGoals();
-        unsubscribeSprints();
       };
     };
 

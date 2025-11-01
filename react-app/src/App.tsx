@@ -141,8 +141,25 @@ function AppContent() {
   // Debug location changes and force re-render
   useEffect(() => {
     logger.debug('nav', 'Location change', { path: location.pathname, key: location.key });
+    try { performance.mark('route_start'); } catch {}
     setForceRender(prev => prev + 1);
   }, [location.pathname, location.key]);
+
+  // After route render completes, record timing
+  useEffect(() => {
+    try {
+      performance.mark('route_done');
+      performance.measure('route', 'route_start', 'route_done');
+      const entries = performance.getEntriesByName('route');
+      const last = entries[entries.length - 1];
+      if (last) {
+        logger.debug('perf', 'route', { durationMs: Math.round(last.duration) });
+      }
+      performance.clearMarks('route_start');
+      performance.clearMarks('route_done');
+      performance.clearMeasures('route');
+    } catch {}
+  }, [forceRender]);
 
   // Auto-route to mobile Home on mobile devices when landing on dashboard/home
   useEffect(() => {
@@ -154,7 +171,7 @@ function AppContent() {
     if (isMobile && onHome && !alreadyMobile) {
       navigate('/mobile', { replace: true });
     }
-  }, [currentUser, deviceInfo?.isMobile, location.pathname]);
+  }, [currentUser, deviceInfo?.isMobile, location.pathname, navigate]);
 
   // Check for updates on app load and initialize version timeout service
   useEffect(() => {

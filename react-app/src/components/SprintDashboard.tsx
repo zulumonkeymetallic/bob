@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Container, Card, Row, Col, ProgressBar, Badge, Button, Dropdown, Alert, Modal, Form } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { Story, Task, Goal, Sprint } from '../types';
 import { ChoiceHelper, StoryStatus } from '../config/choices';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useSprint } from '../contexts/SprintContext';
 
 interface SprintMetrics {
   totalStories: number;
@@ -33,6 +34,7 @@ interface DashboardStats {
 const SprintDashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints, selectedSprintId, setSelectedSprintId } = useSprint();
   const [stats, setStats] = useState<DashboardStats>({
     currentSprint: null,
     sprints: [],
@@ -52,28 +54,41 @@ const SprintDashboard: React.FC = () => {
     upcomingTasks: [],
     goals: []
   });
-  const [selectedSprintId, setSelectedSprintId] = useState<string>('');
+  const recentStoryIdsRef = useRef<string[]>([]);
+  // Use shared SprintContext selection
   const [loading, setLoading] = useState(true);
   const [showCreateSprint, setShowCreateSprint] = useState(false);
   const [newSprintName, setNewSprintName] = useState('');
   const [sprintDuration, setSprintDuration] = useState(14); // Default 2 weeks
 
   useEffect(() => {
-    if (!currentUser) return;
-    loadDashboardData();
-  }, [currentUser, currentPersona, selectedSprintId]);
+    if (sprints.length === 0) {
+      setStats((prev) => ({ ...prev, sprints: [], currentSprint: null }));
+      return;
+    }
 
-  const loadDashboardData = async () => {
+    const currentSprint = selectedSprintId
+      ? sprints.find((s) => s.id === selectedSprintId) || null
+      : sprints.find((s) => {
+          const now = Date.now();
+          return now >= s.startDate && now <= s.endDate;
+        }) || sprints[0] || null;
+
+    setStats((prev) => ({
+      ...prev,
+      sprints,
+      currentSprint,
+    }));
+
+    if (!selectedSprintId && currentSprint) {
+      setSelectedSprintId(currentSprint.id);
+    }
+  }, [sprints, selectedSprintId, setSelectedSprintId]);
+
+  const loadDashboardData = useCallback(() => {
     if (!currentUser) return;
     
     setLoading(true);
-    
-    // Load sprints
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('startDate', 'desc')
-    );
     
     // Load goals
     const goalsQuery = query(
@@ -106,30 +121,6 @@ const SprintDashboard: React.FC = () => {
       limit(10)
     );
 
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Sprint[];
-      
-      const currentSprint = selectedSprintId 
-        ? sprintsData.find(s => s.id === selectedSprintId) || null
-        : sprintsData.find(s => {
-            const now = Date.now();
-            return now >= s.startDate && now <= s.endDate;
-          }) || null;
-      
-      setStats(prev => ({
-        ...prev,
-        sprints: sprintsData,
-        currentSprint
-      }));
-      
-      if (!selectedSprintId && currentSprint) {
-        setSelectedSprintId(currentSprint.id);
-      }
-    });
-
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -144,8 +135,9 @@ const SprintDashboard: React.FC = () => {
         id: doc.id,
         ...doc.data()
       })) as Story[];
-      
+
       setStats(prev => ({ ...prev, recentStories: storiesData }));
+      recentStoryIdsRef.current = storiesData.map((story) => story.id);
       
       // Calculate sprint metrics
       const totalStories = storiesData.length;
@@ -215,13 +207,13 @@ const SprintDashboard: React.FC = () => {
         id: doc.id,
         ...doc.data()
       })) as Task[];
-      
+
       setStats(prev => ({ ...prev, upcomingTasks: tasksData }));
-      
+
       // Filter tasks for current sprint stories
-      const sprintStoryIds = stats.recentStories.map(s => s.id);
+      const sprintStoryIds = new Set(recentStoryIdsRef.current);
       const sprintTasks = tasksData.filter(t => 
-        t.parentType === 'story' && sprintStoryIds.includes(t.parentId)
+        t.parentType === 'story' && t.parentId && sprintStoryIds.has(t.parentId)
       );
       
       const totalTasks = sprintTasks.length;
@@ -240,12 +232,19 @@ const SprintDashboard: React.FC = () => {
     setLoading(false);
 
     return () => {
-      unsubscribeSprints();
       unsubscribeGoals();
       unsubscribeStories();
       unsubscribeTasks();
     };
-  };
+  }, [currentUser, currentPersona, selectedSprintId, stats.currentSprint]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const cleanup = loadDashboardData();
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
+  }, [loadDashboardData, currentUser]);
 
   const createNewSprint = async () => {
     if (!currentUser || !newSprintName.trim()) return;
@@ -366,7 +365,11 @@ const SprintDashboard: React.FC = () => {
                   </Dropdown.Item>
                 </Dropdown.Menu>
               </Dropdown>
-              <Button variant="outline-secondary" size="sm" onClick={loadDashboardData}>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => loadDashboardData()}
+              >
                 Refresh
               </Button>
             </div>

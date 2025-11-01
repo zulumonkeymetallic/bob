@@ -129,22 +129,25 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   React.useEffect(() => {
-    if (selectedItem) {
-      setEditForm({ ...selectedItem });
-      setIsEditing(false);
-      
-      // Subscribe to activity stream for this item
-      const unsubscribe = ActivityStreamService.subscribeToActivityStream(
-        selectedItem.id,
-        setActivities,
-        currentUser?.uid
-      );
-      
-      return unsubscribe;
-    } else {
+    if (!selectedItem) {
       setActivities([]);
+      return;
     }
-  }, [selectedItem]);
+
+    setEditForm({ ...selectedItem });
+    setIsEditing(false);
+
+    if (!currentUser?.uid) return;
+    
+    // Subscribe to activity stream for this item
+    const unsubscribe = ActivityStreamService.subscribeToActivityStream(
+      selectedItem.id,
+      setActivities,
+      currentUser.uid
+    );
+    
+    return unsubscribe;
+  }, [selectedItem, currentUser?.uid]);
 
   // Determine responsive sidebar width
   const getSidebarWidth = React.useCallback(() => {

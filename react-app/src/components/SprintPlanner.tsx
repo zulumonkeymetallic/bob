@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
-import { getThemeName, getStatusName, getPriorityName, isStatus } from '../utils/statusHelpers';
+import { getThemeName, isStatus } from '../utils/statusHelpers';
 import {
   DndContext,
   closestCenter,
@@ -14,7 +15,6 @@ import {
   useSensors,
   DragEndEvent,
   DragStartEvent,
-  DragOverEvent,
   UniqueIdentifier,
 } from '@dnd-kit/core';
 import {
@@ -22,16 +22,14 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import {
-  useSortable,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Calendar, Target, FileText } from 'lucide-react';
+import { Calendar, Target, FileText } from 'lucide-react';
+import SortableStoryCard from './stories/SortableStoryCard';
+import EditStoryModal from './EditStoryModal';
 
 const SprintPlanner: React.FC = () => {
     const { currentUser } = useAuth();
+    const { sprints } = useSprint();
     const [stories, setStories] = useState<Story[]>([]);
-    const [sprints, setSprints] = useState<Sprint[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
     const [showSprintModal, setShowSprintModal] = useState(false);
@@ -43,6 +41,8 @@ const SprintPlanner: React.FC = () => {
         startDate: '',
         endDate: ''
     });
+    const [selectedStory, setSelectedStory] = useState<Story | null>(null);
+    const [showEditModal, setShowEditModal] = useState(false);
 
     // Theme colors for visual consistency
     const themeColors = {
@@ -65,6 +65,48 @@ const SprintPlanner: React.FC = () => {
         })
     );
 
+    const getGoalForStory = (story: Story): Goal | undefined => goals.find(goal => goal.id === story.goalId);
+
+    const resolveThemeColor = (story: Story, goal?: Goal): string => {
+        const rawTheme = goal?.theme ?? (story as any)?.theme ?? 1;
+        if (typeof rawTheme === 'string') {
+            return themeColors[rawTheme as keyof typeof themeColors] || '#6c757d';
+        }
+        const numericTheme = Number(rawTheme);
+        const themeName = Number.isNaN(numericTheme) ? 'Growth' : getThemeName(numericTheme);
+        return themeColors[themeName as keyof typeof themeColors] || '#6c757d';
+    };
+
+    const getTaskCount = (story: Story): number => {
+        if (Array.isArray((story as any)?.tasks)) {
+            return (story as any).tasks.length;
+        }
+        if (typeof (story as any)?.taskCount === 'number') {
+            return Number((story as any).taskCount) || 0;
+        }
+        return 0;
+    };
+
+    const handleEditStory = (story: Story) => {
+        setSelectedStory(story);
+        setShowEditModal(true);
+    };
+
+    const handleDeleteStory = async (story: Story) => {
+        if (!window.confirm('Are you sure you want to delete this story?')) return;
+        try {
+            await deleteDoc(doc(db, 'stories', story.id));
+        } catch (error) {
+            console.error('Error deleting story:', error);
+            alert('Failed to delete story.');
+        }
+    };
+
+    const handleCloseEditModal = () => {
+        setShowEditModal(false);
+        setSelectedStory(null);
+    };
+
     useEffect(() => {
         if (!currentUser) return;
 
@@ -72,7 +114,6 @@ const SprintPlanner: React.FC = () => {
         
         try {
             const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
-            const sprintsQuery = query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid));
             const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
 
             const unsubscribeStories = onSnapshot(storiesQuery, 
@@ -85,17 +126,6 @@ const SprintPlanner: React.FC = () => {
                 error => {
                     console.error('SprintPlanner: Error loading stories:', error);
                     setLoading(false);
-                }
-            );
-
-            const unsubscribeSprints = onSnapshot(sprintsQuery,
-                snapshot => {
-                    const sprintsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sprint));
-                    console.log('SprintPlanner: Loaded sprints:', sprintsData.length);
-                    setSprints(sprintsData.sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime()));
-                },
-                error => {
-                    console.error('SprintPlanner: Error loading sprints:', error);
                 }
             );
 
@@ -112,7 +142,6 @@ const SprintPlanner: React.FC = () => {
 
             return () => {
                 unsubscribeStories();
-                unsubscribeSprints();
                 unsubscribeGoals();
             };
         } catch (error) {
@@ -121,79 +150,8 @@ const SprintPlanner: React.FC = () => {
         }
     }, [currentUser]);
 
-    // Draggable Story Card Component using @dnd-kit
-    const DraggableStoryCard: React.FC<{ story: Story }> = ({ story }) => {
-        const {
-            attributes,
-            listeners,
-            setNodeRef,
-            transform,
-            transition,
-            isDragging,
-        } = useSortable({ id: story.id });
-
-        const style = {
-            transform: CSS.Transform.toString(transform),
-            transition,
-            opacity: isDragging ? 0.5 : 1,
-        };
-
-        const linkedGoal = goals.find(goal => goal.id === story.goalId);
-        const themeName = linkedGoal ? getThemeName(linkedGoal.theme) : 'Growth';
-        const themeColor = themeColors[themeName as keyof typeof themeColors] || '#6c757d';
-
-        return (
-            <div ref={setNodeRef} style={style} {...attributes}>
-                <Card className="mb-2 story-card" style={{ 
-                    borderLeft: `4px solid ${themeColor}`,
-                    cursor: isDragging ? 'grabbing' : 'grab'
-                }}>
-                    <Card.Body className="p-2">
-                        <div className="d-flex align-items-start">
-                            <div 
-                                {...listeners}
-                                className="drag-handle me-2 text-muted"
-                                style={{ cursor: 'grab', padding: '2px' }}
-                            >
-                                <GripVertical size={16} />
-                            </div>
-                            <div className="flex-grow-1">
-                                <div className="d-flex justify-content-between align-items-start mb-1">
-                                    <h6 className="mb-1 story-title">{story.title}</h6>
-                                    <span className={`badge ${getPointsClass(story.points)} ms-2`}>
-                                        {story.points}pts
-                                    </span>
-                                </div>
-                                
-                                {story.acceptanceCriteria && story.acceptanceCriteria.length > 0 && (
-                                    <p className="mb-1 small text-muted acceptance-criteria">
-                                        <strong>AC:</strong> {story.acceptanceCriteria.join(', ')}
-                                    </p>
-                                )}
-                                
-                                <div className="d-flex justify-content-between align-items-center">
-                                    <div className="story-meta">
-                                        {linkedGoal && (
-                                            <span className="badge bg-secondary me-1">{linkedGoal.theme}</span>
-                                        )}
-                                        <span className={`badge ${getStatusClass(story.status)}`}>
-                                            {story.status}
-                                        </span>
-                                        <span className={`badge ${getPriorityClass(story.priority)} ms-1`}>
-                                            {story.priority}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </Card.Body>
-                </Card>
-            </div>
-        );
-    };
-
     // Droppable Sprint Container Component using @dnd-kit
-    const DroppableSprintContainer: React.FC<{ 
+    const DroppableSprintContainer: React.FC<{
         sprint: Sprint;
         sprintStories: Story[];
         children: React.ReactNode;
@@ -311,47 +269,6 @@ const SprintPlanner: React.FC = () => {
         }
     };
 
-    const getSizeClass = (size: string) => {
-        switch (size) {
-            case 'XS': return 'bg-success';
-            case 'S': return 'bg-info';
-            case 'M': return 'bg-warning';
-            case 'L': return 'bg-danger';
-            case 'XL': return 'bg-dark';
-            default: return 'bg-secondary';
-        }
-    };
-
-    const getPointsClass = (points: number) => {
-        if (points <= 1) return 'bg-success';
-        if (points <= 3) return 'bg-info';
-        if (points <= 5) return 'bg-warning';
-        if (points <= 8) return 'bg-danger';
-        return 'bg-dark';
-    };
-
-    const getPriorityClass = (priority: number) => {
-        const priorityName = getPriorityName(priority);
-        switch (priorityName) {
-            case 'High': return 'bg-danger';
-            case 'Medium': return 'bg-warning';
-            case 'Low': return 'bg-info';
-            default: return 'bg-secondary';
-        }
-    };
-
-    const getStatusClass = (status: number) => {
-        const statusName = getStatusName(status);
-        switch (statusName) {
-            case 'Complete': return 'bg-success';
-            case 'Work in Progress': return 'bg-primary';
-            case 'Blocked': return 'bg-danger';
-            case 'New': return 'bg-secondary';
-            case 'Deferred': return 'bg-warning';
-            default: return 'bg-secondary';
-        }
-    };
-
     if (loading) {
         return (
             <Container className="mt-4">
@@ -400,9 +317,22 @@ const SprintPlanner: React.FC = () => {
                                     items={backlogStories.map(story => story.id)}
                                     strategy={verticalListSortingStrategy}
                                 >
-                                    {backlogStories.map(story => (
-                                        <DraggableStoryCard key={story.id} story={story} />
-                                    ))}
+                                    {backlogStories.map(story => {
+                                        const storyGoal = getGoalForStory(story);
+                                        const themeColor = resolveThemeColor(story, storyGoal);
+                                        const taskCount = getTaskCount(story);
+                                        return (
+                                            <SortableStoryCard
+                                                key={story.id}
+                                                story={story}
+                                                goal={storyGoal}
+                                                taskCount={taskCount}
+                                                themeColor={themeColor}
+                                                onEdit={handleEditStory}
+                                                onDelete={handleDeleteStory}
+                                            />
+                                        );
+                                    })}
                                 </SortableContext>
                                 {backlogStories.length === 0 && (
                                     <div className="text-center text-muted mt-4">
@@ -429,9 +359,22 @@ const SprintPlanner: React.FC = () => {
                                             items={sprintStories.map(story => story.id)}
                                             strategy={verticalListSortingStrategy}
                                         >
-                                            {sprintStories.map(story => (
-                                                <DraggableStoryCard key={story.id} story={story} />
-                                            ))}
+                                            {sprintStories.map(story => {
+                                                const storyGoal = getGoalForStory(story);
+                                                const themeColor = resolveThemeColor(story, storyGoal);
+                                                const taskCount = getTaskCount(story);
+                                                return (
+                                                    <SortableStoryCard
+                                                        key={story.id}
+                                                        story={story}
+                                                        goal={storyGoal}
+                                                        taskCount={taskCount}
+                                                        themeColor={themeColor}
+                                                        onEdit={handleEditStory}
+                                                        onDelete={handleDeleteStory}
+                                                    />
+                                                );
+                                            })}
                                         </SortableContext>
                                         {sprintStories.length === 0 && (
                                             <div className="text-center text-muted mt-3">
@@ -458,6 +401,14 @@ const SprintPlanner: React.FC = () => {
                     </Col>
                 </Row>
             </DndContext>
+
+            <EditStoryModal
+                show={showEditModal}
+                onHide={handleCloseEditModal}
+                story={selectedStory}
+                goals={goals}
+                onStoryUpdated={handleCloseEditModal}
+            />
 
             {/* Create Sprint Modal */}
             <Modal show={showSprintModal} onHide={() => setShowSprintModal(false)} size="lg">

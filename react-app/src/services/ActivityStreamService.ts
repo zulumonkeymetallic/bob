@@ -213,19 +213,17 @@ export class ActivityStreamService {
     callback: (activities: ActivityEntry[]) => void,
     userId?: string
   ): () => void {
-    // Include ownerUid guard when caller provides userId to satisfy stricter rules
-    const q = userId
-      ? query(
-          collection(db, 'activity_stream'),
-          where('ownerUid', '==', userId),
-          where('entityId', '==', entityId),
-          orderBy('timestamp', 'desc')
-        )
-      : query(
-          collection(db, 'activity_stream'),
-          where('entityId', '==', entityId),
-          orderBy('timestamp', 'desc')
-        );
+    if (!userId) {
+      console.warn('ActivityStreamService.subscribeToActivityStream called without userId, skipping listener', { entityId });
+      return () => {};
+    }
+
+    const q = query(
+      collection(db, 'activity_stream'),
+      where('ownerUid', '==', userId),
+      where('entityId', '==', entityId),
+      orderBy('timestamp', 'desc')
+    );
 
     return onSnapshot(
       q,

@@ -3,16 +3,17 @@ import { Container, Row, Col, Card, Button, Badge, Table, Dropdown, Form } from 
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import { Story, Goal, Sprint } from '../types';
+import { Story, Goal } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
 import { storyStatusText } from '../utils/storyCardFormatting';
 import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
+import { useSprint } from '../contexts/SprintContext';
 
 const StoryBacklog: React.FC = () => {
   const { currentUser } = useAuth();
+  const { sprints } = useSprint();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [filters, setFilters] = useState({
     status: '',
     goal: '',
@@ -49,23 +50,9 @@ const StoryBacklog: React.FC = () => {
       setStories(storiesData.sort((a, b) => a.orderIndex - b.orderIndex));
     });
 
-    // Subscribe to sprints
-    const sprintsQuery = query(
-      collection(db, 'sprints'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-    const unsubscribeSprints = onSnapshot(sprintsQuery, (snapshot) => {
-      const sprintsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Sprint));
-      setSprints(sprintsData);
-    });
-
     return () => {
       unsubscribeGoals();
       unsubscribeStories();
-      unsubscribeSprints();
     };
   }, [currentUser]);
 

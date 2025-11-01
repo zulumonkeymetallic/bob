@@ -17,7 +17,7 @@ const HabitsManagement: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    const qh = query(collection(db, 'habits'), where('userId','==', currentUser.uid));
+    const qh = query(collection(db, 'habits'), where('ownerUid','==', currentUser.uid));
     const unsub = onSnapshot(qh, (snap) => {
       setHabits(snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) })));
     });
@@ -50,7 +50,7 @@ const HabitsManagement: React.FC = () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       isActive: !!form.isActive,
-      userId: currentUser.uid,
+      ownerUid: currentUser.uid,
     };
     const ref = await addDoc(collection(db, 'habits'), payload);
     setForm({ name:'', description:'', frequency:'daily', targetValue:1, unit:'times', scheduleTime:'07:00', linkedGoalId:'', isActive:true, daysOfWeek: [], daysText: '' });
