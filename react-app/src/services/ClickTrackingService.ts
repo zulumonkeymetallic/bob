@@ -5,6 +5,13 @@
  */
 import logger from '../utils/logger';
 
+const CLICK_LOG_ALL = (() => {
+  try {
+    const env: any = (typeof process !== 'undefined' ? (process as any).env : {}) || {};
+    return env.REACT_APP_CLICK_LOG_ALL === 'true';
+  } catch { return false; }
+})();
+
 export interface ClickEvent {
   timestamp: string;
   page: string;
@@ -118,7 +125,7 @@ class ClickTrackingService {
     const pageInfo = this.getPageInfo();
     const componentInfo = this.getComponentInfo(target);
     
-    logger.debug('click', 'Scroll', {
+    (CLICK_LOG_ALL ? logger.info : logger.debug)('click', 'Scroll', {
       page: pageInfo.page,
       component: componentInfo.component,
       element: componentInfo.element,
@@ -312,7 +319,7 @@ class ClickTrackingService {
   }
   
   private logClickEvent(clickEvent: ClickEvent) {
-    logger.debug('click', 'User interaction', {
+    (CLICK_LOG_ALL ? logger.info : logger.debug)('click', 'User interaction', {
       page: clickEvent.page,
       component: clickEvent.component,
       element: clickEvent.element,

@@ -158,6 +158,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
         { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
         { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
+        { label: 'Hardcover', path: '/settings/integrations/hardcover', icon: 'book' },
         { label: 'Trakt', path: '/settings/integrations/trakt', icon: 'film' }
       ]
     },
