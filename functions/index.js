@@ -58,6 +58,7 @@ const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
+// Hardcover (Books) API is per-user; tokens stored on profiles.{uid}.hardcoverToken
 
 // Scheduler utils (deterministic id + day key)
 function makePlanId(userId, date) {
@@ -346,7 +347,7 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
 
   // Load habits (daily, active) and derive preferred start time
   const habitsSnap = await db.collection('habits')
-    .where('userId','==', uid)
+    .where('ownerUid','==', uid)
     .where('isActive','==', true)
     .get();
   function toTimeMs(hhmm) {
@@ -1021,6 +1022,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   await db.collection('planning_jobs').doc(jobDocId).set({
     id: jobDocId,
     userId: uid,
+    ownerUid: uid,
     planningDate: start.toISODate(),
     windowStart: start.toISODate(),
     windowEnd: end.toISODate(),
@@ -1594,8 +1596,8 @@ exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_K
   // Compute proposed approvals count
   let approvals = 0;
   try {
-    const ps = await db.collection('planning_jobs')
-      .where('userId', '==', uid)
+  const ps = await db.collection('planning_jobs')
+      .where('ownerUid', '==', uid)
       .where('status', '==', 'proposed')
       .get();
     approvals = ps.size;
@@ -4942,8 +4944,8 @@ exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every mond
   for (const doc of profiles.docs) {
     const uid = doc.id;
     try {
-      const q = await db.collection('activity_stream')
-        .where('userId', '==', uid)
+  const q = await db.collection('activity_stream')
+        .where('ownerUid', '==', uid)
         .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(periodStart))
         .get();
       const counts = {};
@@ -7413,6 +7415,192 @@ exports.getSteamAppDetails = httpsV2.onCall(async (req) => {
   };
 });
 
+// ===== Hardcover (Books) — Sync + Status Updates
+async function hardcoverApiBaseFor(uid) {
+  try {
+    const db = admin.firestore();
+    const p = (await db.collection('profiles').doc(uid).get()).data() || {};
+    const base = String(p.hardcoverApiBase || '').trim();
+    if (base) return base.replace(/\/$/, '');
+  } catch {}
+  return 'https://api.hardcover.app';
+}
+
+async function getHardcoverToken(uid) {
+  const db = admin.firestore();
+  const prof = await db.collection('profiles').doc(uid).get();
+  const tokenFromProfile = prof.exists ? String(prof.data()?.hardcoverToken || '').trim() : '';
+  if (tokenFromProfile) return tokenFromProfile;
+  throw new Error('Hardcover API token not configured for this user. Add it in Settings > Integrations > Hardcover.');
+}
+
+async function callHardcoverGraphQL(uid, query, variables) {
+  const token = await getHardcoverToken(uid);
+  const base = await hardcoverApiBaseFor(uid);
+  const url = `${base}/graphql`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ query, variables })
+  });
+  const json = await res.json();
+  if (!res.ok || json.errors) {
+    const msg = json?.errors?.map((e)=>e.message).join('; ') || `HTTP ${res.status}`;
+    throw new Error(`Hardcover GraphQL error: ${msg}`);
+  }
+  return json.data;
+}
+
+async function fetchHardcoverByStatus(uid, status, cursor) {
+  // Try common GraphQL shapes; prefer me -> readingStatuses
+  const q = `
+    query BooksByStatus($status: String!, $after: String) {
+      me {
+        readingStatuses(status: $status, first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id
+              status
+              addedAt
+              book {
+                id
+                title
+                subtitle
+                publishedOn
+                coverEdition { coverUrl }
+                authors { name }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const data = await callHardcoverGraphQL(uid, q, { status, after: cursor || null });
+  const conn = data?.me?.readingStatuses;
+  if (!conn) return { items: [], next: null };
+  const items = (conn.edges || []).map(e => ({
+    status: e?.node?.status || status,
+    addedAt: e?.node?.addedAt || null,
+    book: e?.node?.book || null,
+  })).filter(x => x.book && x.book.id);
+  const next = conn?.pageInfo?.hasNextPage ? (conn?.pageInfo?.endCursor || null) : null;
+  return { items, next };
+}
+
+async function _syncHardcover(uid) {
+  const db = admin.firestore();
+  const startedAt = Date.now();
+  const statuses = ['to-read','reading','read'];
+  let total = 0;
+  try {
+    for (const status of statuses) {
+      let cursor = null;
+      do {
+        const { items, next } = await fetchHardcoverByStatus(uid, status, cursor);
+        cursor = next;
+        if (!items.length) continue;
+        const batch = db.batch();
+        for (const entry of items) {
+          const b = entry.book;
+          const id = `${uid}_${b.id}`;
+          const ref = db.collection('hardcover').doc(id);
+          const cover = b?.coverEdition?.coverUrl || null;
+          const authors = Array.isArray(b?.authors) ? b.authors.map(a => a?.name).filter(Boolean) : [];
+          const addedAtMs = toMillis(entry.addedAt) || null;
+          batch.set(ref, {
+            id,
+            ownerUid: uid,
+            hardcoverId: String(b.id),
+            title: b.title || 'Book',
+            subtitle: b.subtitle || null,
+            authors,
+            coverImage: cover,
+            status: String(entry.status || status),
+            addedAt: addedAtMs,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+        await batch.commit();
+        total += items.length;
+      } while (cursor);
+    }
+
+    await db.collection('profiles').doc(uid).set({
+      hardcoverLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+      hardcoverLibrarySize: total,
+    }, { merge: true });
+
+    await recordIntegrationLog(uid, 'hardcover', 'success', `Synced ${total} books`, { durationMs: Date.now() - startedAt });
+    return { ok: true, written: total };
+  } catch (error) {
+    await recordIntegrationLog(uid, 'hardcover', 'error', error?.message || 'Hardcover sync failed', { durationMs: Date.now() - startedAt });
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Hardcover');
+  }
+}
+
+exports.syncHardcover = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  return await _syncHardcover(req.auth.uid);
+});
+
+async function hardcoverSetStatus(uid, bookId, status) {
+  const m = `
+    mutation UpdateStatus($input: UpdateReadingStatusInput!) {
+      updateReadingStatus(input: $input) { ok }
+    }
+  `;
+  const variables = { input: { bookId: String(bookId), status: String(status) } };
+  await callHardcoverGraphQL(uid, m, variables);
+}
+
+exports.hardcoverUpdateStatus = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const bookId = String(req?.data?.bookId || '').trim();
+  const status = String(req?.data?.status || '').trim();
+  if (!bookId || !status) throw new httpsV2.HttpsError('invalid-argument', 'bookId and status are required');
+  try {
+    await hardcoverSetStatus(uid, bookId, status);
+    const db = admin.firestore();
+    const ref = db.collection('hardcover').doc(`${uid}_${bookId}`);
+    await ref.set({ status, updatedAt: admin.firestore.FieldValue.serverTimestamp(), completedAt: status === 'read' ? Date.now() : null }, { merge: true });
+    return { ok: true };
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', e?.message || 'Failed to update Hardcover status');
+  }
+});
+
+// When a Story linked to a Hardcover book is marked Done, reflect that in Hardcover
+exports.onStoryHardcoverStatusSync = functionsV2.firestore.onDocumentUpdated('stories/{storyId}', async (event) => {
+  try {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (!before || !after) return;
+    const beforeStatus = before.status;
+    const afterStatus = after.status;
+    if (beforeStatus === afterStatus) return;
+    // consider numeric 4 or string 'done' as completion
+    const isDone = (v) => v === 4 || String(v).toLowerCase() === 'done' || String(v).toLowerCase() === 'completed';
+    if (!isDone(afterStatus)) return;
+    const uid = after.ownerUid || after.userId;
+    if (!uid) return;
+    const bookId = after?.metadata?.hardcoverBookId || after?.hardcoverBookId;
+    if (!bookId) return;
+    await hardcoverSetStatus(uid, String(bookId), 'read');
+    // Also mark the local doc
+    const db = admin.firestore();
+    await db.collection('hardcover').doc(`${uid}_${bookId}`).set({ status: 'read', completedAt: Date.now(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  } catch (e) {
+    console.error('onStoryHardcoverStatusSync error', e);
+  }
+});
+
 // Media Import Controller: Generate Stories + Tasks from connected sources
 exports.mediaImportGenerateStories = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
@@ -7651,6 +7839,7 @@ exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZ
         const jobDoc = {
           id: runId,
           userId: uid,
+          ownerUid: uid,
           startedAt: runStartedAt,
           completedAt: admin.firestore.FieldValue.serverTimestamp(),
           status: 'proposed',
@@ -7742,6 +7931,7 @@ exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZ
         await db.collection('planning_jobs').doc(runId).set({
           id: runId,
           userId: uid,
+          ownerUid: uid,
           startedAt: runStartedAt,
           completedAt: admin.firestore.FieldValue.serverTimestamp(),
           status: 'completed',
@@ -7759,6 +7949,7 @@ exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZ
       await db.collection('planning_jobs').doc(runId).set({
         id: runId,
         userId: uid,
+        ownerUid: uid,
         startedAt: runStartedAt,
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
         status: 'error',
@@ -8096,6 +8287,7 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
 
   await db.collection('daily_summaries').add({
     userId,
+    ownerUid: userId,
     dayIso: summaryData.metadata.dayIso,
     timezone: summaryData.metadata.timezone,
     locale: summaryData.metadata.locale,
@@ -8129,6 +8321,7 @@ async function dispatchDataQualityForUser({ db, userId, profile, nowUtc, force =
 
   await db.collection('data_quality_reports').add({
     userId,
+    ownerUid: userId,
     window: snapshot.window,
     summary: snapshot.summaryStats,
     payload: snapshot,

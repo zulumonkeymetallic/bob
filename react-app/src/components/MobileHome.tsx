@@ -30,7 +30,7 @@ const MobileHome: React.FC = () => {
     if (!currentUser?.uid) { setSummary(null); return; }
     const q = query(
       collection(db, 'daily_summaries'),
-      where('userId', '==', currentUser.uid),
+      where('ownerUid', '==', currentUser.uid),
       orderBy('generatedAt', 'desc'),
       limit(1)
     );
@@ -342,4 +342,3 @@ const MobileHome: React.FC = () => {
 };
 
 export default MobileHome;
-

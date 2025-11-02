@@ -87,7 +87,7 @@ const AIUsageDashboard = () => {
       const logsRef = collection(db, 'ai_usage_logs');
       let logsQuery = query(
         logsRef,
-        where('userId', '==', currentUser.uid),
+        where('ownerUid', '==', currentUser.uid),
         orderBy('performance.timestamp', 'desc'),
         limit(100)
       );
@@ -96,7 +96,7 @@ const AIUsageDashboard = () => {
       if (selectedFunction !== 'all') {
         logsQuery = query(
           logsRef,
-          where('userId', '==', currentUser.uid),
+          where('ownerUid', '==', currentUser.uid),
           where('functionName', '==', selectedFunction),
           orderBy('performance.timestamp', 'desc'),
           limit(100)

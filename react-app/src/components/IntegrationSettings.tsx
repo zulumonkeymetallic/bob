@@ -52,7 +52,7 @@ const relativeTime = (value: any) => {
   return formatDistanceToNow(date, { addSuffix: true });
 };
 
-type IntegrationSection = 'google' | 'monzo' | 'strava' | 'steam' | 'trakt' | 'all';
+type IntegrationSection = 'google' | 'monzo' | 'strava' | 'steam' | 'trakt' | 'hardcover' | 'all';
 
 interface IntegrationSettingsProps {
   section?: IntegrationSection;
@@ -87,6 +87,12 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [traktMessage, setTraktMessage] = useState<string | null>(null);
   const [traktLoading, setTraktLoading] = useState(false);
   const [traktUserInput, setTraktUserInput] = useState('');
+
+  // Hardcover
+  const [hardcoverBooks, setHardcoverBooks] = useState<any[]>([]);
+  const [hardcoverMessage, setHardcoverMessage] = useState<string | null>(null);
+  const [hardcoverLoading, setHardcoverLoading] = useState(false);
+  const [hardcoverTokenInput, setHardcoverTokenInput] = useState('');
   const popupTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
@@ -113,6 +119,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       setProfile(data || null);
       if (data?.steamId) setSteamIdInput(data.steamId);
       if (data?.traktUser) setTraktUserInput(data.traktUser);
+      if ((data as any)?.hardcoverToken) setHardcoverTokenInput((data as any).hardcoverToken);
     });
     return () => unsub();
   }, [currentUser]);
@@ -125,6 +132,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const traktLastSync = profile?.traktLastSyncAt;
   const googleLastSync = profile?.googleCalendarLastSyncAt;
   const stravaLastSync = profile?.stravaLastSyncAt;
+  const hardcoverLastSync = (profile as any)?.hardcoverLastSyncAt;
 
   useEffect(() => {
     if (!currentUser) return;
@@ -198,12 +206,24 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       setTraktHistory(rows.slice(0, 5));
     });
 
+    const hardcoverQuery = query(
+      collection(db, 'hardcover'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(5)
+    );
+    const unsubscribeHardcover = onSnapshot(hardcoverQuery, (snap) => {
+      const rows = snap.docs.map((docSnap) => docSnap.data());
+      rows.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+      setHardcoverBooks(rows.slice(0, 5));
+    });
+
     return () => {
       unsubscribeSummary();
       unsubscribeTx();
       unsubscribeStrava();
       unsubscribeSteam();
       unsubscribeTrakt();
+      unsubscribeHardcover();
     };
   }, [currentUser]);
 
@@ -407,6 +427,23 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     }
   };
 
+  const syncHardcover = async () => {
+    if (!currentUser) return;
+    setHardcoverLoading(true);
+    setHardcoverMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'syncHardcover');
+      const res:any = await fn({});
+      const data = res?.data || res;
+      setHardcoverMessage(`Imported ${data?.written || 0} books`);
+    } catch (err:any) {
+      console.error('syncHardcover failed', err);
+      setHardcoverMessage(err?.message || 'Hardcover sync failed');
+    } finally {
+      setHardcoverLoading(false);
+    }
+  };
+
   const updateProfile = async (patch: Record<string, any>) => {
     if (!currentUser) return;
     await updateDoc(doc(db, 'profiles', currentUser.uid), patch);
@@ -484,6 +521,60 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
               <CalendarSyncManager />
             </div>
           </Collapse>
+        </Card.Body>
+      </Card>
+      )}
+
+      {show('hardcover') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">Hardcover</h4>
+            <small>Two-way sync using personal API token</small>
+          </div>
+          <Badge bg={(profile as any)?.hardcoverToken ? 'success' : 'secondary'}>
+            {(profile as any)?.hardcoverToken ? 'Configured' : 'Not Configured'}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <Form.Label>API Token</Form.Label>
+              <Form.Control type="password" value={hardcoverTokenInput} onChange={(e)=>setHardcoverTokenInput(e.target.value)} placeholder="Paste Hardcover API token" />
+              <Button className="mt-2" variant="outline-secondary" size="sm" onClick={() => updateProfile({ hardcoverToken: hardcoverTokenInput || null })}>Save Token</Button>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <div><strong>Last sync:</strong> {formatTimestamp(hardcoverLastSync)} ({relativeTime(hardcoverLastSync)})</div>
+              <Button variant="primary" className="mt-2" onClick={syncHardcover} disabled={hardcoverLoading}>
+                {hardcoverLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Sync Now
+              </Button>
+            </Col>
+          </Row>
+
+          {hardcoverMessage && <Alert variant="info">{hardcoverMessage}</Alert>}
+
+          <h6>Recent Books</h6>
+          {hardcoverBooks.length === 0 ? (
+            <Alert variant="light">No books synced yet.</Alert>
+          ) : (
+            <Table size="sm" responsive>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hardcoverBooks.map((b: any) => (
+                  <tr key={b.hardcoverId}>
+                    <td>{b.title}</td>
+                    <td>{b.status || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
         </Card.Body>
       </Card>
       )}

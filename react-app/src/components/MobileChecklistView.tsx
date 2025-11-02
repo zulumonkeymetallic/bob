@@ -19,7 +19,7 @@ const MobileChecklistView: React.FC = () => {
     const summariesRef = collection(db, 'daily_summaries');
     const q = query(
       summariesRef,
-      where('userId', '==', currentUser.uid),
+      where('ownerUid', '==', currentUser.uid),
       orderBy('generatedAt', 'desc'),
       limit(1),
     );

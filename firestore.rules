@@ -68,9 +68,12 @@ service cloud.firestore {
     }
     // Per-user integration logs (e.g., google/strava/monzo)
     match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /ai_usage_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /steam/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Hardcover books (per-user library + backlog)
+    match /hardcover/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 
     // Travel map entries (per-user visits/locations)
     match /travel/{id} {
@@ -150,14 +153,26 @@ service cloud.firestore {
       allow read, update, delete: if isOwner();
     }
 
-    // Daily summary + reports (owner-scoped by userId)
+    // Daily summary + reports (owner-scoped; accept ownerUid or legacy userId)
     match /daily_summaries/{id} {
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
     }
     match /data_quality_reports/{id} {
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
     }
 
     // Automation status/runs (owner-scoped by userId; these docs do not carry ownerUid)
@@ -176,6 +191,18 @@ service cloud.firestore {
         allow create: if isOwnerForCreate();
         allow read, update, delete: if isOwner();
       }
+    }
+
+    // Planning jobs (AI calendar proposals + runs)
+    match /planning_jobs/{id} {
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
     }
 
     // App usage tracking from Android/TV clients

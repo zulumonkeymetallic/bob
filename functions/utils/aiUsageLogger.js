@@ -67,6 +67,7 @@ class AIUsageLogger {
         status,
         errorMessage,
         userId,
+        ownerUid: userId,
         persona,
         context,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),

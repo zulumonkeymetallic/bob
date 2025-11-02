@@ -14,7 +14,7 @@ const ApprovalsBadge: React.FC = () => {
     if (!currentUser?.uid) { setCount(0); return; }
     const q = query(
       collection(db, 'planning_jobs'),
-      where('userId', '==', currentUser.uid),
+      where('ownerUid', '==', currentUser.uid),
       where('status', '==', 'proposed'),
     );
     const unsub = onSnapshot(q, (snap) => setCount(snap.size), () => setCount(0));
@@ -37,4 +37,3 @@ const ApprovalsBadge: React.FC = () => {
 };
 
 export default ApprovalsBadge;
-

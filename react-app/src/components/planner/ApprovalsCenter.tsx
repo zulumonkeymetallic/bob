@@ -24,7 +24,7 @@ const ApprovalsCenter: React.FC = () => {
     if (!currentUser?.uid) { setJobs([]); return; }
     const q = query(
       collection(db, 'planning_jobs'),
-      where('userId', '==', currentUser.uid),
+      where('ownerUid', '==', currentUser.uid),
       orderBy('completedAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -126,4 +126,3 @@ const ApprovalsCenter: React.FC = () => {
 };
 
 export default ApprovalsCenter;
-

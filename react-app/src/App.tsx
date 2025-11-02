@@ -15,6 +15,7 @@ import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
 import PersonalListsManagement from './components/PersonalListsManagement';
 import GamesBacklog from './components/GamesBacklog';
+import BooksBacklog from './components/BooksBacklog';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
@@ -78,6 +79,7 @@ import GoogleCalendarSettings from './components/settings/integrations/GoogleCal
 import MonzoSettings from './components/settings/integrations/MonzoSettings';
 import StravaSettings from './components/settings/integrations/StravaSettings';
 import SteamSettings from './components/settings/integrations/SteamSettings';
+import HardcoverSettings from './components/settings/integrations/HardcoverSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
 import { useEntityAudit } from './hooks/useEntityAudit';
 import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
@@ -248,6 +250,7 @@ function AppContent() {
               <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
               <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
               <Route path="/games-backlog" element={<GamesBacklog />} />
+              <Route path="/books-backlog" element={<BooksBacklog />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
             {/* Legacy sprint routes - redirect to consolidated */}
             <Route path="/kanban" element={<Navigate to="/sprints/kanban" replace />} />
@@ -326,6 +329,7 @@ function AppContent() {
             <Route path="/settings/integrations/monzo" element={<MonzoSettings />} />
             <Route path="/settings/integrations/strava" element={<StravaSettings />} />
             <Route path="/settings/integrations/steam" element={<SteamSettings />} />
+            <Route path="/settings/integrations/hardcover" element={<HardcoverSettings />} />
             <Route path="/settings/integrations/trakt" element={<TraktSettings />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
             <Route path="/admin" element={<Navigate to="/settings/integrations" replace />} />

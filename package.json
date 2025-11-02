@@ -30,6 +30,7 @@
     "preview:build": "serve -s react-app/build -l 4173",
     "preview:test": "concurrently -k -s first \"npm:emulators\" \"npm:preview:build\"",
     "backfill:sprint-persona": "node scripts/backfill-sprint-persona.js",
-    "validate:sprints": "node scripts/validate-sprints-perf.js --serviceAccount=/Users/jim/GitHub/secrets/bob20250810-firebase-adminsdk-fbsvc-e80020e8a4.json --uid=3L3nnXSuTPfr08c8DTXG5zYX37A2 --project=bob20250810"
+    "validate:sprints": "node scripts/validate-sprints-perf.js --serviceAccount=/Users/jim/GitHub/secrets/bob20250810-firebase-adminsdk-fbsvc-e80020e8a4.json --uid=3L3nnXSuTPfr08c8DTXG5zYX37A2 --project=bob20250810",
+    "backfill:owner-uid": "node scripts/backfill-ownerUid-multi.js --serviceAccount=/Users/jim/GitHub/secrets/bob20250810-firebase-adminsdk-fbsvc-e80020e8a4.json"
   }
 }

@@ -90,21 +90,23 @@ const resolveRecurringDueWithinWindow = (entity, windowStart, windowEnd) => {
 };
 
 const buildActivityIndex = async (db, userId, limit = 400) => {
-  const activitySnap = await db
+  // Prefer ownerUid; fall back to legacy userId if needed
+  let activitySnap = await db
     .collection('activity_stream')
-    .where('userId', '==', userId)
+    .where('ownerUid', '==', userId)
     .orderBy('createdAt', 'desc')
     .limit(limit)
     .get()
-    .catch(async (error) => {
-      console.warn('[reporting] activity_stream query failed, falling back to ownerUid filter', error?.message || error);
-      return db
-        .collection('activity_stream')
-        .where('ownerUid', '==', userId)
-        .orderBy('createdAt', 'desc')
-        .limit(limit)
-        .get();
-    });
+    .catch(() => null);
+  if (!activitySnap || activitySnap.empty) {
+    activitySnap = await db
+      .collection('activity_stream')
+      .where('userId', '==', userId)
+      .orderBy('createdAt', 'desc')
+      .limit(limit)
+      .get()
+      .catch(() => ({ empty: true, docs: [] }));
+  }
 
   const latestByEntity = new Map();
   const latestByType = new Map();

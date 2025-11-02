@@ -101,6 +101,10 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const didFallbackCheckRef = React.useRef(false);
   const cacheHydratedRef = React.useRef(false);
 
+  // Keep a ref of selectedSprintId to avoid resubscribing when it changes
+  const selectedSprintIdRef = React.useRef<string>('');
+  useEffect(() => { selectedSprintIdRef.current = selectedSprintId; }, [selectedSprintId]);
+
   useEffect(() => {
     const saved = localStorage.getItem('bob_selected_sprint');
     if (saved) setSelectedSprintIdState(saved);
@@ -131,7 +135,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } else {
       cacheHydratedRef.current = false;
     }
-  }, [currentUser?.uid, currentPersona, selectedSprintId]);
+  }, [currentUser?.uid, currentPersona]);
 
   useEffect(() => {
     if (!currentUser?.uid || !currentPersona) {
@@ -232,9 +236,10 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           trimmed = [...trimmed, ...fillers];
         }
 
-        if (selectedSprintId) {
-          const selected = data.find((s) => s.id === selectedSprintId);
-          if (selected && !trimmed.some((s) => s.id === selectedSprintId)) {
+        const currentSelected = selectedSprintIdRef.current;
+        if (currentSelected) {
+          const selected = data.find((s) => s.id === currentSelected);
+          if (selected && !trimmed.some((s) => s.id === currentSelected)) {
             trimmed = [selected, ...trimmed];
           }
         }
@@ -264,14 +269,11 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           performance.clearMeasures('sprints_attach');
         } catch {}
 
-        let nextSelectedId = selectedSprintId;
-        if (!selectedSprintId && deduped.length > 0) {
+        let nextSelectedId = selectedSprintIdRef.current;
+        if (!nextSelectedId && deduped.length > 0) {
           nextSelectedId = deduped[0].id;
           setSelectedSprintId(nextSelectedId);
-        } else if (
-          selectedSprintId &&
-          !deduped.some((s) => s.id === selectedSprintId)
-        ) {
+        } else if (nextSelectedId && !deduped.some((s) => s.id === nextSelectedId)) {
           const replacement = deduped[0];
           if (replacement) {
             nextSelectedId = replacement.id;
@@ -335,7 +337,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
 
     return () => unsubscribe();
-  }, [currentUser?.uid, currentPersona, selectedSprintId]);
+  }, [currentUser?.uid, currentPersona]);
 
   const sprintsById = useMemo(() => {
     const map: Record<string, Sprint> = {};
