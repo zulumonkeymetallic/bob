@@ -16,6 +16,12 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   onSprintChange,
   className = '',
 }) => {
+  const DISABLE_SELECTOR = (() => {
+    try {
+      const env: any = (typeof process !== 'undefined' ? (process as any).env : {}) || {};
+      return env.REACT_APP_SPRINT_SELECTOR_DISABLED === 'true' || env.REACT_APP_SPRINT_DEFAULT_ALL === 'true';
+    } catch { return false; }
+  })();
   const {
     sprints,
     loading,
@@ -66,6 +72,15 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           <span className="visually-hidden">Loading...</span>
         </div>
         <span>Loading sprints...</span>
+      </div>
+    );
+  }
+
+  if (DISABLE_SELECTOR) {
+    return (
+      <div className={`d-flex align-items-center ${className}`} title="Sprint selection disabled for test">
+        <span className="me-2">🏃‍♂️</span>
+        <span>All Sprints</span>
       </div>
     );
   }
