@@ -1303,9 +1303,23 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID], invo
     const uid = String(req.query.uid || "");
     const nonce = String(req.query.nonce || "");
     if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+
     const projectId = process.env.GCLOUD_PROJECT;
+    if (!projectId) return res.status(500).send("Missing GCLOUD_PROJECT in environment.");
+
     const redirectUri = `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
     const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+    if (!clientId || !/\.apps\.googleusercontent\.com$/.test(String(clientId))) {
+      // Helpful message without leaking the client id value
+      return res.status(500).send(
+        [
+          'Google OAuth is not configured. Please set GOOGLE_OAUTH_CLIENT_ID (Web application client) and GOOGLE_OAUTH_CLIENT_SECRET as Functions secrets.',
+          'Also add this Redirect URI in the Google Cloud Console:',
+          redirectUri
+        ].join('\n')
+      );
+    }
+
     const state = stateEncode({ uid, nonce });
     const scope = encodeURIComponent("https://www.googleapis.com/auth/calendar");
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&access_type=offline&include_granted_scopes=true&prompt=consent&scope=${scope}&state=${state}`;
@@ -2672,8 +2686,10 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
   const db = admin.firestore();
   const summary = { accounts: 0, pots: 0, transactions: 0, accountsSynced: [] };
 
-  const accountsResp = await monzoApi(accessToken, '/accounts', { account_type: 'uk_retail' });
-  const accounts = accountsResp.accounts || [];
+  // Fetch all accounts (personal + joint). Monzo supports types like 'uk_retail' and 'uk_retail_joint'.
+  // We previously limited to 'uk_retail' which excluded joint accounts; include all to avoid missing data.
+  const accountsResp = await monzoApi(accessToken, '/accounts');
+  const accounts = (accountsResp.accounts || []).filter(a => !a.closed);
   summary.accounts = accounts.length;
 
   if (accounts.length) {
