@@ -1,64 +1,108 @@
-name: Deploy (disabled)
+name: Deploy
 
 on:
   workflow_dispatch:
     inputs:
-      channelId:
-        description: "Firebase Hosting channel (e.g., preview or live)"
+      bump:
+        description: "Version bump (patch/minor/major/explicit)"
+        required: true
+        default: patch
+        type: choice
+        options: [patch, minor, major, explicit]
+      version:
+        description: "Explicit version (when bump=explicit), e.g., 4.3.0"
         required: false
-        default: "live"
+        default: ""
+        type: string
+      push_tags:
+        description: "Push version commit and tag back to repo"
+        required: true
+        default: true
+        type: boolean
+      no_deploy:
+        description: "Build only (skip Firebase deploy)"
+        required: false
+        default: false
+        type: boolean
+      skip_functions:
+        description: "Skip Functions deploy"
+        required: false
+        default: false
+        type: boolean
+      skip_rules:
+        description: "Skip Firestore rules/indexes deploy"
+        required: false
+        default: false
+        type: boolean
+      skip_hosting:
+        description: "Skip Hosting deploy"
+        required: false
+        default: false
+        type: boolean
+      firebase_deploy_flags:
+        description: "Extra flags for firebase deploy (e.g., --force or --project xxx)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-    # Protect with environment approvals/secrets. 'live' -> Production, other -> Test
-    environment: 
-      name: ${{ env.CHANNEL_ID == 'live' && 'Production' || 'Test' }}
-    concurrency:
-      group: deploy-${{ github.ref }}
-      cancel-in-progress: false
     env:
-      CHANNEL_ID: ${{ github.event.inputs.channelId || 'live' }}
+      FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+      FIREBASE_DEPLOY_FLAGS: ${{ inputs.firebase_deploy_flags }}
+      SKIP_FUNCTIONS: ${{ inputs.skip_functions }}
+      SKIP_RULES: ${{ inputs.skip_rules }}
+      SKIP_HOSTING: ${{ inputs.skip_hosting }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          node-version: 20
+          fetch-depth: 0  # required to push tags
 
-      - name: Install root deps
-        run: npm ci || npm i
-
-      - name: Install app deps
-        run: npm ci --prefix react-app || npm i --prefix react-app
-
-      - name: Unit tests (CRA)
-        run: npm test --prefix react-app -- --watchAll=false
-
-      - name: Build app
-        run: npm run build --prefix react-app
-
-      - name: Check version alignment
-        run: node scripts/check-version-alignment.js
-
-      - name: Gate with E2E
-        env:
-          CI: true
-          PW_USE_BUILD: '1'
-          APP_BASE_URL: http://localhost:4173
-          TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
-          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
-        run: npx playwright test
-
-      - name: Firebase Deploy
-        uses: FirebaseExtended/action-hosting-deploy@v0
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          channelId: ${{ env.CHANNEL_ID }}
-          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+          node-version: '20'
 
-      - name: Post release notes
-        if: ${{ success() }}
-        run: echo "Deployed $(git rev-parse --short HEAD) to ${{ secrets.FIREBASE_PROJECT_ID }} (channel: ${{ env.CHANNEL_ID }})"
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools@latest
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Ensure deploy script executable
+        run: chmod +x ./deploy
+
+      - name: Run deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.bump }}" == "explicit" && -n "${{ inputs.version }}" ]]; then
+            ARG_VER="${{ inputs.version }}"
+          else
+            ARG_VER="${{ inputs.bump }}"
+          fi
+
+          PUSH_FLAG=""
+          if [[ "${{ inputs.push_tags }}" == "true" ]]; then
+            PUSH_FLAG="--push"
+          fi
+
+          NO_DEPLOY_FLAG=""
+          if [[ "${{ inputs.no_deploy }}" == "true" ]]; then
+            NO_DEPLOY_FLAG="--no-deploy"
+          fi
+
+          echo "Running: ./deploy ${ARG_VER} ${PUSH_FLAG} ${NO_DEPLOY_FLAG}"
+          ./deploy "${ARG_VER}" ${PUSH_FLAG} ${NO_DEPLOY_FLAG}
+
