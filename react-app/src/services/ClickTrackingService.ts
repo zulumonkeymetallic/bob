@@ -5,13 +5,6 @@
  */
 import logger from '../utils/logger';
 
-const CLICK_LOG_ALL = (() => {
-  try {
-    const env: any = (typeof process !== 'undefined' ? (process as any).env : {}) || {};
-    return env.REACT_APP_CLICK_LOG_ALL === 'true';
-  } catch { return false; }
-})();
-
 export interface ClickEvent {
   timestamp: string;
   page: string;
@@ -42,11 +35,21 @@ class ClickTrackingService {
   private lastScrollTop = 0;
   private lastScrollLeft = 0;
   private scrollTimeout: NodeJS.Timeout | null = null;
+  private logAll = false;
+  
+  public setLogAll(value: boolean) {
+    this.logAll = !!value;
+    try { localStorage.setItem('BOB_CLICK_LOG_ALL', this.logAll ? '1' : '0'); } catch {}
+    logger.info('click', `Click logAll ${this.logAll ? 'enabled' : 'disabled'}`);
+  }
   
   public initialize() {
     if (this.isInitialized) return;
     
     logger.info('click', 'Initializing global click tracking service');
+    // Restore persisted preference
+    try { this.logAll = localStorage.getItem('BOB_CLICK_LOG_ALL') === '1'; } catch {}
+    try { if ((window as any).BOB_CLICK_LOG_ALL === true) this.logAll = true; } catch {}
     
     // Track mouse clicks (desktop)
     document.addEventListener('click', this.handleClick, true);
@@ -125,7 +128,7 @@ class ClickTrackingService {
     const pageInfo = this.getPageInfo();
     const componentInfo = this.getComponentInfo(target);
     
-    (CLICK_LOG_ALL ? logger.info : logger.debug)('click', 'Scroll', {
+    (this.logAll ? logger.info : logger.debug)('click', 'Scroll', {
       page: pageInfo.page,
       component: componentInfo.component,
       element: componentInfo.element,
@@ -319,7 +322,7 @@ class ClickTrackingService {
   }
   
   private logClickEvent(clickEvent: ClickEvent) {
-    (CLICK_LOG_ALL ? logger.info : logger.debug)('click', 'User interaction', {
+    (this.logAll ? logger.info : logger.debug)('click', 'User interaction', {
       page: clickEvent.page,
       component: clickEvent.component,
       element: clickEvent.element,
@@ -337,3 +340,26 @@ class ClickTrackingService {
 
 // Create singleton instance
 export const clickTrackingService = new ClickTrackingService();
+
+// Expose console helpers to toggle click/scroll logs without rebuild
+declare global {
+  interface Window {
+    BOB_CLICK_LOG_ALL?: boolean;
+    BOB_CLICK_ENABLE?: () => void;
+    BOB_CLICK_DISABLE?: () => void;
+  }
+}
+try {
+  if (typeof window !== 'undefined') {
+    window.BOB_CLICK_ENABLE = () => {
+      try { localStorage.setItem('BOB_LOG','1'); } catch {}
+      logger.setLevel('debug');
+      // Narrow to click channel by default; users can widen via BOB_SET_CHANNELS
+      try { (logger as any).setChannels(['click']); } catch {}
+      clickTrackingService.setLogAll(true);
+    };
+    window.BOB_CLICK_DISABLE = () => {
+      clickTrackingService.setLogAll(false);
+    };
+  }
+} catch {}
