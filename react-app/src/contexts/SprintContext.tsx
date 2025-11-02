@@ -9,6 +9,8 @@ import logger from '../utils/logger';
 
 const SPRINT_CACHE_NAMESPACE = 'bob_sprint_cache_v1';
 const SPRINT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes – keeps dev refresh fast without going stale
+// Test branch flag: default to All Sprints and disable auto-select/restore
+const DEFAULT_TO_ALL_SPRINTS = (typeof process !== 'undefined' && (process as any).env?.REACT_APP_SPRINT_DEFAULT_ALL) !== 'false';
 
 type CachedSprint = Omit<Sprint, 'createdAt' | 'updatedAt'> & {
   createdAt?: string | null;
@@ -106,6 +108,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => { selectedSprintIdRef.current = selectedSprintId; }, [selectedSprintId]);
 
   useEffect(() => {
+    if (DEFAULT_TO_ALL_SPRINTS) return; // keep default '' (All Sprints)
     const saved = localStorage.getItem('bob_selected_sprint');
     if (saved) setSelectedSprintIdState(saved);
   }, []);
@@ -127,8 +130,15 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       didFallbackCheckRef.current = false;
       setAllSprints(cached.allSprints);
       setSprints(cached.sprints);
-      if (!selectedSprintId && cached.selectedSprintId) {
-        setSelectedSprintId(cached.selectedSprintId);
+      // Respect explicit user preference including "All Sprints" (empty string).
+      // Only hydrate from cache if feature flag allows and no local preference key exists at all.
+      if (!DEFAULT_TO_ALL_SPRINTS) {
+        try {
+          const savedPref = localStorage.getItem('bob_selected_sprint');
+          if ((savedPref === null || savedPref === undefined) && typeof cached.selectedSprintId === 'string') {
+            setSelectedSprintId(cached.selectedSprintId);
+          }
+        } catch {}
       }
       setError(null);
       setLoading(false);
@@ -270,7 +280,8 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } catch {}
 
         let nextSelectedId = selectedSprintIdRef.current;
-        if (!nextSelectedId && deduped.length > 0) {
+        // Do not override "All Sprints" (empty string). Only auto-select when truly unset.
+        if ((nextSelectedId === undefined || nextSelectedId === null) && deduped.length > 0) {
           nextSelectedId = deduped[0].id;
           setSelectedSprintId(nextSelectedId);
         } else if (nextSelectedId && !deduped.some((s) => s.id === nextSelectedId)) {

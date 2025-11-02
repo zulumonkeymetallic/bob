@@ -37,7 +37,8 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
     if (effectiveSelectedId !== undefined && effectiveSelectedId !== null) return;
 
     const activeSprint = sprints.find((sprint) => isStatus(sprint.status, 'active'));
-    const plannedSprint = sprints.find((sprint) => isStatus(sprint.status, 'planned'));
+    // For sprints, the pre-active state is "planning" (status 0)
+    const plannedSprint = sprints.find((sprint) => isStatus(sprint.status, 'planning'));
     const fallbackSprint = sprints[0];
     const preferred = activeSprint || plannedSprint || fallbackSprint;
 
@@ -86,7 +87,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         className="d-flex align-items-center"
       >
         <span className="me-2">🏃‍♂️</span>
-        {selectedSprintId === '' ? (
+        {effectiveSelectedId === '' ? (
           <span>All Sprints</span>
         ) : selectedSprint ? (
           <span>
@@ -129,7 +130,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
                   </small>
                   <span className={`badge ${
                     isStatus(sprint.status, 'active') ? 'bg-success' : 
-                    isStatus(sprint.status, 'planned') ? 'bg-warning' : 'bg-secondary'
+                    isStatus(sprint.status, 'planning') ? 'bg-warning' : 'bg-secondary'
                   }`}>
                     {sprint.status}
                   </span>

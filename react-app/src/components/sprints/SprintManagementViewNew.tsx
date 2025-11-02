@@ -132,8 +132,9 @@ const SprintManagementView: React.FC = () => {
 
     const activeSprint = sprints.find((s) => s.status === 1) || sprints[0];
     setSelectedSprint(activeSprint || null);
-    if (activeSprint) {
-      setSelectedSprintId(activeSprint.id);
+    // Respect explicit "All Sprints" (empty string). Only auto-select if truly unset.
+    if ((selectedSprintId as any) === undefined || (selectedSprintId as any) === null) {
+      if (activeSprint) setSelectedSprintId(activeSprint.id);
     }
   }, [sprints, selectedSprintId, setSelectedSprintId]);
 
