@@ -1044,6 +1044,131 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   };
 });
 
+// Optional HTTP wrapper for cross-origin fetch from trusted frontends
+exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, res) => {
+  const allowedOrigins = new Set([
+    'https://bob.jc1.tech',
+    'https://bob20250810.web.app',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ]);
+  const origin = String(req.get('origin') || '');
+  if (allowedOrigins.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  res.set('Access-Control-Allow-Credentials', 'true');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
+  try {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed' });
+      return;
+    }
+    const authHeader = String(req.get('Authorization') || '');
+    const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!idToken) {
+      res.status(401).json({ error: 'Missing Authorization: Bearer <Firebase ID token>' });
+      return;
+    }
+    let decoded;
+    try {
+      decoded = await admin.auth().verifyIdToken(idToken);
+    } catch (e) {
+      res.status(401).json({ error: 'Invalid or expired ID token' });
+      return;
+    }
+
+    const uid = decoded.uid;
+    const timezone = req.body?.timezone || DEFAULT_TIMEZONE;
+    const startDate = req.body?.startDate || DateTime.now().setZone(timezone).toISODate();
+    const days = Math.min(Math.max(Number(req.body?.days || 7), 1), 30);
+    const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
+    if (!start.isValid) {
+      res.status(400).json({ error: 'Invalid startDate' });
+      return;
+    }
+    const end = start.plus({ days: days - 1 }).endOf('day');
+
+    const db = admin.firestore();
+    let busy = req.body?.includeBusy === false ? [] : await fetchGoogleBusy(uid, start, end);
+
+    try {
+      const fdb = ensureFirestore();
+      const profileSnap = await fdb.collection('profiles').doc(uid).get();
+      const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+      const qhStart = Number(profile.quietHoursStart);
+      const qhEnd = Number(profile.quietHoursEnd);
+      if (Number.isFinite(qhStart) && Number.isFinite(qhEnd)) {
+        const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+        const extras = [];
+        for (let i = 0; i < daysSpan; i++) {
+          const d0 = start.plus({ days: i }).startOf('day');
+          const d1 = d0.plus({ days: 1 });
+          if (qhStart === qhEnd) continue;
+          const allowedStart = d0.plus({ hours: qhStart });
+          const allowedEnd = d0.plus({ hours: qhEnd });
+          if (qhStart < qhEnd) {
+            extras.push({ start: d0.toISO(), end: allowedStart.toISO() });
+            extras.push({ start: allowedEnd.toISO(), end: d1.toISO() });
+          } else {
+            extras.push({ start: allowedEnd.toISO(), end: allowedStart.toISO() });
+          }
+        }
+        busy = [...busy, ...extras];
+      }
+    } catch (e) {
+      console.warn('[planBlocksV2Http] quiet hours apply failed', e?.message || e);
+    }
+
+    const plan = await planSchedule({ db, userId: uid, windowStart: start, windowEnd: end, busy });
+    const existingIds = new Set(plan.existingIds || []);
+    const batch = db.batch();
+    const nowMs = Date.now();
+
+    for (const instance of plan.planned) {
+      const ref = db.collection('scheduled_instances').doc(instance.id);
+      const isExisting = existingIds.has(instance.id);
+      const payload = {
+        ...instance,
+        status: instance.status || 'planned',
+        userId: uid,
+        ownerUid: uid,
+        updatedAt: nowMs,
+      };
+      if (!isExisting) payload.createdAt = nowMs;
+      batch.set(ref, payload, { merge: true });
+    }
+    for (const unscheduled of plan.unscheduled) {
+      const id = schedulerMakeInstanceId({
+        planId: makePlanId(uid, start.toJSDate()),
+        itemType: String(unscheduled.itemType || 'unknown'),
+        itemId: String(unscheduled.itemId || 'unknown'),
+      });
+      const ref = db.collection('scheduled_instances').doc(id);
+      batch.set(ref, {
+        id,
+        userId: uid,
+        ownerUid: uid,
+        status: 'unscheduled',
+        updatedAt: nowMs,
+        createdAt: nowMs,
+      }, { merge: true });
+    }
+    await batch.commit();
+    res.status(200).json({ ok: true, planned: plan.planned.length, existing: existingIds.size });
+  } catch (e) {
+    console.error('planBlocksV2Http error', e);
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
 // ===== Chores & Routines Helpers
 exports.listChoresWithStats = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
