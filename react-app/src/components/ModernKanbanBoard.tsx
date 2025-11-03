@@ -43,6 +43,10 @@ import SortableStoryCard from './stories/SortableStoryCard';
 
 interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
+  // Optional: constrain tasks to a sprint window (dueDate within [start,end])
+  sprintDueDateRange?: { start: number; end: number } | null;
+  // Optional: allowed task status values (defaults to [0,1,3] = not done)
+  statusFilter?: number[];
 }
 
 type LaneStatus = 'backlog' | 'in-progress' | 'done';
@@ -207,7 +211,7 @@ const SortableTaskCard: React.FC<{
   );
 };
 
-const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) => {
+const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, sprintDueDateRange = null, statusFilter }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar, setUpdateHandler } = useSidebar();
@@ -511,13 +515,31 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       limit(1000)
     );
 
-    const tasksQuery = query(
-      collection(db, 'tasks'),
+    // Build tasks query: optionally constrain to sprint due date range and status
+    const base = [
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc'),
-      limit(1000)
-    );
+    ] as const;
+    const allowed = (statusFilter && statusFilter.length) ? statusFilter : [0,1,3];
+    let tasksQuery;
+    if (sprintDueDateRange && typeof sprintDueDateRange.start === 'number' && typeof sprintDueDateRange.end === 'number') {
+      tasksQuery = query(
+        collection(db, 'tasks'),
+        ...base,
+        where('status', 'in', allowed as any),
+        where('dueDate', '>=', sprintDueDateRange.start),
+        where('dueDate', '<=', sprintDueDateRange.end),
+        orderBy('dueDate', 'asc'),
+        limit(1000)
+      );
+    } else {
+      tasksQuery = query(
+        collection(db, 'tasks'),
+        ...base,
+        orderBy('createdAt', 'desc'),
+        limit(1000)
+      );
+    }
 
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
@@ -549,7 +571,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       unsubscribeStories();
       unsubscribeTasks();
     };
-  }, [currentUser, currentPersona]);
+  }, [currentUser, currentPersona, sprintDueDateRange?.start, sprintDueDateRange?.end, Array.isArray(statusFilter) ? statusFilter.join(',') : '']);
 
   // DnD handlers
   const handleDragStart = (event: DragStartEvent) => {

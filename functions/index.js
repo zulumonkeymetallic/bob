@@ -31,6 +31,8 @@ const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('.
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime } = require('./lib/time');
 const crypto = require('crypto');
+const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -81,7 +83,6 @@ function makeAssignmentId({ planId, itemType, itemId }) {
 }
 
 const MS_IN_MINUTE = 60 * 1000;
-const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const CHORE_LOOKAHEAD_DAYS = 90;
 const AI_PRIORITY_MODEL = 'gemini-1.5-flash';
 
@@ -7206,14 +7207,24 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       let ref = null;
       if (id) ref = db.collection('tasks').doc(id);
       else {
-        const snap = await db.collection('tasks').where('ownerUid','==',uid).where('reminderId','==',reminderId).limit(1).get();
+        // prefer reminderId; also check duplicateKey convention
+        let snap = await db.collection('tasks').where('ownerUid','==',uid).where('reminderId','==',reminderId).limit(1).get();
         if (!snap.empty) ref = snap.docs[0].ref;
+        if (!ref && reminderId) {
+          const dupKey = `reminder:${String(reminderId).toLowerCase()}`;
+          snap = await db.collection('tasks').where('ownerUid','==',uid).where('duplicateKey','==',dupKey).limit(1).get();
+          if (!snap.empty) ref = snap.docs[0].ref;
+        }
       }
       if (ref) {
         const task_type = classifyType(title);
         const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type };
         if (reminderId) data['reminderId'] = reminderId;
-        if (completed) data['status'] = 2;
+        if (completed) {
+          data['status'] = 2;
+          data['completedAt'] = Date.now();
+          data['deleteAfter'] = Date.now() + TASK_TTL_DAYS * MS_IN_DAY;
+        }
         if (iosTags.length) {
           try {
             const snap = await ref.get();
@@ -7226,24 +7237,66 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         updated++;
       } else if (reminderId || title) {
         // Auto-import new task from Reminders
-        const newRef = db.collection('tasks').doc();
         const task_type = classifyType(title);
-        await newRef.set({
-          id: newRef.id,
-          ownerUid: uid,
-          persona: 'personal',
-          title: title || 'Reminder',
-          status: completed ? 2 : 0,
-          task_type,
-          entry_method: 'import:reminders',
-          source: 'ios_reminder',
-          reminderId: reminderId || null,
-          reminderCreatedAt: Date.now(),
-          createdAt: Date.now(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          ...(iosTags.length ? { tags: iosTags } : {}),
-        }, { merge: true });
-        updated++;
+        const nowMs = Date.now();
+        const dupKey = reminderId ? `reminder:${String(reminderId).toLowerCase()}` : null;
+        // Check again for duplicates by duplicateKey to avoid creating a new one
+        if (dupKey) {
+          const snap = await db.collection('tasks').where('ownerUid','==',uid).where('duplicateKey','==',dupKey).limit(1).get();
+          if (!snap.empty) {
+            const existingRef = snap.docs[0].ref;
+            const data = {
+              title: title || 'Reminder',
+              task_type,
+              source: 'ios_reminder',
+              reminderId: reminderId,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+              ...(iosTags.length ? { tags: Array.from(new Set([...(snap.docs[0].data()?.tags || []), ...iosTags])).slice(0,12) } : {}),
+            };
+            await existingRef.set(data, { merge: true });
+            updated++;
+          } else {
+            const newRef = db.collection('tasks').doc();
+            await newRef.set({
+              id: newRef.id,
+              ownerUid: uid,
+              persona: 'personal',
+              title: title || 'Reminder',
+              status: completed ? 2 : 0,
+              task_type,
+              entry_method: 'import:reminders',
+              source: 'ios_reminder',
+              reminderId: reminderId || null,
+              duplicateKey: dupKey,
+              reminderCreatedAt: nowMs,
+              createdAt: nowMs,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+              ...(iosTags.length ? { tags: iosTags } : {}),
+            }, { merge: true });
+            updated++;
+          }
+        } else {
+          const newRef = db.collection('tasks').doc();
+          await newRef.set({
+            id: newRef.id,
+            ownerUid: uid,
+            persona: 'personal',
+            title: title || 'Reminder',
+            status: completed ? 2 : 0,
+            task_type,
+            entry_method: 'import:reminders',
+            source: 'ios_reminder',
+            reminderId: reminderId || null,
+            reminderCreatedAt: nowMs,
+            createdAt: nowMs,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+            ...(iosTags.length ? { tags: iosTags } : {}),
+          }, { merge: true });
+          updated++;
+        }
       }
     }
     return res.json({ ok: true, updated });
@@ -7280,6 +7333,79 @@ exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{
       });
       await batch.commit();
     }
+  }
+});
+
+// ===== Task lifecycle maintenance (completed/duplicates TTL and flags)
+exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (event) => {
+  const before = event.data?.before?.data() || null;
+  const after = event.data?.after?.data() || null;
+  if (!after) return; // deletion
+
+  const db = ensureFirestore();
+  const id = event.params.taskId;
+  const ref = db.collection('tasks').doc(id);
+
+  const now = Date.now();
+  const isDone = (v) => {
+    if (v == null) return false;
+    if (typeof v === 'number') return v === 2 || v >= 2;
+    const s = String(v).toLowerCase();
+    return s === 'done' || s === 'complete' || s === 'completed';
+  };
+
+  const wasDone = before ? isDone(before.status) : false;
+  const nowDone = isDone(after.status);
+  const patch = {};
+
+  // Track completedAt and TTL deleteAfter on status change
+  if (!wasDone && nowDone) {
+    const completedAt = after.completedAt || now;
+    patch.completedAt = completedAt;
+    // set deleteAfter only if not already set
+    if (!after.deleteAfter) patch.deleteAfter = completedAt + TASK_TTL_DAYS * MS_IN_DAY;
+  } else if (wasDone && !nowDone) {
+    // Clear when moved out of done
+    patch.completedAt = null;
+    patch.deleteAfter = null;
+  }
+
+  // Duplicate detection by reminderId/duplicateKey
+  try {
+    const ownerUid = after.ownerUid || before?.ownerUid || null;
+    let key = after.duplicateKey || null;
+    if (!key && after.reminderId) key = `reminder:${String(after.reminderId).toLowerCase()}`;
+    if (key && ownerUid) {
+      const dupSnap = await db.collection('tasks')
+        .where('ownerUid','==', ownerUid)
+        .where('duplicateKey','==', key)
+        .limit(2)
+        .get();
+      const others = dupSnap.docs.filter(d => d.id !== id);
+      if (others.length) {
+        // Flag both as duplicates. Prefer keeping the oldest.
+        patch.duplicateKey = key;
+        if (!after.duplicateFlag) patch.duplicateFlag = true;
+        if (!nowDone && !after.deleteAfter) {
+          patch.deleteAfter = (after.completedAt || now) + TASK_TTL_DAYS * MS_IN_DAY;
+        }
+        // Best-effort: mark counterpart as duplicateFlag too
+        try {
+          const otherRef = others[0].ref;
+          const other = others[0].data() || {};
+          const otherPatch = {};
+          if (!other.duplicateFlag) otherPatch.duplicateFlag = true;
+          if (!other.duplicateKey) otherPatch.duplicateKey = key;
+          if (Object.keys(otherPatch).length) await otherRef.set(otherPatch, { merge: true });
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] duplicate detection skipped:', e?.message || e);
+  }
+
+  if (Object.keys(patch).length) {
+    try { await ref.set(patch, { merge: true }); } catch (e) { console.warn('[onTaskWritten] patch failed', id, e?.message || e); }
   }
 });
 
@@ -8162,6 +8288,78 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
         error: error?.message || String(error),
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
+    }
+  }
+});
+
+// ===== Cleanup: delete completed/duplicate tasks past TTL
+exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const limit = Number(req?.data?.limit || 200);
+  const db = ensureFirestore();
+  const now = Date.now();
+  let deleted = 0;
+  const writer = db.bulkWriter();
+  try {
+    // Primary: deleteAfter reached
+    const snap1 = await db.collection('tasks')
+      .where('ownerUid','==', uid)
+      .where('deleteAfter','<=', now)
+      .limit(limit)
+      .get();
+    for (const d of snap1.docs) {
+      writer.delete(d.ref); deleted++;
+    }
+    if (deleted < limit) {
+      // Fallback: completedAt older than TTL but no deleteAfter
+      const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
+      const remain = limit - deleted;
+      const snap2 = await db.collection('tasks')
+        .where('ownerUid','==', uid)
+        .where('status','==', 2)
+        .where('completedAt','<=', cutoff)
+        .limit(remain)
+        .get();
+      for (const d of snap2.docs) {
+        writer.delete(d.ref); deleted++;
+      }
+    }
+    await writer.close();
+    return { ok: true, deleted };
+  } catch (e) {
+    try { await writer.close(); } catch {}
+    throw new httpsV2.HttpsError('internal', 'cleanup failed: ' + (e?.message || e));
+  }
+});
+
+exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *', timeZone: 'UTC' }, async () => {
+  const db = ensureFirestore();
+  const now = Date.now();
+  const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
+  const usersSnap = await db.collection('profiles').get();
+  for (const u of usersSnap.docs) {
+    const uid = u.id;
+    const writer = db.bulkWriter();
+    try {
+      const snap1 = await db.collection('tasks')
+        .where('ownerUid','==', uid)
+        .where('deleteAfter','<=', now)
+        .limit(500)
+        .get();
+      for (const d of snap1.docs) writer.delete(d.ref);
+
+      const snap2 = await db.collection('tasks')
+        .where('ownerUid','==', uid)
+        .where('status','==', 2)
+        .where('completedAt','<=', cutoff)
+        .limit(500)
+        .get();
+      for (const d of snap2.docs) writer.delete(d.ref);
+    } catch (e) {
+      console.warn('[cleanupOldTasksNightly]', uid, e?.message || e);
+    } finally {
+      try { await writer.close(); } catch {}
     }
   }
 });

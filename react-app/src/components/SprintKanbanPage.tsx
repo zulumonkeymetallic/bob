@@ -94,13 +94,27 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
         setStories(storiesData);
       });
 
-      // Tasks subscription
-      const tasksQuery = query(
-        collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('serverUpdatedAt', 'desc')
-      );
+      // Tasks subscription: if a sprint is selected, limit to that sprint window and not-done
+      let tasksQuery;
+      if (currentSprint && typeof (currentSprint as any).startDate === 'number' && typeof (currentSprint as any).endDate === 'number') {
+        tasksQuery = query(
+          collection(db, 'tasks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          where('status', 'in', [0,1,3]),
+          where('dueDate', '>=', (currentSprint as any).startDate),
+          where('dueDate', '<=', (currentSprint as any).endDate),
+          orderBy('dueDate', 'asc')
+        );
+      } else {
+        tasksQuery = query(
+          collection(db, 'tasks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          where('status', 'in', [0,1,3]),
+          orderBy('serverUpdatedAt', 'desc')
+        );
+      }
 
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
         const tasksData = snapshot.docs.map(doc => ({
@@ -432,6 +446,8 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
             <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ padding: '24px' }}>
               <ModernKanbanBoard
+                sprintDueDateRange={currentSprint ? { start: (currentSprint as any).startDate, end: (currentSprint as any).endDate } : null}
+                statusFilter={[0,1,3]}
                 onItemSelect={(item, type) => {
                   if (type === 'story') {
                     setSelectedStory(item as Story);

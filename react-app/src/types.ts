@@ -149,6 +149,10 @@ export interface Task {
   createdAt?: number;
   updatedAt?: number;
   tags?: string[];
+  // Lifecycle & maintenance
+  completedAt?: number; // when status first moved to Done
+  deleteAfter?: number; // scheduled deletion timestamp (TTL)
+  duplicateFlag?: boolean; // normalized duplicate indicator
 }
 
 export interface Column {
