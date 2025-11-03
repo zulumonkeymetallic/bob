@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useRef } from 'react';
 import { Story, Task, Goal, Sprint } from '../types';
 
 interface SidebarContextType {
@@ -29,6 +29,7 @@ export const SidebarProvider: React.FC<SidebarProviderProps> = ({ children }) =>
     } catch { return false; }
   });
   const [updateHandler, setUpdateHandler] = useState<((item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => Promise<void>) | null>(null);
+  const updateHandlerRef = useRef<typeof updateHandler>(null);
 
   const showSidebar = (item: Story | Task | Goal, type: 'story' | 'task' | 'goal') => {
     setSelectedItem(item);
@@ -60,6 +61,9 @@ export const SidebarProvider: React.FC<SidebarProviderProps> = ({ children }) =>
   };
 
   const setUpdateHandlerCallback = (handler: (item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => Promise<void>) => {
+    // Avoid unnecessary state updates to prevent render loops
+    if (updateHandlerRef.current === handler) return;
+    updateHandlerRef.current = handler;
     setUpdateHandler(() => handler);
   };
 

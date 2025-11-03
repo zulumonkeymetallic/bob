@@ -1,4 +1,5 @@
 import { useAuth } from '../contexts/AuthContext';
+import { useCallback } from 'react';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 
 export interface TrackingOptions {
@@ -28,7 +29,7 @@ export const useActivityTracking = () => {
   const { currentUser } = useAuth();
 
   // Track only meaningful CRUD operations - no UI clicks
-  const trackCRUD = async (
+  const trackCRUD = useCallback(async (
     operation: 'create' | 'update' | 'delete',
     entityId: string,
     entityType: 'goal' | 'story' | 'task' | 'calendar_block',
@@ -61,9 +62,9 @@ export const useActivityTracking = () => {
     } catch (error) {
       console.error('❌ BOB v3.8.0: Failed to track CRUD operation:', error);
     }
-  };
+  }, [currentUser]);
 
-  const addNote = async (
+  const addNote = useCallback(async (
     entityId: string,
     entityType: 'goal' | 'story' | 'task',
     noteContent: string,
@@ -87,9 +88,9 @@ export const useActivityTracking = () => {
     } catch (error) {
       console.error('❌ BOB v3.8.0: Failed to add note:', error, { entityId, entityType, noteContent });
     }
-  };
+  }, [currentUser]);
 
-  const trackFieldChange = async (
+  const trackFieldChange = useCallback(async (
     entityId: string,
     entityType: 'goal' | 'story' | 'task',
     fieldName: string,
@@ -123,9 +124,9 @@ export const useActivityTracking = () => {
         newValue 
       });
     }
-  };
+  }, [currentUser]);
 
-  const subscribeToActivity = (
+  const subscribeToActivity = useCallback((
     entityId: string,
     callback: (activities: any[]) => void
   ) => {
@@ -139,10 +140,10 @@ export const useActivityTracking = () => {
       callback,
       currentUser.uid
     );
-  };
+  }, [currentUser]);
 
   // 🖱️ Click tracking for debugging (console logs only - NOT saved to activity stream)
-  const trackClick = (options: TrackingOptions) => {
+  const trackClick = useCallback((options: TrackingOptions) => {
     console.log('🖱️ UI Click (Debug Only):', {
       timestamp: new Date().toISOString(),
       elementId: options.elementId,
@@ -156,7 +157,7 @@ export const useActivityTracking = () => {
     });
     // Note: This is intentionally NOT saving to ActivityStreamService
     // We only want CRUD operations in the activity stream
-  };
+  }, [currentUser?.email]);
 
   return {
     trackCRUD,

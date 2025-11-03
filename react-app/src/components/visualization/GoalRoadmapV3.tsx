@@ -37,6 +37,7 @@ const pluralize = (word: string, count: number) => (count === 1 ? word : `${word
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
+  const isDark = theme === 'dark';
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { showSidebar } = useSidebar();
   const navigate = useNavigate();
@@ -1144,8 +1145,8 @@ const GoalRoadmapV3: React.FC = () => {
                         fontSize: 11,
                         fontWeight: 700,
                         borderRadius: 999,
-                        background: 'rgba(255,255,255,.82)',
-                        color: '#111827'
+                        background: isDark ? 'rgba(0,0,0,.4)' : 'rgba(255,255,255,.82)',
+                        color: isDark ? '#fff' : '#111827'
                       }}
                     >
                       {pct}%
@@ -1164,8 +1165,8 @@ const GoalRoadmapV3: React.FC = () => {
                   )}
                   {!isMilestone && (zoom === 'weeks' || zoom === 'months') && (
                     <div className="mt-1" style={{ width: '100%' }}>
-                      <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,.3)', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: 'rgba(255,255,255,.9)' }} />
+                      <div style={{ height: 6, borderRadius: 999, background: isDark ? 'rgba(255,255,255,.25)' : 'rgba(15,23,42,.12)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: isDark ? 'rgba(255,255,255,.75)' : 'rgba(15,23,42,.6)' }} />
                       </div>
                     </div>
                   )}

@@ -19,7 +19,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   const DISABLE_SELECTOR = (() => {
     try {
       const env: any = (typeof process !== 'undefined' ? (process as any).env : {}) || {};
-      return env.REACT_APP_SPRINT_SELECTOR_DISABLED === 'true' || env.REACT_APP_SPRINT_DEFAULT_ALL === 'true';
+      return env.REACT_APP_SPRINT_SELECTOR_DISABLED === 'true';
     } catch { return false; }
   })();
   const {
@@ -39,11 +39,13 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   useEffect(() => {
     if (loading) return;
     if (sprints.length === 0) return;
-    // If nothing selected (null/undefined) try to auto-select an active/planned sprint.
-    if (effectiveSelectedId !== undefined && effectiveSelectedId !== null) return;
+    // Respect explicit user choice including empty string in storage
+    const savedPref = (() => { try { return localStorage.getItem('bob_selected_sprint'); } catch { return null; } })();
+    const noSavedPreference = savedPref === null || savedPref === undefined;
+    // Only auto-select when there is no explicit selection AND no saved preference
+    if ((effectiveSelectedId !== undefined && effectiveSelectedId !== null && effectiveSelectedId !== '') || !noSavedPreference) return;
 
     const activeSprint = sprints.find((sprint) => isStatus(sprint.status, 'active'));
-    // For sprints, the pre-active state is "planning" (status 0)
     const plannedSprint = sprints.find((sprint) => isStatus(sprint.status, 'planning'));
     const fallbackSprint = sprints[0];
     const preferred = activeSprint || plannedSprint || fallbackSprint;

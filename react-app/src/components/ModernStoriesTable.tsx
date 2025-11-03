@@ -843,6 +843,9 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     hasGoal: ''
   });
 
+  // Inline tasks expansion state (declare before effects that depend on it)
+  const [expandedStoryId, setExpandedStoryId] = useState<string | null>(null);
+
   // Subscribe to inline tasks only for the expanded story to avoid loading all tasks
   useEffect(() => {
     if (!enableInlineTasks || !currentUser || !expandedStoryId) return;
@@ -1115,8 +1118,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
   const visibleColumnsCount = columns.filter(col => col.visible).length;
 
-  // Inline tasks expansion state
-  const [expandedStoryId, setExpandedStoryId] = useState<string | null>(null);
+  // Inline tasks expansion state moved earlier
   const handleToggleExpand = (storyId: string) => {
     setExpandedStoryId(prev => (prev === storyId ? null : storyId));
   };

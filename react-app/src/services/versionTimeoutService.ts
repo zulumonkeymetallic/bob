@@ -3,6 +3,12 @@
 
 import { VERSION, BUILD_HASH } from '../version';
 
+// Feature flag: disable version checks in development unless explicitly enabled
+// Avoid dev hot-reload loops caused by /version.json mismatches
+const VERSION_CHECKS_ENABLED =
+  process.env.NODE_ENV === 'production' ||
+  String(process.env.REACT_APP_ENABLE_VERSION_CHECKS).toLowerCase() === 'true';
+
 interface VersionStatus {
   currentVersion: string;
   serverVersion: string | null;
@@ -12,7 +18,13 @@ interface VersionStatus {
   forceUpdateNeeded: boolean;
 }
 
-export class VersionTimeoutService {
+export interface IVersionTimeoutService {
+  getSessionInfo(): { duration: number; timeUntilTimeout: number; version: string };
+  forceVersionCheck(): Promise<void>;
+  destroy(): void;
+}
+
+export class VersionTimeoutService implements IVersionTimeoutService {
   private static instance: VersionTimeoutService;
   private checkInterval: NodeJS.Timeout | null = null;
   private onVisibilityChangeRef: ((this: Document, ev: Event) => any) | null = null;
@@ -32,6 +44,7 @@ export class VersionTimeoutService {
   }
 
   private initializeService(): void {
+    if (!VERSION_CHECKS_ENABLED) return; // Guard: do not initialize in dev
     console.log('🕐 Version Timeout Service initialized');
     console.log(`⏱️ Timeout duration: ${this.TIMEOUT_DURATION / 60000} minutes`);
     console.log(`🔄 Check interval: ${this.CHECK_INTERVAL / 60000} minutes`);
@@ -56,6 +69,7 @@ export class VersionTimeoutService {
   }
 
   private startPeriodicChecks(): void {
+    if (!VERSION_CHECKS_ENABLED) return; // Guard: disabled
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
     }
@@ -66,6 +80,7 @@ export class VersionTimeoutService {
   }
 
   private async performVersionCheck(): Promise<void> {
+    if (!VERSION_CHECKS_ENABLED) return; // Guard: disabled
     try {
       const status = await this.getVersionStatus();
       
@@ -140,6 +155,7 @@ export class VersionTimeoutService {
   }
 
   private async handleTimeout(): Promise<void> {
+    if (!VERSION_CHECKS_ENABLED) return; // Guard: disabled
     console.log('⏰ 30-minute timeout reached - forcing app refresh');
     
     // Show notification to user
@@ -160,6 +176,7 @@ export class VersionTimeoutService {
   }
 
   private async handleVersionMismatch(status: VersionStatus): Promise<void> {
+    if (!VERSION_CHECKS_ENABLED) return; // Guard: disabled
     console.log(`🆕 New version available: ${status.currentVersion} → ${status.serverVersion}`);
     
     const shouldUpdate = window.confirm(
@@ -174,6 +191,7 @@ export class VersionTimeoutService {
   }
 
   private async forceAppRefresh(reason: string): Promise<void> {
+    if (!VERSION_CHECKS_ENABLED) return; // Guard: disabled
     console.log(`🔄 Forcing app refresh: ${reason}`);
     
     try {
@@ -227,6 +245,7 @@ export class VersionTimeoutService {
   }
 
   public async forceVersionCheck(): Promise<void> {
+    if (!VERSION_CHECKS_ENABLED) return; // Guard: disabled
     console.log('🔍 Manual version check triggered');
     await this.performVersionCheck();
   }
@@ -243,8 +262,24 @@ export class VersionTimeoutService {
   }
 }
 
-// Export singleton instance
-export const versionTimeoutService = VersionTimeoutService.getInstance();
+// Lightweight no-op implementation for development to avoid loops
+class NoopVersionTimeoutService implements IVersionTimeoutService {
+  getSessionInfo() {
+    // Provide stable defaults for UI
+    return { duration: 0, timeUntilTimeout: 30, version: VERSION };
+  }
+  async forceVersionCheck(): Promise<void> { /* no-op */ }
+  destroy(): void { /* no-op */ }
+}
 
-// Auto-initialize when module loads
-console.log('📱 Version Timeout Service loaded');
+// Export instance (real in prod, no-op in dev)
+export const versionTimeoutService: IVersionTimeoutService = VERSION_CHECKS_ENABLED
+  ? VersionTimeoutService.getInstance()
+  : new NoopVersionTimeoutService();
+
+if (VERSION_CHECKS_ENABLED) {
+  // Auto-initialize when module loads
+  console.log('📱 Version Timeout Service loaded');
+} else {
+  console.log('📱 Version Timeout Service disabled in development');
+}

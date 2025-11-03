@@ -4,6 +4,7 @@ import { Clock, Target, CheckCircle, AlertTriangle, TrendingUp } from 'lucide-re
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Sprint, Story, Task } from '../types';
 
@@ -21,6 +22,7 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { sprints, sprintsById } = useSprint();
   const [resolvedSprintId, setResolvedSprintId] = useState<string | undefined>(undefined);
 
@@ -89,28 +91,46 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     return () => unsubscribe();
   }, [resolvedSprintId, currentUser]);
 
-  // Load tasks (both linked to stories and standalone)
+  // Load tasks efficiently: if a sprint is resolved, scope to that sprint via sprint_task_index
+  // Avoid loading all tasks when no sprint is selected
   useEffect(() => {
-    if (!currentUser) {
-      setTasks([]);
-      return;
-    }
+    if (!currentUser) { setTasks([]); return; }
+    if (!resolvedSprintId) { setTasks([]); return; }
 
-    const tasksQuery = query(
-      collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid)
+    const q = query(
+      collection(db, 'sprint_task_index'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona || 'personal'),
+      where('sprintId', '==', resolvedSprintId)
     );
 
-    const unsubscribe = onSnapshot(tasksQuery, (snapshot) => {
-      const taskData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const taskData = snapshot.docs.map(d => {
+        const x = d.data() as any;
+        const t: any = {
+          id: d.id,
+          title: x.title,
+          description: x.description || '',
+          status: x.status,
+          priority: x.priority ?? 2,
+          effort: x.effort ?? 'M',
+          estimateMin: x.estimateMin ?? 0,
+          dueDate: x.dueDate || null,
+          parentType: x.parentType || 'story',
+          parentId: x.parentId || x.storyId || '',
+          storyId: x.storyId || null,
+          sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+          persona: currentPersona || 'personal',
+          ownerUid: currentUser.uid,
+          ref: x.ref || `TASK-${String(d.id).slice(-4).toUpperCase()}`,
+        };
+        return t as Task;
+      });
       setTasks(taskData);
     });
 
     return () => unsubscribe();
-  }, [currentUser]);
+  }, [currentUser, currentPersona, resolvedSprintId]);
 
   const metrics = useMemo(() => {
     // Aggregated metrics when no sprint is selected
@@ -149,7 +169,7 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     const daysUntilStart = !hasStarted ? Math.ceil((startDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : 0;
     
     // Story metrics
-    const sprintStories = stories.filter(story => story.sprintId === selectedSprintId);
+    const sprintStories = stories.filter(story => story.sprintId === resolvedSprintId);
     const completedStories = sprintStories.filter(story => story.status === 4).length; // Done status
     const totalStories = sprintStories.length;
     

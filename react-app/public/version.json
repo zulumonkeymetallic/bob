@@ -1,7 +1,7 @@
 {
-  "version": "4.0.2",
-  "buildTime": "2025-10-21T00:00:00Z",
-  "buildHash": "entity-audit-logging-4.0.2",
+  "version": "4.5.0",
+  "buildTime": "2025-11-03T23:59:00Z",
+  "buildHash": "kanban-roadmap-theming-4.5.0",
   "features": [
     "Global audit logging for goals, stories, tasks",
     "Toolbar/header overlap refinements",

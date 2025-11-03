@@ -9,8 +9,10 @@ import logger from '../utils/logger';
 
 const SPRINT_CACHE_NAMESPACE = 'bob_sprint_cache_v1';
 const SPRINT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes – keeps dev refresh fast without going stale
-// Test branch flag: default to All Sprints and disable auto-select/restore
-const DEFAULT_TO_ALL_SPRINTS = (typeof process !== 'undefined' && (process as any).env?.REACT_APP_SPRINT_DEFAULT_ALL) !== 'false';
+// Feature flag: explicitly default to "All Sprints" only when set.
+// Default behavior (no flag): auto-select the active sprint for better perf.
+const DEFAULT_TO_ALL_SPRINTS = String((typeof process !== 'undefined' && (process as any).env?.REACT_APP_SPRINT_DEFAULT_ALL) || '')
+  .toLowerCase() === 'true';
 
 type CachedSprint = Omit<Sprint, 'createdAt' | 'updatedAt'> & {
   createdAt?: string | null;
@@ -108,9 +110,12 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => { selectedSprintIdRef.current = selectedSprintId; }, [selectedSprintId]);
 
   useEffect(() => {
-    if (DEFAULT_TO_ALL_SPRINTS) return; // keep default '' (All Sprints)
+    // If an explicit default-to-all flag is set, keep initial '' and do not hydrate
+    if (DEFAULT_TO_ALL_SPRINTS) return;
     const saved = localStorage.getItem('bob_selected_sprint');
-    if (saved) setSelectedSprintIdState(saved);
+    if (saved !== null && saved !== undefined) {
+      setSelectedSprintIdState(saved);
+    }
   }, []);
 
   const setSelectedSprintId = (id: string) => {
@@ -280,8 +285,11 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } catch {}
 
         let nextSelectedId = selectedSprintIdRef.current;
-        // Do not override "All Sprints" (empty string). Only auto-select when truly unset.
-        if ((nextSelectedId === undefined || nextSelectedId === null) && deduped.length > 0) {
+        // Default to active sprint (first in deduped) when there is no saved preference
+        // and the current selection is empty/undefined/null.
+        const savedPref = (() => { try { return localStorage.getItem('bob_selected_sprint'); } catch { return null; } })();
+        const noSavedPreference = savedPref === null || savedPref === undefined;
+        if ((!nextSelectedId || nextSelectedId === '') && noSavedPreference && deduped.length > 0) {
           nextSelectedId = deduped[0].id;
           setSelectedSprintId(nextSelectedId);
         } else if (nextSelectedId && !deduped.some((s) => s.id === nextSelectedId)) {

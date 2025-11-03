@@ -557,9 +557,20 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       {/* Global collapse/expand toggle */}
       <button
         type="button"
-        className="btn btn-sm btn-light position-fixed"
         onClick={toggleNavCollapsed}
-        style={{ top: 10, left: navCollapsed ? 10 : 260, zIndex: 2000, boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}
+        className="position-fixed"
+        style={{
+          top: 10,
+          left: navCollapsed ? 10 : 260,
+          zIndex: 2000,
+          boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+          border: '1px solid var(--notion-border)',
+          background: 'var(--notion-hover)',
+          color: 'var(--notion-text)',
+          padding: '4px 8px',
+          borderRadius: 6,
+          lineHeight: 1
+        }}
         title={navCollapsed ? 'Show sidebar' : 'Hide sidebar'}
       >
         {navCollapsed ? '▶' : '◀'}

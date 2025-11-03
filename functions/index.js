@@ -28,6 +28,15 @@ const {
 } = require('./lib/reporting');
 const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
 const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('./services/mediaImportController');
+// Expose advanced LLM-powered daily digest from separate module
+try {
+  const digestModule = require('./dailyDigestGenerator');
+  if (digestModule && digestModule.generateDailyDigest) {
+    exports.generateDailyDigest = digestModule.generateDailyDigest;
+  }
+} catch (e) {
+  console.warn('[init] dailyDigestGenerator not loaded', e?.message || e);
+}
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime } = require('./lib/time');
 const crypto = require('crypto');
@@ -7221,6 +7230,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         const task_type = classifyType(title);
         const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type };
         if (reminderId) data['reminderId'] = reminderId;
+        if (reminderId) data['duplicateKey'] = `reminder:${String(reminderId).toLowerCase()}`;
         if (completed) {
           data['status'] = 2;
           data['completedAt'] = Date.now();
@@ -7371,12 +7381,25 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
     patch.deleteAfter = null;
   }
 
-  // Duplicate detection by reminderId/duplicateKey
+  // Ensure effort has a sensible default if missing
+  if (!after.effort) {
+    const est = Number(after.estimateMin || 0) || (Number(after.estimatedHours || 0) * 60);
+    let eff = 'S';
+    if (est >= 240) eff = 'L';
+    else if (est >= 60) eff = 'M';
+    patch.effort = eff;
+  }
+
+  // Duplicate detection by reminderId/duplicateKey; also persist duplicateKey when available
   try {
     const ownerUid = after.ownerUid || before?.ownerUid || null;
     let key = after.duplicateKey || null;
     if (!key && after.reminderId) key = `reminder:${String(after.reminderId).toLowerCase()}`;
     if (key && ownerUid) {
+      // Always store duplicateKey for consistency, even if no duplicates found
+      if (!after.duplicateKey) {
+        patch.duplicateKey = key;
+      }
       const dupSnap = await db.collection('tasks')
         .where('ownerUid','==', ownerUid)
         .where('duplicateKey','==', key)
@@ -7385,7 +7408,6 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
       const others = dupSnap.docs.filter(d => d.id !== id);
       if (others.length) {
         // Flag both as duplicates. Prefer keeping the oldest.
-        patch.duplicateKey = key;
         if (!after.duplicateFlag) patch.duplicateFlag = true;
         if (!nowDone && !after.deleteAfter) {
           patch.deleteAfter = (after.completedAt || now) + TASK_TTL_DAYS * MS_IN_DAY;
@@ -8481,6 +8503,7 @@ exports.cleanupDuplicateTasksNow = httpsV2.onCall(async (req) => {
 
     // Decide deletions (all but oldest per key)
     const writer = db.bulkWriter();
+    const activityGroups = [];
     for (const [key, arr] of buckets.entries()) {
       if (!Array.isArray(arr) || arr.length < 2) continue;
       // Oldest = min(createdAt/reminderCreatedAt/serverUpdatedAt)
@@ -8495,6 +8518,9 @@ exports.cleanupDuplicateTasksNow = httpsV2.onCall(async (req) => {
       const keep = scored[0];
       const drop = scored.slice(1);
       processed += arr.length;
+      if (drop.length) {
+        activityGroups.push({ kept: keep.id, removed: drop.map((x) => x.id), keys: [key] });
+      }
       for (const d of drop) {
         if (forceImmediate) {
           writer.delete(db.collection('tasks').doc(d.id));
@@ -8506,10 +8532,95 @@ exports.cleanupDuplicateTasksNow = httpsV2.onCall(async (req) => {
       }
     }
     await writer.close();
+    // Activity log for Data Quality reporting
+    try {
+      if (activityGroups.length) {
+        const ref = db.collection('activity_stream').doc();
+        await ref.set({
+          id: ref.id,
+          entityId: `tasks_${uid}`,
+          entityType: 'task',
+          activityType: 'deduplicate_tasks',
+          userId: uid,
+          ownerUid: uid,
+          description: `Deduplicated ${activityGroups.reduce((acc, g) => acc + (Array.isArray(g.removed) ? g.removed.length : 0), 0)} tasks across ${activityGroups.length} groups`,
+          metadata: { groups: activityGroups, hardDelete: !!forceImmediate },
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      }
+    } catch (e) {
+      console.warn('[cleanupDuplicateTasksNow] failed to log activity', e?.message || e);
+    }
     return { ok: true, processed, deleted, scheduled, keys: buckets.size };
   } catch (e) {
     throw new httpsV2.HttpsError('internal', 'duplicate cleanup failed: ' + (e?.message || e));
   }
+});
+
+// Dry-run preview for duplicate cleanup (per-user; no writes)
+// Identifies duplicate groups by duplicateKey or reminderId, and reports which docs would be deleted.
+exports.previewDuplicateTasksCleanup = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+
+  const pageSize = Math.min(Number(req?.data?.pageSize || 5000), 20000);
+  const maxGroups = Math.min(Number(req?.data?.maxGroups || 100), 1000);
+
+  let processed = 0;
+  const buckets = new Map(); // key -> array of {id, data}
+  let cursor = null;
+  const normKey = (t) => t.duplicateKey || (t.reminderId ? `reminder:${String(t.reminderId).toLowerCase()}` : null);
+  const toAge = (data) => {
+    const ca = Number(data.createdAt || 0);
+    const ra = Number(data.reminderCreatedAt || 0);
+    const su = Number(data.serverUpdatedAt || 0);
+    const vals = [ca, ra, su].filter((x) => Number.isFinite(x) && x > 0);
+    return vals.length ? Math.min(...vals) : Date.now();
+  };
+
+  while (true) {
+    let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc').limit(pageSize);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const d of snap.docs) {
+      const data = d.data() || {};
+      processed++;
+      const key = normKey(data);
+      if (!key) continue;
+      const arr = buckets.get(key) || [];
+      arr.push({ id: d.id, data });
+      buckets.set(key, arr);
+    }
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
+  }
+
+  let groups = 0;
+  let candidates = 0;
+  const preview = [];
+  for (const [key, arr] of buckets.entries()) {
+    if (!Array.isArray(arr) || arr.length < 2) continue;
+    groups++;
+    const scored = arr.map(({ id, data }) => ({ id, data, age: toAge(data) })).sort((a, b) => a.age - b.age);
+    const keep = scored[0];
+    const drop = scored.slice(1);
+    candidates += drop.length;
+    if (preview.length < maxGroups) {
+      preview.push({ key, count: arr.length, keepId: keep.id, deleteIds: drop.map((x) => x.id) });
+    }
+  }
+
+  return {
+    ok: true,
+    processed,
+    groups,
+    candidates, // number of docs that would be deleted
+    sample: preview,
+    note: 'dry-run only; no writes performed',
+  };
 });
 
 // ===== DUR-2: Auto-reschedule missed items (hourly)
@@ -8824,7 +8935,7 @@ exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
   schedule: 'every 15 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('BREVO_API_KEY')],
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -8860,7 +8971,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   schedule: 'every 30 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('BREVO_API_KEY')],
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -8892,7 +9003,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   }
 });
 
-exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY')] }, async (req) => {
+exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -9111,7 +9222,8 @@ exports.cleanupUserLogs = schedulerV2.onSchedule({
 // ===== v3.0.2 Functions =====
 
 // Daily Digest Email Generation (uses Nylas)
-exports.generateDailyDigest = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('BREVO_API_KEY')] }, async () => {
+// Legacy simple digest (kept for reference); renamed to avoid clashing with LLM version
+exports.generateDailyDigestLegacy = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('BREVO_API_KEY')] }, async () => {
   try {
     const usersSnapshot = await admin.firestore().collection('users').where('emailDigest', '==', true).get();
     for (const userDoc of usersSnapshot.docs) {
@@ -9183,7 +9295,7 @@ async function generateUserDigest(userId, userData) {
 }
 
 // Manual trigger for daily digest (per-user)
-exports.sendDailyDigestNow = httpsV2.onCall(async (req) => {
+exports.sendDailyDigestNowLegacy = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -9477,8 +9589,9 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
   return { taskId: taskDoc.id, storyId: storyRef.id, storyRef: storyRefValue };
 }
 
+// Run auto-conversion once per day to reduce churn
 exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
+  schedule: '0 2 * * *', // daily at 02:00 UTC (~every 24 hours)
   timeZone: 'UTC',
   memory: '512MiB',
 }, async () => {
@@ -9554,6 +9667,59 @@ exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
       }, { merge: true });
     }
   }
+});
+
+// ===== Tasks integrity report (per-user): counts + duplicate diagnostics
+exports.tasksIntegrityReport = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const now = Date.now();
+
+  let total = 0;
+  let flaggedDuplicates = 0;
+  let missingEffort = 0;
+  let open = 0;
+  let ttlPending = 0;
+  const dupBuckets = new Map(); // duplicateKey -> count
+  const ridBuckets = new Map(); // reminder:<id> -> count
+
+  let cursor = null;
+  const pageSize = 5000;
+  while (true) {
+    let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc').limit(pageSize);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const d of snap.docs) {
+      const t = d.data() || {};
+      total++;
+      const st = t.status;
+      const isDone = (typeof st === 'number') ? st === 2 || st >= 2 : String(st).toLowerCase() === 'done' || String(st).toLowerCase() === 'completed';
+      if (!isDone) open++;
+      if (!t.effort) missingEffort++;
+      if (t.duplicateFlag) flaggedDuplicates++;
+      if (t.deleteAfter && Number(t.deleteAfter) <= now) ttlPending++;
+      const key = t.duplicateKey || (t.reminderId ? `reminder:${String(t.reminderId).toLowerCase()}` : null);
+      if (key) dupBuckets.set(key, (dupBuckets.get(key) || 0) + 1);
+      if (t.reminderId) {
+        const ridKey = `reminder:${String(t.reminderId).toLowerCase()}`;
+        ridBuckets.set(ridKey, (ridBuckets.get(ridKey) || 0) + 1);
+      }
+    }
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
+  }
+
+  const duplicateGroups = Array.from(dupBuckets.entries()).filter(([, c]) => c > 1).length;
+  const reminderDuplicateGroups = Array.from(ridBuckets.entries()).filter(([, c]) => c > 1).length;
+
+  return {
+    ok: true,
+    totals: { total, open, missingEffort, flaggedDuplicates, ttlPending },
+    duplicateGroups,
+    reminderDuplicateGroups,
+  };
 });
 
 // Ensure every goal/story/task has a human-readable ref (e.g., GR-26LGIP, ST-XXXX, TK-XXXX)
