@@ -515,28 +515,28 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       limit(1000)
     );
 
-    // Build tasks query: optionally constrain to sprint due date range and status
-    const base = [
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-    ] as const;
-    const allowed = (statusFilter && statusFilter.length) ? statusFilter : [0,1,3];
+    // Prefer materialized sprint_task_index to avoid downloading all tasks
     let tasksQuery;
-    if (sprintDueDateRange && typeof sprintDueDateRange.start === 'number' && typeof sprintDueDateRange.end === 'number') {
+    const sprintKey = (resolvedSprintId && resolvedSprintId !== '') ? resolvedSprintId : '__none__';
+    if (resolvedSprintId !== undefined) {
+      // Specific sprint or backlog sentinel
       tasksQuery = query(
-        collection(db, 'tasks'),
-        ...base,
-        where('status', 'in', allowed as any),
-        where('dueDate', '>=', sprintDueDateRange.start),
-        where('dueDate', '<=', sprintDueDateRange.end),
+        collection(db, 'sprint_task_index'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        where('sprintId', '==', sprintKey),
+        where('isOpen', '==', true),
         orderBy('dueDate', 'asc'),
         limit(1000)
       );
     } else {
+      // All sprints: still use index but without sprint filter
       tasksQuery = query(
-        collection(db, 'tasks'),
-        ...base,
-        orderBy('createdAt', 'desc'),
+        collection(db, 'sprint_task_index'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        where('isOpen', '==', true),
+        orderBy('dueDate', 'asc'),
         limit(1000)
       );
     }
@@ -558,10 +558,28 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     }, (error) => console.warn('[Kanban] stories subscribe error', error?.message || error));
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
+      // Map index docs to Task-like shape expected by board UI
+      const tasksData = snapshot.docs.map(d => {
+        const x = d.data() as any;
+        const t: any = {
+          id: d.id,
+          title: x.title,
+          description: x.description || '',
+          status: x.status,
+          priority: x.priority ?? 2,
+          effort: x.effort ?? 'M',
+          estimateMin: x.estimateMin ?? 0,
+          dueDate: x.dueDate || null,
+          parentType: x.parentType || 'story',
+          parentId: x.parentId || x.storyId || '',
+          storyId: x.storyId || null,
+          sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+          persona: currentPersona,
+          ownerUid: currentUser.uid,
+          ref: x.ref || `TASK-${String(d.id).slice(-4).toUpperCase()}`,
+        };
+        return t as Task;
+      });
       setTasks(tasksData);
       setLoading(false);
     }, (error) => console.warn('[Kanban] tasks subscribe error', error?.message || error));

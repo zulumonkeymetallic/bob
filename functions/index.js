@@ -33,6 +33,7 @@ const { coerceZone, toDateTime } = require('./lib/time');
 const crypto = require('crypto');
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
+const SPRINT_NONE = '__none__';
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -7406,6 +7407,79 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
 
   if (Object.keys(patch).length) {
     try { await ref.set(patch, { merge: true }); } catch (e) { console.warn('[onTaskWritten] patch failed', id, e?.message || e); }
+  }
+
+  // Maintain sprint task index (materialized view)
+  try {
+    const ownerUid = after.ownerUid || before?.ownerUid || null;
+    const persona = after.persona || before?.persona || null;
+    if (!ownerUid) return;
+    const isDone = (v) => {
+      if (v == null) return false;
+      if (typeof v === 'number') return v === 2 || v >= 2;
+      const s = String(v).toLowerCase();
+      return s === 'done' || s === 'complete' || s === 'completed';
+    };
+    const isOpen = !isDone(after.status);
+
+    // Resolve effective sprint
+    let effectiveSprintId = after.sprintId || null;
+    let storyId = after.storyId || (after.parentType === 'story' ? after.parentId : null) || null;
+    if (!effectiveSprintId && storyId) {
+      try {
+        const storySnap = await db.collection('stories').doc(String(storyId)).get();
+        const story = storySnap.exists ? (storySnap.data() || {}) : {};
+        if (story && story.sprintId) effectiveSprintId = story.sprintId;
+      } catch {}
+    }
+    if (!effectiveSprintId && after.dueDate) {
+      try {
+        // Load sprints for this owner (persona optional)
+        let qs = db.collection('sprints').where('ownerUid','==', ownerUid);
+        if (persona) qs = qs.where('persona','==', persona);
+        const ss = await qs.get();
+        const due = Number(after.dueDate) || null;
+        if (due) {
+          for (const d of ss.docs) {
+            const s = d.data() || {};
+            if (typeof s.startDate === 'number' && typeof s.endDate === 'number') {
+              if (due >= s.startDate && due <= s.endDate) { effectiveSprintId = d.id; break; }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const indexRef = db.collection('sprint_task_index').doc(id);
+    if (!isOpen) {
+      // Remove from index if present
+      try { await indexRef.delete(); } catch {}
+      return;
+    }
+
+    // If still no sprint, index as backlog sentinel
+    const sprintKey = effectiveSprintId || SPRINT_NONE;
+    const indexDoc = {
+      id,
+      ownerUid,
+      persona: persona || null,
+      sprintId: sprintKey,
+      status: after.status,
+      isOpen: true,
+      dueDate: after.dueDate || null,
+      priority: after.priority ?? null,
+      effort: after.effort ?? null,
+      estimateMin: after.estimateMin ?? null,
+      title: after.title || 'Task',
+      description: after.description || null,
+      parentType: after.parentType || null,
+      parentId: after.parentId || null,
+      storyId: storyId,
+      updatedAt: Date.now(),
+    };
+    await indexRef.set(indexDoc, { merge: true });
+  } catch (e) {
+    console.warn('[onTaskWritten] sprint_task_index maintenance failed', id, e?.message || e);
   }
 });
 
