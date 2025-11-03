@@ -136,8 +136,9 @@ const SprintManagementView = () => {
     if (!sprints.length) return;
     if (selectedSprintId && sprintsById[selectedSprintId]) return;
     const activeSprint = sprints.find((s) => (s.status ?? 0) === 1) || sprints[0];
-    if (activeSprint) {
-      setSelectedSprintId(activeSprint.id);
+    // Respect explicit "All Sprints" (empty string). Only auto-select if truly unset.
+    if ((selectedSprintId as any) === undefined || (selectedSprintId as any) === null) {
+      if (activeSprint) setSelectedSprintId(activeSprint.id);
     }
   }, [sprints, selectedSprintId, sprintsById, setSelectedSprintId]);
 

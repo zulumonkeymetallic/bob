@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -35,6 +35,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   // const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
+  const location = useLocation();
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem('leftNavCollapsed') === '1'; } catch { return false; }
   });
@@ -158,6 +159,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
         { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
         { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
+        { label: 'Hardcover', path: '/settings/integrations/hardcover', icon: 'book' },
         { label: 'Trakt', path: '/settings/integrations/trakt', icon: 'film' }
       ]
     },
@@ -174,13 +176,22 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
   const handleNavigation = (path: string) => {
     try {
-      console.info('[Sidebar] navigation requested', { path });
+      console.info('[Sidebar] navigation requested', { path, from: location.pathname, ts: new Date().toISOString() });
       navigate(path);
       setShowSidebar(false);
+      // Defer success log slightly to ensure route transition
+      setTimeout(() => {
+        console.info('[Sidebar] navigation success', { to: path, at: window.location.pathname, ts: new Date().toISOString() });
+      }, 0);
     } catch (error) {
       console.error('[Sidebar] navigation failed', { path, error });
     }
   };
+
+  // Global route-change logging to aid troubleshooting
+  React.useEffect(() => {
+    console.info('[Route] changed', { pathname: location.pathname, ts: new Date().toISOString() });
+  }, [location.pathname]);
 
   const toggleGroup = (groupLabel: string) => {
     setExpandedGroups(prev => 
@@ -546,9 +557,20 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       {/* Global collapse/expand toggle */}
       <button
         type="button"
-        className="btn btn-sm btn-light position-fixed"
         onClick={toggleNavCollapsed}
-        style={{ top: 10, left: navCollapsed ? 10 : 260, zIndex: 2000, boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}
+        className="position-fixed"
+        style={{
+          top: 10,
+          left: navCollapsed ? 10 : 260,
+          zIndex: 2000,
+          boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+          border: '1px solid var(--notion-border)',
+          background: 'var(--notion-hover)',
+          color: 'var(--notion-text)',
+          padding: '4px 8px',
+          borderRadius: 6,
+          lineHeight: 1
+        }}
         title={navCollapsed ? 'Show sidebar' : 'Hide sidebar'}
       >
         {navCollapsed ? '▶' : '◀'}

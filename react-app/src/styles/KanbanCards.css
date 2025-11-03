@@ -77,19 +77,25 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Allow wrapping so cards grow in height, not width */
+  white-space: normal;
+  overflow: visible;
+  text-overflow: initial;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .kanban-card__description {
   font-size: 11px;
   color: var(--muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  /* Remove clamp to permit multi-line descriptions */
+  display: block;
   line-height: 1.35;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: initial;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .kanban-card__meta {
@@ -162,6 +168,12 @@
   gap: 8px;
 }
 
+/* Match task card size to story cards */
+.kanban-card--task {
+  width: 90%;
+  margin: 0 auto 12px;
+}
+
 .drop-lane {
   border: 2px dashed transparent;
   border-radius: 10px;
@@ -172,6 +184,17 @@
 .drop-lane.is-over {
   border-color: var(--brand);
   background: rgba(var(--card-rgb), 0.15);
+}
+
+/* Lane-level drop target highlight */
+.lane-drop-target {
+  border: 2px dashed transparent;
+  border-radius: 12px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.lane-drop-target.is-over {
+  border-color: var(--brand);
+  background: rgba(var(--card-rgb), 0.12);
 }
 
 .sprint-column {

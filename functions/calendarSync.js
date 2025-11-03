@@ -3,6 +3,17 @@ const admin = require('firebase-admin');
 const { google } = require('googleapis');
 const { loadThemesForUser, mapThemeIdToLabel, getGoogleColorForThemeId } = require('./services/themeManager');
 
+function getGoogleOAuthConfig() {
+  const projectId = process.env.GCLOUD_PROJECT;
+  const region = 'europe-west2';
+  const env = process.env || {};
+  const clientId = env.GOOGLE_OAUTH_CLIENT_ID || (functions.config().google && functions.config().google.client_id);
+  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET || (functions.config().google && functions.config().google.client_secret);
+  const redirectFromConfig = functions.config().google && functions.config().google.redirect_uri;
+  const redirectUri = redirectFromConfig || (projectId ? `https://${region}-${projectId}.cloudfunctions.net/oauthCallback` : undefined);
+  return { clientId, clientSecret, redirectUri };
+}
+
 // Enhanced calendar block sync function
 exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
@@ -35,11 +46,11 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
     }
 
     // Initialize Google Calendar API
-    const oauth2Client = new google.auth.OAuth2(
-      functions.config().google.client_id,
-      functions.config().google.client_secret,
-      functions.config().google.redirect_uri
-    );
+    const { clientId, clientSecret, redirectUri } = getGoogleOAuthConfig();
+    if (!clientId || !clientSecret || !redirectUri) {
+      throw new functions.https.HttpsError('failed-precondition', 'Google OAuth not configured. Set GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET secrets and add the Cloud Functions redirect URI in Google Cloud Console.');
+    }
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
     oauth2Client.setCredentials(userData.googleCalendarTokens);
 
@@ -173,11 +184,11 @@ exports.syncFromGoogleCalendar = functions.https.onCall(async (data, context) =>
     }
 
     // Initialize Google Calendar API
-    const oauth2Client = new google.auth.OAuth2(
-      functions.config().google.client_id,
-      functions.config().google.client_secret,
-      functions.config().google.redirect_uri
-    );
+    const { clientId: cid, clientSecret: csec, redirectUri: ruri } = getGoogleOAuthConfig();
+    if (!cid || !csec || !ruri) {
+      throw new functions.https.HttpsError('failed-precondition', 'Google OAuth not configured. Set GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET secrets and add the Cloud Functions redirect URI in Google Cloud Console.');
+    }
+    const oauth2Client = new google.auth.OAuth2(cid, csec, ruri);
 
     oauth2Client.setCredentials(userData.googleCalendarTokens);
     const calendar = google.calendar({ version: 'v3', auth: oauth2Client });

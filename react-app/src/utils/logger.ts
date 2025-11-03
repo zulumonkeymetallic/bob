@@ -119,12 +119,12 @@ export const logger = {
 // Expose a quick toggle helper in dev console
 // window.BOB_LOG=('1' to enable) and window.BOB_SET_LEVEL('debug')
 declare global {
-  interface Window { BOB_LOG?: string; BOB_SET_LEVEL?: (lvl: LogLevel) => void; }
+  interface Window { BOB_LOG?: string; BOB_SET_LEVEL?: (lvl: LogLevel) => void; BOB_SET_CHANNELS?: (list: string[]) => void; }
 }
 try {
   window.BOB_SET_LEVEL = (lvl: LogLevel) => logger.setLevel(lvl);
+  window.BOB_SET_CHANNELS = (list: string[]) => logger.setChannels(list);
   if (parseSearch().get('log') === '1') localStorage.setItem('BOB_LOG','1');
 } catch {}
 
 export default logger;
-

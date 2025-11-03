@@ -156,7 +156,8 @@ export const getGoalsData = async (userUid: string) => {
 
 // Get Tasks data
 export const getTasksData = async (userUid: string) => {
-  const q = query(collection(db, 'tasks'), where('ownerUid', '==', userUid));
+  // Use materialized index for open tasks to avoid loading entire tasks collection
+  const q = query(collection(db, 'sprint_task_index'), where('ownerUid', '==', userUid), where('isOpen', '==', true));
   const querySnapshot = await getDocs(q);
   return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 };

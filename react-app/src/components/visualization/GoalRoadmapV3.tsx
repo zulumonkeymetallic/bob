@@ -37,6 +37,7 @@ const pluralize = (word: string, count: number) => (count === 1 ? word : `${word
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
+  const isDark = theme === 'dark';
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { showSidebar } = useSidebar();
   const navigate = useNavigate();
@@ -206,12 +207,24 @@ const GoalRoadmapV3: React.FC = () => {
     }
     start.setHours(0,0,0,0); end.setHours(0,0,0,0);
     if (datasetRange) {
-      const unionStart = Math.min(start.getTime(), datasetRange.start.getTime());
-      const unionEnd = Math.max(end.getTime(), datasetRange.end.getTime());
-      const maxSpan = 10 * YEAR_MS;
-      const span = Math.min(Math.max(unionEnd - unionStart, DAY_MS * 90), maxSpan);
-      start = new Date(unionStart);
-      end = new Date(unionStart + span);
+      // Limit scrollable domain to data extents (no far-right empty timeline)
+      const dataStart = datasetRange.start.getTime();
+      const dataEnd = datasetRange.end.getTime();
+
+      // Start/end based on zoom, then clamp to dataset extents
+      const clampedStart = Math.max(start.getTime(), dataStart);
+      const clampedEnd = Math.min(end.getTime(), dataEnd);
+
+      // Ensure at least a minimal span for usability when zooming very tight
+      const minSpan = DAY_MS * 30;
+      let s = clampedStart;
+      let e = clampedEnd;
+      if (e - s < minSpan) {
+        e = Math.min(dataEnd, s + minSpan);
+        if (e - s < minSpan) s = Math.max(dataStart, e - minSpan);
+      }
+
+      start = new Date(s); end = new Date(e);
       start.setHours(0,0,0,0); end.setHours(0,0,0,0);
     }
     return { start, end };
@@ -337,19 +350,24 @@ const GoalRoadmapV3: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser?.uid) return;
-    const q = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid));
+    // Use materialized index for open tasks to avoid loading entire tasks collection
+    const q = query(
+      collection(db, 'sprint_task_index'),
+      where('ownerUid', '==', currentUser.uid),
+      where('isOpen', '==', true)
+    );
     const unsub = onSnapshot(q, snap => {
       const totals: Record<string, number> = {};
       const sprintTotals: Record<string, number> = {};
       snap.docs.forEach((docSnap) => {
-        const task = docSnap.data() as Task;
-        const parentId = task.parentId;
+        const task = docSnap.data() as any;
+        const parentId = task.parentId || task.storyId;
         const meta = storyMeta[parentId];
         const goalId = meta?.goalId;
         if (!goalId) return;
         totals[goalId] = (totals[goalId] || 0) + 1;
         if (selectedSprintId) {
-          const taskSprintId = (task as any).sprintId as string | undefined;
+          const taskSprintId = task.sprintId as string | undefined;
           const storySprintId = meta?.sprintId;
           if ((taskSprintId && taskSprintId === selectedSprintId) || (storySprintId && storySprintId === selectedSprintId)) {
             sprintTotals[goalId] = (sprintTotals[goalId] || 0) + 1;
@@ -814,7 +832,8 @@ const GoalRoadmapV3: React.FC = () => {
     () => ({
       '--axis-h': `${axisHeight}px`,
       '--toolbar-h': `${toolbarHeight}px`,
-      '--header-overlap': `${HEADER_OVERLAP_PX}px`
+      '--header-overlap': `${HEADER_OVERLAP_PX}px`,
+      '--axis-gap': `0px`
     }) as React.CSSProperties,
     [axisHeight, toolbarHeight]
   );
@@ -1139,8 +1158,8 @@ const GoalRoadmapV3: React.FC = () => {
                         fontSize: 11,
                         fontWeight: 700,
                         borderRadius: 999,
-                        background: 'rgba(255,255,255,.82)',
-                        color: '#111827'
+                        background: isDark ? 'rgba(0,0,0,.4)' : 'rgba(255,255,255,.82)',
+                        color: isDark ? '#fff' : '#111827'
                       }}
                     >
                       {pct}%
@@ -1159,8 +1178,8 @@ const GoalRoadmapV3: React.FC = () => {
                   )}
                   {!isMilestone && (zoom === 'weeks' || zoom === 'months') && (
                     <div className="mt-1" style={{ width: '100%' }}>
-                      <div style={{ height: 6, borderRadius: 999, background: 'rgba(255,255,255,.3)', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: 'rgba(255,255,255,.9)' }} />
+                      <div style={{ height: 6, borderRadius: 999, background: isDark ? 'rgba(255,255,255,.25)' : 'rgba(15,23,42,.12)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: isDark ? 'rgba(255,255,255,.75)' : 'rgba(15,23,42,.6)' }} />
                       </div>
                     </div>
                   )}

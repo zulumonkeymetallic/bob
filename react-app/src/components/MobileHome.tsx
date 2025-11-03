@@ -9,13 +9,13 @@ import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper, StoryStatus } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
 
-type TabKey = 'tasks' | 'stories' | 'goals';
+type TabKey = 'overview' | 'tasks' | 'stories' | 'goals';
 
 const MobileHome: React.FC = () => {
   const { currentUser } = useAuth();
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
 
-  const [activeTab, setActiveTab] = useState<TabKey>('tasks');
+  const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -24,6 +24,14 @@ const MobileHome: React.FC = () => {
   const [noteModal, setNoteModal] = useState<{ type: 'task'|'story'|'goal'; id: string; show: boolean } | null>(null);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+
+  // Mobile override: if no explicit sprint is selected, prefer the active sprint
+  useEffect(() => {
+    if (!sprints || !sprints.length) return;
+    if (selectedSprintId) return;
+    const active = sprints.find(s => (s.status ?? 0) === 1) || sprints[0];
+    if (active?.id) setSelectedSprintId(active.id);
+  }, [sprints, selectedSprintId, setSelectedSprintId]);
 
   // Subscribe to Daily Summary (AI) - latest for user
   useEffect(() => {
@@ -156,9 +164,8 @@ const MobileHome: React.FC = () => {
           size="sm"
           value={selectedSprintId || ''}
           onChange={(e) => setSelectedSprintId(e.target.value)}
-          style={{ width: 200 }}
+          style={{ width: 200, WebkitAppearance: 'none', appearance: 'none', backgroundImage: 'none' as any }}
         >
-          <option value="">All Sprints</option>
           {sprints.map((s) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
@@ -182,21 +189,93 @@ const MobileHome: React.FC = () => {
         </Card>
       )}
 
-      {/* Tabs: Tasks | Stories | Goals */}
+      {/* Tabs: Overview | Tasks | Stories | Goals */}
       <div className="mobile-filter-tabs mb-3">
         <div className="btn-group w-100" role="group">
-          {(['tasks','stories','goals'] as TabKey[]).map(key => (
+          {(['overview','tasks','stories','goals'] as TabKey[]).map(key => (
             <Button
               key={key}
               variant={activeTab === key ? 'primary' : 'outline-primary'}
               size="sm"
               onClick={() => setActiveTab(key)}
             >
-              {key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : 'Goals'}
+              {key === 'overview' ? 'Overview' : key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : 'Goals'}
             </Button>
           ))}
         </div>
       </div>
+
+      {/* Overview */}
+      {activeTab === 'overview' && (
+        <div>
+          {summary && (
+            <Card className="mb-3" style={{ background: 'linear-gradient(90deg,#eef2ff,#fdf2f8)' }}>
+              <Card.Body>
+                {summary.dailyBriefing?.headline && (
+                  <div className="fw-semibold mb-1" style={{ fontSize: 16 }}>{summary.dailyBriefing.headline}</div>
+                )}
+                {summary.dailyBriefing?.body && (
+                  <div style={{ fontSize: 14 }} className="mb-2">{summary.dailyBriefing.body}</div>
+                )}
+                {summary.dailyBriefing?.checklist && (
+                  <div className="text-muted" style={{ fontSize: 13 }}>{summary.dailyBriefing.checklist}</div>
+                )}
+              </Card.Body>
+            </Card>
+          )}
+
+          <div className="d-grid gap-2 mb-3" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+            <Card style={{ background: '#ecfeff' }}><Card.Body>
+              <div className="small text-muted">Tasks today</div>
+              <div className="fs-5 fw-semibold">{tasks.filter(t => t.status !== 2 && t.dueDate && new Date(t.dueDate).toDateString() === new Date().toDateString()).length}</div>
+            </Card.Body></Card>
+            <Card style={{ background: '#fef3c7' }}><Card.Body>
+              <div className="small text-muted">Overdue</div>
+              <div className="fs-5 fw-semibold">{tasks.filter(t => t.status !== 2 && t.dueDate && t.dueDate < Date.now() - 86400000).length}</div>
+            </Card.Body></Card>
+            <Card style={{ background: '#dcfce7' }}><Card.Body>
+              <div className="small text-muted">Stories done</div>
+              <div className="fs-5 fw-semibold">{stories.filter(s => s.status === 4).length}</div>
+            </Card.Body></Card>
+            <Card style={{ background: '#fee2e2' }}><Card.Body>
+              <div className="small text-muted">Chores/Routines</div>
+              <div className="fs-6">{(summary?.choresDue?.length || 0) + (summary?.routinesDue?.length || 0)} due</div>
+            </Card.Body></Card>
+          </div>
+
+          {summary?.priorities?.items?.length > 0 && (
+            <Card className="mb-3" style={{ background: '#f0f9ff' }}>
+              <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
+                <strong>Today’s Priorities</strong>
+              </Card.Header>
+              <ListGroup variant="flush">
+                {summary.priorities.items.slice(0, 5).map((it: any, idx: number) => (
+                  <ListGroup.Item key={idx} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
+                    <span>{it.title || it.id || it.ref || 'Task'}</span>
+                    <Badge bg={idx < 2 ? 'danger' : idx < 4 ? 'warning' : 'secondary'}>{Math.round(it.score || 0)}</Badge>
+                  </ListGroup.Item>
+                ))}
+              </ListGroup>
+            </Card>
+          )}
+
+          {summary?.worldSummary && (
+            <Card className="mb-3" style={{ background: '#fff7ed' }}>
+              <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
+                <strong>World & Weather</strong>
+              </Card.Header>
+              <Card.Body>
+                {summary.worldSummary.summary && (
+                  <div className="mb-2" style={{ fontSize: 14 }}>{summary.worldSummary.summary}</div>
+                )}
+                {summary.worldSummary.weather && (
+                  <div className="text-muted" style={{ fontSize: 13 }}>{summary.worldSummary.weather}</div>
+                )}
+              </Card.Body>
+            </Card>
+          )}
+        </div>
+      )}
 
       {/* Content */}
       {activeTab === 'tasks' && (

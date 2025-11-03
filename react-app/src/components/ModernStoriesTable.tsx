@@ -843,20 +843,29 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     hasGoal: ''
   });
 
-  // Subscribe to tasks when inline tasks are enabled
+  // Inline tasks expansion state (declare before effects that depend on it)
+  const [expandedStoryId, setExpandedStoryId] = useState<string | null>(null);
+
+  // Subscribe to inline tasks only for the expanded story to avoid loading all tasks
   useEffect(() => {
-    if (!enableInlineTasks || !currentUser) return;
+    if (!enableInlineTasks || !currentUser || !expandedStoryId) return;
     const tasksQ = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('persona', '==', currentPersona),
+      where('parentType', '==', 'story'),
+      where('parentId', '==', expandedStoryId)
     );
     const unsub = onSnapshot(tasksQ, (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[];
       setAllTasks(list);
     });
-    return () => unsub();
-  }, [enableInlineTasks, currentUser, currentPersona]);
+    return () => {
+      unsub();
+      // Clear tasks when collapsing to prevent stale cross-story data
+      setAllTasks([]);
+    };
+  }, [enableInlineTasks, currentUser, currentPersona, expandedStoryId]);
   const [sortConfig, setSortConfig] = useState({
     key: 'updatedAt',
     direction: 'desc' as 'asc' | 'desc'
@@ -1109,8 +1118,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
   const visibleColumnsCount = columns.filter(col => col.visible).length;
 
-  // Inline tasks expansion state
-  const [expandedStoryId, setExpandedStoryId] = useState<string | null>(null);
+  // Inline tasks expansion state moved earlier
   const handleToggleExpand = (storyId: string) => {
     setExpandedStoryId(prev => (prev === storyId ? null : storyId));
   };

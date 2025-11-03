@@ -16,6 +16,12 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   onSprintChange,
   className = '',
 }) => {
+  const DISABLE_SELECTOR = (() => {
+    try {
+      const env: any = (typeof process !== 'undefined' ? (process as any).env : {}) || {};
+      return env.REACT_APP_SPRINT_SELECTOR_DISABLED === 'true';
+    } catch { return false; }
+  })();
   const {
     sprints,
     loading,
@@ -33,11 +39,14 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   useEffect(() => {
     if (loading) return;
     if (sprints.length === 0) return;
-    // If nothing selected (null/undefined) try to auto-select an active/planned sprint.
-    if (effectiveSelectedId !== undefined && effectiveSelectedId !== null) return;
+    // Respect explicit user choice including empty string in storage
+    const savedPref = (() => { try { return localStorage.getItem('bob_selected_sprint'); } catch { return null; } })();
+    const noSavedPreference = savedPref === null || savedPref === undefined;
+    // Only auto-select when there is no explicit selection AND no saved preference
+    if ((effectiveSelectedId !== undefined && effectiveSelectedId !== null && effectiveSelectedId !== '') || !noSavedPreference) return;
 
     const activeSprint = sprints.find((sprint) => isStatus(sprint.status, 'active'));
-    const plannedSprint = sprints.find((sprint) => isStatus(sprint.status, 'planned'));
+    const plannedSprint = sprints.find((sprint) => isStatus(sprint.status, 'planning'));
     const fallbackSprint = sprints[0];
     const preferred = activeSprint || plannedSprint || fallbackSprint;
 
@@ -69,6 +78,15 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
     );
   }
 
+  if (DISABLE_SELECTOR) {
+    return (
+      <div className={`d-flex align-items-center ${className}`} title="Sprint selection disabled for test">
+        <span className="me-2">🏃‍♂️</span>
+        <span>All Sprints</span>
+      </div>
+    );
+  }
+
   if (sprints.length === 0) {
     return (
       <div className={`d-flex align-items-center ${className}`}>
@@ -86,7 +104,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         className="d-flex align-items-center"
       >
         <span className="me-2">🏃‍♂️</span>
-        {selectedSprintId === '' ? (
+        {effectiveSelectedId === '' ? (
           <span>All Sprints</span>
         ) : selectedSprint ? (
           <span>
@@ -129,7 +147,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
                   </small>
                   <span className={`badge ${
                     isStatus(sprint.status, 'active') ? 'bg-success' : 
-                    isStatus(sprint.status, 'planned') ? 'bg-warning' : 'bg-secondary'
+                    isStatus(sprint.status, 'planning') ? 'bg-warning' : 'bg-secondary'
                   }`}>
                     {sprint.status}
                   </span>

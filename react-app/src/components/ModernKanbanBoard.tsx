@@ -20,11 +20,13 @@ import {
   verticalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable';
+import { pointerWithin } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { Edit3, Trash2, Target, BookOpen, Activity, SquarePlus, ListTodo, KanbanSquare, Maximize2, Minimize2, GripVertical, Wand2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs, limit } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -43,6 +45,10 @@ import SortableStoryCard from './stories/SortableStoryCard';
 
 interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
+  // Optional: constrain tasks to a sprint window (dueDate within [start,end])
+  sprintDueDateRange?: { start: number; end: number } | null;
+  // Optional: allowed task status values (defaults to [0,1,3] = not done)
+  statusFilter?: number[];
 }
 
 type LaneStatus = 'backlog' | 'in-progress' | 'done';
@@ -59,8 +65,19 @@ const DroppableArea: React.FC<{
     <div
       ref={setNodeRef}
       className={`drop-lane${isOver ? ' is-over' : ''}`}
-      style={{ minHeight: '100px', ...style }}
+      style={{ minHeight: '220px', padding: '12px', ...style }}
     >
+      {children}
+    </div>
+  );
+};
+
+// Broad lane-level droppable to allow forgiving drops anywhere in a column
+const LaneDroppable: React.FC<{ id: string; children: React.ReactNode; style?: React.CSSProperties }>
+  = ({ id, children, style }) => {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div ref={setNodeRef} className={`lane-drop-target${isOver ? ' is-over' : ''}`} style={style}>
       {children}
     </div>
   );
@@ -110,10 +127,34 @@ const SortableTaskCard: React.FC<{
     backgroundColor: colorWithAlpha(accentColor, 0.12)
   };
 
+  const [converting, setConverting] = useState(false);
+
+  const handleConvertToStory = async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (converting) return;
+    setConverting(true);
+    try {
+      const suggest = httpsCallable(functions, 'suggestTaskStoryConversions');
+      const convert = httpsCallable(functions, 'convertTasksToStories');
+      const resp: any = await suggest({ persona: (task as any).persona || 'personal', taskIds: [task.id], limit: 1 });
+      const suggestions: any[] = Array.isArray(resp?.data?.suggestions) ? resp.data.suggestions : [];
+      const s = suggestions.find(x => x.taskId === task.id) || suggestions[0] || {};
+      const storyTitle = (s.storyTitle || task.title || 'New Story').slice(0, 140);
+      const storyDescription = (s.storyDescription || (task as any).description || '').slice(0, 1200);
+      const goalId = s.goalId || (task as any).goalId || null;
+      await convert({ conversions: [{ taskId: task.id, storyTitle, storyDescription, goalId }] });
+    } catch (e) {
+      console.warn('[Kanban] convert to story failed', e);
+      alert('Could not convert this task to a story. Try again.');
+    } finally {
+      setConverting(false);
+    }
+  };
+
   return (
     <div ref={setNodeRef} style={style}>
       <div
-        className={`kanban-card kanban-card__clickable${isDragging ? ' dragging' : ''}`}
+        className={`kanban-card kanban-card--task kanban-card__clickable${isDragging ? ' dragging' : ''}`}
         style={{ borderLeft: `3px solid ${isStatus((task as any).status, 'blocked') ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb')}`, marginBottom: '10px' }}
         role="button"
         tabIndex={0}
@@ -149,6 +190,17 @@ const SortableTaskCard: React.FC<{
                 }}
               >
                 <Activity size={11} />
+              </Button>
+              <Button
+                variant="link"
+                size="sm"
+                className="p-0"
+                style={{ width: 24, height: 24, color: themeVars.muted }}
+                title={converting ? 'Converting…' : 'Convert to Story'}
+                onClick={handleConvertToStory}
+                disabled={converting}
+              >
+                <Wand2 size={11} />
               </Button>
               <Button
                 variant="link"
@@ -207,7 +259,7 @@ const SortableTaskCard: React.FC<{
   );
 };
 
-const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) => {
+const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, sprintDueDateRange = null, statusFilter }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { showSidebar, setUpdateHandler } = useSidebar();
@@ -467,12 +519,27 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         return { lane, type: 'tasks' };
       }
     }
+    const lanePrefix = 'lane-';
+    if (id.startsWith(lanePrefix)) {
+      const lane = id.slice(lanePrefix.length) as LaneStatus;
+      if (laneIds.includes(lane)) {
+        // When dropping on a lane, infer type from the active item in resolveDropTarget
+        return { lane, type: 'stories' } as any;
+      }
+    }
     return null;
   };
 
   const resolveDropTarget = (overId: string, activeId: string): { lane: LaneStatus; type: 'stories' | 'tasks' } | null => {
     const parsed = parseDroppableId(overId);
-    if (parsed) return parsed;
+    if (parsed) {
+      // If the target is a lane, derive type based on dragged entity
+      if ((parsed as any).type === undefined || (overId || '').startsWith('lane-')) {
+        const isStory = stories.some(s => s.id === activeId);
+        return { lane: parsed.lane, type: isStory ? 'stories' : 'tasks' };
+      }
+      return parsed;
+    }
 
     const story = stories.find(s => s.id === overId);
     if (story) return { lane: storyLaneForStatus(story), type: 'stories' };
@@ -511,13 +578,31 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       limit(1000)
     );
 
-    const tasksQuery = query(
-      collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc'),
-      limit(1000)
-    );
+    // Prefer materialized sprint_task_index to avoid downloading all tasks
+    let tasksQuery;
+    const sprintKey = (resolvedSprintId && resolvedSprintId !== '') ? resolvedSprintId : '__none__';
+    if (resolvedSprintId !== undefined) {
+      // Specific sprint or backlog sentinel
+      tasksQuery = query(
+        collection(db, 'sprint_task_index'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        where('sprintId', '==', sprintKey),
+        where('isOpen', '==', true),
+        orderBy('dueDate', 'asc'),
+        limit(1000)
+      );
+    } else {
+      // All sprints: still use index but without sprint filter
+      tasksQuery = query(
+        collection(db, 'sprint_task_index'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        where('isOpen', '==', true),
+        orderBy('dueDate', 'asc'),
+        limit(1000)
+      );
+    }
 
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
@@ -536,10 +621,28 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
     }, (error) => console.warn('[Kanban] stories subscribe error', error?.message || error));
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
+      // Map index docs to Task-like shape expected by board UI
+      const tasksData = snapshot.docs.map(d => {
+        const x = d.data() as any;
+        const t: any = {
+          id: d.id,
+          title: x.title,
+          description: x.description || '',
+          status: x.status,
+          priority: x.priority ?? 2,
+          effort: x.effort ?? 'M',
+          estimateMin: x.estimateMin ?? 0,
+          dueDate: x.dueDate || null,
+          parentType: x.parentType || 'story',
+          parentId: x.parentId || x.storyId || '',
+          storyId: x.storyId || null,
+          sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+          persona: currentPersona,
+          ownerUid: currentUser.uid,
+          ref: x.ref || `TASK-${String(d.id).slice(-4).toUpperCase()}`,
+        };
+        return t as Task;
+      });
       setTasks(tasksData);
       setLoading(false);
     }, (error) => console.warn('[Kanban] tasks subscribe error', error?.message || error));
@@ -549,7 +652,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
       unsubscribeStories();
       unsubscribeTasks();
     };
-  }, [currentUser, currentPersona]);
+  }, [currentUser, currentPersona, sprintDueDateRange?.start, sprintDueDateRange?.end, Array.isArray(statusFilter) ? statusFilter.join(',') : '']);
 
   // DnD handlers
   const handleDragStart = (event: DragStartEvent) => {
@@ -830,27 +933,38 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
         {/* Kanban Board */}
         <DndContext 
           sensors={sensors} 
-          collisionDetection={closestCenter}
+          collisionDetection={pointerWithin}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
+          <div style={{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', overflowX: 'auto' }}>
           <Row style={{ minHeight: '600px' }}>
           {swimLanes.map((lane) => {
             const lgCols = Math.max(1, Math.floor(12 / swimLanes.length));
             const mdCols = Math.min(12, Math.max(6, lgCols * 2));
             return (
             <Col xs={12} md={mdCols as any} lg={lgCols as any} key={lane.id} style={{ marginBottom: '20px' }}>
-              <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+              <Card style={{
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                border: 'none',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+              }}>
                 <Card.Header style={{ 
                   backgroundColor: lane.color, 
                   color: themeVars.onAccent,
                   padding: '16px 20px',
-                  border: 'none'
+                  border: 'none',
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 2
                 }}>
                   <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600' }}>
                     {lane.title}
                   </h5>
                 </Card.Header>
+                <LaneDroppable id={`lane-${lane.status}`}>
                 <Card.Body style={{ padding: '16px' }}>
                   {/* Stories Section */}
                   <div style={{ marginBottom: '24px' }}>
@@ -914,10 +1028,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect }) =
                     </DroppableArea>
                   </div>
                 </Card.Body>
+                </LaneDroppable>
               </Card>
             </Col>
           );})}
         </Row>
+        </div>
 
         {/* Drag Overlay */}
         <DragOverlay>

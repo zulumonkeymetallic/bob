@@ -55,7 +55,8 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
       setStories(data);
     }));
 
-    const qTasks = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid));
+    // Use materialized index for open tasks only to avoid loading entire tasks collection
+    const qTasks = query(collection(db, 'sprint_task_index'), where('ownerUid', '==', currentUser.uid), where('isOpen', '==', true));
     unsubs.push(onSnapshot(qTasks, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Task[];
       setTasks(data);

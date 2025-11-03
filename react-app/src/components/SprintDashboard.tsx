@@ -80,8 +80,9 @@ const SprintDashboard: React.FC = () => {
       currentSprint,
     }));
 
-    if (!selectedSprintId && currentSprint) {
-      setSelectedSprintId(currentSprint.id);
+    // Respect explicit "All Sprints" (empty string). Only auto-select if truly unset.
+    if ((selectedSprintId as any) === undefined || (selectedSprintId as any) === null) {
+      if (currentSprint) setSelectedSprintId(currentSprint.id);
     }
   }, [sprints, selectedSprintId, setSelectedSprintId]);
 

@@ -150,10 +150,11 @@ const Dashboard: React.FC = () => {
     );
 
     const tasksQuery = query(
-      collection(db, 'tasks'),
+      collection(db, 'sprint_task_index'),
       where('ownerUid', '==', currentUser.uid),
-      orderBy('priority', 'desc'),
-      limit(40)
+      where('isOpen', '==', true),
+      orderBy('dueDate', 'asc'),
+      limit(60)
     );
 
     const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
@@ -202,7 +203,7 @@ const Dashboard: React.FC = () => {
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
       const allTasks = snapshot.docs.map(doc => {
-        const data = doc.data();
+        const data = doc.data() as any;
         return {
           id: doc.id,
           ...data,

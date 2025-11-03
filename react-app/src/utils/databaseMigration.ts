@@ -1,7 +1,7 @@
 import { db } from '../firebase';
 import { collection, getDocs, doc, updateDoc, query, where } from 'firebase/firestore';
 import { ChoiceMigration } from '../config/migration';
-import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
+// Note: status/theme/priority helpers not used in migration utility; removed to satisfy ESLint
 
 export class DatabaseMigration {
   

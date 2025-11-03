@@ -28,9 +28,21 @@ const {
 } = require('./lib/reporting');
 const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
 const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('./services/mediaImportController');
+// Expose advanced LLM-powered daily digest from separate module
+try {
+  const digestModule = require('./dailyDigestGenerator');
+  if (digestModule && digestModule.generateDailyDigest) {
+    exports.generateDailyDigest = digestModule.generateDailyDigest;
+  }
+} catch (e) {
+  console.warn('[init] dailyDigestGenerator not loaded', e?.message || e);
+}
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime } = require('./lib/time');
 const crypto = require('crypto');
+const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
+const SPRINT_NONE = '__none__';
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -81,7 +93,6 @@ function makeAssignmentId({ planId, itemType, itemId }) {
 }
 
 const MS_IN_MINUTE = 60 * 1000;
-const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const CHORE_LOOKAHEAD_DAYS = 90;
 const AI_PRIORITY_MODEL = 'gemini-1.5-flash';
 
@@ -1044,6 +1055,131 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   };
 });
 
+// Optional HTTP wrapper for cross-origin fetch from trusted frontends
+exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, res) => {
+  const allowedOrigins = new Set([
+    'https://bob.jc1.tech',
+    'https://bob20250810.web.app',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ]);
+  const origin = String(req.get('origin') || '');
+  if (allowedOrigins.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  res.set('Access-Control-Allow-Credentials', 'true');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
+  try {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed' });
+      return;
+    }
+    const authHeader = String(req.get('Authorization') || '');
+    const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!idToken) {
+      res.status(401).json({ error: 'Missing Authorization: Bearer <Firebase ID token>' });
+      return;
+    }
+    let decoded;
+    try {
+      decoded = await admin.auth().verifyIdToken(idToken);
+    } catch (e) {
+      res.status(401).json({ error: 'Invalid or expired ID token' });
+      return;
+    }
+
+    const uid = decoded.uid;
+    const timezone = req.body?.timezone || DEFAULT_TIMEZONE;
+    const startDate = req.body?.startDate || DateTime.now().setZone(timezone).toISODate();
+    const days = Math.min(Math.max(Number(req.body?.days || 7), 1), 30);
+    const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
+    if (!start.isValid) {
+      res.status(400).json({ error: 'Invalid startDate' });
+      return;
+    }
+    const end = start.plus({ days: days - 1 }).endOf('day');
+
+    const db = admin.firestore();
+    let busy = req.body?.includeBusy === false ? [] : await fetchGoogleBusy(uid, start, end);
+
+    try {
+      const fdb = ensureFirestore();
+      const profileSnap = await fdb.collection('profiles').doc(uid).get();
+      const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+      const qhStart = Number(profile.quietHoursStart);
+      const qhEnd = Number(profile.quietHoursEnd);
+      if (Number.isFinite(qhStart) && Number.isFinite(qhEnd)) {
+        const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+        const extras = [];
+        for (let i = 0; i < daysSpan; i++) {
+          const d0 = start.plus({ days: i }).startOf('day');
+          const d1 = d0.plus({ days: 1 });
+          if (qhStart === qhEnd) continue;
+          const allowedStart = d0.plus({ hours: qhStart });
+          const allowedEnd = d0.plus({ hours: qhEnd });
+          if (qhStart < qhEnd) {
+            extras.push({ start: d0.toISO(), end: allowedStart.toISO() });
+            extras.push({ start: allowedEnd.toISO(), end: d1.toISO() });
+          } else {
+            extras.push({ start: allowedEnd.toISO(), end: allowedStart.toISO() });
+          }
+        }
+        busy = [...busy, ...extras];
+      }
+    } catch (e) {
+      console.warn('[planBlocksV2Http] quiet hours apply failed', e?.message || e);
+    }
+
+    const plan = await planSchedule({ db, userId: uid, windowStart: start, windowEnd: end, busy });
+    const existingIds = new Set(plan.existingIds || []);
+    const batch = db.batch();
+    const nowMs = Date.now();
+
+    for (const instance of plan.planned) {
+      const ref = db.collection('scheduled_instances').doc(instance.id);
+      const isExisting = existingIds.has(instance.id);
+      const payload = {
+        ...instance,
+        status: instance.status || 'planned',
+        userId: uid,
+        ownerUid: uid,
+        updatedAt: nowMs,
+      };
+      if (!isExisting) payload.createdAt = nowMs;
+      batch.set(ref, payload, { merge: true });
+    }
+    for (const unscheduled of plan.unscheduled) {
+      const id = schedulerMakeInstanceId({
+        planId: makePlanId(uid, start.toJSDate()),
+        itemType: String(unscheduled.itemType || 'unknown'),
+        itemId: String(unscheduled.itemId || 'unknown'),
+      });
+      const ref = db.collection('scheduled_instances').doc(id);
+      batch.set(ref, {
+        id,
+        userId: uid,
+        ownerUid: uid,
+        status: 'unscheduled',
+        updatedAt: nowMs,
+        createdAt: nowMs,
+      }, { merge: true });
+    }
+    await batch.commit();
+    res.status(200).json({ ok: true, planned: plan.planned.length, existing: existingIds.size });
+  } catch (e) {
+    console.error('planBlocksV2Http error', e);
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
 // ===== Chores & Routines Helpers
 exports.listChoresWithStats = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
@@ -1303,9 +1439,23 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID], invo
     const uid = String(req.query.uid || "");
     const nonce = String(req.query.nonce || "");
     if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+
     const projectId = process.env.GCLOUD_PROJECT;
+    if (!projectId) return res.status(500).send("Missing GCLOUD_PROJECT in environment.");
+
     const redirectUri = `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
     const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+    if (!clientId || !/\.apps\.googleusercontent\.com$/.test(String(clientId))) {
+      // Helpful message without leaking the client id value
+      return res.status(500).send(
+        [
+          'Google OAuth is not configured. Please set GOOGLE_OAUTH_CLIENT_ID (Web application client) and GOOGLE_OAUTH_CLIENT_SECRET as Functions secrets.',
+          'Also add this Redirect URI in the Google Cloud Console:',
+          redirectUri
+        ].join('\n')
+      );
+    }
+
     const state = stateEncode({ uid, nonce });
     const scope = encodeURIComponent("https://www.googleapis.com/auth/calendar");
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&access_type=offline&include_granted_scopes=true&prompt=consent&scope=${scope}&state=${state}`;
@@ -2672,8 +2822,10 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
   const db = admin.firestore();
   const summary = { accounts: 0, pots: 0, transactions: 0, accountsSynced: [] };
 
-  const accountsResp = await monzoApi(accessToken, '/accounts', { account_type: 'uk_retail' });
-  const accounts = accountsResp.accounts || [];
+  // Fetch all accounts (personal + joint). Monzo supports types like 'uk_retail' and 'uk_retail_joint'.
+  // We previously limited to 'uk_retail' which excluded joint accounts; include all to avoid missing data.
+  const accountsResp = await monzoApi(accessToken, '/accounts');
+  const accounts = (accountsResp.accounts || []).filter(a => !a.closed);
   summary.accounts = accounts.length;
 
   if (accounts.length) {
@@ -7065,14 +7217,25 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       let ref = null;
       if (id) ref = db.collection('tasks').doc(id);
       else {
-        const snap = await db.collection('tasks').where('ownerUid','==',uid).where('reminderId','==',reminderId).limit(1).get();
+        // prefer reminderId; also check duplicateKey convention
+        let snap = await db.collection('tasks').where('ownerUid','==',uid).where('reminderId','==',reminderId).limit(1).get();
         if (!snap.empty) ref = snap.docs[0].ref;
+        if (!ref && reminderId) {
+          const dupKey = `reminder:${String(reminderId).toLowerCase()}`;
+          snap = await db.collection('tasks').where('ownerUid','==',uid).where('duplicateKey','==',dupKey).limit(1).get();
+          if (!snap.empty) ref = snap.docs[0].ref;
+        }
       }
       if (ref) {
         const task_type = classifyType(title);
         const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type };
         if (reminderId) data['reminderId'] = reminderId;
-        if (completed) data['status'] = 2;
+        if (reminderId) data['duplicateKey'] = `reminder:${String(reminderId).toLowerCase()}`;
+        if (completed) {
+          data['status'] = 2;
+          data['completedAt'] = Date.now();
+          data['deleteAfter'] = Date.now() + TASK_TTL_DAYS * MS_IN_DAY;
+        }
         if (iosTags.length) {
           try {
             const snap = await ref.get();
@@ -7085,24 +7248,66 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         updated++;
       } else if (reminderId || title) {
         // Auto-import new task from Reminders
-        const newRef = db.collection('tasks').doc();
         const task_type = classifyType(title);
-        await newRef.set({
-          id: newRef.id,
-          ownerUid: uid,
-          persona: 'personal',
-          title: title || 'Reminder',
-          status: completed ? 2 : 0,
-          task_type,
-          entry_method: 'import:reminders',
-          source: 'ios_reminder',
-          reminderId: reminderId || null,
-          reminderCreatedAt: Date.now(),
-          createdAt: Date.now(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          ...(iosTags.length ? { tags: iosTags } : {}),
-        }, { merge: true });
-        updated++;
+        const nowMs = Date.now();
+        const dupKey = reminderId ? `reminder:${String(reminderId).toLowerCase()}` : null;
+        // Check again for duplicates by duplicateKey to avoid creating a new one
+        if (dupKey) {
+          const snap = await db.collection('tasks').where('ownerUid','==',uid).where('duplicateKey','==',dupKey).limit(1).get();
+          if (!snap.empty) {
+            const existingRef = snap.docs[0].ref;
+            const data = {
+              title: title || 'Reminder',
+              task_type,
+              source: 'ios_reminder',
+              reminderId: reminderId,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+              ...(iosTags.length ? { tags: Array.from(new Set([...(snap.docs[0].data()?.tags || []), ...iosTags])).slice(0,12) } : {}),
+            };
+            await existingRef.set(data, { merge: true });
+            updated++;
+          } else {
+            const newRef = db.collection('tasks').doc();
+            await newRef.set({
+              id: newRef.id,
+              ownerUid: uid,
+              persona: 'personal',
+              title: title || 'Reminder',
+              status: completed ? 2 : 0,
+              task_type,
+              entry_method: 'import:reminders',
+              source: 'ios_reminder',
+              reminderId: reminderId || null,
+              duplicateKey: dupKey,
+              reminderCreatedAt: nowMs,
+              createdAt: nowMs,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+              ...(iosTags.length ? { tags: iosTags } : {}),
+            }, { merge: true });
+            updated++;
+          }
+        } else {
+          const newRef = db.collection('tasks').doc();
+          await newRef.set({
+            id: newRef.id,
+            ownerUid: uid,
+            persona: 'personal',
+            title: title || 'Reminder',
+            status: completed ? 2 : 0,
+            task_type,
+            entry_method: 'import:reminders',
+            source: 'ios_reminder',
+            reminderId: reminderId || null,
+            reminderCreatedAt: nowMs,
+            createdAt: nowMs,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+            ...(iosTags.length ? { tags: iosTags } : {}),
+          }, { merge: true });
+          updated++;
+        }
       }
     }
     return res.json({ ok: true, updated });
@@ -7139,6 +7344,164 @@ exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{
       });
       await batch.commit();
     }
+  }
+});
+
+// ===== Task lifecycle maintenance (completed/duplicates TTL and flags)
+exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (event) => {
+  const before = event.data?.before?.data() || null;
+  const after = event.data?.after?.data() || null;
+  if (!after) return; // deletion
+
+  const db = ensureFirestore();
+  const id = event.params.taskId;
+  const ref = db.collection('tasks').doc(id);
+
+  const now = Date.now();
+  const isDone = (v) => {
+    if (v == null) return false;
+    if (typeof v === 'number') return v === 2 || v >= 2;
+    const s = String(v).toLowerCase();
+    return s === 'done' || s === 'complete' || s === 'completed';
+  };
+
+  const wasDone = before ? isDone(before.status) : false;
+  const nowDone = isDone(after.status);
+  const patch = {};
+
+  // Track completedAt and TTL deleteAfter on status change
+  if (!wasDone && nowDone) {
+    const completedAt = after.completedAt || now;
+    patch.completedAt = completedAt;
+    // set deleteAfter only if not already set
+    if (!after.deleteAfter) patch.deleteAfter = completedAt + TASK_TTL_DAYS * MS_IN_DAY;
+  } else if (wasDone && !nowDone) {
+    // Clear when moved out of done
+    patch.completedAt = null;
+    patch.deleteAfter = null;
+  }
+
+  // Ensure effort has a sensible default if missing
+  if (!after.effort) {
+    const est = Number(after.estimateMin || 0) || (Number(after.estimatedHours || 0) * 60);
+    let eff = 'S';
+    if (est >= 240) eff = 'L';
+    else if (est >= 60) eff = 'M';
+    patch.effort = eff;
+  }
+
+  // Duplicate detection by reminderId/duplicateKey; also persist duplicateKey when available
+  try {
+    const ownerUid = after.ownerUid || before?.ownerUid || null;
+    let key = after.duplicateKey || null;
+    if (!key && after.reminderId) key = `reminder:${String(after.reminderId).toLowerCase()}`;
+    if (key && ownerUid) {
+      // Always store duplicateKey for consistency, even if no duplicates found
+      if (!after.duplicateKey) {
+        patch.duplicateKey = key;
+      }
+      const dupSnap = await db.collection('tasks')
+        .where('ownerUid','==', ownerUid)
+        .where('duplicateKey','==', key)
+        .limit(2)
+        .get();
+      const others = dupSnap.docs.filter(d => d.id !== id);
+      if (others.length) {
+        // Flag both as duplicates. Prefer keeping the oldest.
+        if (!after.duplicateFlag) patch.duplicateFlag = true;
+        if (!nowDone && !after.deleteAfter) {
+          patch.deleteAfter = (after.completedAt || now) + TASK_TTL_DAYS * MS_IN_DAY;
+        }
+        // Best-effort: mark counterpart as duplicateFlag too
+        try {
+          const otherRef = others[0].ref;
+          const other = others[0].data() || {};
+          const otherPatch = {};
+          if (!other.duplicateFlag) otherPatch.duplicateFlag = true;
+          if (!other.duplicateKey) otherPatch.duplicateKey = key;
+          if (Object.keys(otherPatch).length) await otherRef.set(otherPatch, { merge: true });
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] duplicate detection skipped:', e?.message || e);
+  }
+
+  if (Object.keys(patch).length) {
+    try { await ref.set(patch, { merge: true }); } catch (e) { console.warn('[onTaskWritten] patch failed', id, e?.message || e); }
+  }
+
+  // Maintain sprint task index (materialized view)
+  try {
+    const ownerUid = after.ownerUid || before?.ownerUid || null;
+    const persona = after.persona || before?.persona || null;
+    if (!ownerUid) return;
+    const isDone = (v) => {
+      if (v == null) return false;
+      if (typeof v === 'number') return v === 2 || v >= 2;
+      const s = String(v).toLowerCase();
+      return s === 'done' || s === 'complete' || s === 'completed';
+    };
+    const isOpen = !isDone(after.status);
+
+    // Resolve effective sprint
+    let effectiveSprintId = after.sprintId || null;
+    let storyId = after.storyId || (after.parentType === 'story' ? after.parentId : null) || null;
+    if (!effectiveSprintId && storyId) {
+      try {
+        const storySnap = await db.collection('stories').doc(String(storyId)).get();
+        const story = storySnap.exists ? (storySnap.data() || {}) : {};
+        if (story && story.sprintId) effectiveSprintId = story.sprintId;
+      } catch {}
+    }
+    if (!effectiveSprintId && after.dueDate) {
+      try {
+        // Load sprints for this owner (persona optional)
+        let qs = db.collection('sprints').where('ownerUid','==', ownerUid);
+        if (persona) qs = qs.where('persona','==', persona);
+        const ss = await qs.get();
+        const due = Number(after.dueDate) || null;
+        if (due) {
+          for (const d of ss.docs) {
+            const s = d.data() || {};
+            if (typeof s.startDate === 'number' && typeof s.endDate === 'number') {
+              if (due >= s.startDate && due <= s.endDate) { effectiveSprintId = d.id; break; }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const indexRef = db.collection('sprint_task_index').doc(id);
+    if (!isOpen) {
+      // Remove from index if present
+      try { await indexRef.delete(); } catch {}
+      return;
+    }
+
+    // If still no sprint, index as backlog sentinel
+    const sprintKey = effectiveSprintId || SPRINT_NONE;
+    const indexDoc = {
+      id,
+      ownerUid,
+      persona: persona || null,
+      sprintId: sprintKey,
+      status: after.status,
+      isOpen: true,
+      dueDate: after.dueDate || null,
+      priority: after.priority ?? null,
+      effort: after.effort ?? null,
+      estimateMin: after.estimateMin ?? null,
+      title: after.title || 'Task',
+      description: after.description || null,
+      parentType: after.parentType || null,
+      parentId: after.parentId || null,
+      storyId: storyId,
+      updatedAt: Date.now(),
+    };
+    await indexRef.set(indexDoc, { merge: true });
+  } catch (e) {
+    console.warn('[onTaskWritten] sprint_task_index maintenance failed', id, e?.message || e);
   }
 });
 
@@ -8025,6 +8388,241 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
   }
 });
 
+// ===== Cleanup: delete completed/duplicate tasks past TTL
+exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const limit = Number(req?.data?.limit || 200);
+  const db = ensureFirestore();
+  const now = Date.now();
+  let deleted = 0;
+  const writer = db.bulkWriter();
+  try {
+    // Primary: deleteAfter reached
+    const snap1 = await db.collection('tasks')
+      .where('ownerUid','==', uid)
+      .where('deleteAfter','<=', now)
+      .limit(limit)
+      .get();
+    for (const d of snap1.docs) {
+      writer.delete(d.ref); deleted++;
+    }
+    if (deleted < limit) {
+      // Fallback: completedAt older than TTL but no deleteAfter
+      const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
+      const remain = limit - deleted;
+      const snap2 = await db.collection('tasks')
+        .where('ownerUid','==', uid)
+        .where('status','==', 2)
+        .where('completedAt','<=', cutoff)
+        .limit(remain)
+        .get();
+      for (const d of snap2.docs) {
+        writer.delete(d.ref); deleted++;
+      }
+    }
+    await writer.close();
+    return { ok: true, deleted };
+  } catch (e) {
+    try { await writer.close(); } catch {}
+    throw new httpsV2.HttpsError('internal', 'cleanup failed: ' + (e?.message || e));
+  }
+});
+
+exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *', timeZone: 'UTC' }, async () => {
+  const db = ensureFirestore();
+  const now = Date.now();
+  const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
+  const usersSnap = await db.collection('profiles').get();
+  for (const u of usersSnap.docs) {
+    const uid = u.id;
+    const writer = db.bulkWriter();
+    try {
+      const snap1 = await db.collection('tasks')
+        .where('ownerUid','==', uid)
+        .where('deleteAfter','<=', now)
+        .limit(500)
+        .get();
+      for (const d of snap1.docs) writer.delete(d.ref);
+
+      const snap2 = await db.collection('tasks')
+        .where('ownerUid','==', uid)
+        .where('status','==', 2)
+        .where('completedAt','<=', cutoff)
+        .limit(500)
+        .get();
+      for (const d of snap2.docs) writer.delete(d.ref);
+    } catch (e) {
+      console.warn('[cleanupOldTasksNightly]', uid, e?.message || e);
+    } finally {
+      try { await writer.close(); } catch {}
+    }
+  }
+});
+
+// ===== On-demand duplicate cleanup for the authenticated user
+// Groups by duplicateKey or reminderId; keeps the oldest, deletes others.
+exports.cleanupDuplicateTasksNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const forceImmediate = !!req?.data?.forceImmediate; // delete vs. schedule via deleteAfter=now
+  const pageSize = Math.min(Number(req?.data?.pageSize || 5000), 20000);
+  const db = ensureFirestore();
+  let processed = 0;
+  let deleted = 0;
+  let scheduled = 0;
+  try {
+    // Read user's tasks in batches by updatedAt to avoid timeouts
+    let cursor = null;
+    const buckets = new Map(); // key -> array of {id, data}
+    const loadBatch = async () => {
+      let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc');
+      if (cursor) q = q.startAfter(cursor);
+      q = q.limit(pageSize);
+      const snap = await q.get();
+      if (snap.empty) return null;
+      snap.docs.forEach((d) => {
+        const data = d.data() || {};
+        const key = data.duplicateKey || (data.reminderId ? `reminder:${String(data.reminderId).toLowerCase()}` : null);
+        if (!key) return; // skip non-keyed
+        const arr = buckets.get(key) || [];
+        arr.push({ id: d.id, data });
+        buckets.set(key, arr);
+      });
+      cursor = snap.docs[snap.docs.length - 1];
+      return snap.size;
+    };
+
+    // Load at least one batch
+    while (true) {
+      const count = await loadBatch();
+      if (!count || count < pageSize) break;
+      // If buckets become very large, break to limit memory
+      if (buckets.size > 20000) break;
+    }
+
+    // Decide deletions (all but oldest per key)
+    const writer = db.bulkWriter();
+    const activityGroups = [];
+    for (const [key, arr] of buckets.entries()) {
+      if (!Array.isArray(arr) || arr.length < 2) continue;
+      // Oldest = min(createdAt/reminderCreatedAt/serverUpdatedAt)
+      const scored = arr.map(({ id, data }) => {
+        const ca = typeof data.createdAt === 'number' ? data.createdAt : 0;
+        const ra = typeof data.reminderCreatedAt === 'number' ? data.reminderCreatedAt : 0;
+        const su = typeof data.serverUpdatedAt === 'number' ? data.serverUpdatedAt : 0;
+        const age = Math.min(...[ca||Infinity, ra||Infinity, su||Infinity].filter(x => Number.isFinite(x)));
+        return { id, data, age: Number.isFinite(age) ? age : Date.now() };
+      });
+      scored.sort((a,b) => a.age - b.age);
+      const keep = scored[0];
+      const drop = scored.slice(1);
+      processed += arr.length;
+      if (drop.length) {
+        activityGroups.push({ kept: keep.id, removed: drop.map((x) => x.id), keys: [key] });
+      }
+      for (const d of drop) {
+        if (forceImmediate) {
+          writer.delete(db.collection('tasks').doc(d.id));
+          deleted++;
+        } else {
+          writer.set(db.collection('tasks').doc(d.id), { deleteAfter: Date.now() }, { merge: true });
+          scheduled++;
+        }
+      }
+    }
+    await writer.close();
+    // Activity log for Data Quality reporting
+    try {
+      if (activityGroups.length) {
+        const ref = db.collection('activity_stream').doc();
+        await ref.set({
+          id: ref.id,
+          entityId: `tasks_${uid}`,
+          entityType: 'task',
+          activityType: 'deduplicate_tasks',
+          userId: uid,
+          ownerUid: uid,
+          description: `Deduplicated ${activityGroups.reduce((acc, g) => acc + (Array.isArray(g.removed) ? g.removed.length : 0), 0)} tasks across ${activityGroups.length} groups`,
+          metadata: { groups: activityGroups, hardDelete: !!forceImmediate },
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      }
+    } catch (e) {
+      console.warn('[cleanupDuplicateTasksNow] failed to log activity', e?.message || e);
+    }
+    return { ok: true, processed, deleted, scheduled, keys: buckets.size };
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', 'duplicate cleanup failed: ' + (e?.message || e));
+  }
+});
+
+// Dry-run preview for duplicate cleanup (per-user; no writes)
+// Identifies duplicate groups by duplicateKey or reminderId, and reports which docs would be deleted.
+exports.previewDuplicateTasksCleanup = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+
+  const pageSize = Math.min(Number(req?.data?.pageSize || 5000), 20000);
+  const maxGroups = Math.min(Number(req?.data?.maxGroups || 100), 1000);
+
+  let processed = 0;
+  const buckets = new Map(); // key -> array of {id, data}
+  let cursor = null;
+  const normKey = (t) => t.duplicateKey || (t.reminderId ? `reminder:${String(t.reminderId).toLowerCase()}` : null);
+  const toAge = (data) => {
+    const ca = Number(data.createdAt || 0);
+    const ra = Number(data.reminderCreatedAt || 0);
+    const su = Number(data.serverUpdatedAt || 0);
+    const vals = [ca, ra, su].filter((x) => Number.isFinite(x) && x > 0);
+    return vals.length ? Math.min(...vals) : Date.now();
+  };
+
+  while (true) {
+    let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc').limit(pageSize);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const d of snap.docs) {
+      const data = d.data() || {};
+      processed++;
+      const key = normKey(data);
+      if (!key) continue;
+      const arr = buckets.get(key) || [];
+      arr.push({ id: d.id, data });
+      buckets.set(key, arr);
+    }
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
+  }
+
+  let groups = 0;
+  let candidates = 0;
+  const preview = [];
+  for (const [key, arr] of buckets.entries()) {
+    if (!Array.isArray(arr) || arr.length < 2) continue;
+    groups++;
+    const scored = arr.map(({ id, data }) => ({ id, data, age: toAge(data) })).sort((a, b) => a.age - b.age);
+    const keep = scored[0];
+    const drop = scored.slice(1);
+    candidates += drop.length;
+    if (preview.length < maxGroups) {
+      preview.push({ key, count: arr.length, keepId: keep.id, deleteIds: drop.map((x) => x.id) });
+    }
+  }
+
+  return {
+    ok: true,
+    processed,
+    groups,
+    candidates, // number of docs that would be deleted
+    sample: preview,
+    note: 'dry-run only; no writes performed',
+  };
+});
+
 // ===== DUR-2: Auto-reschedule missed items (hourly)
 exports.autoRescheduleMissed = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
@@ -8337,7 +8935,7 @@ exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
   schedule: 'every 15 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('BREVO_API_KEY')],
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -8373,7 +8971,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   schedule: 'every 30 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('BREVO_API_KEY')],
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -8405,7 +9003,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   }
 });
 
-exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY')] }, async (req) => {
+exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -8624,7 +9222,8 @@ exports.cleanupUserLogs = schedulerV2.onSchedule({
 // ===== v3.0.2 Functions =====
 
 // Daily Digest Email Generation (uses Nylas)
-exports.generateDailyDigest = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('BREVO_API_KEY')] }, async () => {
+// Legacy simple digest (kept for reference); renamed to avoid clashing with LLM version
+exports.generateDailyDigestLegacy = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('BREVO_API_KEY')] }, async () => {
   try {
     const usersSnapshot = await admin.firestore().collection('users').where('emailDigest', '==', true).get();
     for (const userDoc of usersSnapshot.docs) {
@@ -8696,7 +9295,7 @@ async function generateUserDigest(userId, userData) {
 }
 
 // Manual trigger for daily digest (per-user)
-exports.sendDailyDigestNow = httpsV2.onCall(async (req) => {
+exports.sendDailyDigestNowLegacy = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -8990,8 +9589,9 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
   return { taskId: taskDoc.id, storyId: storyRef.id, storyRef: storyRefValue };
 }
 
+// Run auto-conversion once per day to reduce churn
 exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
+  schedule: '0 2 * * *', // daily at 02:00 UTC (~every 24 hours)
   timeZone: 'UTC',
   memory: '512MiB',
 }, async () => {
@@ -9067,6 +9667,59 @@ exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
       }, { merge: true });
     }
   }
+});
+
+// ===== Tasks integrity report (per-user): counts + duplicate diagnostics
+exports.tasksIntegrityReport = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const now = Date.now();
+
+  let total = 0;
+  let flaggedDuplicates = 0;
+  let missingEffort = 0;
+  let open = 0;
+  let ttlPending = 0;
+  const dupBuckets = new Map(); // duplicateKey -> count
+  const ridBuckets = new Map(); // reminder:<id> -> count
+
+  let cursor = null;
+  const pageSize = 5000;
+  while (true) {
+    let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc').limit(pageSize);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const d of snap.docs) {
+      const t = d.data() || {};
+      total++;
+      const st = t.status;
+      const isDone = (typeof st === 'number') ? st === 2 || st >= 2 : String(st).toLowerCase() === 'done' || String(st).toLowerCase() === 'completed';
+      if (!isDone) open++;
+      if (!t.effort) missingEffort++;
+      if (t.duplicateFlag) flaggedDuplicates++;
+      if (t.deleteAfter && Number(t.deleteAfter) <= now) ttlPending++;
+      const key = t.duplicateKey || (t.reminderId ? `reminder:${String(t.reminderId).toLowerCase()}` : null);
+      if (key) dupBuckets.set(key, (dupBuckets.get(key) || 0) + 1);
+      if (t.reminderId) {
+        const ridKey = `reminder:${String(t.reminderId).toLowerCase()}`;
+        ridBuckets.set(ridKey, (ridBuckets.get(ridKey) || 0) + 1);
+      }
+    }
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
+  }
+
+  const duplicateGroups = Array.from(dupBuckets.entries()).filter(([, c]) => c > 1).length;
+  const reminderDuplicateGroups = Array.from(ridBuckets.entries()).filter(([, c]) => c > 1).length;
+
+  return {
+    ok: true,
+    totals: { total, open, missingEffort, flaggedDuplicates, ttlPending },
+    duplicateGroups,
+    reminderDuplicateGroups,
+  };
 });
 
 // Ensure every goal/story/task has a human-readable ref (e.g., GR-26LGIP, ST-XXXX, TK-XXXX)

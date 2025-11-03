@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Container, Row, Col, Button, Dropdown, Badge, Spinner } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy, deleteDoc, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Story, Sprint, Task, Goal } from '../types';
@@ -94,19 +94,50 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
         setStories(storiesData);
       });
 
-      // Tasks subscription
-      const tasksQuery = query(
-        collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        orderBy('serverUpdatedAt', 'desc')
-      );
+      // Tasks subscription: use materialized sprint_task_index to avoid full collection reads
+      const tasksQuery = currentSprint
+        ? query(
+            collection(db, 'sprint_task_index'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            where('sprintId', '==', (currentSprint as any).id),
+            where('isOpen', '==', true),
+            orderBy('dueDate', 'asc'),
+            limit(1000)
+          )
+        : query(
+            collection(db, 'sprint_task_index'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            where('sprintId', '==', '__none__'),
+            where('isOpen', '==', true),
+            orderBy('dueDate', 'asc'),
+            limit(1000)
+          );
 
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-        const tasksData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Task[];
+        const tasksData = snapshot.docs.map(docSnap => {
+          const x = docSnap.data() as any;
+          const t: any = {
+            id: docSnap.id,
+            title: x.title,
+            description: x.description || '',
+            status: x.status,
+            priority: x.priority ?? 2,
+            effort: x.effort ?? 'M',
+            estimateMin: x.estimateMin ?? 0,
+            dueDate: x.dueDate || null,
+            parentType: x.parentType || 'story',
+            parentId: x.parentId || x.storyId || '',
+            storyId: x.storyId || null,
+            sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+            persona: currentPersona,
+            ownerUid: currentUser.uid,
+            ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
+          };
+        
+          return t as Task;
+        });
         setTasks(tasksData);
       });
 
@@ -432,6 +463,8 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
             <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
               <Card.Body style={{ padding: '24px' }}>
               <ModernKanbanBoard
+                sprintDueDateRange={currentSprint ? { start: (currentSprint as any).startDate, end: (currentSprint as any).endDate } : null}
+                statusFilter={[0,1,3]}
                 onItemSelect={(item, type) => {
                   if (type === 'story') {
                     setSelectedStory(item as Story);

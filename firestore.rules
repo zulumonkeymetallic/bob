@@ -66,6 +66,11 @@ service cloud.firestore {
       );
       allow read, update, delete: if activityOwned();
     }
+    // Materialized view: sprint task index (server-managed)
+    match /sprint_task_index/{id} {
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create, update, delete: if false; // server-only via Cloud Functions
+    }
     // Per-user integration logs (e.g., google/strava/monzo)
     match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /ai_usage_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

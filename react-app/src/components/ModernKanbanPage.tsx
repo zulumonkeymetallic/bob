@@ -106,21 +106,46 @@ const ModernKanbanPage: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    let tasksQuery = query(
-      collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      orderBy('createdAt', 'desc'),
-      limit(1000)
-    );
-    if (selectedSprintId) {
-      tasksQuery = query(tasksQuery, where('sprintId', '==', selectedSprintId));
-    }
+    // Use materialized index for open tasks; if a sprint is selected, filter by sprintId; else backlog only
+    const tasksQuery = selectedSprintId
+      ? query(
+          collection(db, 'sprint_task_index'),
+          where('ownerUid', '==', currentUser.uid),
+          where('sprintId', '==', selectedSprintId),
+          where('isOpen', '==', true),
+          orderBy('dueDate', 'asc'),
+          limit(1000)
+        )
+      : query(
+          collection(db, 'sprint_task_index'),
+          where('ownerUid', '==', currentUser.uid),
+          where('sprintId', '==', '__none__'),
+          where('isOpen', '==', true),
+          orderBy('dueDate', 'asc'),
+          limit(1000)
+        );
 
     const unsubscribe = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
+      const tasksData = snapshot.docs.map(docSnap => {
+        const x = docSnap.data() as any;
+        const t: any = {
+          id: docSnap.id,
+          title: x.title,
+          description: x.description || '',
+          status: x.status,
+          priority: x.priority ?? 2,
+          effort: x.effort ?? 'M',
+          estimateMin: x.estimateMin ?? 0,
+          dueDate: x.dueDate || null,
+          parentType: x.parentType || 'story',
+          parentId: x.parentId || x.storyId || '',
+          storyId: x.storyId || null,
+          sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+          ownerUid: currentUser.uid,
+          ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
+        };
+        return t as Task;
+      });
       setTasks(tasksData);
     }, (error) => {
       console.warn('[ModernKanbanPage] tasks subscribe error', error?.message || error);
