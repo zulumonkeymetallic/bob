@@ -207,12 +207,24 @@ const GoalRoadmapV3: React.FC = () => {
     }
     start.setHours(0,0,0,0); end.setHours(0,0,0,0);
     if (datasetRange) {
-      const unionStart = Math.min(start.getTime(), datasetRange.start.getTime());
-      const unionEnd = Math.max(end.getTime(), datasetRange.end.getTime());
-      const maxSpan = 10 * YEAR_MS;
-      const span = Math.min(Math.max(unionEnd - unionStart, DAY_MS * 90), maxSpan);
-      start = new Date(unionStart);
-      end = new Date(unionStart + span);
+      // Limit scrollable domain to data extents (no far-right empty timeline)
+      const dataStart = datasetRange.start.getTime();
+      const dataEnd = datasetRange.end.getTime();
+
+      // Start/end based on zoom, then clamp to dataset extents
+      const clampedStart = Math.max(start.getTime(), dataStart);
+      const clampedEnd = Math.min(end.getTime(), dataEnd);
+
+      // Ensure at least a minimal span for usability when zooming very tight
+      const minSpan = DAY_MS * 30;
+      let s = clampedStart;
+      let e = clampedEnd;
+      if (e - s < minSpan) {
+        e = Math.min(dataEnd, s + minSpan);
+        if (e - s < minSpan) s = Math.max(dataStart, e - minSpan);
+      }
+
+      start = new Date(s); end = new Date(e);
       start.setHours(0,0,0,0); end.setHours(0,0,0,0);
     }
     return { start, end };
@@ -820,7 +832,8 @@ const GoalRoadmapV3: React.FC = () => {
     () => ({
       '--axis-h': `${axisHeight}px`,
       '--toolbar-h': `${toolbarHeight}px`,
-      '--header-overlap': `${HEADER_OVERLAP_PX}px`
+      '--header-overlap': `${HEADER_OVERLAP_PX}px`,
+      '--axis-gap': `0px`
     }) as React.CSSProperties,
     [axisHeight, toolbarHeight]
   );
