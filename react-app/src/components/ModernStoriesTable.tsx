@@ -843,20 +843,26 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     hasGoal: ''
   });
 
-  // Subscribe to tasks when inline tasks are enabled
+  // Subscribe to inline tasks only for the expanded story to avoid loading all tasks
   useEffect(() => {
-    if (!enableInlineTasks || !currentUser) return;
+    if (!enableInlineTasks || !currentUser || !expandedStoryId) return;
     const tasksQ = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('persona', '==', currentPersona),
+      where('parentType', '==', 'story'),
+      where('parentId', '==', expandedStoryId)
     );
     const unsub = onSnapshot(tasksQ, (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[];
       setAllTasks(list);
     });
-    return () => unsub();
-  }, [enableInlineTasks, currentUser, currentPersona]);
+    return () => {
+      unsub();
+      // Clear tasks when collapsing to prevent stale cross-story data
+      setAllTasks([]);
+    };
+  }, [enableInlineTasks, currentUser, currentPersona, expandedStoryId]);
   const [sortConfig, setSortConfig] = useState({
     key: 'updatedAt',
     direction: 'desc' as 'asc' | 'desc'

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -35,6 +35,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   // const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
+  const location = useLocation();
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem('leftNavCollapsed') === '1'; } catch { return false; }
   });
@@ -175,13 +176,22 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
   const handleNavigation = (path: string) => {
     try {
-      console.info('[Sidebar] navigation requested', { path });
+      console.info('[Sidebar] navigation requested', { path, from: location.pathname, ts: new Date().toISOString() });
       navigate(path);
       setShowSidebar(false);
+      // Defer success log slightly to ensure route transition
+      setTimeout(() => {
+        console.info('[Sidebar] navigation success', { to: path, at: window.location.pathname, ts: new Date().toISOString() });
+      }, 0);
     } catch (error) {
       console.error('[Sidebar] navigation failed', { path, error });
     }
   };
+
+  // Global route-change logging to aid troubleshooting
+  React.useEffect(() => {
+    console.info('[Route] changed', { pathname: location.pathname, ts: new Date().toISOString() });
+  }, [location.pathname]);
 
   const toggleGroup = (groupLabel: string) => {
     setExpandedGroups(prev => 

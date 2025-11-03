@@ -217,7 +217,10 @@ function AppContent() {
     };
   }, []);
 
-  useEntityAudit(currentUser ? { currentUserId: currentUser.uid, currentUserEmail: currentUser.email, persona: currentPersona } : null);
+  // Gate global audit listeners behind an env flag to reduce initial reads
+  if (process.env.REACT_APP_ENABLE_AUDIT === 'true') {
+    useEntityAudit(currentUser ? { currentUserId: currentUser.uid, currentUserEmail: currentUser.email, persona: currentPersona } : null);
+  }
 
   if (!currentUser) {
     return <LoginPage />;

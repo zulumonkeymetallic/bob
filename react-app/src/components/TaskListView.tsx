@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
@@ -45,17 +45,24 @@ const TaskListView: React.FC = () => {
       setLoading(true);
 
       // Load all related data
+      // Use materialized index for open tasks to avoid downloading entire tasks collection
       const tasksQuery = selectedSprintId
         ? query(
-            collection(db, 'tasks'),
+            collection(db, 'sprint_task_index'),
             where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
             where('sprintId', '==', selectedSprintId),
-            orderBy('priority', 'desc')
+            where('isOpen', '==', true),
+            orderBy('dueDate', 'asc'),
+            limit(1000)
           )
         : query(
-            collection(db, 'tasks'),
+            collection(db, 'sprint_task_index'),
             where('ownerUid', '==', currentUser.uid),
-            orderBy('priority', 'desc')
+            where('persona', '==', currentPersona),
+            where('isOpen', '==', true),
+            orderBy('dueDate', 'asc'),
+            limit(1000)
           );
       
       const storiesQuery = query(
@@ -72,17 +79,27 @@ const TaskListView: React.FC = () => {
       
       // Subscribe to real-time updates
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-        const tasksData = snapshot.docs.map(doc => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            ...data,
-            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
-            createdAt: data.createdAt?.toDate?.() || data.createdAt,
-            updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
-            dueDate: data.dueDate?.toDate?.() || data.dueDate,
+        const tasksData = snapshot.docs.map(docSnap => {
+          const x = docSnap.data() as any;
+          const t: any = {
+            id: docSnap.id,
+            title: x.title,
+            description: x.description || '',
+            status: x.status,
+            priority: x.priority ?? 2,
+            effort: x.effort ?? 'M',
+            estimateMin: x.estimateMin ?? 0,
+            dueDate: x.dueDate || null,
+            parentType: x.parentType || 'story',
+            parentId: x.parentId || x.storyId || '',
+            storyId: x.storyId || null,
+            sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+            persona: currentPersona,
+            ownerUid: currentUser.uid,
+            ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
           };
-        }) as Task[];
+          return t as Task;
+        });
         setTasks(tasksData);
       });
       
