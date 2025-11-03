@@ -8438,6 +8438,80 @@ exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *'
   }
 });
 
+// ===== On-demand duplicate cleanup for the authenticated user
+// Groups by duplicateKey or reminderId; keeps the oldest, deletes others.
+exports.cleanupDuplicateTasksNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const forceImmediate = !!req?.data?.forceImmediate; // delete vs. schedule via deleteAfter=now
+  const pageSize = Math.min(Number(req?.data?.pageSize || 5000), 20000);
+  const db = ensureFirestore();
+  let processed = 0;
+  let deleted = 0;
+  let scheduled = 0;
+  try {
+    // Read user's tasks in batches by updatedAt to avoid timeouts
+    let cursor = null;
+    const buckets = new Map(); // key -> array of {id, data}
+    const loadBatch = async () => {
+      let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc');
+      if (cursor) q = q.startAfter(cursor);
+      q = q.limit(pageSize);
+      const snap = await q.get();
+      if (snap.empty) return null;
+      snap.docs.forEach((d) => {
+        const data = d.data() || {};
+        const key = data.duplicateKey || (data.reminderId ? `reminder:${String(data.reminderId).toLowerCase()}` : null);
+        if (!key) return; // skip non-keyed
+        const arr = buckets.get(key) || [];
+        arr.push({ id: d.id, data });
+        buckets.set(key, arr);
+      });
+      cursor = snap.docs[snap.docs.length - 1];
+      return snap.size;
+    };
+
+    // Load at least one batch
+    while (true) {
+      const count = await loadBatch();
+      if (!count || count < pageSize) break;
+      // If buckets become very large, break to limit memory
+      if (buckets.size > 20000) break;
+    }
+
+    // Decide deletions (all but oldest per key)
+    const writer = db.bulkWriter();
+    for (const [key, arr] of buckets.entries()) {
+      if (!Array.isArray(arr) || arr.length < 2) continue;
+      // Oldest = min(createdAt/reminderCreatedAt/serverUpdatedAt)
+      const scored = arr.map(({ id, data }) => {
+        const ca = typeof data.createdAt === 'number' ? data.createdAt : 0;
+        const ra = typeof data.reminderCreatedAt === 'number' ? data.reminderCreatedAt : 0;
+        const su = typeof data.serverUpdatedAt === 'number' ? data.serverUpdatedAt : 0;
+        const age = Math.min(...[ca||Infinity, ra||Infinity, su||Infinity].filter(x => Number.isFinite(x)));
+        return { id, data, age: Number.isFinite(age) ? age : Date.now() };
+      });
+      scored.sort((a,b) => a.age - b.age);
+      const keep = scored[0];
+      const drop = scored.slice(1);
+      processed += arr.length;
+      for (const d of drop) {
+        if (forceImmediate) {
+          writer.delete(db.collection('tasks').doc(d.id));
+          deleted++;
+        } else {
+          writer.set(db.collection('tasks').doc(d.id), { deleteAfter: Date.now() }, { merge: true });
+          scheduled++;
+        }
+      }
+    }
+    await writer.close();
+    return { ok: true, processed, deleted, scheduled, keys: buckets.size };
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', 'duplicate cleanup failed: ' + (e?.message || e));
+  }
+});
+
 // ===== DUR-2: Auto-reschedule missed items (hourly)
 exports.autoRescheduleMissed = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;

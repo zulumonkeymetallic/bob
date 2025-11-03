@@ -65,9 +65,15 @@ const CurrentSprintKanban: React.FC = () => {
             const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
             setStories(storiesData);
 
-            const tasksQuery = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), where('sprintId', '==', activeSprint.id));
+            const tasksQuery = query(
+              collection(db, 'sprint_task_index'),
+              where('ownerUid', '==', currentUser.uid),
+              where('sprintId', '==', activeSprint.id),
+              where('isOpen', '==', true),
+              orderBy('dueDate', 'asc')
+            );
             const unsubscribeTasks = onSnapshot(tasksQuery, taskSnapshot => {
-                const tasksData = taskSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
+                const tasksData = taskSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)) as Task[];
                 setTasks(tasksData);
                 setLoading(false);
             });

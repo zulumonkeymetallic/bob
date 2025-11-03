@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Container, Card, Form, Button, Badge, ListGroup } from 'react-bootstrap';
 import { Check2Square, Square, Star, Clock, ExclamationTriangle } from 'react-bootstrap-icons';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useDeviceInfo } from '../utils/deviceDetection';
 import { Task, Story } from '../types';
@@ -25,15 +25,21 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
     if (!currentUser) return;
 
     // Subscribe to tasks
-    const tasksQuery = query(
-      collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid)
-    );
+    // Use materialized index; when filter is 'today', constrain dueDate window
+    const start = new Date(); start.setHours(0,0,0,0);
+    const end = new Date(); end.setHours(23,59,59,999);
+    const base: any[] = [collection(db, 'sprint_task_index'), where('ownerUid', '==', currentUser.uid), where('isOpen', '==', true)];
+    if (filter === 'today') {
+      base.push(where('dueDate', '>=', start.getTime()));
+      base.push(where('dueDate', '<=', end.getTime()));
+      base.push(orderBy('dueDate', 'asc'));
+    } else {
+      base.push(orderBy('dueDate', 'asc'));
+      base.push(limit(500));
+    }
+    const tasksQuery = query.apply(null, base as any);
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Task));
+      const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)) as Task[];
       setTasks(tasksData);
     });
 

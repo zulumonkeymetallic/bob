@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Container, Row, Col, Form, Button, Badge } from 'react-bootstrap';
-import { collection, onSnapshot, query, where, updateDoc, deleteDoc, doc, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, updateDoc, deleteDoc, doc, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import ModernTaskTable from '../ModernTaskTable';
@@ -22,7 +22,7 @@ const TaskCleanupPage: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    const tq = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), orderBy('updatedAt', 'desc'));
+    const tq = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), orderBy('updatedAt', 'desc'), limit(1000));
     const unsubT = onSnapshot(tq, snap => setTasks(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[]));
     const unsubS = onSnapshot(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)), snap => setStories(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[]));
     const unsubG = onSnapshot(query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid)), snap => setGoals(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[]));
@@ -135,4 +135,3 @@ const TaskCleanupPage: React.FC = () => {
 };
 
 export default TaskCleanupPage;
-

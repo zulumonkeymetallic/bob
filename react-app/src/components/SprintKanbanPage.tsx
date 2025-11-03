@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Container, Row, Col, Button, Dropdown, Badge, Spinner } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy, deleteDoc, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Story, Sprint, Task, Goal } from '../types';
@@ -94,33 +94,50 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
         setStories(storiesData);
       });
 
-      // Tasks subscription: if a sprint is selected, limit to that sprint window and not-done
-      let tasksQuery;
-      if (currentSprint && typeof (currentSprint as any).startDate === 'number' && typeof (currentSprint as any).endDate === 'number') {
-        tasksQuery = query(
-          collection(db, 'tasks'),
-          where('ownerUid', '==', currentUser.uid),
-          where('persona', '==', currentPersona),
-          where('status', 'in', [0,1,3]),
-          where('dueDate', '>=', (currentSprint as any).startDate),
-          where('dueDate', '<=', (currentSprint as any).endDate),
-          orderBy('dueDate', 'asc')
-        );
-      } else {
-        tasksQuery = query(
-          collection(db, 'tasks'),
-          where('ownerUid', '==', currentUser.uid),
-          where('persona', '==', currentPersona),
-          where('status', 'in', [0,1,3]),
-          orderBy('serverUpdatedAt', 'desc')
-        );
-      }
+      // Tasks subscription: use materialized sprint_task_index to avoid full collection reads
+      const tasksQuery = currentSprint
+        ? query(
+            collection(db, 'sprint_task_index'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            where('sprintId', '==', (currentSprint as any).id),
+            where('isOpen', '==', true),
+            orderBy('dueDate', 'asc'),
+            limit(1000)
+          )
+        : query(
+            collection(db, 'sprint_task_index'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            where('sprintId', '==', '__none__'),
+            where('isOpen', '==', true),
+            orderBy('dueDate', 'asc'),
+            limit(1000)
+          );
 
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-        const tasksData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Task[];
+        const tasksData = snapshot.docs.map(docSnap => {
+          const x = docSnap.data() as any;
+          const t: any = {
+            id: docSnap.id,
+            title: x.title,
+            description: x.description || '',
+            status: x.status,
+            priority: x.priority ?? 2,
+            effort: x.effort ?? 'M',
+            estimateMin: x.estimateMin ?? 0,
+            dueDate: x.dueDate || null,
+            parentType: x.parentType || 'story',
+            parentId: x.parentId || x.storyId || '',
+            storyId: x.storyId || null,
+            sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+            persona: currentPersona,
+            ownerUid: currentUser.uid,
+            ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
+          };
+        
+          return t as Task;
+        });
         setTasks(tasksData);
       });
 

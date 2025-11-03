@@ -337,19 +337,24 @@ const GoalRoadmapV3: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser?.uid) return;
-    const q = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid));
+    // Use materialized index for open tasks to avoid loading entire tasks collection
+    const q = query(
+      collection(db, 'sprint_task_index'),
+      where('ownerUid', '==', currentUser.uid),
+      where('isOpen', '==', true)
+    );
     const unsub = onSnapshot(q, snap => {
       const totals: Record<string, number> = {};
       const sprintTotals: Record<string, number> = {};
       snap.docs.forEach((docSnap) => {
-        const task = docSnap.data() as Task;
-        const parentId = task.parentId;
+        const task = docSnap.data() as any;
+        const parentId = task.parentId || task.storyId;
         const meta = storyMeta[parentId];
         const goalId = meta?.goalId;
         if (!goalId) return;
         totals[goalId] = (totals[goalId] || 0) + 1;
         if (selectedSprintId) {
-          const taskSprintId = (task as any).sprintId as string | undefined;
+          const taskSprintId = task.sprintId as string | undefined;
           const storySprintId = meta?.sprintId;
           if ((taskSprintId && taskSprintId === selectedSprintId) || (storySprintId && storySprintId === selectedSprintId)) {
             sprintTotals[goalId] = (sprintTotals[goalId] || 0) + 1;
