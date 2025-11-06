@@ -3033,8 +3033,17 @@ exports.runPlanner = functionsV2.https.onCall(async (req) => {
     console.warn('[runPlanner] planBlocksV2 failed', e?.message || e);
   }
 
-  // Optional push to Google Calendar by default
-  const push = req?.data?.pushToGoogle !== false;
+  // Optional push to Google Calendar; default from user_settings.pushOnPlan (true if missing)
+  let push = true;
+  if (typeof req?.data?.pushToGoogle === 'boolean') {
+    push = !!req.data.pushToGoogle;
+  } else {
+    try {
+      const db = ensureFirestore();
+      const us = await db.collection('user_settings').doc(uid).get();
+      if (us.exists && typeof us.data().pushOnPlan === 'boolean') push = !!us.data().pushOnPlan;
+    } catch {}
+  }
   if (push && exports.syncPlanToGoogleCalendar?.run) {
     try {
       const p = await exports.syncPlanToGoogleCalendar.run({ auth: { uid }, data: {} });
