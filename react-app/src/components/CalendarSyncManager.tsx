@@ -133,7 +133,9 @@ const CalendarSyncManager: React.FC = () => {
     try {
       setIsLoading(true);
       const listUpcomingEvents = httpsCallable(functions, 'listUpcomingEvents');
-      const result = await listUpcomingEvents({ days: 7 });
+      const start = new Date(); start.setHours(0,0,0,0);
+      const end = new Date(start.getTime() + 7*24*60*60*1000 - 1);
+      const result = await listUpcomingEvents({ timeMin: start.toISOString(), timeMax: end.toISOString(), maxResults: 100 });
       const events = result.data as any;
       
       setUpcomingEvents(events.items || []);
@@ -151,17 +153,14 @@ const CalendarSyncManager: React.FC = () => {
 
     try {
       setIsLoading(true);
-      setSyncStatus('🤖 AI is analyzing your schedule and creating time blocks...');
-      
-      const planCalendar = httpsCallable(functions, 'planCalendar');
-      const result = await planCalendar({
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        persona: 'personal'
-      });
-      
-      const planResult = result.data as any;
-      setSyncStatus(`✅ AI created ${planResult.blocksCreated || 0} time blocks for your goals and tasks`);
+      setSyncStatus('🤖 Planning window with unified scheduler...');
+      const runPlanner = httpsCallable(functions, 'runPlanner');
+      const today = new Date().toISOString().slice(0,10);
+      const result = await runPlanner({ startDate: today, days: 7, persona: 'personal' });
+      const data: any = result.data || {};
+      const blocksCreated = data?.llm?.blocksCreated || 0;
+      const planned = Array.isArray(data?.schedule?.planned) ? data.schedule.planned.length : (data?.schedule?.plannedCount || 0);
+      setSyncStatus(`✅ Planner updated. AI blocks: ${blocksCreated}, scheduled instances: ${planned}`);
     } catch (error) {
       console.error('AI planning failed:', error);
       setSyncStatus('❌ AI planning error: ' + error.message);

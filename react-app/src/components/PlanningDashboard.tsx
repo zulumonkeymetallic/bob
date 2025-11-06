@@ -61,13 +61,9 @@ const PlanningDashboard: React.FC = () => {
 
     setIsPlanning(true);
     try {
-      const planCalendar = httpsCallable(functions, 'planCalendar');
-      const result = await planCalendar({
-        persona: currentPersona,
-        horizonDays: 7,
-        applyIfScoreGe: 0.8
-      });
-
+      const runPlanner = httpsCallable(functions, 'runPlanner');
+      const startDate = new Date().toISOString().slice(0,10);
+      const result = await runPlanner({ persona: currentPersona, startDate, days: 7 });
       setPlanningResult(result.data);
       setShowPlanModal(true);
     } catch (error) {

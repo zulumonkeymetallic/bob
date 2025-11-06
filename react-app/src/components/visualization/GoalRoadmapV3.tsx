@@ -859,13 +859,12 @@ const GoalRoadmapV3: React.FC = () => {
     try {
       if (!currentUser?.uid) return;
       setSchedulingId(g.id);
-      const planCalendar = httpsCallable(functions, 'planCalendar');
+      const runPlanner = httpsCallable(functions, 'runPlanner');
       const minutes = Math.min(Math.max(60, (g.timeToMasterHours || 2) * 60), 300);
-      const result = await planCalendar({ persona: 'personal', focusGoalId: g.id, goalTimeRequest: minutes });
-      const data = result.data as any;
-      const blocksCreated = typeof data?.blocksCreated === 'number'
-        ? data.blocksCreated
-        : Array.isArray(data?.blocks) ? data.blocks.length : 0;
+      const startDate = new Date().toISOString().slice(0,10);
+      const result = await runPlanner({ persona: 'personal', startDate, days: 7, focusGoalId: g.id, goalTimeRequest: minutes });
+      const data:any = result.data || {};
+      const blocksCreated = data?.llm?.blocksCreated || (Array.isArray(data?.llm?.blocks) ? data.llm.blocks.length : 0);
       window.alert(`AI scheduled ${blocksCreated} time block${blocksCreated === 1 ? '' : 's'} for "${g.title}"`);
     } catch (err:any) {
       const rawMessage = String(err?.message || 'unknown');

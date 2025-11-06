@@ -293,7 +293,21 @@ const CalendarIntegrationView: React.FC = () => {
   const loadUpcomingFromGoogle = async () => {
     try {
       const listFn = httpsCallable(functions, 'listUpcomingEvents');
-      const res: any = await listFn({ maxResults: 25 });
+      // derive range from selectedDate + viewType
+      const start = new Date(selectedDate);
+      const end = new Date(selectedDate);
+      if (viewType === 'day') {
+        start.setHours(0,0,0,0); end.setHours(23,59,59,999);
+      } else if (viewType === 'week') {
+        start.setDate(start.getDate() - start.getDay());
+        start.setHours(0,0,0,0);
+        end.setDate(start.getDate() + 6);
+        end.setHours(23,59,59,999);
+      } else {
+        start.setDate(1); start.setHours(0,0,0,0);
+        end.setMonth(start.getMonth()+1, 0); end.setHours(23,59,59,999);
+      }
+      const res: any = await listFn({ maxResults: 250, timeMin: start.toISOString(), timeMax: end.toISOString() });
       const items = Array.isArray(res?.data?.items) ? res.data.items : [];
       const mapped: CalendarEvent[] = items.map((ev: any) => ({
         id: ev.id,
@@ -316,6 +330,12 @@ const CalendarIntegrationView: React.FC = () => {
       console.warn('listUpcomingEvents failed', e);
     }
   };
+
+  useEffect(() => {
+    if (!currentUser || !gcalConnected) return;
+    loadUpcomingFromGoogle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate, viewType]);
   
   // Event linking functions
   const linkEventToGoal = (eventId: string, goalId: string, storyId?: string, taskId?: string) => {
