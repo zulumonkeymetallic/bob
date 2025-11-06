@@ -51,10 +51,13 @@ const AssistantChatModal: React.FC<AssistantChatModalProps> = ({ show, onHide })
   const planToday = async () => {
     setWorking('plan');
     try {
-      const callable = httpsCallable(functions, 'planCalendar');
-      const result = await callable({ persona: 'personal', horizonDays: 1 });
-      const data = result.data as any;
-      alert(`Planned ${data?.blocksCreated || 0} blocks`);
+      const callable = httpsCallable(functions, 'runPlanner');
+      const startDate = new Date().toISOString().slice(0,10);
+      const result = await callable({ persona: 'personal', startDate, days: 1 });
+      const data:any = result.data || {};
+      const blocksCreated = data?.llm?.blocksCreated || 0;
+      const planned = Array.isArray(data?.schedule?.planned) ? data.schedule.planned.length : (data?.schedule?.plannedCount || 0);
+      alert(`Planner updated. AI blocks: ${blocksCreated}, scheduled instances: ${planned}`);
       setActions(null);
     } catch (e: any) {
       alert(e?.message || 'Failed to plan');

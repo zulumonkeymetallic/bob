@@ -64,9 +64,33 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
         const themes = await loadThemesForUser(uid);
         const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
         const activityName = block.title || block.category || 'BOB Block';
+        // Try to enrich with story AC + deep link
+        let enrichedDesc = block.rationale || '';
+        try {
+          if (block.storyId) {
+            const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+            if (s.exists) {
+              const sd = s.data() || {};
+              const storyRef = sd.ref || s.id;
+              const link = `https://bob20250810.web.app/stories?storyId=${encodeURIComponent(s.id)}`;
+              const acArr = Array.isArray(sd.acceptanceCriteria)
+                ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
+                : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
+              const lines = [];
+              if (enrichedDesc) lines.push(enrichedDesc);
+              lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
+              lines.push(`BOB: ${link}`);
+              if (acArr.length) {
+                lines.push('', 'Acceptance criteria:');
+                for (const item of acArr) lines.push(`- ${item}`);
+              }
+              enrichedDesc = lines.join('\n');
+            }
+          }
+        } catch {}
         const event = {
           summary: `[${themeLabel}] – ${activityName}`,
-          description: block.rationale || 'BOB calendar block',
+          description: enrichedDesc || 'BOB calendar block',
           start: {
             dateTime: new Date(block.start).toISOString(),
             timeZone: 'UTC',
@@ -111,9 +135,32 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
         const themes = await loadThemesForUser(uid);
         const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
         const activityName = block.title || block.category || 'BOB Block';
+        let enrichedDesc2 = block.rationale || '';
+        try {
+          if (block.storyId) {
+            const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+            if (s.exists) {
+              const sd = s.data() || {};
+              const storyRef = sd.ref || s.id;
+              const link = `https://bob20250810.web.app/stories?storyId=${encodeURIComponent(s.id)}`;
+              const acArr = Array.isArray(sd.acceptanceCriteria)
+                ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
+                : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
+              const lines = [];
+              if (enrichedDesc2) lines.push(enrichedDesc2);
+              lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
+              lines.push(`BOB: ${link}`);
+              if (acArr.length) {
+                lines.push('', 'Acceptance criteria:');
+                for (const item of acArr) lines.push(`- ${item}`);
+              }
+              enrichedDesc2 = lines.join('\n');
+            }
+          }
+        } catch {}
         const updateEvent = {
           summary: `[${themeLabel}] – ${activityName}`,
-          description: block.rationale || 'BOB calendar block',
+          description: enrichedDesc2 || 'BOB calendar block',
           start: {
             dateTime: new Date(block.start).toISOString(),
             timeZone: 'UTC',

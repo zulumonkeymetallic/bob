@@ -39,6 +39,14 @@ const SettingsPage: React.FC = () => {
     needsMigration: false
   });
 
+  // Planner & Automations toggles
+  const [pushOnPlan, setPushOnPlan] = useState<boolean>(true);
+  const [enableAutoLLMConversion, setEnableAutoLLMConversion] = useState<boolean>(false);
+  const [autoLLMConversionMinPoints, setAutoLLMConversionMinPoints] = useState<number>(4);
+  const [autoConversionThresholdMinutes, setAutoConversionThresholdMinutes] = useState<number>(240);
+  const [autoConversionThresholdPoints, setAutoConversionThresholdPoints] = useState<number>(2);
+  const [aiFocusTopCount, setAiFocusTopCount] = useState<number>(5);
+
   // Check if database needs migration to new theme system
   const checkMigrationStatus = async () => {
     if (!currentUser) return;
@@ -91,6 +99,21 @@ const SettingsPage: React.FC = () => {
           const usSnap = await getDoc(usRef);
           if (usSnap.exists()) {
             setBackfillAfterEnrichment(!!usSnap.data().backfillAfterEnrichment);
+            setPushOnPlan(usSnap.data().pushOnPlan !== false); // default true
+          }
+        } catch {}
+
+        // Load profile-level AI planner toggles
+        try {
+          const pfRef = doc(db, 'profiles', currentUser.uid);
+          const pfSnap = await getDoc(pfRef);
+          if (pfSnap.exists()) {
+            const p = pfSnap.data() as any;
+            if (typeof p.enableAutoLLMConversion === 'boolean') setEnableAutoLLMConversion(p.enableAutoLLMConversion);
+            if (Number.isFinite(Number(p.autoLLMConversionMinPoints))) setAutoLLMConversionMinPoints(Number(p.autoLLMConversionMinPoints));
+            if (Number.isFinite(Number(p.autoConversionThresholdMinutes))) setAutoConversionThresholdMinutes(Number(p.autoConversionThresholdMinutes));
+            if (Number.isFinite(Number(p.autoConversionThresholdPoints))) setAutoConversionThresholdPoints(Number(p.autoConversionThresholdPoints));
+            if (Number.isFinite(Number(p.aiFocusTopCount))) setAiFocusTopCount(Number(p.aiFocusTopCount));
           }
         } catch {}
         
@@ -457,6 +480,79 @@ const SettingsPage: React.FC = () => {
                         }}
                       />
                       <div className="text-muted small mt-1">Sends a concise AI-powered list of your top priorities, overdue and due-today items.</div>
+                    </Form.Group>
+
+                    <hr />
+                    <h5 className="mb-2" style={{ color: colors.primary }}>Planner & Automations</h5>
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="switch"
+                        id="switch-push-on-plan"
+                        label="Push planned blocks to Google Calendar"
+                        checked={pushOnPlan}
+                        onChange={async (e) => {
+                          const next = e.target.checked;
+                          setPushOnPlan(next);
+                          try { if (currentUser) await setDoc(doc(db, 'user_settings', currentUser.uid), { pushOnPlan: next, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save pushOnPlan', err); }
+                        }}
+                      />
+                      <div className="text-muted small mt-1">When enabled, planning will automatically sync blocks to Google.</div>
+                    </Form.Group>
+
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="switch"
+                        id="switch-enable-auto-llm-conversion"
+                        label="Convert oversized tasks to stories via LLM (scheduled)"
+                        checked={enableAutoLLMConversion}
+                        onChange={async (e) => {
+                          const next = e.target.checked;
+                          setEnableAutoLLMConversion(next);
+                          try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { enableAutoLLMConversion: next, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save enableAutoLLMConversion', err); }
+                        }}
+                      />
+                      <div className="text-muted small mt-1">Runs nightly. Uses “Min LLM story points” threshold.</div>
+                    </Form.Group>
+
+                    <Row className="mb-3">
+                      <Col md={4} className="mb-2">
+                        <Form.Label>Min LLM story points (1–8)</Form.Label>
+                        <Form.Control type="number" min={1} max={8} value={autoLLMConversionMinPoints}
+                          onChange={async (e) => {
+                            const v = Math.max(1, Math.min(8, Number(e.target.value) || 4));
+                            setAutoLLMConversionMinPoints(v);
+                            try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { autoLLMConversionMinPoints: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save minPoints', err); }
+                          }} />
+                      </Col>
+                      <Col md={4} className="mb-2">
+                        <Form.Label>Heuristic convert: minutes ≥</Form.Label>
+                        <Form.Control type="number" min={30} max={1440} step={30} value={autoConversionThresholdMinutes}
+                          onChange={async (e) => {
+                            const v = Math.max(30, Math.min(1440, Number(e.target.value) || 240));
+                            setAutoConversionThresholdMinutes(v);
+                            try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { autoConversionThresholdMinutes: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save threshold minutes', err); }
+                          }} />
+                      </Col>
+                      <Col md={4} className="mb-2">
+                        <Form.Label>Heuristic convert: points ></Form.Label>
+                        <Form.Control type="number" min={0} max={8} value={autoConversionThresholdPoints}
+                          onChange={async (e) => {
+                            const v = Math.max(0, Math.min(8, Number(e.target.value) || 2));
+                            setAutoConversionThresholdPoints(v);
+                            try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { autoConversionThresholdPoints: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save threshold points', err); }
+                          }} />
+                      </Col>
+                    </Row>
+
+                    <Form.Group className="mb-3">
+                      <Form.Label>Daily focus: show top N items</Form.Label>
+                      <Form.Control type="number" min={1} max={7} value={aiFocusTopCount}
+                        onChange={async (e) => {
+                          const v = Math.max(1, Math.min(7, Number(e.target.value) || 5));
+                          setAiFocusTopCount(v);
+                          try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { aiFocusTopCount: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save aiFocusTopCount', err); }
+                        }} />
+                      <div className="text-muted small mt-1">Controls Assistant/Daily Digest “Top Priorities” length.</div>
                     </Form.Group>
 
                     <div className="d-flex gap-2">

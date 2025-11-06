@@ -255,27 +255,28 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
         [goal.id]: '🤖 AI is analyzing and scheduling time for this goal...' 
       }));
 
-      // Call the calendar planning function with goal focus
-      const planCalendar = httpsCallable(functions, 'planCalendar');
-      const result = await planCalendar({
+      // Unified planner: focus on this goal then schedule
+      const runPlanner = httpsCallable(functions, 'runPlanner');
+      const result = await runPlanner({
         startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        days: 7,
         persona: currentPersona || 'personal',
-        focusGoalId: goal.id, // Focus planning on this specific goal
-        goalTimeRequest: goal.timeToMasterHours ? Math.min(goal.timeToMasterHours * 60, 300) : 120 // Request 2-5 hours per week
+        focusGoalId: goal.id,
+        goalTimeRequest: goal.timeToMasterHours ? Math.min(goal.timeToMasterHours * 60, 300) : 120
       });
 
       const planResult = result.data as any;
       
-      if (planResult.blocksCreated > 0) {
+      const blocksCreated = planResult?.llm?.blocksCreated || (Array.isArray(planResult?.llm?.blocks) ? planResult.llm.blocks.length : 0);
+      if (blocksCreated > 0) {
         setCalendarSyncStatus(prev => ({ 
           ...prev, 
-          [goal.id]: `✅ Scheduled ${planResult.blocksCreated} time blocks for "${goal.title}"` 
+          [goal.id]: `✅ Scheduled ${blocksCreated} time blocks for "${goal.title}"` 
         }));
 
         // Toast success
         setToastVariant('success');
-        setToastMsg(`Scheduled ${planResult.blocksCreated} blocks for "${goal.title}"`);
+        setToastMsg(`Scheduled ${blocksCreated} blocks for "${goal.title}"`);
 
         // Track activity
         await addDoc(collection(db, 'activity_stream'), {
