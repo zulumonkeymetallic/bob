@@ -3013,7 +3013,7 @@ exports.runPlanner = functionsV2.https.onCall(async (req) => {
   const goalTimeRequest = req?.data?.goalTimeRequest || null;
   const persona = req?.data?.persona || 'personal';
 
-  const results = { llm: null, schedule: null };
+  const results = { llm: null, schedule: null, pushed: null };
   // If focused goal scheduling requested, call LLM planner first.
   if (focusGoalId || goalTimeRequest) {
     try {
@@ -3031,6 +3031,17 @@ exports.runPlanner = functionsV2.https.onCall(async (req) => {
     results.schedule = schedRes?.data || schedRes || null;
   } catch (e) {
     console.warn('[runPlanner] planBlocksV2 failed', e?.message || e);
+  }
+
+  // Optional push to Google Calendar by default
+  const push = req?.data?.pushToGoogle !== false;
+  if (push && exports.syncPlanToGoogleCalendar?.run) {
+    try {
+      const p = await exports.syncPlanToGoogleCalendar.run({ auth: { uid }, data: {} });
+      results.pushed = p?.data || p || null;
+    } catch (e) {
+      console.warn('[runPlanner] syncPlanToGoogleCalendar failed', e?.message || e);
+    }
   }
 
   return { ok: true, ...results };
