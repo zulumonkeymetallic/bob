@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Badge, Table, Modal, Form } from 'react-bootstrap';
 import { db, functions } from '../firebase';
-import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, addDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -13,10 +13,16 @@ const Calendar: React.FC = () => {
   const [blocks, setBlocks] = useState<CalendarBlock[]>([]);
   const [currentWeek, setCurrentWeek] = useState(new Date());
   const [showCreateEvent, setShowCreateEvent] = useState(false);
+  const [showCreateRoutine, setShowCreateRoutine] = useState(false);
   const [newEvent, setNewEvent] = useState({
     title: '',
     start: '',
-    duration: 60
+    duration: 60,
+    theme: 'Health' as 'Health'|'Growth'|'Wealth'|'Tribe'|'Home',
+    subtheme: '',
+    repeatWeekly: false,
+    repeatDays: { SU:false, MO:false, TU:false, WE:false, TH:false, FR:false, SA:false } as Record<'SU'|'MO'|'TU'|'WE'|'TH'|'FR'|'SA', boolean>,
+    repeatUntil: ''
   });
   const [googleEvents, setGoogleEvents] = useState<any[]>([]);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
@@ -28,6 +34,17 @@ const Calendar: React.FC = () => {
     theme: '',
     flexibility: 'soft',
     rationale: ''
+  });
+
+  // Recurring routine form
+  const [routineForm, setRoutineForm] = useState({
+    title: '',
+    theme: 'Health' as 'Health'|'Growth'|'Wealth'|'Tribe'|'Home',
+    subtheme: '',
+    duration: 60,
+    start: '', // datetime-local for first occurrence
+    repeatDays: { SU:false, MO:false, TU:false, WE:false, TH:false, FR:false, SA:false } as Record<'SU'|'MO'|'TU'|'WE'|'TH'|'FR'|'SA', boolean>,
+    repeatUntil: '' // YYYY-MM-DD
   });
 
   // Load calendar blocks from Firebase
@@ -51,14 +68,20 @@ const Calendar: React.FC = () => {
     return () => unsubscribe();
   }, [currentUser]);
 
-  // Load upcoming Google Calendar events (overlay)
+  // Load Google Calendar events for the visible week (overlay)
   useEffect(() => {
     const load = async () => {
       if (!currentUser) return;
       try {
         setLoadingGoogle(true);
         const callable = httpsCallable(functions, 'listUpcomingEvents');
-        const res: any = await callable({ maxResults: 50 });
+        const startOfWeek = new Date(currentWeek);
+        startOfWeek.setDate(currentWeek.getDate() - currentWeek.getDay());
+        startOfWeek.setHours(0,0,0,0);
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 6);
+        endOfWeek.setHours(23,59,59,999);
+        const res: any = await callable({ maxResults: 250, timeMin: startOfWeek.toISOString(), timeMax: endOfWeek.toISOString() });
         const items = (res?.data?.items || []).map((e: any) => ({
           id: e.id,
           summary: e.summary || 'Untitled',
@@ -73,7 +96,7 @@ const Calendar: React.FC = () => {
       }
     };
     load();
-  }, [currentUser]);
+  }, [currentUser, currentWeek]);
 
   // Get week dates
   const getWeekDates = () => {
@@ -125,13 +148,34 @@ const Calendar: React.FC = () => {
       const startDate = new Date(newEvent.start);
       const endDate = new Date(startDate.getTime() + (newEvent.duration * 60 * 1000));
 
+      const summary = `[${newEvent.theme}] – ${newEvent.subtheme ? newEvent.subtheme + ' · ' : ''}${newEvent.title}`;
+      let recurrence: string[] = [];
+      if (newEvent.repeatWeekly) {
+        const selected = Object.entries(newEvent.repeatDays).filter(([,v])=>v).map(([k])=>k).join(',');
+        if (selected) {
+          let rule = `RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=${selected}`;
+          if (newEvent.repeatUntil) {
+            const untilDate = new Date(newEvent.repeatUntil);
+            untilDate.setHours(23,59,59,999);
+            const untilStr = untilDate.toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
+            rule += `;UNTIL=${untilStr}`;
+          }
+          recurrence = [rule];
+        }
+      }
       await createEvent({
-        summary: newEvent.title,
+        summary,
         start: startDate.toISOString(),
-        end: endDate.toISOString()
+        end: endDate.toISOString(),
+        description: newEvent.subtheme ? `Activity: ${newEvent.subtheme}` : undefined,
+        recurrence,
+        extendedProperties: { private: { 'bob-theme': newEvent.theme, 'bob-subtheme': newEvent.subtheme || '' } }
       });
 
-      setNewEvent({ title: '', start: '', duration: 60 });
+      setNewEvent({
+        title: '', start: '', duration: 60, theme: 'Health', subtheme: '', repeatWeekly: false,
+        repeatDays: { SU:false, MO:false, TU:false, WE:false, TH:false, FR:false, SA:false }, repeatUntil: ''
+      });
       setShowCreateEvent(false);
       alert('Event created successfully!');
     } catch (error: any) {
@@ -149,6 +193,57 @@ const Calendar: React.FC = () => {
       }
       
       alert(errorMessage);
+    }
+  };
+
+  // Create recurring block as a Routine (scheduled by planner)
+  const handleCreateRoutine = async () => {
+    if (!currentUser || !routineForm.title.trim() || !routineForm.start) return;
+    try {
+      const startDate = new Date(routineForm.start);
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const byday = Object.entries(routineForm.repeatDays).filter(([,v])=>v).map(([k])=>k).join(',');
+      if (!byday) {
+        alert('Select at least one day for weekly recurrence');
+        return;
+      }
+      let rrule = `RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=${byday}`;
+      if (routineForm.repeatUntil) {
+        const untilDate = new Date(routineForm.repeatUntil);
+        untilDate.setHours(23,59,59,999);
+        const untilStr = untilDate.toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
+        rrule += `;UNTIL=${untilStr}`;
+      }
+
+      const title = `[${routineForm.theme}] – ${routineForm.subtheme ? routineForm.subtheme + ' · ' : ''}${routineForm.title.trim()}`;
+      const now = Date.now();
+      await addDoc(collection(db, 'routines'), {
+        ownerUid: currentUser.uid,
+        title,
+        description: routineForm.subtheme ? `Activity: ${routineForm.subtheme}` : null,
+        recurrence: {
+          rrule,
+          dtstart: startDate.toISOString(),
+          timezone: tz,
+          source: 'rrule'
+        },
+        durationMinutes: Number(routineForm.duration) || 60,
+        priority: 3,
+        policy: { mode: 'roll_forward' },
+        tags: [`theme-${routineForm.theme}`, routineForm.subtheme ? `activity-${routineForm.subtheme}` : null].filter(Boolean),
+        createdAt: now,
+        updatedAt: now
+      });
+
+      setShowCreateRoutine(false);
+      setRoutineForm({
+        title: '', theme: 'Health', subtheme: '', duration: 60, start: '',
+        repeatDays: { SU:false, MO:false, TU:false, WE:false, TH:false, FR:false, SA:false }, repeatUntil: ''
+      });
+      alert('Recurring block created. Run Planning to schedule instances.');
+    } catch (e:any) {
+      console.error('Failed to create routine', e);
+      alert(e?.message || 'Failed to create recurring block');
     }
   };
 
@@ -225,6 +320,9 @@ const Calendar: React.FC = () => {
         <div>
           <Button variant="outline-primary" className="me-2" onClick={() => setShowCreateEvent(true)}>
             + Quick Event
+          </Button>
+          <Button variant="outline-success" className="me-2" onClick={() => setShowCreateRoutine(true)}>
+            + Recurring Block
           </Button>
           <Button variant="outline-secondary" className="me-2" onClick={() => window.location.reload()} disabled={loadingGoogle}>
             {loadingGoogle ? 'Loading Google…' : 'Reload Google Events'}
@@ -370,6 +468,25 @@ const Calendar: React.FC = () => {
                 onChange={(e) => setNewEvent({...newEvent, title: e.target.value})}
               />
             </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Theme</Form.Label>
+              <Form.Select value={newEvent.theme} onChange={(e)=>setNewEvent({ ...newEvent, theme: e.target.value as any })}>
+                <option value="Health">Health</option>
+                <option value="Growth">Growth</option>
+                <option value="Wealth">Wealth</option>
+                <option value="Tribe">Tribe</option>
+                <option value="Home">Home</option>
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Sub‑theme / Activity</Form.Label>
+              <Form.Control
+                type="text"
+                placeholder="e.g., Fitness, Triathlon training"
+                value={newEvent.subtheme}
+                onChange={(e)=>setNewEvent({ ...newEvent, subtheme: e.target.value })}
+              />
+            </Form.Group>
             
             <Form.Group className="mb-3">
               <Form.Label>Start Time</Form.Label>
@@ -391,6 +508,38 @@ const Calendar: React.FC = () => {
                 <option value={90}>1.5 hours</option>
                 <option value={120}>2 hours</option>
               </Form.Select>
+            </Form.Group>
+
+            <Form.Group className="mb-3">
+              <Form.Check
+                type="switch"
+                id="repeat-weekly"
+                label="Repeat weekly"
+                checked={newEvent.repeatWeekly}
+                onChange={(e)=>setNewEvent({ ...newEvent, repeatWeekly: e.target.checked })}
+              />
+              {newEvent.repeatWeekly && (
+                <div className="mt-2">
+                  <div className="d-flex flex-wrap gap-3 mb-2">
+                    {(['SU','MO','TU','WE','TH','FR','SA'] as const).map(d => (
+                      <Form.Check
+                        key={d}
+                        inline
+                        label={d}
+                        type="checkbox"
+                        checked={newEvent.repeatDays[d]}
+                        onChange={(e)=>setNewEvent({ ...newEvent, repeatDays: { ...newEvent.repeatDays, [d]: e.target.checked } })}
+                      />
+                    ))}
+                  </div>
+                  <Form.Label>Repeat until (optional)</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={newEvent.repeatUntil}
+                    onChange={(e)=>setNewEvent({ ...newEvent, repeatUntil: e.target.value })}
+                  />
+                </div>
+              )}
             </Form.Group>
           </Form>
         </Modal.Body>
@@ -453,6 +602,88 @@ const Calendar: React.FC = () => {
         <Modal.Footer>
           <Button variant="secondary" onClick={()=>setEditBlock(null)}>Cancel</Button>
           <Button variant="primary" onClick={submitEditBlock}>Save Changes</Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Create Recurring Block (Routine) */}
+      <Modal show={showCreateRoutine} onHide={() => setShowCreateRoutine(false)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Create Recurring Block</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Title</Form.Label>
+              <Form.Control
+                type="text"
+                placeholder="e.g., Triathlon training"
+                value={routineForm.title}
+                onChange={(e)=>setRoutineForm({ ...routineForm, title: e.target.value })}
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Theme</Form.Label>
+              <Form.Select value={routineForm.theme} onChange={(e)=>setRoutineForm({ ...routineForm, theme: e.target.value as any })}>
+                <option value="Health">Health</option>
+                <option value="Growth">Growth</option>
+                <option value="Wealth">Wealth</option>
+                <option value="Tribe">Tribe</option>
+                <option value="Home">Home</option>
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Activity / Sub‑theme</Form.Label>
+              <Form.Control
+                type="text"
+                placeholder="e.g., Fitness, Swim/Bike/Run"
+                value={routineForm.subtheme}
+                onChange={(e)=>setRoutineForm({ ...routineForm, subtheme: e.target.value })}
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>First Start</Form.Label>
+              <Form.Control
+                type="datetime-local"
+                value={routineForm.start}
+                onChange={(e)=>setRoutineForm({ ...routineForm, start: e.target.value })}
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Duration (minutes)</Form.Label>
+              <Form.Select value={routineForm.duration} onChange={(e)=>setRoutineForm({ ...routineForm, duration: parseInt(e.target.value) })}>
+                <option value={30}>30 minutes</option>
+                <option value={45}>45 minutes</option>
+                <option value={60}>1 hour</option>
+                <option value={90}>1.5 hours</option>
+                <option value={120}>2 hours</option>
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Weekly on</Form.Label>
+              <div className="d-flex flex-wrap gap-3 mb-2">
+                {(['SU','MO','TU','WE','TH','FR','SA'] as const).map(d => (
+                  <Form.Check
+                    key={d}
+                    inline
+                    label={d}
+                    type="checkbox"
+                    checked={routineForm.repeatDays[d]}
+                    onChange={(e)=>setRoutineForm({ ...routineForm, repeatDays: { ...routineForm.repeatDays, [d]: e.target.checked } })}
+                  />
+                ))}
+              </div>
+              <Form.Label>Repeat until (optional)</Form.Label>
+              <Form.Control
+                type="date"
+                value={routineForm.repeatUntil}
+                onChange={(e)=>setRoutineForm({ ...routineForm, repeatUntil: e.target.value })}
+              />
+            </Form.Group>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={()=>setShowCreateRoutine(false)}>Cancel</Button>
+          <Button variant="success" onClick={handleCreateRoutine} disabled={!routineForm.title.trim() || !routineForm.start}>Create</Button>
         </Modal.Footer>
       </Modal>
     </Container>
