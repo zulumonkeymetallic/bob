@@ -719,7 +719,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 fontWeight: 500,
               }}
               onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'rgba(0,0,0,0.04)';
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = rgbaCard(0.04);
                 (e.currentTarget as HTMLButtonElement).style.color = 'var(--green)';
               }}
               onMouseLeave={(e) => {
@@ -1131,7 +1131,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
         backgroundColor: 'var(--panel)', 
         borderRadius: '8px', 
         border: '1px solid var(--line)', 
-        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+        boxShadow: '0 1px 3px 0 var(--glass-shadow-color)',
         overflow: 'hidden' 
       }}
     >
@@ -1453,7 +1453,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                     textAlign: 'center',
                     fontSize: '12px',
                     fontWeight: '500',
-                    color: '#6b7280',
+                    color: themeVars.muted as string,
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
                     width: '96px',
@@ -1604,7 +1604,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           backgroundColor: themeVars.panel as string,
           borderLeft: `1px solid ${themeVars.border}`,
           transition: 'transform 0.3s ease',
-          boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
+          boxShadow: '-4px 0 16px 0 var(--glass-shadow-color)',
           transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
         }}>
           <div style={{ 

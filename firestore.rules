@@ -73,6 +73,10 @@ service cloud.firestore {
     }
     // Per-user integration logs (e.g., google/strava/monzo)
     match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /integration_status/{id} {
+      allow create, update: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
     match /ai_usage_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

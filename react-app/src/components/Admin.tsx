@@ -165,10 +165,12 @@ const Admin = () => {
     if (!user) return;
     try {
       setMonzoStatus('Starting Monzo OAuth...');
-      const nonce = Math.random().toString(36).slice(2);
-      const origin = window.location.origin;
-      const url = `${origin}/api/monzo/start?uid=${user.uid}&nonce=${nonce}`;
-      const popup = window.open(url, 'monzo-oauth', 'width=500,height=700');
+      const createSession = httpsCallable(functions, 'createMonzoOAuthSession');
+      const res: any = await createSession({ origin: window.location.origin });
+      const data = res?.data || res;
+      const startUrl = data?.startUrl || (data?.sessionId ? `${window.location.origin}/api/monzo/start?session=${data.sessionId}` : null);
+      if (!startUrl) throw new Error('Missing session URL');
+      const popup = window.open(startUrl, 'monzo-oauth', 'width=500,height=700');
       const check = setInterval(() => {
         if (popup?.closed) {
           clearInterval(check);

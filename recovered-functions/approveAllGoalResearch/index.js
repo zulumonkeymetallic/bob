@@ -4537,7 +4537,47 @@ exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
   }
 });
 
-async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = false, logActivity = true, activityActor = 'AI_Agent', runId = null }) {
+// Helper: normalize a task title conservatively for exact-match dedupe
+function normalizeTitle(s) {
+  if (!s) return '';
+  let str = String(s).toLowerCase();
+  // strip urls entirely (http/https/www/email-like)
+  str = str.replace(/https?:\/\/\S+/g, ' ');
+  str = str.replace(/www\.[^\s]+/g, ' ');
+  // remove common punctuation/symbols
+  str = str.replace(/[\[\]{}()"'`“”‘’.,!?;:<>_~*^#%\\/\\|+-=]/g, ' ');
+  // collapse whitespace
+  str = str.replace(/\s+/g, ' ').trim();
+  return str;
+}
+
+function textHasUrl(s) {
+  if (!s) return false;
+  const str = String(s);
+  return /https?:\/\/\S+/.test(str) || /www\.[^\s]+/.test(str);
+}
+
+function resolveListKey(task) {
+  const id = task.reminderListId || task.listId || null;
+  const name = task.reminderListName || task.listName || null;
+  if (id) return `id:${String(id).toLowerCase()}`;
+  if (name) return `name:${String(name).toLowerCase()}`;
+  return 'none';
+}
+
+function dueMs(task) {
+  return toMillis(task.dueDate || task.dueDateMs || task.targetDate);
+}
+
+const DUE_CLOSE_MS = 36 * 60 * 60 * 1000; // 36 hours
+
+function isDone(task) {
+  const status = String(task.status ?? '').toLowerCase();
+  const done = status === 'done' || status === 'complete' || Number(task.status) === 2;
+  return done || task.deleted === true;
+}
+
+async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = false, logActivity = true, activityActor = 'AI_Agent', runId = null, includeTitleDedupe = true }) {
   const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
   const taskDocs = tasksSnap.docs.map(doc => ({ id: doc.id, ref: doc.ref, data: doc.data() || {} }));
   if (!taskDocs.length) {
@@ -4589,8 +4629,11 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
   }
 
   const groups = Array.from(signatureMap.values());
-  if (!groups.length) {
-    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, dryRun, groups: [] };
+
+  // Track IDs already covered by strong-key groups to avoid title-dedupe on them
+  const strongClaimedIds = new Set();
+  for (const g of groups) {
+    if (Array.isArray(g.ids)) g.ids.forEach(id => strongClaimedIds.add(id));
   }
 
   const canonicalNotes = new Map();
@@ -4654,12 +4697,143 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
     Array.from(group.keys).forEach(k => note.keys.add(k));
   }
 
+  // Secondary pass: conservative title-based dedupe for items not grouped by strong keys
+  const titleSummary = [];
+  const titleCanonicalNotes = new Map();
+  if (includeTitleDedupe) {
+    // Build buckets by (normalizedTitle, listKey)
+    const titleBuckets = new Map();
+    for (const doc of taskDocs) {
+      const t = { id: doc.id, ...(doc.data || {}) };
+      if (strongClaimedIds.has(t.id)) continue; // already handled by strong keys
+      const norm = normalizeTitle(t.title || t.name || t.task || '');
+      if (!norm || norm.length < 8) continue; // too short to be safe
+      if (textHasUrl(t.title || t.name || t.task || '')) continue; // contain URL
+      const listKey = resolveListKey(t);
+      const bucketKey = `${norm}||${listKey}`;
+      if (!titleBuckets.has(bucketKey)) titleBuckets.set(bucketKey, []);
+      titleBuckets.get(bucketKey).push(t);
+    }
+
+    for (const [bucketKey, items] of titleBuckets.entries()) {
+      if (!Array.isArray(items) || items.length < 2) continue;
+
+      // Split items into due subgroups: none-due together; due items clustered by 36h proximity
+      const noneDue = [];
+      const withDue = [];
+      for (const t of items) {
+        const d = dueMs(t);
+        if (d == null) noneDue.push(t); else withDue.push({ t, d });
+      }
+
+      const subgroups = [];
+      if (noneDue.length > 1) subgroups.push({ dueBucket: 'none', tasks: noneDue.map(t => t) });
+
+      if (withDue.length) {
+        withDue.sort((a, b) => a.d - b.d);
+        let startIdx = 0;
+        for (let i = 1; i <= withDue.length; i++) {
+          const start = withDue[startIdx];
+          const curr = withDue[i] || null;
+          if (!curr || (curr.d - start.d) > DUE_CLOSE_MS) {
+            const groupSlice = withDue.slice(startIdx, i).map(x => x.t);
+            if (groupSlice.length > 1) {
+              const day = toDayKey(new Date(start.d));
+              subgroups.push({ dueBucket: day, tasks: groupSlice });
+            }
+            startIdx = i;
+          }
+        }
+      }
+
+      // For each subgroup, create duplicate updates with reason=duplicateTitle
+      const [normTitle, listKey] = bucketKey.split('||');
+      for (const sg of subgroups) {
+        const tasks = sg.tasks;
+        // Skip if every task in subgroup is already done, unless at least 2 already flagged as duplicates
+        const allDone = tasks.every(isDone);
+        const alreadyMarked = tasks.filter(x => x.duplicateOf || x.duplicateKey).length;
+        if (allDone && alreadyMarked < 2) continue;
+
+        const canonical = tasks.slice().sort((a, b) => {
+          const deletedDiff = (a.deleted ? 1 : 0) - (b.deleted ? 1 : 0);
+          if (deletedDiff !== 0) return deletedDiff;
+          const statusA = String(a.status ?? '').toLowerCase();
+          const statusB = String(b.status ?? '').toLowerCase();
+          const doneA = statusA === 'done' || statusA === 'complete' || Number(a.status) === 2;
+          const doneB = statusB === 'done' || statusB === 'complete' || Number(b.status) === 2;
+          if (doneA !== doneB) return doneA - doneB;
+          const createdA = toMillis(a.reminderCreatedAt) ?? toMillis(a.createdAt) ?? toMillis(a.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+          const createdB = toMillis(b.reminderCreatedAt) ?? toMillis(b.createdAt) ?? toMillis(b.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+          if (createdA !== createdB) return createdA - createdB;
+          return String(a.id).localeCompare(String(b.id));
+        })[0];
+
+        const duplicates = tasks.filter(t => t.id !== canonical.id);
+        if (!duplicates.length) continue;
+
+        const listPart = listKey.startsWith('id:') || listKey.startsWith('name:') ? listKey.slice(listKey.indexOf(':') + 1) : listKey;
+        const dupKeyStable = `title:${normTitle}|list:${listPart}|dueBucket:${sg.dueBucket}`;
+
+        titleSummary.push({ kept: canonical.id, removed: duplicates.map(d => d.id), keys: [dupKeyStable], reason: 'duplicateTitle' });
+
+        const canonicalRefValue = canonical.ref || canonical.reference || canonical.displayId || canonical.id;
+        duplicates.forEach(dup => {
+          duplicateUpdates.push({
+            id: dup.id,
+            data: {
+              duplicateOf: canonical.id,
+              duplicateKey: dupKeyStable,
+              duplicateReason: 'duplicateTitle',
+              duplicateResolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+              reminderSyncDirective: 'complete',
+              syncState: 'dirty',
+              status: 2,
+              deleted: true,
+              serverUpdatedAt: Date.now()
+            }
+          });
+          duplicateReminderMappings.push({
+            duplicateId: dup.id,
+            canonicalId: canonical.id,
+            canonicalRef: canonicalRefValue,
+            canonicalTitle: canonical.title || canonicalRefValue,
+          });
+        });
+
+        if (!titleCanonicalNotes.has(canonical.id)) {
+          titleCanonicalNotes.set(canonical.id, { children: new Set(), keys: new Set() });
+        }
+        const note = titleCanonicalNotes.get(canonical.id);
+        duplicates.forEach(dup => note.children.add(dup.id));
+        note.keys.add(dupKeyStable);
+      }
+    }
+  }
+
+  // Merge titleCanonicalNotes into canonicalNotes
+  for (const [cid, info] of titleCanonicalNotes.entries()) {
+    if (!canonicalNotes.has(cid)) canonicalNotes.set(cid, { children: new Set(), keys: new Set() });
+    const dest = canonicalNotes.get(cid);
+    info.children.forEach(v => dest.children.add(v));
+    info.keys.forEach(v => dest.keys.add(v));
+  }
+
+  // Combine summaries
+  const allSummaries = summary.concat(titleSummary);
+
   if (dryRun) {
-    return { ok: true, dryRun: true, processed: taskDocs.length, duplicatesResolved: duplicateUpdates.length, groups: summary };
+    // Include reason counts in dry-run output
+    const reasonCounts = allSummaries.reduce((acc, g) => {
+      const reason = g.reason || 'strongKey';
+      acc[reason] = (acc[reason] || 0) + 1;
+      return acc;
+    }, {});
+    return { ok: true, dryRun: true, processed: taskDocs.length, duplicatesResolved: duplicateUpdates.length, groups: allSummaries, reasonCounts };
   }
 
   if (!duplicateUpdates.length) {
-    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, groups: summary, hardDelete };
+    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, groups: allSummaries, hardDelete };
   }
 
   const bulk = db.bulkWriter();
@@ -4718,6 +4892,12 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
 
   if (logActivity) {
     const activityRef = db.collection('activity_stream').doc();
+    // compute reason counts
+    const reasonCounts = allSummaries.reduce((acc, g) => {
+      const reason = g.reason || 'strongKey';
+      acc[reason] = (acc[reason] || 0) + 1;
+      return acc;
+    }, {});
     await activityRef.set({
       id: activityRef.id,
       entityId: `tasks_${userId}`,
@@ -4725,8 +4905,8 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
       activityType: 'deduplicate_tasks',
       userId,
       actor: activityActor,
-      description: `Resolved ${duplicateUpdates.length} duplicate tasks across ${summary.length} groups`,
-      metadata: { groups: summary, hardDelete, runId },
+      description: `Resolved ${duplicateUpdates.length} duplicate tasks across ${allSummaries.length} groups`,
+      metadata: { groups: allSummaries, hardDelete, runId, reasonCounts },
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -4736,7 +4916,8 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
     ok: true,
     processed: taskDocs.length,
     duplicatesResolved: duplicateUpdates.length,
-    groups: summary,
+    groups: allSummaries,
+    reasonCounts: allSummaries.reduce((acc, g) => { const r = g.reason || 'strongKey'; acc[r] = (acc[r] || 0) + 1; return acc; }, {}),
     hardDelete,
     dryRun,
   };
@@ -5183,6 +5364,7 @@ async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId
     logActivity: true,
     activityActor: 'NightlyMaintenance',
     runId,
+    includeTitleDedupe: profile?.titleDedupeEnabled !== false,
   });
 
   const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
@@ -5248,9 +5430,10 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
 
   const dryRun = !!request?.data?.dryRun;
   const hardDelete = !!request?.data?.hardDelete;
+  const includeTitleDedupe = request?.data?.includeTitleDedupe !== false; // default true
 
   const db = admin.firestore();
-  return deduplicateUserTasks({ db, userId: uid, dryRun, hardDelete, logActivity: true, activityActor: uid });
+  return deduplicateUserTasks({ db, userId: uid, dryRun, hardDelete, logActivity: true, activityActor: uid, includeTitleDedupe });
 });
 
 exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {

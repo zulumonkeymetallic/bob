@@ -73,6 +73,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [monzoMessage, setMonzoMessage] = useState<string | null>(null);
   const [monzoLoading, setMonzoLoading] = useState(false);
   const [monzoWebhookAccountId, setMonzoWebhookAccountId] = useState('');
+  const [monzoIntegrationStatus, setMonzoIntegrationStatus] = useState<any | null>(null);
 
   const [stravaActivities, setStravaActivities] = useState<any[]>([]);
   const [stravaMessage, setStravaMessage] = useState<string | null>(null);
@@ -126,8 +127,17 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
 
   // Derived flags
   const stravaConnected = !!profile?.stravaConnected;
-  const monzoConnected = !!profile?.monzoConnected;
-  const monzoLastSync = profile?.monzoLastSyncAt;
+  const monzoConnected = !!(monzoIntegrationStatus?.connected ?? profile?.monzoConnected);
+  const monzoLastSync = monzoIntegrationStatus?.lastSyncAt || profile?.monzoLastSyncAt;
+  const monzoLastSyncStatus = monzoIntegrationStatus?.lastSyncStatus || (monzoConnected ? 'connected' : 'not_connected');
+  const displayMonzoStatus = monzoLastSyncStatus
+    ? monzoLastSyncStatus.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    : '—';
+  const monzoLastSyncSource = monzoIntegrationStatus?.lastSyncSource || null;
+  const monzoLastAnalyticsAt = monzoIntegrationStatus?.lastAnalyticsAt || null;
+  const monzoLastWebhookAt = monzoIntegrationStatus?.lastWebhookAt || null;
+  const monzoLastErrorAt = monzoIntegrationStatus?.lastErrorAt || null;
+  const monzoLastErrorMessage = monzoIntegrationStatus?.lastErrorMessage || null;
   const steamLastSync = profile?.steamLastSyncAt;
   const traktLastSync = profile?.traktLastSyncAt;
   const googleLastSync = profile?.googleCalendarLastSyncAt;
@@ -216,6 +226,10 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       rows.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
       setHardcoverBooks(rows.slice(0, 5));
     });
+    const integrationDoc = doc(db, 'integration_status', `monzo_${currentUser.uid}`);
+    const unsubscribeIntegration = onSnapshot(integrationDoc, (snap) => {
+      setMonzoIntegrationStatus(snap.exists ? snap.data() : null);
+    });
 
     return () => {
       unsubscribeSummary();
@@ -224,6 +238,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       unsubscribeSteam();
       unsubscribeTrakt();
       unsubscribeHardcover();
+      unsubscribeIntegration();
     };
   }, [currentUser]);
 
@@ -276,18 +291,30 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     }
   };
 
-  const connectMonzo = () => {
+  const connectMonzo = async () => {
     if (!currentUser) return;
-    const nonce = Math.random().toString(36).slice(2);
-    const url = `${window.location.origin}/api/monzo/start?uid=${currentUser.uid}&nonce=${nonce}`;
-    const popup = window.open(url, 'monzo-oauth', 'width=480,height=720');
-    if (popup) {
-      const timer = window.setInterval(() => {
-        if (popup.closed) {
-          clearPopupTimer(timer);
-        }
-      }, 800);
-      trackPopupTimer(timer);
+    setMonzoMessage(null);
+    try {
+      const createSession = httpsCallable(functions, 'createMonzoOAuthSession');
+      const res: any = await createSession({ origin: window.location.origin });
+      const data = res?.data || res;
+      const sessionId = data?.sessionId;
+      const startUrl = data?.startUrl || (sessionId ? `${window.location.origin}/api/monzo/start?session=${sessionId}` : null);
+      if (!startUrl) throw new Error('Unable to resolve Monzo start URL');
+      const popup = window.open(startUrl, 'monzo-oauth', 'width=480,height=720');
+      if (popup) {
+        const timer = window.setInterval(() => {
+          if (popup.closed) {
+            clearPopupTimer(timer);
+          }
+        }, 800);
+        trackPopupTimer(timer);
+      } else {
+        setMonzoMessage('Popup blocked. Please allow popups for Monzo connect.');
+      }
+    } catch (err: any) {
+      console.error('connectMonzo failed', err);
+      setMonzoMessage(err?.message || 'Failed to start Monzo OAuth');
     }
   };
 
@@ -593,20 +620,33 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         <Card.Body>
           <Row className="mb-3">
             <Col md={6}>
+              <div><strong>Status:</strong> {displayMonzoStatus}</div>
               <div><strong>Last sync:</strong> {formatTimestamp(monzoLastSync)} ({relativeTime(monzoLastSync)})</div>
-              <div><strong>Mandatory spend:</strong> {formatCurrency(monzoTotals.mandatory)}</div>
-              <div><strong>Savings transfers:</strong> {formatCurrency(monzoTotals.savings)}</div>
+              <div><strong>Sync source:</strong> {monzoLastSyncSource || '—'}</div>
+              <div><strong>Analytics refresh:</strong> {formatTimestamp(monzoLastAnalyticsAt)}</div>
+              <div><strong>Last webhook:</strong> {formatTimestamp(monzoLastWebhookAt)}</div>
             </Col>
             <Col md={6} className="text-md-end mt-3 mt-md-0">
-              <Button variant="outline-primary" className="me-2" onClick={connectMonzo}>
-                {monzoConnected ? 'Reconnect' : 'Connect'}
-              </Button>
-              <Button variant="primary" onClick={syncMonzo} disabled={monzoLoading}>
-                {monzoLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                Sync Now
-              </Button>
+              <div><strong>Mandatory spend:</strong> {formatCurrency(monzoTotals.mandatory)}</div>
+              <div><strong>Savings transfers:</strong> {formatCurrency(monzoTotals.savings)}</div>
+              <div className="mt-3">
+                <Button variant="outline-primary" className="me-2" onClick={connectMonzo} disabled={monzoLoading}>
+                  {monzoConnected ? 'Reconnect' : 'Connect'}
+                </Button>
+                <Button variant="primary" onClick={syncMonzo} disabled={monzoLoading}>
+                  {monzoLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                  Sync Now
+                </Button>
+              </div>
             </Col>
           </Row>
+
+          {monzoLastErrorMessage && (
+            <Alert variant="warning">
+              <div><strong>Last error:</strong> {monzoLastErrorMessage}</div>
+              <div className="mb-0"><small>{formatTimestamp(monzoLastErrorAt)} ({relativeTime(monzoLastErrorAt)})</small></div>
+            </Alert>
+          )}
 
           {monzoMessage && <Alert variant="info">{monzoMessage}</Alert>}
 

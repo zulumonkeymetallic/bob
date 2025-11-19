@@ -82,7 +82,8 @@ const TasksList: React.FC = () => {
     parentId: '',
     theme: 1, // Default to Health & Fitness
     status: 'planned' as 'planned' | 'in_progress' | 'done',
-    estimatedHours: 1
+    estimatedHours: 1,
+    points: 1
   });
 
   const [editingField, setEditingField] = useState<{taskId: string, field: string, value: any} | null>(null);
@@ -417,6 +418,7 @@ const TasksList: React.FC = () => {
 
       const statusMap: Record<string, number> = { planned: 0, in_progress: 1, done: 2 };
       const priorityMap: Record<string, number> = { high: 1, med: 2, low: 3 };
+      const normalizedPoints = Math.max(1, Math.min(8, Math.round(Number(newTask.points) || 1)));
       const taskData: any = {
         ref: ref, // Add reference number
         title: newTask.title,
@@ -425,6 +427,7 @@ const TasksList: React.FC = () => {
         effort: newTask.effort,
         estimatedHours: estimatedHoursRounded,
         estimateMin: estimateMinutes,
+        points: normalizedPoints,
         status: statusMap[String(newTask.status).toLowerCase()] ?? 0,
         theme: newTask.theme,
         persona: currentPersona,
@@ -469,7 +472,8 @@ const TasksList: React.FC = () => {
         parentId: '',
         theme: 1, // Default to Health & Fitness
         status: 'planned',
-        estimatedHours: 1
+        estimatedHours: 1,
+        points: 1
       });
       setShowAddTask(false);
     } catch (error) {
@@ -530,6 +534,15 @@ const TasksList: React.FC = () => {
         const minutes = Number(payload.estimateMin);
         if (!Number.isNaN(minutes)) {
           payload.estimatedHours = roundHours(minutes / 60);
+        }
+      }
+
+      if (payload.points !== undefined) {
+        const rawPoints = Number(payload.points);
+        if (Number.isNaN(rawPoints)) {
+          delete payload.points;
+        } else {
+          payload.points = Math.max(1, Math.min(8, Math.round(rawPoints)));
         }
       }
 
@@ -659,6 +672,7 @@ const TasksList: React.FC = () => {
         priority: selectedTask.priority,
         effort: selectedTask.effort,
         status: selectedTask.status as any,
+        points: selectedTask.points ?? 1,
         theme: selectedTask.theme,
         storyId: selectedTask.storyId || null,
         projectId: selectedTask.projectId || null,
@@ -1126,6 +1140,26 @@ const TasksList: React.FC = () => {
             </Row>
 
             <Row>
+              <Col md={3}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Points</Form.Label>
+                  <Form.Control
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={newTask.points ?? 1}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
+                      setNewTask({ ...newTask, points: normalized });
+                    }}
+                  />
+                  <Form.Text className="text-muted">Scale 1–8 to align with sprint planning.</Form.Text>
+                </Form.Group>
+              </Col>
+            </Row>
+
+            <Row>
               <Col md={4}>
                 <Form.Group className="mb-3">
                   <Form.Label>Parent Type</Form.Label>
@@ -1289,6 +1323,25 @@ const TasksList: React.FC = () => {
                           estimatedHours: Number.isNaN(value) ? undefined : roundHours(value),
                           estimateMin: Number.isNaN(value) ? selectedTask.estimateMin : Math.max(5, Math.round(roundHours(value) * 60))
                         });
+                      }}
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <Row>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Points</Form.Label>
+                    <Form.Control
+                      type="number"
+                      min={1}
+                      max={8}
+                      value={selectedTask.points ?? 1}
+                      onChange={(e) => {
+                        const value = Number(e.target.value);
+                        const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
+                        setSelectedTask({ ...selectedTask, points: normalized });
                       }}
                     />
                   </Form.Group>

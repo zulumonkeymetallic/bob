@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Button, Form, Badge, ListGroup, Spinner } from 'react-bootstrap';
+import { MessageCircle } from 'lucide-react';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
 import { useAuth } from '../contexts/AuthContext';
+import { useSidebar } from '../contexts/SidebarContext';
 import { Goal, Story, Task } from '../types';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
@@ -23,28 +25,119 @@ interface Props {
 
 const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialTab = 'details' }) => {
   const { currentUser } = useAuth();
+  const { showSidebar } = useSidebar();
+  const [activeItem, setActiveItem] = useState<Goal | Story | Task | null>(item);
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [loading, setLoading] = useState(false);
+  const [quickCompleting, setQuickCompleting] = useState(false);
   const [resolvedThemeHex, setResolvedThemeHex] = useState<string>('#6b7280');
   const { themes: globalThemes } = useGlobalThemes();
   const activityRef = useRef<HTMLDivElement | null>(null);
+
+  const formatDateDisplay = (value: any): string => {
+    if (!value) return '—';
+    let date: Date;
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (Number.isNaN(parsed)) return value;
+      date = new Date(parsed);
+    } else if (typeof value?.toDate === 'function') {
+      date = value.toDate();
+    } else {
+      date = new Date(value);
+    }
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+      return '—';
+    }
+    return date.toLocaleDateString();
+  };
+
+  const toDateInputValue = (value: any): string => {
+    if (!value) return '';
+    const date = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const fromDateInputValue = (value: string): number | null => {
+    if (!value) return null;
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? null : ms;
+  };
+
+  const getReferenceNumber = (entity?: any) => entity?.ref || entity?.referenceNumber || entity?.id;
+
+  const completeStatusValue = type === 'story' ? 4 : 2;
+
+  const isEntityComplete = () => {
+    const status = Number((activeItem as any)?.status ?? 0);
+    return status === completeStatusValue;
+  };
+
+  const handleOpenActivitySidebar = () => {
+    if (!activeItem) return;
+    try {
+      showSidebar(activeItem as any, type);
+    } catch (error) {
+      console.warn('Failed to open activity sidebar', error);
+    }
+  };
+
+  const handleQuickComplete = async () => {
+    if (!activeItem || !currentUser || isEntityComplete()) {
+      return;
+    }
+    setQuickCompleting(true);
+    try {
+      const collectionName = type === 'goal' ? 'goals' : type === 'story' ? 'stories' : 'tasks';
+      const updates: Record<string, any> = {
+        status: completeStatusValue,
+        updatedAt: serverTimestamp()
+      };
+      if (type === 'task') {
+        updates.completedAt = serverTimestamp();
+      }
+      await updateDoc(doc(db, collectionName, (activeItem as any).id), updates);
+      const referenceNumber = getReferenceNumber(activeItem);
+      await ActivityStreamService.logStatusChange(
+        (activeItem as any).id,
+        type,
+        currentUser.uid,
+        currentUser.email || undefined,
+        String((activeItem as any).status),
+        String(completeStatusValue),
+        'personal',
+        referenceNumber
+      );
+      setActiveItem(prev => (prev ? ({ ...prev, status: completeStatusValue } as typeof prev) : prev));
+      setEditForm((prev: any) => ({ ...prev, status: completeStatusValue }));
+    } catch (error) {
+      // eslint-disable-next-line no-alert
+      alert('Failed to mark as complete. Please try again.');
+    } finally {
+      setQuickCompleting(false);
+    }
+  };
 
   // Resolve theme color based on entity (goal direct; story->goal; task->story->goal)
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      if (!item) return;
+      if (!activeItem) return;
       try {
         if (type === 'goal') {
-          const themeId = migrateThemeValue((item as any).theme);
+          const themeId = migrateThemeValue((activeItem as any).theme);
           const hex = getThemeById(themeId).color;
           if (!cancelled) setResolvedThemeHex(hex);
           return;
         }
         if (type === 'story') {
-          const goalId = (item as any).goalId;
+          const goalId = (activeItem as any).goalId;
           if (goalId) {
             const snap = await getDoc(doc(db, 'goals', goalId));
             if (snap.exists()) {
@@ -55,7 +148,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
           return;
         }
         if (type === 'task') {
-          const parentId = (item as any).parentId;
+          const parentId = (activeItem as any).parentId;
           if (parentId) {
             const storySnap = await getDoc(doc(db, 'stories', parentId));
             if (storySnap.exists()) {
@@ -71,7 +164,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
             }
           }
           // Fallback: use task's own theme if present
-          const ownTheme = migrateThemeValue((item as any).theme);
+          const ownTheme = migrateThemeValue((activeItem as any).theme);
           if (ownTheme) {
             if (!cancelled) setResolvedThemeHex(getThemeById(ownTheme).color);
           }
@@ -80,13 +173,13 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
     };
     run();
     return () => { cancelled = true; };
-  }, [item, type]);
+  }, [activeItem, type]);
 
   // Subscribe to activity stream for this entity
   useEffect(() => {
-    if (!item) { setActivities([]); return; }
-    return ActivityStreamService.subscribeToActivityStream(item.id, setActivities, currentUser?.uid);
-  }, [item?.id, currentUser?.uid]);
+    if (!activeItem) { setActivities([]); return; }
+    return ActivityStreamService.subscribeToActivityStream(activeItem.id, setActivities, currentUser?.uid);
+  }, [activeItem?.id, currentUser?.uid]);
 
   // If requested, scroll to activity on open
   useEffect(() => {
@@ -99,7 +192,12 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
 
   // Initialize edit form when opening
   useEffect(() => {
-    if (item) setEditForm({ ...(item as any) });
+    setActiveItem(item);
+    if (item) {
+      setEditForm({ ...(item as any) });
+    } else {
+      setEditForm({});
+    }
     setIsEditing(false);
   }, [item]);
 
@@ -109,57 +207,57 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
   };
 
   const handleSave = async () => {
-    if (!currentUser) return;
+    if (!currentUser || !activeItem) return;
     setLoading(true);
     try {
       const col = type === 'goal' ? 'goals' : type === 'story' ? 'stories' : 'tasks';
       const updates = { ...editForm };
       delete (updates as any).id;
-      await updateDoc(doc(db, col, (item as any).id), { ...updates, updatedAt: serverTimestamp() });
+      await updateDoc(doc(db, col, (activeItem as any).id), { ...updates, updatedAt: serverTimestamp() });
+      setActiveItem(prev => (prev ? ({ ...prev, ...updates } as typeof prev) : prev));
 
       // Log changes
-      const referenceNumber = (item as any).ref || (item as any).referenceNumber || (item as any).id;
-      Object.keys(editForm).forEach(async (key) => {
-        if ((item as any)[key] !== editForm[key]) {
-          const oldVal = (item as any)[key];
-          const newVal = editForm[key];
-          if (key === 'status') {
-            await ActivityStreamService.logStatusChange(
-              (item as any).id,
-              type,
-              currentUser.uid,
-              currentUser.email || undefined,
-              String(oldVal),
-              String(newVal),
-              'personal',
-              referenceNumber
-            );
-          } else if (key === 'sprintId') {
-            await ActivityStreamService.logSprintChange(
-              (item as any).id,
-              (type === 'goal' ? 'story' : type) as any,
-              String(oldVal || ''),
-              String(newVal || ''),
-              currentUser.uid,
-              currentUser.email || undefined,
-              'personal',
-              referenceNumber
-            );
-          } else {
-            await ActivityStreamService.logFieldChange(
-              (item as any).id,
-              type,
-              currentUser.uid,
-              currentUser.email || undefined,
-              key,
-              oldVal,
-              newVal,
-              'personal',
-              referenceNumber
-            );
-          }
+      const referenceNumber = getReferenceNumber(activeItem);
+      const changedKeys = Object.keys(editForm).filter((key) => key !== 'id' && (activeItem as any)[key] !== editForm[key]);
+      for (const key of changedKeys) {
+        const oldVal = (activeItem as any)[key];
+        const newVal = editForm[key];
+        if (key === 'status') {
+          await ActivityStreamService.logStatusChange(
+            (activeItem as any).id,
+            type,
+            currentUser.uid,
+            currentUser.email || undefined,
+            String(oldVal),
+            String(newVal),
+            'personal',
+            referenceNumber
+          );
+        } else if (key === 'sprintId') {
+          await ActivityStreamService.logSprintChange(
+            (activeItem as any).id,
+            (type === 'goal' ? 'story' : type) as any,
+            String(oldVal || ''),
+            String(newVal || ''),
+            currentUser.uid,
+            currentUser.email || undefined,
+            'personal',
+            referenceNumber
+          );
+        } else {
+          await ActivityStreamService.logFieldChange(
+            (activeItem as any).id,
+            type,
+            currentUser.uid,
+            currentUser.email || undefined,
+            key,
+            oldVal,
+            newVal,
+            'personal',
+            referenceNumber
+          );
         }
-      });
+      }
       setIsEditing(false);
     } catch (e) {
       // eslint-disable-next-line no-alert
@@ -176,14 +274,36 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
     return ChoiceHelper.getOptions('task', 'status');
   }, [type]);
 
-  if (!item) return null;
+  if (!activeItem) return null;
+  const entity = activeItem as any;
 
   return (
     <Modal show={show} onHide={onHide} size="lg" centered>
       <Modal.Header closeButton style={headerStyle}>
-        <Modal.Title>
-          {(item as any).title || 'Untitled'}
-        </Modal.Title>
+        <div className="d-flex align-items-center w-100 justify-content-between">
+          <Modal.Title>
+            {entity.title || 'Untitled'}
+          </Modal.Title>
+          <div className="d-flex align-items-center gap-2">
+            <Button
+              variant="outline-light"
+              size="sm"
+              onClick={handleOpenActivitySidebar}
+              title="Open activity stream"
+            >
+              <MessageCircle size={14} className="me-1" />
+              Activity
+            </Button>
+            <Button
+              variant="light"
+              size="sm"
+              onClick={handleQuickComplete}
+              disabled={quickCompleting || isEntityComplete() || loading}
+            >
+              {quickCompleting ? 'Completing…' : 'Mark Complete'}
+            </Button>
+          </div>
+        </div>
       </Modal.Header>
       <Modal.Body>
         <div style={{ display: 'flex', gap: 16, flexDirection: 'column' }}>
@@ -199,7 +319,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
             {isEditing ? (
               <Form.Control value={editForm.title || ''} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} />
             ) : (
-              <div>{(item as any).title}</div>
+              <div>{entity.title}</div>
             )}
           </div>
           <div>
@@ -207,7 +327,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
             {isEditing ? (
               <Form.Control as="textarea" rows={3} value={editForm.description || ''} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
             ) : (
-              <div style={{ whiteSpace: 'pre-wrap' }}>{(item as any).description || '—'}</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{entity.description || '—'}</div>
             )}
           </div>
           <div style={{ display: 'flex', gap: 16 }}>
@@ -225,7 +345,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
               ) : (
                 <Badge bg="secondary">
                   {(() => {
-                    const v = (item as any).status;
+                    const v = entity.status;
                     const n = typeof v === 'number' ? v : Number(v);
                     if (type === 'story') {
                       return storyStatusText(n);
@@ -260,13 +380,43 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
                   )}
                 </Form.Select>
               ) : (
-                <Badge bg="secondary">{String((item as any).priority ?? '—')}</Badge>
+                <Badge bg="secondary">{String(entity.priority ?? '—')}</Badge>
               )}
             </div>
           </div>
 
+          {(type === 'task' || type === 'story') && (
+            <div>
+              <label style={{ fontWeight: 500 }}>Due Date</label>
+              {isEditing ? (
+                <Form.Control
+                  type="date"
+                  value={toDateInputValue(editForm.dueDate ?? entity.dueDate)}
+                  onChange={(e) => setEditForm({ ...editForm, dueDate: fromDateInputValue(e.target.value) })}
+                />
+              ) : (
+                <div>{formatDateDisplay(entity.dueDate)}</div>
+              )}
+            </div>
+          )}
+
+          {type === 'goal' && (
+            <div>
+              <label style={{ fontWeight: 500 }}>Target Date</label>
+              {isEditing ? (
+                <Form.Control
+                  type="date"
+                  value={((editForm.targetDate ?? entity.targetDate) || '').slice(0, 10)}
+                  onChange={(e) => setEditForm({ ...editForm, targetDate: e.target.value })}
+                />
+              ) : (
+                <div>{entity.targetDate ? formatDateDisplay(entity.targetDate) : '—'}</div>
+              )}
+            </div>
+          )}
+
           {/* Theme (tasks without a story can set theme directly) */}
-          {type === 'task' && (!((item as any)?.parentId) || (item as any)?.parentType !== 'story') && (
+          {type === 'task' && (!(entity?.parentId) || entity?.parentType !== 'story') && (
             <div>
               <label style={{ fontWeight: 500 }}>Theme</label>
               {isEditing ? (
@@ -280,7 +430,7 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
                 </Form.Select>
               ) : (
                 <Badge bg="secondary">{(() => {
-                  const themeId = migrateThemeValue((item as any).theme);
+                  const themeId = migrateThemeValue(entity.theme);
                   const found = globalThemes.find(t => t.id === themeId);
                   return found?.label || found?.name || '—';
                 })()}</Badge>
@@ -315,7 +465,11 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
           </Button>
         ) : (
           <>
-            <Button variant="secondary" onClick={() => setIsEditing(false)} disabled={loading}>
+            <Button
+              variant="secondary"
+              onClick={() => { setEditForm({ ...entity }); setIsEditing(false); }}
+              disabled={loading}
+            >
               Cancel
             </Button>
             <Button variant="primary" onClick={handleSave} disabled={loading}>

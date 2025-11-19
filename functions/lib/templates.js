@@ -659,6 +659,11 @@ const renderDailySummaryEmail = (data) => {
       ${renderSchedulerChanges(data.schedulerChanges)}
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Briefing & Weather</h2>
+        ${renderBriefing(data.aiBriefing)}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">World summary</h2>
         ${renderWorldSummary(data.worldSummary)}
       </section>
@@ -668,8 +673,14 @@ const renderDailySummaryEmail = (data) => {
         ${renderFitness(data.fitness)}
       </section>
 
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Progress scoreboard</h2>
+        ${renderProgressSummary(data.goalProgress, data.sprintProgress, data.budgetProgress)}
+      </section>
+
+      ${renderSprintBacklog(data.sprintProgress?.pendingStories)}
+
       <footer style="margin-top:24px;text-align:center;color:#6b7280;font-size:12px;">
-        <p>Need to tweak this summary or unsubscribe? <a href="https://app.bob/notifications" style="color:#2563eb;">Manage notifications</a>.</p>
         <p>Generated at ${escape(data.metadata.generatedAt || '')} (${escape(data.metadata.timezone || '')}).</p>
       </footer>
     </div>
@@ -743,6 +754,96 @@ const renderDataQualityEmail = ({ profile, snapshot }) => {
     </div>
   </body>
 </html>
+  `;
+};
+
+const renderBriefing = (data) => {
+  if (!data || (!data.lines && !data.weather)) {
+    return `<p style="color:#6b7280;">No briefing available today.</p>`;
+  }
+  const linesHtml = Array.isArray(data.lines) && data.lines.length
+    ? `<ul style="padding-left:18px;margin:0;">${data.lines.map((line) => `<li style="margin-bottom:4px;">${escape(line)}</li>`).join('')}</ul>`
+    : '';
+  const weatherHtml = data.weather
+    ? `<div style="margin-top:12px;padding:12px;border-radius:8px;background:#f3f4f6;">
+        <strong>Weather:</strong> ${escape(data.weather.summary || '')}
+        ${data.weather.temp ? `<div style="font-size:13px;color:#6b7280;">${escape(data.weather.temp)}</div>` : ''}
+      </div>`
+    : '';
+  const newsHtml = Array.isArray(data.news) && data.news.length
+    ? `<div style="margin-top:12px;">
+        <strong>News:</strong>
+        <ul style="padding-left:18px;margin:4px 0 0;">${data.news.map((item) => `<li>${escape(item)}</li>`).join('')}</ul>
+      </div>`
+    : '';
+  return `${linesHtml}${weatherHtml}${newsHtml}`;
+};
+
+const renderProgressSummary = (goalProgress, sprintProgress, budgetProgress) => {
+  if (!goalProgress && !sprintProgress && !budgetProgress) {
+    return `<p style="color:#6b7280;">No metrics available.</p>`;
+  }
+  const cards = [];
+  if (goalProgress) {
+    cards.push(`
+      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;">
+        <strong style="display:block;font-size:14px;color:#1f2937;">Goals</strong>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">${goalProgress.completed}/${goalProgress.total} complete</div>
+        ${goalProgress.percentComplete != null ? `<div style="height:6px;border-radius:999px;background:#eef2ff;overflow:hidden;"><div style="width:${goalProgress.percentComplete}%;background:#4f46e5;height:6px;"></div></div>` : ''}
+      </div>
+    `);
+  }
+  if (sprintProgress) {
+    cards.push(`
+      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;">
+        <strong style="display:block;font-size:14px;color:#1f2937;">Current Sprint</strong>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">${escape(sprintProgress.sprintName || 'Sprint')} · ${sprintProgress.completedStories}/${sprintProgress.totalStories} done</div>
+        ${sprintProgress.percentComplete != null ? `<div style="height:6px;border-radius:999px;background:#d1fae5;overflow:hidden;"><div style="width:${sprintProgress.percentComplete}%;background:#059669;height:6px;"></div></div>` : ''}
+      </div>
+    `);
+  }
+  if (budgetProgress && budgetProgress.length) {
+    const top = budgetProgress[0];
+    cards.push(`
+      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;">
+        <strong style="display:block;font-size:14px;color:#1f2937;">Budget (${escape(top.key || 'Spending')})</strong>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">${Number(top.actual || 0).toFixed(0)} spent of ${Number(top.budget || 0).toFixed(0)}</div>
+        ${top.utilisation != null ? `<div style="height:6px;border-radius:999px;background:#fef3c7;overflow:hidden;"><div style="width:${Math.min(top.utilisation, 100)}%;background:#f59e0b;height:6px;"></div></div>` : ''}
+      </div>
+    `);
+  }
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">${cards.join('')}</div>`;
+};
+
+const renderSprintBacklog = (pendingStories) => {
+  if (!pendingStories || !pendingStories.length) return '';
+  const rows = pendingStories
+    .map((story) => `
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(story.ref || '')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${story.deepLink ? `<a href="${escape(story.deepLink)}" style="color:#2563eb;">${escape(story.title || '')}</a>` : escape(story.title || '')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(story.goal || '—')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(story.status || '')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(story.dueDisplay || '—')}</td>
+      </tr>
+    `)
+    .join('');
+  return `
+    <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+      <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Stories awaiting kickoff</h2>
+      <table role="presentation" style="width:100%;border-collapse:collapse;font-size:14px;">
+        <thead>
+          <tr style="background:#f3f4f6;text-align:left;">
+            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Ref</th>
+            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Story</th>
+            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Goal</th>
+            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Status</th>
+            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Due</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>
   `;
 };
 

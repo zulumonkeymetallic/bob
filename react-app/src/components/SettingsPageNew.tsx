@@ -534,7 +534,7 @@ const SettingsPage: React.FC = () => {
                           }} />
                       </Col>
                       <Col md={4} className="mb-2">
-                        <Form.Label>Heuristic convert: points ></Form.Label>
+                        <Form.Label>Heuristic convert: points &gt;</Form.Label>
                         <Form.Control type="number" min={0} max={8} value={autoConversionThresholdPoints}
                           onChange={async (e) => {
                             const v = Math.max(0, Math.min(8, Number(e.target.value) || 2));

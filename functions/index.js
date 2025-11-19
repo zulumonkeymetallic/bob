@@ -28,6 +28,8 @@ const {
 } = require('./lib/reporting');
 const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
 const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('./services/mediaImportController');
+const { buildAbsoluteUrl } = require('./utils/urlHelpers');
+const { ensureTaskPoints, clampTaskPoints, deriveTaskPoints } = require('./utils/taskPoints');
 // Expose advanced LLM-powered daily digest from separate module
 try {
   const digestModule = require('./dailyDigestGenerator');
@@ -40,6 +42,7 @@ try {
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime } = require('./lib/time');
 const crypto = require('crypto');
+const { KeyManagementServiceClient } = require('@google-cloud/kms');
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
 const SPRINT_NONE = '__none__';
@@ -66,6 +69,7 @@ const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
 // Monzo integration secrets
 const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
 const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
+const MONZO_WEBHOOK_SECRET = defineSecret("MONZO_WEBHOOK_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
@@ -798,7 +802,7 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   let converted = [];
   if (autoApply) {
     const conversions = suggestions
-      .filter(s => s.taskId && s.storyTitle)
+      .filter(s => s.taskId && s.storyTitle && s.convert === true)
       .map(s => ({ taskId: s.taskId, storyTitle: s.storyTitle, storyDescription: s.storyDescription || '', points: s.points }));
     if (conversions.length && exports.convertTasksToStories?.run) {
       try {
@@ -1445,6 +1449,208 @@ function stateDecode(s) {
   try { return JSON.parse(Buffer.from(String(s || ""), "base64url").toString("utf8")); } catch { return {}; }
 }
 
+const MONZO_KMS_ENV_KEYS = ['MONZO_KMS_KEY', 'MONZO_TOKEN_KMS_KEY'];
+let monzoKmsClient = null;
+function getMonzoKmsClient() {
+  if (!monzoKmsClient) {
+    monzoKmsClient = new KeyManagementServiceClient();
+  }
+  return monzoKmsClient;
+}
+function getMonzoKmsKeyName() {
+  for (const keyName of MONZO_KMS_ENV_KEYS) {
+    const value = process.env[keyName];
+    if (value) return value.trim();
+  }
+  return null;
+}
+async function encryptMonzoSecret(plainText) {
+  if (!plainText) return null;
+  const keyName = getMonzoKmsKeyName();
+  if (!keyName) {
+    throw new Error('MONZO_KMS_KEY not configured. Set MONZO_KMS_KEY to the full KMS resource path.');
+  }
+  const client = getMonzoKmsClient();
+  const [result] = await client.encrypt({
+    name: keyName,
+    plaintext: Buffer.from(String(plainText), 'utf8'),
+  });
+  if (!result.ciphertext) {
+    throw new Error('Monzo token encryption failed (no ciphertext)');
+  }
+  return Buffer.from(result.ciphertext).toString('base64');
+}
+async function decryptMonzoSecret(cipherText) {
+  if (!cipherText) return null;
+  const keyName = getMonzoKmsKeyName();
+  if (!keyName) {
+    throw new Error('MONZO_KMS_KEY not configured. Set MONZO_KMS_KEY to the full KMS resource path.');
+  }
+  const client = getMonzoKmsClient();
+  const [result] = await client.decrypt({
+    name: keyName,
+    ciphertext: Buffer.from(String(cipherText), 'base64'),
+  });
+  return result.plaintext ? Buffer.from(result.plaintext).toString('utf8') : null;
+}
+async function resolveMonzoRefreshToken(tokenRef, data) {
+  if (!tokenRef) return null;
+  if (data?.encryptedRefreshToken) {
+    return decryptMonzoSecret(data.encryptedRefreshToken);
+  }
+  if (data?.refresh_token) {
+    const legacy = data.refresh_token;
+    try {
+      const encrypted = await encryptMonzoSecret(legacy);
+      await tokenRef.set({
+        encryptedRefreshToken: encrypted,
+        refresh_token: admin.firestore.FieldValue.delete(),
+        encryption: {
+          method: 'gcp-kms',
+          kmsKeyName: getMonzoKmsKeyName(),
+          migratedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      }, { merge: true });
+    } catch (error) {
+      console.warn('[monzo] failed to migrate refresh token to KMS', error?.message || error);
+    }
+    return legacy;
+  }
+  return null;
+}
+
+function constantTimeEqualsBuffer(a, b) {
+  if (!(a instanceof Buffer)) a = Buffer.from(a);
+  if (!(b instanceof Buffer)) b = Buffer.from(b);
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+function verifyMonzoSignature(headerValue, digestBuffer) {
+  if (!headerValue || !digestBuffer) return false;
+  const rawHeader = String(headerValue).trim();
+  if (!rawHeader) return false;
+  const stripped = rawHeader.startsWith('sha256=') ? rawHeader.slice(7) : rawHeader;
+  try {
+    const candidateHex = Buffer.from(stripped, 'hex');
+    if (candidateHex.length === digestBuffer.length && constantTimeEqualsBuffer(candidateHex, digestBuffer)) {
+      return true;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  try {
+    const candidateBase64 = Buffer.from(stripped, 'base64');
+    if (candidateBase64.length === digestBuffer.length && constantTimeEqualsBuffer(candidateBase64, digestBuffer)) {
+      return true;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return false;
+}
+
+const MONZO_OAUTH_SESSION_TTL_MS = 10 * 60 * 1000;
+function sanitizeOrigin(origin) {
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+function defaultMonzoOrigin() {
+  const explicit = sanitizeOrigin(process.env.MONZO_PUBLIC_BASE_URL || process.env.MONZO_HOSTING_ORIGIN);
+  if (explicit) return explicit;
+  const projectId = process.env.GCLOUD_PROJECT;
+  if (projectId) return `https://${projectId}.web.app`;
+  return null;
+}
+function resolveMonzoOriginFromRequest(req) {
+  if (!req) return defaultMonzoOrigin();
+  const forwardedHost = req.get('x-forwarded-host') || req.get('host');
+  if (forwardedHost) {
+    const proto = req.get('x-forwarded-proto') || 'https';
+    return `${proto}://${forwardedHost}`;
+  }
+  return defaultMonzoOrigin();
+}
+function buildMonzoRedirectUri(req) {
+  const origin = resolveMonzoOriginFromRequest(req);
+  if (!origin) throw new Error('Unable to resolve Monzo redirect origin');
+  return `${origin.replace(/\/$/, '')}/api/monzo/callback`;
+}
+function buildTimestampPatch(field) {
+  if (!field) return {};
+  return {
+    [field]: admin.firestore.FieldValue.serverTimestamp(),
+    [`${field}EpochMs`]: Date.now(),
+  };
+}
+
+async function updateMonzoIntegrationStatus(uid, patch = {}) {
+  if (!uid) return;
+  const db = admin.firestore();
+  const ref = db.collection('integration_status').doc(`monzo_${uid}`);
+  const payload = {
+    ownerUid: uid,
+    provider: 'monzo',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedEpochMs: Date.now(),
+    ...patch,
+  };
+  await ref.set(payload, { merge: true });
+}
+
+async function recordMonzoAutomationStatus({ uid, status, message, source }) {
+  if (!uid) return;
+  try {
+    const db = admin.firestore();
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'monzo_sync',
+      status,
+      message: source ? `[${source}] ${message || ''}`.trim() : message,
+      dayIso: DateTime.utc().toISODate(),
+    });
+  } catch (error) {
+    console.warn('[monzo] failed to record automation status', error?.message || error);
+  }
+}
+
+async function markMonzoAnalyticsRun(uid, analyticsSummary, context = {}) {
+  await updateMonzoIntegrationStatus(uid, {
+    ...buildTimestampPatch('lastAnalyticsAt'),
+    analyticsSummary: analyticsSummary || null,
+    lastAnalyticsContext: context || null,
+  });
+}
+
+async function runMonzoAnalytics(uid, context = {}) {
+  const analytics = await computeMonzoAnalytics(uid);
+  await markMonzoAnalyticsRun(uid, analytics?.summarySnapshot || null, context);
+  return analytics;
+}
+
+async function enqueueMonzoSyncJob(uid, payload = {}) {
+  if (!uid) return null;
+  const db = admin.firestore();
+  const jobRef = db.collection('monzo_sync_jobs').doc();
+  const base = {
+    ownerUid: uid,
+    state: 'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    attemptCount: 0,
+  };
+  await jobRef.set({ ...base, ...payload });
+  return jobRef.id;
+}
+
 // ===== OAuth: start
 function getGoogleRedirectUri() {
   try {
@@ -1923,6 +2129,35 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   }
 });
 
+exports.createMonzoOAuthSession = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const sessionId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const expiresAtMs = Date.now() + MONZO_OAUTH_SESSION_TTL_MS;
+  const sessionDoc = {
+    ownerUid: uid,
+    status: 'pending',
+    nonce,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt: admin.firestore.Timestamp.fromMillis(expiresAtMs),
+    expiresAtMs,
+  };
+  const requestedOrigin = sanitizeOrigin(req?.data?.origin);
+  if (requestedOrigin) sessionDoc.origin = requestedOrigin;
+  await db.collection('monzo_oauth_sessions').doc(sessionId).set(sessionDoc);
+  const hostingOrigin = requestedOrigin || defaultMonzoOrigin();
+  const startBase = hostingOrigin || defaultMonzoOrigin();
+  const startUrl = startBase ? `${startBase.replace(/\/$/, '')}/api/monzo/start?session=${sessionId}` : null;
+  return {
+    sessionId,
+    nonce,
+    startUrl,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
+});
+
 // (Removed older Monzo OAuth start/callback – consolidated below with hosting rewrite support)
 
 async function getMonzoAccessToken(uid) {
@@ -1936,7 +2171,7 @@ async function getMonzoAccessToken(uid) {
     return data.access_token;
   }
   // refresh
-  const refresh = data.refresh_token;
+  const refresh = await resolveMonzoRefreshToken(tokenRef, data);
   if (!refresh) throw new Error('Missing refresh_token');
   const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
     method: 'POST',
@@ -1952,7 +2187,16 @@ async function getMonzoAccessToken(uid) {
   const expiresIn = tokenData.expires_in;
   const newRefresh = tokenData.refresh_token || refresh;
   const expires_at = Math.floor(Date.now()/1000) + (Number(expiresIn)||0);
-  await tokenRef.set({ access_token: access, refresh_token: newRefresh, expires_at, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const encryptedRefreshToken = await encryptMonzoSecret(newRefresh);
+  await tokenRef.set({
+    access_token: access,
+    encryptedRefreshToken,
+    refresh_token: admin.firestore.FieldValue.delete(),
+    expires_at,
+    scope: tokenData.scope || data.scope || null,
+    token_type: tokenData.token_type || data.token_type || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
   return access;
 }
 
@@ -2101,26 +2345,34 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
 // ===== Monzo OAuth Start
 exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoker: 'public' }, async (req, res) => {
   try {
-    const uid = String(req.query.uid || "");
-    const nonce = String(req.query.nonce || "");
-    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+    const sessionId = String(req.query.session || "").trim();
+    if (!sessionId) return res.status(400).send("Missing session");
 
-    const projectId = process.env.GCLOUD_PROJECT;
-    const region = "europe-west2";
-    const forwardedHost = req.get('x-forwarded-host');
-    const forwardedProto = req.get('x-forwarded-proto') || 'https';
-    const isHostingRewrite = forwardedHost && !forwardedHost.includes(`${region}-${projectId}.cloudfunctions.net`);
-    const redirectUri = isHostingRewrite
-      ? `${forwardedProto}://${forwardedHost}/api/monzo/callback`
-      : `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+    const db = admin.firestore();
+    const sessionRef = db.collection('monzo_oauth_sessions').doc(sessionId);
+    const sessionSnap = await sessionRef.get();
+    if (!sessionSnap.exists) return res.status(404).send("Session expired");
+    const session = sessionSnap.data() || {};
+    if (!session.ownerUid || !session.nonce) return res.status(400).send("Invalid session");
+    if (session.status && session.status !== 'pending') return res.status(409).send("Session already used");
+    if (session.expiresAtMs && session.expiresAtMs < Date.now()) {
+      await sessionRef.set({ status: 'expired', expiredAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return res.status(410).send("Session expired");
+    }
 
     const clientId = process.env.MONZO_CLIENT_ID;
     if (!clientId) return res.status(500).send("Monzo client ID not configured");
 
-    const state = stateEncode({ uid, nonce });
+    const redirectUri = buildMonzoRedirectUri(req);
+    const state = stateEncode({ uid: session.ownerUid, sessionId, nonce: session.nonce });
     const scope = encodeURIComponent("openid profile accounts:read balance:read transactions:read pots:read");
     // Force a new consent screen to maximise chance of receiving a refresh_token
     const authUrl = `https://auth.monzo.com/?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}&prompt=consent`;
+    await sessionRef.set({
+      redirectUri,
+      redirectedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastStartHost: req.get('x-forwarded-host') || req.get('host') || null,
+    }, { merge: true });
     res.redirect(authUrl);
   } catch (e) {
     console.error('Monzo OAuth start error:', e);
@@ -2133,17 +2385,28 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
   try {
     const code = String(req.query.code || "");
     const state = stateDecode(req.query.state);
-    const uid = state.uid;
-    if (!code || !uid) return res.status(400).send("Missing code/uid");
+    const uid = String(state.uid || '');
+    const sessionId = String(state.sessionId || '');
+    const nonce = String(state.nonce || '');
+    if (!code || !uid || !sessionId || !nonce) return res.status(400).send("Missing code/session");
 
-    const projectId = process.env.GCLOUD_PROJECT;
-    const region = "europe-west2";
-    const forwardedHost = req.get('x-forwarded-host');
-    const forwardedProto = req.get('x-forwarded-proto') || 'https';
-    const isHostingRewrite = forwardedHost && !forwardedHost.includes(`${region}-${projectId}.cloudfunctions.net`);
-    const redirectUri = isHostingRewrite
-      ? `${forwardedProto}://${forwardedHost}/api/monzo/callback`
-      : `https://${region}-${projectId}.cloudfunctions.net/monzoOAuthCallback`;
+    const db = admin.firestore();
+    const sessionRef = db.collection('monzo_oauth_sessions').doc(sessionId);
+    const sessionSnap = await sessionRef.get();
+    if (!sessionSnap.exists) return res.status(400).send("Session not found");
+    const session = sessionSnap.data() || {};
+    if ((session.status && session.status !== 'pending') || session.ownerUid !== uid) return res.status(409).send("Session invalid");
+    if (session.nonce !== nonce) {
+      await sessionRef.set({ status: 'error', error: 'nonce_mismatch', completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return res.status(400).send("Nonce mismatch");
+    }
+    if (session.expiresAtMs && session.expiresAtMs < Date.now()) {
+      await sessionRef.set({ status: 'expired', expiredAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return res.status(410).send("Session expired");
+    }
+    await sessionRef.set({ status: 'exchanging', exchangeStartedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+
+    const redirectUri = session.redirectUri || buildMonzoRedirectUri(req);
 
     const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
       method: "POST",
@@ -2167,12 +2430,14 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
       return res.status(400).send("Monzo tokens missing from response");
     }
 
-    const db = admin.firestore();
-    await db.collection('tokens').doc(`${uid}_monzo`).set({
+    const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+    const encryptedRefreshToken = await encryptMonzoSecret(refresh);
+    await tokenRef.set({
       provider: 'monzo',
       ownerUid: uid,
       monzoUserId,
-      refresh_token: refresh,
+      encryptedRefreshToken,
+      refresh_token: admin.firestore.FieldValue.delete(),
       access_token: access,
       expires_at: expiresAt,
       scope: tokenData.scope || null,
@@ -2186,15 +2451,35 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
       monzoLastSyncAt: null,
     }, { merge: true });
 
-    await db.collection('monzo_sync_jobs').add({
-      ownerUid: uid,
-      type: 'initial-sync',
-      state: 'pending',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    await updateMonzoIntegrationStatus(uid, {
+      connected: true,
+      monzoUserId,
+      ...buildTimestampPatch('lastConnectedAt'),
+      lastSyncError: admin.firestore.FieldValue.delete(),
+      lastErrorMessage: admin.firestore.FieldValue.delete(),
     });
+
+    await enqueueMonzoSyncJob(uid, {
+      type: 'initial-sync',
+      source: 'oauth',
+      sessionId,
+    });
+
+    await sessionRef.set({ status: 'completed', completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
     res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
   } catch (e) {
+    try {
+      const state = stateDecode(req.query.state);
+      const sessionId = state?.sessionId;
+      if (sessionId) {
+        await admin.firestore().collection('monzo_oauth_sessions').doc(sessionId).set({
+          status: 'error',
+          error: e?.message || String(e),
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+    } catch { /* noop */ }
     console.error('Monzo OAuth callback error:', e);
     res.status(500).send("Monzo OAuth callback error: " + e.message);
   }
@@ -2218,7 +2503,7 @@ async function ensureMonzoAccessToken(uid) {
     return { accessToken, tokenRef, tokenData: data };
   }
 
-  const refreshToken = data.refresh_token;
+  const refreshToken = await resolveMonzoRefreshToken(tokenRef, data);
   if (!refreshToken) {
     throw new httpsV2.HttpsError('failed-precondition', 'Missing Monzo refresh token');
   }
@@ -2241,17 +2526,23 @@ async function ensureMonzoAccessToken(uid) {
   const newRefresh = refreshed.refresh_token || refreshToken;
   const expiresIn = Number(refreshed.expires_in || 0);
   expiresAt = expiresIn ? nowSeconds + expiresIn : null;
+  const encryptedRefreshToken = await encryptMonzoSecret(newRefresh);
 
   await tokenRef.set({
     access_token: accessToken,
-    refresh_token: newRefresh,
+    encryptedRefreshToken,
+    refresh_token: admin.firestore.FieldValue.delete(),
     expires_at: expiresAt,
     scope: refreshed.scope || data.scope || null,
     token_type: refreshed.token_type || data.token_type || null,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  return { accessToken, tokenRef, tokenData: { ...data, access_token: accessToken, refresh_token: newRefresh, expires_at: expiresAt } };
+  return {
+    accessToken,
+    tokenRef,
+    tokenData: { ...data, access_token: accessToken, encryptedRefreshToken, refresh_token: undefined, expires_at: expiresAt },
+  };
 }
 
 async function monzoApi(accessToken, path, query = {}) {
@@ -2296,10 +2587,35 @@ exports.monzoRegisterWebhook = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO
 });
 
 // Webhook receiver (hosting rewrite supported)
-exports.monzoWebhook = httpsV2.onRequest(async (req, res) => {
+exports.monzoWebhook = httpsV2.onRequest({ secrets: [MONZO_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
   try {
     if (req.method !== 'POST') return res.status(405).send('Method not allowed');
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+    const secret = MONZO_WEBHOOK_SECRET.value?.() || process.env.MONZO_WEBHOOK_SECRET || '';
+    const rawBodyBuffer = req.rawBody instanceof Buffer
+      ? req.rawBody
+      : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
+    if (secret) {
+      const signatureHeader = req.get('x-monzo-signature') || req.get('X-Monzo-Signature') || '';
+      const digest = crypto.createHmac('sha256', secret).update(rawBodyBuffer).digest();
+      if (!verifyMonzoSignature(signatureHeader, digest)) {
+        try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'signature mismatch' }); } catch {}
+        return res.status(401).send('invalid signature');
+      }
+    }
+
+    let body = null;
+    if (typeof req.body === 'object' && req.body !== null) {
+      body = req.body;
+    } else {
+      const rawText = rawBodyBuffer ? rawBodyBuffer.toString('utf8') : '';
+      try {
+        body = rawText ? JSON.parse(rawText) : {};
+      } catch (parseError) {
+        try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'invalid_payload', error: parseError?.message || String(parseError) }); } catch {}
+        return res.status(400).send('invalid payload');
+      }
+    }
+
     const accountId = String(body?.data?.account_id || body?.account_id || '').trim();
     if (!accountId) return res.status(400).send('Missing account_id');
     const db = admin.firestore();
@@ -2308,8 +2624,34 @@ exports.monzoWebhook = httpsV2.onRequest(async (req, res) => {
     const docRef = snap.docs[0];
     const uid = (docRef.data() || {}).ownerUid;
     if (!uid) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'ownerUid missing', accountId }); return res.json({ ok: true }); }
-    // Trigger incremental sync without since to fetch latest
-    try { await syncMonzoDataForUser(uid); } catch (e) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), error: String(e?.message||e) }); }
+
+    const eventType = body?.type || body?.data?.type || 'transaction.created';
+    const payload = {
+      accountId,
+      eventType,
+      eventId: body?.id || body?.data?.id || null,
+      created: body?.created || body?.data?.created || null,
+      amount: body?.data?.amount || null,
+      raw: body,
+    };
+
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastWebhookAt'),
+      lastWebhookEvent: {
+        eventType,
+        eventId: payload.eventId,
+        created: payload.created || null,
+      },
+    });
+
+    await enqueueMonzoSyncJob(uid, {
+      type: 'webhook',
+      source: 'webhook',
+      webhookPayload: payload,
+      webhookReceivedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), event: eventType, accountId, uid });
     return res.json({ ok: true });
   } catch (e) {
     try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), error: String(e?.message||e) }); } catch {}
@@ -2322,11 +2664,53 @@ exports.revokeMonzoAccess = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CL
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const db = admin.firestore();
+  const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+  let refreshToken = null;
   try {
-    await db.collection('tokens').doc(`${uid}_monzo`).delete();
-  } catch {}
+    const tokenSnap = await tokenRef.get();
+    if (tokenSnap.exists) {
+      const data = tokenSnap.data() || {};
+      refreshToken = await resolveMonzoRefreshToken(tokenRef, data);
+    }
+  } catch (error) {
+    console.warn('[monzo] failed to load token for revoke', error?.message || error);
+  }
+
+  if (refreshToken) {
+    try {
+      await fetch('https://api.monzo.com/oauth2/token/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          token: refreshToken,
+          client_id: process.env.MONZO_CLIENT_ID,
+          client_secret: process.env.MONZO_CLIENT_SECRET,
+        }).toString(),
+      });
+      await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoked_upstream', uid });
+    } catch (error) {
+      console.warn('[monzo] token revoke failed', error?.message || error);
+      await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoke_failed', uid, error: error?.message || String(error) });
+    }
+  }
+
+  try {
+    await tokenRef.delete();
+  } catch (error) {
+    console.warn('[monzo] failed to delete local token', error?.message || error);
+  }
+
   await db.collection('profiles').doc(uid).set({ monzoConnected: false, monzoUserId: null }, { merge: true });
+  await updateMonzoIntegrationStatus(uid, {
+    connected: false,
+    monzoUserId: null,
+    lastSyncAt: admin.firestore.FieldValue.delete(),
+    lastSyncEpochMs: admin.firestore.FieldValue.delete(),
+    lastErrorMessage: admin.firestore.FieldValue.delete(),
+    lastSyncStatus: 'disconnected',
+  });
   await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoked', uid });
+  await recordMonzoAutomationStatus({ uid, status: 'success', source: 'manual_revoke', message: 'Access revoked' });
   return { ok: true };
 });
 
@@ -2368,9 +2752,87 @@ exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () 
     const data = t.data() || {};
     const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
     if (!uid) continue;
-    try { await syncMonzoDataForUser(uid); } catch (e) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) }); }
+    try {
+      const summary = await syncMonzoDataForUser(uid);
+      await updateMonzoIntegrationStatus(uid, {
+        ...buildTimestampPatch('lastSyncAt'),
+        lastSyncStatus: 'success',
+        lastSyncSource: 'backstop',
+        lastSyncSummary: summary || null,
+        lastErrorMessage: admin.firestore.FieldValue.delete(),
+        lastErrorAt: admin.firestore.FieldValue.delete(),
+      });
+      await recordMonzoAutomationStatus({ uid, status: 'success', source: 'backstop', message: 'Backstop sync completed' });
+    } catch (e) {
+      await updateMonzoIntegrationStatus(uid, {
+        lastSyncStatus: 'error',
+        lastErrorMessage: e?.message || String(e),
+        ...buildTimestampPatch('lastErrorAt'),
+      });
+      await recordMonzoAutomationStatus({ uid, status: 'error', source: 'backstop', message: e?.message || 'Backstop sync failed' });
+      await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) });
+    }
   }
   return { ok: true, users: tokens.size };
+});
+
+exports.processMonzoSyncJob = firestoreV2.onDocumentCreated('monzo_sync_jobs/{jobId}', { secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (event) => {
+  const jobRef = event?.data?.ref;
+  const initialData = event?.data?.data() || {};
+  const uid = initialData.ownerUid;
+  if (!jobRef || !uid) return;
+
+  const snap = await jobRef.get();
+  const job = snap.exists ? (snap.data() || {}) : initialData;
+  if (!job || job.state !== 'pending') return;
+
+  await jobRef.set({
+    state: 'in-progress',
+    startedAt: admin.firestore.FieldValue.serverTimestamp(),
+    attemptCount: Number(job.attemptCount || 0) + 1,
+  }, { merge: true });
+
+  const source = job.source || job.type || 'job';
+  const since = job.since || job.sinceIso || null;
+  try {
+    const summary = await syncMonzoDataForUser(uid, { since });
+    await jobRef.set({
+      state: 'completed',
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastResult: summary || null,
+    }, { merge: true });
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastSyncAt'),
+      lastSyncStatus: 'success',
+      lastSyncSource: source,
+      lastSyncJobId: jobRef.id,
+      lastSyncSummary: summary || null,
+      lastErrorMessage: admin.firestore.FieldValue.delete(),
+      lastErrorAt: admin.firestore.FieldValue.delete(),
+    });
+    await recordMonzoAutomationStatus({ uid, status: 'success', source, message: `Job ${jobRef.id} completed` });
+  } catch (error) {
+    await jobRef.set({
+      state: 'failed',
+      failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      error: error?.message || String(error),
+    }, { merge: true });
+    await updateMonzoIntegrationStatus(uid, {
+      lastSyncStatus: 'error',
+      lastErrorMessage: error?.message || String(error),
+      ...buildTimestampPatch('lastErrorAt'),
+    });
+    await recordMonzoAutomationStatus({ uid, status: 'error', source, message: error?.message || 'Job failed' });
+    await admin.firestore().collection('webhook_logs').add({
+      source: 'monzo',
+      direction: 'internal',
+      ts: Date.now(),
+      event: 'job_failed',
+      uid,
+      jobId: jobRef.id,
+      error: error?.message || String(error),
+    });
+  }
 });
 
 exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
@@ -2414,6 +2876,15 @@ exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SEC
       since: sinceIso,
       jobId,
     });
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastSyncAt'),
+      lastSyncStatus: 'success',
+      lastSyncSource: jobId ? 'job' : 'manual',
+      lastSyncSummary: summary || null,
+      lastErrorMessage: admin.firestore.FieldValue.delete(),
+      lastErrorAt: admin.firestore.FieldValue.delete(),
+    });
+    await recordMonzoAutomationStatus({ uid, status: 'success', source: jobId ? 'job' : 'manual', message: 'Sync completed' });
     if (jobRef) {
       await jobRef.set({
         state: 'completed',
@@ -2427,6 +2898,12 @@ exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SEC
       since: sinceIso,
       jobId,
     });
+    await updateMonzoIntegrationStatus(uid, {
+      lastSyncStatus: 'error',
+      lastErrorMessage: error?.message || String(error),
+      ...buildTimestampPatch('lastErrorAt'),
+    });
+    await recordMonzoAutomationStatus({ uid, status: 'error', source: jobId ? 'job' : 'manual', message: error?.message || 'Sync failed' });
     if (jobRef) {
       await jobRef.set({
         state: 'failed',
@@ -2463,7 +2940,7 @@ exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  await computeMonzoAnalytics(uid);
+  await runMonzoAnalytics(uid, { reason: 'update_transaction_category' });
 
   return { ok: true };
 });
@@ -2471,7 +2948,7 @@ exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT
 exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
-  const analytics = await computeMonzoAnalytics(uid);
+  const analytics = await runMonzoAnalytics(uid, { reason: 'manual_recompute' });
   return { ok: true, analytics };
 });
 
@@ -2530,7 +3007,7 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
   let updated = 0;
   if (applyToExisting) {
     updated = await applyMappingToExisting(uid, merchantKey, categoryType, label);
-    try { await computeMonzoAnalytics(uid); } catch {}
+    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch {}
   }
 
   return { ok: true, merchantKey, updated };
@@ -2575,7 +3052,7 @@ exports.bulkUpsertMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID,
       if (!m.merchantKey || !m.categoryType) continue;
       updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
     }
-    try { await computeMonzoAnalytics(uid); } catch {}
+    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch {}
   }
   try { await recordIntegrationLog(uid, 'monzo', 'success', 'Bulk upsert merchant mappings', { upserts, applied: apply }); } catch {}
   return { ok: true, upserts, updated };
@@ -2601,7 +3078,7 @@ exports.applyMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZ
       updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
     }
   }
-  try { await computeMonzoAnalytics(uid); } catch {}
+  try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch {}
   try { await recordIntegrationLog(uid, 'monzo', 'success', 'Applied merchant mappings', { updated }); } catch {}
   return { ok: true, updated };
 });
@@ -2635,7 +3112,7 @@ exports.backfillMerchantKeys = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO
 exports.generateMonzoAuditReport = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
-  const analytics = await computeMonzoAnalytics(uid);
+  const analytics = await runMonzoAnalytics(uid, { reason: 'audit_report' });
   const summary = analytics.summarySnapshot || {};
   const alignment = analytics.alignmentDoc || {};
 
@@ -2695,7 +3172,7 @@ exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async 
       const data = t.data() || {};
       const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
       if (!uid) continue;
-      await computeMonzoAnalytics(uid);
+      await runMonzoAnalytics(uid, { reason: 'nightly' });
       ok++;
     } catch (e) {
       fail++;
@@ -2703,6 +3180,66 @@ exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async 
     }
   }
   return { ok, fail, scanned: tokens.size };
+});
+
+exports.monzoIntegrationMonitor = schedulerV2.onSchedule('every 60 minutes', async () => {
+  const db = admin.firestore();
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const snap = await db.collection('integration_status')
+    .where('provider', '==', 'monzo')
+    .where('connected', '==', true)
+    .where('lastAnalyticsEpochMs', '<', cutoff)
+    .limit(25)
+    .get();
+
+  for (const doc of snap.docs) {
+    const data = doc.data() || {};
+    const uid = data.ownerUid || doc.id.replace(/^monzo_/, '');
+    if (!uid) continue;
+    const lastAlertEpochMs = Number(data.lastAlertEpochMs || 0);
+    if (lastAlertEpochMs && lastAlertEpochMs > cutoff) continue;
+
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    const email = profile.email || null;
+    const description = 'Monzo analytics have not refreshed in the past 24 hours. Please trigger a manual sync or reconnect.';
+
+    try {
+      const activityRef = db.collection('activity_stream').doc();
+      await activityRef.set({
+        id: activityRef.id,
+        entityId: `monzo_${uid}`,
+        entityType: 'integration',
+        activityType: 'monzo_sync_alert',
+        actor: 'System',
+        userId: uid,
+        ownerUid: uid,
+        description,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      console.warn('[monzo-monitor] failed to log activity', error?.message || error);
+    }
+
+    if (email) {
+      const subject = 'BOB · Monzo sync requires attention';
+      const html = `
+        <p>Hi ${profile.displayName || ''},</p>
+        <p>Your Monzo analytics haven't refreshed in over 24 hours. Please open BOB → Finance settings and run a manual sync or reconnect Monzo to restore daily budgeting insights.</p>
+        <p>– BOB Automations</p>
+      `;
+      try { await sendEmail({ to: email, subject, html }); } catch (error) { console.warn('[monzo-monitor] email failed', error?.message || error); }
+    }
+
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastAlertAt'),
+      lastAlertMessage: 'Monzo analytics stale >24h',
+      lastAlertEpochMs: Date.now(),
+    });
+  }
+
+  return { stale: snap.size };
 });
 
 async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since }) {
@@ -2933,7 +3470,7 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
   }, { merge: true });
 
   try {
-    const analytics = await computeMonzoAnalytics(uid);
+    const analytics = await runMonzoAnalytics(uid, { reason: 'sync' });
     summary.analytics = analytics.summarySnapshot || null;
   } catch (error) {
     console.error(`Failed to compute Monzo analytics for user ${uid}`, error);
@@ -3544,7 +4081,7 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
   const createdTasks = [];
   for (const a of nextActions.slice(0, 12)) {
     const tRef = db.collection('tasks').doc();
-    await tRef.set({
+    await tRef.set(ensureTaskPoints({
       id: tRef.id,
       ownerUid: uid,
       persona: 'personal',
@@ -3561,7 +4098,7 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
       goalId,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    }, { merge: true });
+    }), { merge: true });
     createdTasks.push(tRef.id);
   }
 
@@ -3686,7 +4223,7 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
     const tref = db.collection('tasks').doc();
     const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x)=>String(x)).slice(0, 12) : [];
     const desc = 'AI-generated from story orchestration' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
-    await tref.set({
+    await tref.set(ensureTaskPoints({
       id: tref.id,
       ownerUid: uid,
       persona: story.persona || 'personal',
@@ -3704,7 +4241,7 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
       acceptanceCriteria: ac,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    }, { merge: true });
+    }), { merge: true });
     createdTasks.push(tref.id);
   }
 
@@ -3828,7 +4365,7 @@ exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
     const tref = db.collection('tasks').doc();
     const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x) => String(x)).slice(0, 12) : [];
     const desc = 'Derived from research' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
-    await tref.set({
+    await tref.set(ensureTaskPoints({
       id: tref.id,
       ownerUid: uid,
       persona,
@@ -3844,7 +4381,7 @@ exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
       acceptanceCriteria: ac,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    }, { merge: true });
+    }), { merge: true });
     created += 1;
   }
 
@@ -3903,7 +4440,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   for (const t of tasks.slice(0, 5)) {
     const taskRef = db.collection('tasks').doc();
     const est = Number(t?.estimateMin || 30);
-    await taskRef.set({
+    await taskRef.set(ensureTaskPoints({
       id: taskRef.id,
       ownerUid: uid,
       persona: 'personal',
@@ -3924,7 +4461,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
         reminderTitle: `[${goalSnap.data().theme || 'Growth'}] – ${String(t?.title || 'Follow-up')}`,
         reminderNote: `Goal: ${goalSnap.data().title || goalId}`
       } : {}),
-    }, { merge: true });
+    }), { merge: true });
     created.push(taskRef.id);
   }
   try { await maybeSummarizeThread(threadRef, uid); } catch {}
@@ -4017,6 +4554,9 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     let taskId = proposed.taskId || null;
     let habitId = proposed.habitId || null;
     let linkUrl = null;
+    let storyRef = null;
+    let storyDescription = '';
+    let taskDescription = '';
 
     // Preferred order: task → story → habit
     if (taskId) {
@@ -4033,6 +4573,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
             goalId = td.goalId || null;
           }
           linkUrl = `/tasks?taskId=${t.id}`;
+          taskDescription = td.description || '';
         }
       } catch {}
     }
@@ -4047,6 +4588,8 @@ async function applyCalendarBlocks(uid, persona, blocks) {
           title = `${ref ? ref + ' · ' : ''}${sTitle}`;
           if (!goalId && sd.goalId) goalId = sd.goalId;
           linkUrl = `/stories?storyId=${s.id}`;
+          storyRef = ref || null;
+          storyDescription = sd.description || '';
         }
       } catch {}
     }
@@ -4083,7 +4626,27 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       linkUrl = `/goals/roadmap?goalId=${goalId}`;
     }
 
-    return { title, theme, goalId, storyId, taskId, habitId, linkUrl };
+    return { title, theme, goalId, storyId, taskId, habitId, linkUrl, storyRef, storyDescription, taskDescription };
+  }
+
+  async function buildCalendarNarrative(ownerUid, enriched, proposed) {
+    const descriptionSource = enriched.taskDescription || enriched.storyDescription || proposed.description || '';
+    if (!descriptionSource || descriptionSource.length < 12) return null;
+    try {
+      const summary = await callLLMJson({
+        system: 'You help summarise calendar focus blocks. Reply with <=2 sentences describing the concrete outcome and next steps for the provided work item. Plain text only.',
+        user: `Title: ${enriched.title || proposed.title || 'Focus Block'}\nDetails: ${descriptionSource}`,
+        purpose: 'calendarBlockSummary',
+        userId: ownerUid,
+        expectJson: false,
+        temperature: 0.2,
+      });
+      const text = String(summary || '').trim();
+      return text ? text.slice(0, 400) : descriptionSource.slice(0, 280);
+    } catch (error) {
+      console.warn('[calendar-ai] narrative generation failed', error?.message || error);
+      return descriptionSource.slice(0, 280);
+    }
   }
 
   // We will also log to activity_stream once
@@ -4093,6 +4656,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
   let createdCount = 0;
   for (const proposed of blocks) {
     const enriched = await enrichBlock(proposed);
+    const narrative = await buildCalendarNarrative(uid, enriched, proposed);
     const blockRef = db.collection('calendar_blocks').doc();
     const theme_id = mapThemeLabelToId(enriched.theme, userThemes);
     const startMs = Number(proposed.start || 0);
@@ -4111,6 +4675,8 @@ async function applyCalendarBlocks(uid, persona, blocks) {
       createdBy: 'ai',
       version: 1,
       title: enriched.title || proposed.title || `${proposed.category || 'Block'} (${enriched.theme})`,
+      linkUrl: enriched.linkUrl || null,
+      note: narrative || proposed.note || null,
       theme: enriched.theme,
       theme_id,
       dedupeKey,
@@ -4163,6 +4729,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
         linkUrl: linkUrl,
         entry_method: 'calendar_ai',
         theme_id,
+        note: narrative || null,
         createdAt: now,
         updatedAt: now
       });
@@ -4178,7 +4745,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
         theme_id,
         reminderSyncDirective: 'upsert',
         reminderTitle: `[${enriched.theme}] – ${linkTitle || enriched.taskId}`,
-        reminderNote: `Deep link: ${linkUrl || ''}`.trim(),
+        reminderNote: [narrative, `Deep link: ${linkUrl || ''}`.trim()].filter(Boolean).join('\n'),
         updatedAt: now,
       }, { merge: true });
     }
@@ -4525,7 +5092,51 @@ exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
   }
 });
 
-async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = false, logActivity = true, activityActor = 'AI_Agent', runId = null }) {
+// Helpers for conservative title-based dedupe
+function normalizeTitle(s) {
+  if (!s) return '';
+  let str = String(s).toLowerCase();
+  str = str.replace(/https?:\/\/\S+/g, ' ');
+  str = str.replace(/www\.[^\s]+/g, ' ');
+  str = str.replace(/[\[\]{}()"'`“”‘’.,!?;:<>_~*^#%\\/\\|+-=]/g, ' ');
+  str = str.replace(/\s+/g, ' ').trim();
+  return str;
+}
+// Hardened title normalizer: Unicode NFKD, strip diacritics, remove zero-width/formatting chars
+function normalizeTitleHardened(s) {
+  if (!s) return '';
+  let str = String(s);
+  try { str = str.normalize('NFKD'); } catch {}
+  str = str.replace(/[\u0300-\u036f]/g, '');
+  str = str.replace(/[\u200B-\u200D\uFEFF\u00AD\u061C\u2060-\u206F\uFE0E\uFE0F]/g, '');
+  str = str.toLowerCase();
+  str = str.replace(/https?:\/\/\S+/g, ' ');
+  str = str.replace(/www\.[^\s]+/g, ' ');
+  str = str.replace(/[\[\]{}()\"'`“”‘’.,!?;:<>_~*^#%\\/\\|+\-=]/g, ' ');
+  return str.replace(/\s+/g, ' ').trim();
+}
+
+function textHasUrl(s) {
+  if (!s) return false;
+  const str = String(s);
+  return /https?:\/\/\S+/.test(str) || /www\.[^\s]+/.test(str);
+}
+function resolveListKey(task) {
+  const id = task.reminderListId || task.listId || null;
+  const name = task.reminderListName || task.listName || null;
+  if (id) return `id:${String(id).toLowerCase()}`;
+  if (name) return `name:${String(name).toLowerCase()}`;
+  return 'none';
+}
+function dueMs(task) { return toMillis(task.dueDate || task.dueDateMs || task.targetDate); }
+const DUE_CLOSE_MS = 36 * 60 * 60 * 1000; // 36h
+function isDone(task) {
+  const status = String(task.status ?? '').toLowerCase();
+  const done = status === 'done' || status === 'complete' || Number(task.status) === 2;
+  return done || task.deleted === true;
+}
+
+async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = false, logActivity = true, activityActor = 'AI_Agent', runId = null, includeTitleDedupe = true }) {
   const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
   const taskDocs = tasksSnap.docs.map(doc => ({ id: doc.id, ref: doc.ref, data: doc.data() || {} }));
   if (!taskDocs.length) {
@@ -4577,9 +5188,9 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
   }
 
   const groups = Array.from(signatureMap.values());
-  if (!groups.length) {
-    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, dryRun, groups: [] };
-  }
+  // Track strong-key claimed IDs so title-based pass can skip them
+  const strongClaimedIds = new Set();
+  for (const g of groups) { if (Array.isArray(g.ids)) g.ids.forEach(id => strongClaimedIds.add(id)); }
 
   const canonicalNotes = new Map();
   const duplicateUpdates = [];
@@ -4642,12 +5253,90 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
     Array.from(group.keys).forEach(k => note.keys.add(k));
   }
 
+  // Secondary pass: title-based grouping for tasks not in strong groups (global uniqueness by title)
+  const titleSummary = [];
+  const titleCanonicalNotes = new Map();
+  if (includeTitleDedupe) {
+    const titleBuckets = new Map();
+    for (const doc of taskDocs) {
+      const t = { id: doc.id, ...(doc.data || {}) };
+      if (strongClaimedIds.has(t.id)) continue;
+      const norm = normalizeTitleHardened(t.title || t.name || t.task || '');
+      if (!norm) continue;
+      if (textHasUrl(t.title || t.name || t.task || '')) continue;
+      // Global uniqueness: key by normalized title only
+      const bucketKey = norm;
+      if (!titleBuckets.has(bucketKey)) titleBuckets.set(bucketKey, []);
+      titleBuckets.get(bucketKey).push(t);
+    }
+    for (const [bucketKey, items] of titleBuckets.entries()) {
+      if (!Array.isArray(items) || items.length < 2) continue;
+      const tasks = items;
+      const canonical = tasks.slice().sort((a, b) => {
+          const deletedDiff = (a.deleted ? 1 : 0) - (b.deleted ? 1 : 0);
+          if (deletedDiff !== 0) return deletedDiff;
+          const statusA = String(a.status ?? '').toLowerCase();
+          const statusB = String(b.status ?? '').toLowerCase();
+          const doneA = statusA === 'done' || statusA === 'complete' || Number(a.status) === 2;
+          const doneB = statusB === 'done' || statusB === 'complete' || Number(b.status) === 2;
+          if (doneA !== doneB) return doneA - doneB;
+          const createdA = toMillis(a.reminderCreatedAt) ?? toMillis(a.createdAt) ?? toMillis(a.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+          const createdB = toMillis(b.reminderCreatedAt) ?? toMillis(b.createdAt) ?? toMillis(b.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+          if (createdA !== createdB) return createdA - createdB;
+          return String(a.id).localeCompare(String(b.id));
+        })[0];
+      const duplicates = tasks.filter(t => t.id !== canonical.id);
+      if (!duplicates.length) continue;
+      const normTitle = bucketKey;
+      const dupKeyStable = `title:${normTitle}`;
+      titleSummary.push({ kept: canonical.id, removed: duplicates.map(d => d.id), keys: [dupKeyStable], reason: 'duplicateTitleGlobal' });
+      const canonicalRefValue = canonical.ref || canonical.reference || canonical.displayId || canonical.id;
+      duplicates.forEach(dup => {
+        duplicateUpdates.push({
+          id: dup.id,
+          data: {
+            duplicateOf: canonical.id,
+            duplicateKey: dupKeyStable,
+            duplicateReason: 'duplicateTitleGlobal',
+            duplicateResolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+            reminderSyncDirective: 'complete',
+            syncState: 'dirty',
+            status: 2,
+            deleted: true,
+            serverUpdatedAt: Date.now()
+          }
+        });
+        duplicateReminderMappings.push({
+          duplicateId: dup.id,
+          canonicalId: canonical.id,
+          canonicalRef: canonicalRefValue,
+          canonicalTitle: canonical.title || canonicalRefValue,
+        });
+      });
+      if (!titleCanonicalNotes.has(canonical.id)) titleCanonicalNotes.set(canonical.id, { children: new Set(), keys: new Set() });
+      const note = titleCanonicalNotes.get(canonical.id);
+      duplicates.forEach(dup => note.children.add(dup.id));
+      note.keys.add(dupKeyStable);
+    }
+  }
+
+  // Merge title notes into canonical notes
+  for (const [cid, info] of titleCanonicalNotes.entries()) {
+    if (!canonicalNotes.has(cid)) canonicalNotes.set(cid, { children: new Set(), keys: new Set() });
+    const dest = canonicalNotes.get(cid);
+    info.children.forEach(v => dest.children.add(v));
+    info.keys.forEach(v => dest.keys.add(v));
+  }
+
+  const allSummaries = summary.concat(titleSummary);
+
   if (dryRun) {
-    return { ok: true, dryRun: true, processed: taskDocs.length, duplicatesResolved: duplicateUpdates.length, groups: summary };
+    const reasonCounts = allSummaries.reduce((acc, g) => { const r = g.reason || 'strongKey'; acc[r] = (acc[r] || 0) + 1; return acc; }, {});
+    return { ok: true, dryRun: true, processed: taskDocs.length, duplicatesResolved: duplicateUpdates.length, groups: allSummaries, reasonCounts };
   }
 
   if (!duplicateUpdates.length) {
-    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, groups: summary, hardDelete };
+    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, groups: allSummaries, hardDelete };
   }
 
   const bulk = db.bulkWriter();
@@ -4706,16 +5395,16 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
 
   if (logActivity) {
     const activityRef = db.collection('activity_stream').doc();
+    const reasonCounts = allSummaries.reduce((acc, g) => { const r = g.reason || 'strongKey'; acc[r] = (acc[r] || 0) + 1; return acc; }, {});
     await activityRef.set({
       id: activityRef.id,
       entityId: `tasks_${userId}`,
       entityType: 'task',
       activityType: 'deduplicate_tasks',
       userId,
-      ownerUid: userId,
       actor: activityActor,
-      description: `Resolved ${duplicateUpdates.length} duplicate tasks across ${summary.length} groups`,
-      metadata: { groups: summary, hardDelete, runId },
+      description: `Resolved ${duplicateUpdates.length} duplicate tasks across ${allSummaries.length} groups`,
+      metadata: { groups: allSummaries, hardDelete, runId, reasonCounts },
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -4725,7 +5414,8 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
     ok: true,
     processed: taskDocs.length,
     duplicatesResolved: duplicateUpdates.length,
-    groups: summary,
+    groups: allSummaries,
+    reasonCounts: allSummaries.reduce((acc, g) => { const r = g.reason || 'strongKey'; acc[r] = (acc[r] || 0) + 1; return acc; }, {}),
     hardDelete,
     dryRun,
   };
@@ -4997,12 +5687,154 @@ async function detectDuplicateRemindersForUser({ db, userId }) {
   return { groupsCreated: created, reminderTasks: reminderTasks.length };
 }
 
+async function requestWorkEstimateFromLLM({ userId, entityType, title, description }) {
+  const cleanTitle = String(title || 'Work Item').slice(0, 200);
+  const cleanDescription = String(description || '').slice(0, 800);
+  const systemPrompt = [
+    'You are an expert agile estimator. Provide realistic sizing for the supplied item.',
+    'Express effort where 1 point equals roughly one hour of focused work.',
+    'Return ONLY JSON with shape {"hours": number, "points": number, "rationale": string}.',
+    'Do not include markdown or prose outside the JSON.',
+  ].join('\n');
+  const userPrompt = [
+    `Type: ${entityType}`,
+    `Title: ${cleanTitle}`,
+    cleanDescription ? `Description: ${cleanDescription}` : null,
+    'Estimate the focused hours required. Use decimals if needed.',
+    'Cap points at 8 even if hours exceed that; still include real hours.'
+  ].filter(Boolean).join('\n');
+
+  const raw = await callLLMJson({
+    system: systemPrompt,
+    user: userPrompt,
+    purpose: `${entityType}Sizing`,
+    userId,
+    expectJson: true,
+    temperature: 0.1
+  });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.warn('[llm-sizing] parse failed', { userId, entityType, error: error?.message || error });
+    return null;
+  }
+
+  const hours = Number(parsed?.hours ?? parsed?.estimated_hours ?? parsed?.estimateHours);
+  const pointsRaw = Number(parsed?.points);
+  const rationale = String(parsed?.rationale || parsed?.reason || '').slice(0, 280);
+  if (!Number.isFinite(hours) || hours <= 0) return null;
+  const estimatedPoints = clampTaskPoints(pointsRaw) ?? clampTaskPoints(hours) ?? Math.max(1, Math.round(hours));
+  return {
+    hours,
+    points: estimatedPoints,
+    rationale,
+  };
+}
+
+async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyLimit = 3 }) {
+  const serverNow = admin.firestore.FieldValue.serverTimestamp();
+  const tasksSnap = await db.collection('tasks')
+    .where('ownerUid', '==', userId)
+    .orderBy('updatedAt', 'desc')
+    .limit(75)
+    .get()
+    .catch(() => ({ empty: true, docs: [] }));
+
+  const taskCandidates = tasksSnap.docs
+    .filter((doc) => {
+      const data = doc.data() || {};
+      const done = Number(data.status) === 2 || String(data.status).toLowerCase() === 'done';
+      if (done) return false;
+      const hasEstimate = Number.isFinite(Number(data.estimateMin));
+      const hasPoints = Number.isFinite(Number(data.points));
+      return !hasEstimate || !hasPoints;
+    })
+    .slice(0, taskLimit);
+
+  const sizedTasks = [];
+  for (const docSnap of taskCandidates) {
+    const data = docSnap.data() || {};
+    const estimate = await requestWorkEstimateFromLLM({
+      userId,
+      entityType: 'task',
+      title: data.title || data.ref || 'Task',
+      description: data.description || '',
+    });
+    if (!estimate) continue;
+    const estimateMinutes = Math.max(60, Math.round(estimate.hours * 60));
+    await docSnap.ref.set({
+      points: estimate.points,
+      estimatedHours: Number(estimate.hours.toFixed(2)),
+      estimateMin: estimateMinutes,
+      llmSizing: {
+        method: 'llm',
+        rationale: estimate.rationale,
+        runId,
+        updatedAt: serverNow,
+      },
+      updatedAt: serverNow,
+    }, { merge: true });
+    sizedTasks.push(docSnap.id);
+  }
+
+  const storiesSnap = await db.collection('stories')
+    .where('ownerUid', '==', userId)
+    .orderBy('updatedAt', 'desc')
+    .limit(60)
+    .get()
+    .catch(() => ({ empty: true, docs: [] }));
+
+  const storyCandidates = storiesSnap.docs
+    .filter((doc) => {
+      const data = doc.data() || {};
+      const done = Number(data.status) === 4 || String(data.status).toLowerCase() === 'done';
+      if (done) return false;
+      return !Number.isFinite(Number(data.points));
+    })
+    .slice(0, storyLimit);
+
+  const sizedStories = [];
+  for (const docSnap of storyCandidates) {
+    const data = docSnap.data() || {};
+    const estimate = await requestWorkEstimateFromLLM({
+      userId,
+      entityType: 'story',
+      title: data.title || data.ref || 'Story',
+      description: data.description || '',
+    });
+    if (!estimate) continue;
+    await docSnap.ref.set({
+      points: estimate.points,
+      estimatedHours: Number(estimate.hours.toFixed(2)),
+      llmSizing: {
+        method: 'llm',
+        rationale: estimate.rationale,
+        runId,
+        updatedAt: serverNow,
+      },
+      updatedAt: serverNow,
+    }, { merge: true });
+    sizedStories.push(docSnap.id);
+  }
+
+  return {
+    tasksSized: sizedTasks.length,
+    storiesSized: sizedStories.length,
+    sizedTaskIds: sizedTasks,
+    sizedStoryIds: sizedStories,
+  };
+}
+
 async function autoConvertOversizedTasksForUser({ db, userId, profile, runId, maxConversions = 5 }) {
   if (profile.autoConversionEnabled === false) {
     return { processed: 0, converted: 0, conversions: [] };
   }
   const thresholdMinutes = Number(profile.autoConversionThresholdMinutes || 240);
-  const pointsThreshold = Number(profile.autoConversionThresholdPoints || 2);
+  const pointsThreshold = Number.isFinite(profile.autoConversionThresholdPoints)
+    ? Number(profile.autoConversionThresholdPoints)
+    : 4;
 
   const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
   const candidates = tasksSnap.docs.filter((taskDoc) => {
@@ -5146,6 +5978,55 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
   };
 }
 
+async function applyDailySprintCalendarPlanForUser({ db, userId, profile, runId }) {
+  const persona = profile?.defaultPersona || 'personal';
+  const sprintId = await getPreferredSprintId(userId);
+  const horizonDays = Number(profile?.aiPlanningHorizonDays || 3);
+  const context = await assemblePlanningContext(userId, persona, Math.max(1, Math.min(horizonDays, 7)));
+  context.userId = userId;
+
+  if (sprintId) {
+    context.tasks = context.tasks.filter((task) => {
+      const taskSprint = task.sprintId || task.parentId || null;
+      return taskSprint === sprintId;
+    });
+  }
+
+  if (!context.tasks.length) {
+    return { applied: 0, reason: 'no_tasks', sprintId };
+  }
+
+  let aiPlan;
+  try {
+    aiPlan = await generateAIPlan(context, {
+      llmProvider: profile?.planningProvider || 'gemini',
+      llmModel: profile?.planningModel || 'gemini-1.5-flash',
+    });
+  } catch (error) {
+    console.warn('[calendar-ai] planning failed', { userId, error: error?.message || error });
+    return { applied: 0, reason: 'plan_failed', sprintId, error: error?.message || String(error) };
+  }
+
+  const blocks = Array.isArray(aiPlan?.blocks) ? aiPlan.blocks : [];
+  if (!blocks.length) {
+    return { applied: 0, reason: 'no_blocks', sprintId };
+  }
+
+  const validation = await validateCalendarBlocks(blocks, context);
+  if (validation.errors.length) {
+    console.warn('[calendar-ai] validation failed', { userId, errors: validation.errors });
+    return { applied: 0, reason: 'validation_failed', sprintId, errors: validation.errors };
+  }
+
+  const applied = await applyCalendarBlocks(userId, persona, blocks);
+  return {
+    applied,
+    sprintId,
+    llmBlocks: blocks.length,
+    runId,
+  };
+}
+
 async function getLatestMaintenanceSummary({ db, userId }) {
   try {
     const statusDoc = await db.collection('automation_status').doc(`nightly_task_maintenance_${userId}`).get();
@@ -5214,15 +6095,29 @@ async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId
     logActivity: true,
     activityActor: 'NightlyMaintenance',
     runId,
+    // Always include title-based dedupe by default
+    includeTitleDedupe: true,
   });
 
   const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
 
   const dueDateAdjustments = await adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId });
 
+  const sizingResult = await ensureLlmSizingForUser({ db, userId, runId });
+
   const conversionResult = await autoConvertOversizedTasksForUser({ db, userId, profile, runId });
 
   const calendarPlan = await generateCalendarPlanForUser({ db, userId, profile, runId });
+
+  const aiCalendarBlocks = await applyDailySprintCalendarPlanForUser({ db, userId, profile, runId });
+
+  if (profile?.monzoConnected) {
+    try {
+      await runMonzoAnalytics(userId, { reason: 'nightly_maintenance', runId });
+    } catch (error) {
+      console.warn('[maintenance] failed to refresh Monzo analytics', { userId, error: error?.message || error });
+    }
+  }
 
   const topLimit = Math.max(1, Math.min(Number(profile.aiFocusTopCount || 5), 10));
   const maintenanceSummary = {
@@ -5238,8 +6133,10 @@ async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId
       top: priorityResult.items ? priorityResult.items.slice(0, topLimit) : [],
     },
     dueDates: dueDateAdjustments,
+    sizing: sizingResult,
     conversions: conversionResult,
     calendar: calendarPlan,
+    aiCalendarBlocks,
     runId,
     completedAt: nowUtc.toISO(),
   };
@@ -5280,9 +6177,15 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
 
   const dryRun = !!request?.data?.dryRun;
   const hardDelete = !!request?.data?.hardDelete;
+  const includeTitleDedupe = request?.data?.includeTitleDedupe !== false; // default true
 
   const db = admin.firestore();
-  return deduplicateUserTasks({ db, userId: uid, dryRun, hardDelete, logActivity: true, activityActor: uid });
+  try {
+    return await deduplicateUserTasks({ db, userId: uid, dryRun, hardDelete, logActivity: true, activityActor: uid, includeTitleDedupe });
+  } catch (e) {
+    console.error('[deduplicateTasks] failed', { uid, error: e?.message || String(e), stack: e?.stack });
+    throw new httpsV2.HttpsError('internal', e?.message || 'deduplicateTasks failed');
+  }
 });
 
 exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
@@ -5500,7 +6403,7 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
       goalId: goalId || null,
       sprintId: sprintId || null,
       priority: conversion?.priority ? Number(conversion.priority) : 2,
-      points: conversion?.points ? Number(conversion.points) : Math.max(1, Math.min(8, Math.round((Number(taskData.estimateMin || 90) || 90) / 45))),
+      points: conversion?.points ? Number(conversion.points) : Math.max(1, Math.min(8, Math.round((Number(taskData.estimateMin || 60) || 60) / 60))),
       status: 0,
       theme: theme || taskData.theme || 1,
       persona,
@@ -5689,6 +6592,8 @@ function buildHeuristicFocus(summaryData, note) {
       });
   }
 
+  const weatherContext = summaryData?.worldSummary?.weather || summaryData?.weather || null;
+
   return {
     mode: 'fallback',
     model: 'heuristic',
@@ -5696,6 +6601,16 @@ function buildHeuristicFocus(summaryData, note) {
     summary: note || 'AI focus unavailable; showing heuristic priorities.',
     ask: items.length ? 'Tackle these priorities first to stay on track.' : 'No urgent work detected—use the time for strategic planning.',
     items,
+    briefing: {
+      lines: [note || 'Maintain momentum and review strategic goals today.'],
+      news: [],
+      weather: weatherContext
+        ? {
+            summary: String(weatherContext.summary || weatherContext.description || ''),
+            temp: String(weatherContext.temp || weatherContext.temperature || ''),
+          }
+        : null,
+    },
   };
 }
 
@@ -5725,14 +6640,31 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
 
     if (!context.length) return null;
 
-    const system = 'You are an executive productivity assistant. Rank daily work and provide crisp instructions. Respond in JSON only.';
+    const newsContext = summaryData?.worldSummary?.highlights || summaryData?.worldSummary?.news || [];
+    const weatherContext = summaryData?.worldSummary?.weather || summaryData?.weather || null;
+    const sprintPending = Array.isArray(summaryData?.sprintProgress?.pendingStories)
+      ? summaryData.sprintProgress.pendingStories.slice(0, 5)
+      : [];
+    const goalContext = Array.isArray(summaryData?.goalProgress?.goals)
+      ? summaryData.goalProgress.goals.slice(0, 5)
+      : [];
+    const budgetContext = Array.isArray(summaryData?.budgetProgress)
+      ? summaryData.budgetProgress.slice(0, 5)
+      : summaryData?.budgetProgress || null;
+
+    const system = 'You are an executive productivity assistant. Rank daily work, provide briefing notes, and include relevant news/weather. Respond in JSON only.';
     const prompt = [
       `Today is ${summaryData?.metadata?.dayIso || DateTime.now().toISODate()} in timezone ${zone}.`,
-      'Analyse the tasks below and select the most impactful focus items for today.',
-      'Return JSON object {"items":[{"ref":string,"bucket":"Today"|"Watch"|"Defer","rationale":string,"nextStep":string,"confidence":number}],"ask":string,"summary":string}.',
+      'Analyse the tasks below and produce focus priorities, a short briefing paragraph, and any notable news/weather mentions.',
+      'Return JSON {"items":[{"ref":string,"bucket":"Today"|"Watch"|"Defer","rationale":string,"nextStep":string,"confidence":number}],"ask":string,"summary":string,"news":[string],"weather":{"summary":string,"temp":string},"summaryLines":[string]}.',
       'Constraints: use only provided refs; limit items to 3-5; rationale <=120 chars; nextStep <=80 chars; confidence 0-1.',
       'Tasks:',
       JSON.stringify(context),
+      sprintPending.length ? `Stories awaiting kickoff: ${JSON.stringify(sprintPending)}` : 'Stories awaiting kickoff: []',
+      goalContext.length ? `Goal snapshot: ${JSON.stringify(goalContext)}` : 'Goal snapshot: []',
+      budgetContext ? `Budget snapshot: ${JSON.stringify(budgetContext)}` : 'Budget snapshot: null',
+      newsContext.length ? `News context: ${JSON.stringify(newsContext.slice(0, 5))}` : 'News context: []',
+      weatherContext ? `Weather context: ${JSON.stringify(weatherContext)}` : 'Weather context: null',
     ].join('\n');
 
     const raw = await callLLMJson({
@@ -5801,6 +6733,26 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
     const askText = parsed.ask || parsed.callToAction || (normalised.length ? 'Commit to finishing these focus items today.' : null);
     const summaryText = parsed.summary || parsed.note || null;
 
+    const weatherPayload = parsed.weather
+      ? {
+          summary: String(parsed.weather.summary || parsed.weather.description || ''),
+          temp: String(parsed.weather.temp || parsed.weather.temperature || ''),
+        }
+      : weatherContext
+      ? {
+          summary: String(weatherContext.summary || weatherContext.description || ''),
+          temp: String(weatherContext.temp || weatherContext.temperature || ''),
+        }
+      : null;
+
+    const newsLines = Array.isArray(parsed.news)
+      ? parsed.news.map((item) => String(item))
+      : newsContext.slice(0, 3).map((item) => String(item.title || item.summary || item));
+
+    const summaryLines = Array.isArray(parsed.summaryLines)
+      ? parsed.summaryLines.map((line) => String(line))
+      : summaryText ? [String(summaryText)] : [];
+
     return {
       mode: 'ai',
       model: AI_PRIORITY_MODEL,
@@ -5808,6 +6760,11 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       summary: summaryText,
       ask: askText,
       items: normalised,
+      briefing: {
+        lines: summaryLines,
+        news: newsLines,
+        weather: weatherPayload,
+      },
     };
   } catch (error) {
     console.warn('[daily-summary-ai] focus generation failed', error?.message || error);
@@ -7530,7 +8487,8 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         id: t.id,
         title,
         dueDate: t.dueDate || null,
-        ref: t.ref || `TK-${String(t.id||'').slice(0,6).toUpperCase()}`,
+        // Use canonical task ref style: TK-<last6 of id, zero-padded>
+        ref: t.ref || `TK-${String(t.id||'').slice(-6).padStart(6,'0').toUpperCase()}`,
         createdAt: t.createdAt || null,
         storyId: t.storyId || null,
         goalId: t.goalId || null,
@@ -7625,7 +8583,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             updated++;
           } else {
             const newRef = db.collection('tasks').doc();
-            await newRef.set({
+            await newRef.set(ensureTaskPoints({
               id: newRef.id,
               ownerUid: uid,
               persona: 'personal',
@@ -7641,12 +8599,12 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
               ...(iosTags.length ? { tags: iosTags } : {}),
-            }, { merge: true });
+            }), { merge: true });
             updated++;
           }
         } else {
           const newRef = db.collection('tasks').doc();
-          await newRef.set({
+          await newRef.set(ensureTaskPoints({
             id: newRef.id,
             ownerUid: uid,
             persona: 'personal',
@@ -7661,7 +8619,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
             ...(iosTags.length ? { tags: iosTags } : {}),
-          }, { merge: true });
+          }), { merge: true });
           updated++;
         }
       }
@@ -7707,11 +8665,14 @@ exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{
 exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (event) => {
   const before = event.data?.before?.data() || null;
   const after = event.data?.after?.data() || null;
-  if (!after) return; // deletion
-
   const db = ensureFirestore();
   const id = event.params.taskId;
   const ref = db.collection('tasks').doc(id);
+  // If the task document was deleted, proactively remove any stale index row
+  if (!after) {
+    try { await db.collection('sprint_task_index').doc(id).delete(); } catch {}
+    return;
+  }
 
   const now = Date.now();
   const isDone = (v) => {
@@ -7783,8 +8744,49 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
     console.warn('[onTaskWritten] duplicate detection skipped:', e?.message || e);
   }
 
+  // Ensure points are always populated and clamped
+  try {
+    const normalizedPoints = clampTaskPoints(after.points);
+    const desiredPoints = (normalizedPoints != null ? normalizedPoints : deriveTaskPoints(after));
+    if (typeof desiredPoints === 'number') {
+      const existingPoints = Number(after.points);
+      if (!Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
+        patch.points = desiredPoints;
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] points normalization skipped', e?.message || e);
+  }
+
   if (Object.keys(patch).length) {
     try { await ref.set(patch, { merge: true }); } catch (e) { console.warn('[onTaskWritten] patch failed', id, e?.message || e); }
+  }
+
+  const ownerUidForAuto = after.ownerUid || before?.ownerUid || null;
+  if (
+    ownerUidForAuto &&
+    !after.convertedToStoryId &&
+    after.autoConverted !== true &&
+    after.autoConversionSkip !== true
+  ) {
+    const estMinutes = Number(after.estimateMin || 0);
+    const estHours = Number(after.estimatedHours || 0);
+    const points = Number(after.points || 0);
+    if (estMinutes >= 240 || estHours >= 4 || points > 4) {
+      try {
+        const profileSnap = await db.collection('profiles').doc(ownerUidForAuto).get();
+        const profileData = profileSnap.exists ? (profileSnap.data() || {}) : {};
+        await autoConvertTask({
+          db,
+          taskDoc: event.data.after,
+          profile: profileData,
+          runId: `trigger_${Date.now()}`,
+        });
+        return;
+      } catch (error) {
+        console.warn('[onTaskWritten] immediate auto-convert failed', { id, error: error?.message || error });
+      }
+    }
   }
 
   // Maintain sprint task index (materialized view)
@@ -9210,6 +10212,7 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
   const aiFocus = await buildDailySummaryAiFocus({ summaryData, userId });
   if (aiFocus) {
     summaryData.aiFocus = aiFocus;
+    if (aiFocus.briefing) summaryData.aiBriefing = aiFocus.briefing;
   }
 
   if (runContext?.maintenanceSummary) {
@@ -9839,6 +10842,10 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
   const storyRefValue = await generateStoryRef(db, userId);
   const size = deriveStorySize(task);
 
+  const estimateMinutes = Number(task.estimateMin || 0);
+  const fallbackPoints = estimateMinutes ? clampTaskPoints(estimateMinutes / 60) : null;
+  const computedPoints = clampTaskPoints(task.points) ?? fallbackPoints ?? 1;
+
   const storyPayload = {
     ref: storyRefValue,
     title: task.title || 'Story created from task',
@@ -9846,7 +10853,7 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
     goalId: task.goalId || null,
     sprintId: task.sprintId || null,
     priority: task.priority || 2,
-    points: task.points || Math.max(1, Math.round((task.estimateMin || 240) / 90)),
+    points: computedPoints,
     status: 0,
     theme: task.theme || goal?.theme || 1,
     persona: task.persona || profile?.persona || 'personal',
@@ -10046,7 +11053,7 @@ exports.autoLLMTaskStoryConversion = schedulerV2.onSchedule({
       const res = await exports.suggestTaskStoryConversions.run({ auth: { uid }, data: { limit: 12 } });
       const suggestions = Array.isArray(res?.suggestions) ? res.suggestions : (Array.isArray(res?.result?.suggestions) ? res.result.suggestions : []);
       const conversions = suggestions
-        .filter(s => s && s.taskId && s.storyTitle && Number(s.points || 0) >= minPoints)
+        .filter(s => s && s.taskId && s.storyTitle && Number(s.points || 0) >= minPoints && s.convert === true)
         .map(s => ({ taskId: s.taskId, storyTitle: s.storyTitle, storyDescription: s.storyDescription || '', points: s.points }));
       if (!conversions.length) continue;
       if (!exports.convertTasksToStories?.run) continue;
@@ -10136,7 +11143,10 @@ exports.ensureEntityRefs = schedulerV2.onSchedule({ schedule: 'every 2 hours', t
     for (const docSnap of missing.slice(0, 200)) { // cap per run
       const id = docSnap.id;
       const data = docSnap.data() || {};
-      const ref = makeRefLocal(prefix);
+      // For tasks, align with canonical TK-<last6> style; otherwise use time-based local ref.
+      const ref = (col === 'tasks')
+        ? `TK-${String(id).slice(-6).padStart(6,'0').toUpperCase()}`
+        : makeRefLocal(prefix);
       batch.set(docSnap.ref, { ref, updatedAt: Date.now() }, { merge: true });
       const actRef = db.collection('activity_stream').doc();
       activityBatch.set(actRef, {
@@ -10404,14 +11414,6 @@ function themeLabelFromValue(v) {
     return lower.charAt(0).toUpperCase()+lower.slice(1);
   }
   return s;
-}
-
-function buildAbsoluteUrl(path) {
-  const origin = process.env.APP_BASE_URL || 'https://bob.jc1.tech';
-  if (!path) return origin;
-  if (path.startsWith('http')) return path;
-  if (!path.startsWith('/')) return `${origin}/${path}`;
-  return `${origin}${path}`;
 }
 
 async function buildTaskContext(db, task) {

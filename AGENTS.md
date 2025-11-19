@@ -38,6 +38,12 @@ Dev Flags
 - `REACT_APP_FIRESTORE_FORCE_LONG_POLLING=true`: skips WebChannel probing; faster attach
 - `REACT_APP_SPRINT_DEV_GUARDRAIL=true`: logs if persona-scoped sprint query returns 0 but owner-only probe finds orphaned sprints
 
+Task Points
+- Every task document now requires `points` (1–8) and maps 1 point = 1 hour. Functions auto-derive points from `estimateMin`/`effort`, and Firestore triggers clamp outliers.
+- Nightly maintenance runs an LLM sizing pass to fill in missing estimates on both tasks and stories; use `npm run backfill:task-points -- --dryRun` for one-off corrections, then rerun without `--dryRun` once output looks correct.
+- Tasks sized above four hours (≥ 4 points) are auto-converted into stories via the LLM pipeline immediately (trigger) and again during nightly maintenance.
+- Calendar AI now runs nightly to create sprint-aligned focus blocks that include deep links plus enriched descriptions.
+
 Relevant Code Anchors
 - Sprint query and perf log: `react-app/src/contexts/SprintContext.tsx:185`
 - Firestore init (long polling flag + custom-token helper): `react-app/src/firebase.ts:25`, `react-app/src/firebase.ts:66`
@@ -65,4 +71,3 @@ Troubleshooting
   - Check for transient SDK logs during first connection; steady-state attaches should be < 1000ms
 - Custom token minting fails:
   - Ensure the service account JSON path is valid and has token creator rights
-

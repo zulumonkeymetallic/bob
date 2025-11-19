@@ -871,7 +871,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       backgroundColor: themeVars.panel as string, 
       borderRadius: '8px', 
       border: `1px solid ${themeVars.border}`,
-      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+      boxShadow: '0 1px 3px 0 var(--glass-shadow-color)',
       overflow: 'hidden' 
     }}>
       {/* Header with controls */}
@@ -1078,7 +1078,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 fontWeight: 600
               }}
               onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'rgba(0,0,0,0.03)';
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = rgbaCard(0.03);
               }}
               onMouseLeave={(e) => {
                 (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
@@ -1101,7 +1101,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
           backgroundColor: themeVars.panel as string,
           borderLeft: `1px solid ${themeVars.border}`,
           transition: 'transform 0.3s ease',
-          boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
+          boxShadow: '-4px 0 16px 0 var(--glass-shadow-color)',
           transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
         }}>
           <div style={{ 
@@ -1330,7 +1330,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
     {/* Edit/Create Modal (lightweight) */}
     {showEditModal && (
-      <div className="modal d-block" tabIndex={-1} role="dialog" style={{ background: 'rgba(0,0,0,0.35)' }}>
+      <div className="modal d-block" tabIndex={-1} role="dialog" style={{ background: 'var(--bs-backdrop-bg)' }}>
         <div className="modal-dialog modal-lg" role="document">
           <div className="modal-content">
             <div className="modal-header">
@@ -1405,7 +1405,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     )}
     <ToastContainer position="bottom-end" className="p-3">
       <Toast bg={toastState.variant} onClose={closeToast} show={toastState.show} delay={4000} autohide>
-        <Toast.Body className={toastState.variant === 'info' ? '' : 'text-white'}>{toastState.message}</Toast.Body>
+        <Toast.Body style={{ color: toastState.variant === 'info' ? themeVars.text : themeVars.onAccent }}>
+          {toastState.message}
+        </Toast.Body>
       </Toast>
     </ToastContainer>
     </>

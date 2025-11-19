@@ -285,6 +285,11 @@ const DroppableArea: React.FC<{
               <Badge bg="outline-secondary" style={{ fontSize: '9px', color: themeVars.muted as string, backgroundColor: 'transparent', border: `1px solid ${themeVars.border}` }}>
                 {task.effort}
               </Badge>
+              {Number.isFinite(Number((task as any).points)) && (
+                <Badge bg="info" style={{ fontSize: '9px' }}>
+                  {(task as any).points} pts
+                </Badge>
+              )}
               {blocked && (
                 <Badge bg="danger" style={{ fontSize: '9px' }}>Blocked</Badge>
               )}

@@ -104,6 +104,7 @@ export interface Task {
   priority: number; // 1=High, 2=Medium, 3=Low
   effort: 'S' | 'M' | 'L';
   estimateMin: number;
+  points?: number;
   estimatedHours?: number;
   startDate?: number;
   dueDate?: number;

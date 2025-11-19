@@ -231,7 +231,7 @@ const TasksManagement: React.FC = () => {
       {/* Statistics Cards */}
       <Row className="mb-4">
         <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
               <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--text)' }}>
                 {taskStats.total}
@@ -243,7 +243,7 @@ const TasksManagement: React.FC = () => {
           </Card>
         </Col>
         <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
               <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--green)' }}>
                 {taskStats.linked}
@@ -255,7 +255,7 @@ const TasksManagement: React.FC = () => {
           </Card>
         </Col>
         <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
               <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--red)' }}>
                 {taskStats.unlinked}
@@ -267,7 +267,7 @@ const TasksManagement: React.FC = () => {
           </Card>
         </Col>
         <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
             <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
               <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--purple)' }}>
                 {taskStats.withGoals}
@@ -283,7 +283,7 @@ const TasksManagement: React.FC = () => {
       {/* Filters */}
       <Row className="mb-4">
         <Col>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
             <Card.Body>
               <Row className="align-items-center">
                 <Col md={2}>
@@ -409,7 +409,7 @@ const TasksManagement: React.FC = () => {
       {/* Tasks Table */}
       <Row>
         <Col>
-          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
             <Card.Header style={{ 
               backgroundColor: 'var(--card)', 
               borderBottom: '1px solid var(--line)', 

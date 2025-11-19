@@ -420,7 +420,7 @@ const StoriesManagement: React.FC = () => {
         {/* Dashboard Cards */}
         <Row className="mb-4">
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ height: '100%', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.text as string }}>
                   {storyCounts.total}
@@ -432,7 +432,7 @@ const StoriesManagement: React.FC = () => {
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ height: '100%', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.muted as string }}>
                   {storyCounts.backlog}
@@ -444,7 +444,7 @@ const StoriesManagement: React.FC = () => {
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ height: '100%', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.brand as string }}>
                   {storyCounts.active}
@@ -456,7 +456,7 @@ const StoriesManagement: React.FC = () => {
             </Card>
           </Col>
           <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <Card style={{ height: '100%', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
               <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--green)' }}>
                   {storyCounts.done}
@@ -470,7 +470,7 @@ const StoriesManagement: React.FC = () => {
         </Row>
 
         {/* Filters */}
-        <Card style={{ marginBottom: '24px', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+        <Card style={{ marginBottom: '24px', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
           <Card.Body style={{ padding: '24px' }}>
             <Row>
               <Col md={4}>
@@ -482,7 +482,7 @@ const StoriesManagement: React.FC = () => {
                       placeholder="Search by title..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      style={{ border: '1px solid #d1d5db' }}
+                      style={{ border: '1px solid var(--line)' }}
                     />
                   </InputGroup>
                 </Form.Group>
@@ -493,7 +493,7 @@ const StoriesManagement: React.FC = () => {
                   <Form.Select
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
-                    style={{ border: '1px solid #d1d5db' }}
+                    style={{ border: '1px solid var(--line)' }}
                   >
                     <option value="all">All Status</option>
                     <option value="backlog">Backlog</option>
@@ -561,7 +561,7 @@ const StoriesManagement: React.FC = () => {
         </Card>
 
         {/* Modern Stories Table - Full Width */}
-        <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
+        <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))', minHeight: '600px' }}>
           <Card.Header style={{ 
             backgroundColor: themeVars.panel as string, 
             borderBottom: `1px solid ${themeVars.border}`, 

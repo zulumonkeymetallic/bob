@@ -119,6 +119,8 @@ const SortableTaskCard: React.FC<{
   const priorityLabel = formatPriorityLabel(task.priority);
   const effortLabel = task.effort ? String(task.effort).toUpperCase() : null;
   const estimateLabel = task.estimateMin ? `${task.estimateMin} min` : null;
+  const pointsValue = Number((task as any).points);
+  const pointsLabel = Number.isFinite(pointsValue) ? `${pointsValue} pts` : null;
   const refLabel = task.ref || `TASK-${task.id.slice(-4).toUpperCase()}`;
   const accentColor = themeColor || '#2563eb';
   const handleStyle: React.CSSProperties = {
@@ -237,6 +239,11 @@ const SortableTaskCard: React.FC<{
                 {effortLabel}
               </span>
             )}
+            {pointsLabel && (
+              <span className="kanban-card__meta-badge" title="Story points">
+                {pointsLabel}
+              </span>
+            )}
             {estimateLabel && (
               <span className="kanban-card__meta-text" title="Time estimate">
                 {estimateLabel}
@@ -266,6 +273,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const { selectedSprintId } = useSprint();
   const navigate = useNavigate();
   const boardContainerRef = useRef<HTMLDivElement | null>(null);
+  const [boardHeight, setBoardHeight] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const { trackFieldChange, addNote } = useActivityTracking();
   const iconButtonStyle: React.CSSProperties = {
@@ -322,6 +330,39 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, []);
+
+  // Dynamically size the scrollable board area to use the full viewport height
+  const recomputeBoardHeight = useCallback(() => {
+    try {
+      const el = boardContainerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const top = rect.top; // distance from viewport top
+      const margin = 24; // a little breathing room
+      const h = Math.max(320, Math.floor((window.innerHeight || document.documentElement.clientHeight) - top - margin));
+      setBoardHeight(h);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    recomputeBoardHeight();
+    window.addEventListener('resize', recomputeBoardHeight);
+    let ro: any = null;
+    try {
+      const RO = (window as any).ResizeObserver;
+      if (typeof RO === 'function') {
+        ro = new RO(() => {
+          // Batch callback to next tick to avoid layout thrash
+          requestAnimationFrame(recomputeBoardHeight);
+        });
+        if (boardContainerRef.current) ro.observe(boardContainerRef.current);
+      }
+    } catch {}
+    return () => {
+      window.removeEventListener('resize', recomputeBoardHeight);
+      try { if (ro) ro.disconnect(); } catch {}
+    };
+  }, [recomputeBoardHeight]);
 
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
@@ -937,7 +978,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <div style={{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', overflowX: 'auto' }}>
+          <div style={{ height: boardHeight ? `${boardHeight}px` : 'calc(100dvh - 140px)', overflowY: 'auto', overflowX: 'auto' }}>
           <Row style={{ minHeight: '600px' }}>
           {swimLanes.map((lane) => {
             const lgCols = Math.max(1, Math.floor(12 / swimLanes.length));

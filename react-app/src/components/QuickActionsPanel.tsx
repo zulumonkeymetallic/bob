@@ -41,7 +41,8 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
     storyId: '',
     goalId: '',
     sprintId: '',
-    size: ''
+    size: '',
+    points: 1
   });
   const [loading, setLoading] = useState(false);
   
@@ -145,7 +146,8 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
       storyId: '',
       goalId: '',
       sprintId: '',
-      size: ''
+      size: '',
+      points: 1
     });
   };
     setShowModal(true);
@@ -203,6 +205,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         entityData.effort = formData.size || 'M';
         entityData.estimateMin = 60; // Default estimate
         entityData.estimatedHours = 1;
+        entityData.points = Math.max(1, Math.min(8, Math.round(Number(formData.points) || 1)));
         entityData.alignedToGoal = !!formData.storyId;
         entityData.source = 'web';
         entityData.aiLinkConfidence = 0;
@@ -265,7 +268,8 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         storyId: '',
         goalId: '',
         sprintId: '',
-        size: ''
+        size: '',
+        points: 1
       });
       
     } catch (error) {
@@ -407,6 +411,21 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
                         <option value="M">M - Medium</option>
                         <option value="L">L - Large</option>
                       </Form.Select>
+                    </Form.Group>
+
+                    <Form.Group className="mb-3">
+                      <Form.Label>Points (1–8)</Form.Label>
+                      <Form.Control
+                        type="number"
+                        min={1}
+                        max={8}
+                        value={formData.points ?? 1}
+                        onChange={(e) => {
+                          const value = Number(e.target.value);
+                          const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
+                          setFormData({ ...formData, points: normalized });
+                        }}
+                      />
                     </Form.Group>
                   </>
                 )}

@@ -177,6 +177,15 @@
       ]
     },
     {
+      "collectionGroup": "integration_status",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "provider", "order": "ASCENDING" },
+        { "fieldPath": "connected", "order": "ASCENDING" },
+        { "fieldPath": "lastAnalyticsEpochMs", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [

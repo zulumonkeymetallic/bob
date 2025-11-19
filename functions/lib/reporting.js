@@ -14,6 +14,21 @@ const { expandRecurrence } = require('../scheduler/engine');
 
 const TASK_DONE_STATUSES = new Set(['done', 'completed', 'complete', 'archived', 2, 3]);
 const STORY_DONE_STATUSES = new Set(['done', 'complete', 'archived', 3]);
+const STORY_STATUS_MAP = {
+  0: 'backlog',
+  1: 'planned',
+  2: 'in-progress',
+  3: 'testing',
+  4: 'done',
+};
+const STORY_NOT_STARTED_STATUSES = new Set(['backlog', 'planned', 'plan', 'todo', 'new']);
+const GOAL_STATUS_MAP = {
+  0: 'new',
+  1: 'in-progress',
+  2: 'complete',
+  3: 'blocked',
+  4: 'deferred',
+};
 
 const ensureFirestore = () => {
   if (!admin.apps.length) {
@@ -193,20 +208,51 @@ const collectGoalsAndStories = async (db, taskDocs, storyDocs) => {
 };
 
 const normaliseTaskStatus = (status) => {
-  if (status == null) return 'open';
-  if (typeof status === 'string') return status.toLowerCase();
   if (typeof status === 'number') {
-    if (status === 2 || status === 3) return 'done';
-    if (status === 1) return 'in_progress';
-    return 'open';
+    if (status >= 3) return 'blocked';
+    if (status === 2) return 'done';
+    if (status === 1) return 'in-progress';
+    return 'backlog';
   }
-  return 'open';
+  const str = String(status || '').toLowerCase();
+  if (!str) return 'backlog';
+  if (str.includes('done') || str.includes('complete')) return 'done';
+  if (str.includes('block')) return 'blocked';
+  if (str.includes('progress') || str.includes('active')) return 'in-progress';
+  if (str.includes('review') || str.includes('qa')) return 'in-review';
+  return 'backlog';
+};
+
+const normaliseStoryStatus = (status) => {
+  if (typeof status === 'number') {
+    return STORY_STATUS_MAP[status] || 'backlog';
+  }
+  const str = String(status || '').toLowerCase();
+  if (!str) return 'backlog';
+  if (str.includes('done') || str.includes('complete')) return 'done';
+  if (str.includes('test') || str.includes('qa')) return 'testing';
+  if (str.includes('active') || str.includes('progress')) return 'in-progress';
+  if (str.includes('plan')) return 'planned';
+  return 'backlog';
+};
+
+const normaliseGoalStatus = (status) => {
+  if (typeof status === 'number') {
+    return GOAL_STATUS_MAP[status] || 'new';
+  }
+  const str = String(status || '').toLowerCase();
+  if (!str) return 'new';
+  if (str.includes('block')) return 'blocked';
+  if (str.includes('defer')) return 'deferred';
+  if (str.includes('progress') || str.includes('active')) return 'in-progress';
+  if (str.includes('done') || str.includes('complete')) return 'complete';
+  return 'new';
 };
 
 const ensureTaskReference = (task) => {
   const ref = task.ref || task.reference || task.displayId || null;
   if (ref) return ref;
-  return `TASK-${String(task.id || '').slice(-6).padStart(6, '0').toUpperCase()}`;
+  return `TK-${String(task.id || '').slice(-6).padStart(6, '0').toUpperCase()}`;
 };
 
 const ensureStoryReference = (story) => {
@@ -249,6 +295,8 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     schedulerSnap,
     choresSnap,
     routinesSnap,
+    goalsAllSnap,
+    sprintsSnap,
   ] = await Promise.all([
     db.collection('tasks').where('ownerUid', '==', userId).get(),
     db.collection('stories').where('ownerUid', '==', userId).get(),
@@ -263,16 +311,20 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       .catch(() => ({ docs: [] })),
     db.collection('chores').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
     db.collection('routines').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('goals').where('ownerUid', '==', userId).get(),
+    db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
   ]);
 
-  const tasks = toList(tasksSnap).filter((task) => {
+  const taskDocs = toList(tasksSnap);
+  const tasks = taskDocs.filter((task) => {
     if (TASK_DONE_STATUSES.has(task.status)) return false;
     const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
     if (!dueMs) return false;
     return dueMs >= startMs && dueMs <= endMs;
   });
 
-  const stories = toList(storiesSnap).filter((story) => {
+  const storiesAll = toList(storiesSnap);
+  const stories = storiesAll.filter((story) => {
     if (STORY_DONE_STATUSES.has(story.status)) return false;
     if (story.sprintDueDate || story.targetDate) {
       const dueMs = toMillis(story.sprintDueDate || story.targetDate);
@@ -324,6 +376,10 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     })
     .filter(Boolean)
     .sort((a, b) => (a.dueMs || Number.MAX_SAFE_INTEGER) - (b.dueMs || Number.MAX_SAFE_INTEGER));
+
+  const goalsAll = toList(goalsAllSnap);
+  const goalLookup = new Map(goalsAll.map((goal) => [goal.id, goal]));
+  const sprints = toList(sprintsSnap);
 
   const { goalsById, storiesById } = await collectGoalsAndStories(db, tasks, stories);
   const taskSummaries = tasks.map((task) => {
@@ -429,7 +485,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const storiesToStart = stories
     .filter((story) => (story.sprintDueDate || story.targetDate || story.plannedStartDate))
     .map((story) => {
-      const goal = story.goalId ? goalsById.get(story.goalId) : null;
+        const goal = story.goalId ? (goalsById.get(story.goalId) || goalLookup.get(story.goalId)) : null;
       const due = toDateTime(story.sprintDueDate || story.targetDate, { zone });
       const acceptanceCriteria = Array.isArray(story.acceptanceCriteria)
         ? story.acceptanceCriteria.filter(Boolean)
@@ -613,6 +669,99 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     console.warn('[reporting] monzo lookup failed', error?.message || error);
   }
 
+  const normaliseSprintStatus = (value) => {
+    if (typeof value === 'number') return value;
+    const str = String(value || '').toLowerCase();
+    if (!str) return null;
+    if (str.includes('active')) return 1;
+    if (str.includes('plan')) return 0;
+    if (str.includes('done') || str.includes('complete')) return 2;
+    if (str.includes('cancel')) return 3;
+    return null;
+  };
+
+  let goalProgress = null;
+  if (goalsAll.length) {
+    const counts = {
+      total: goalsAll.length,
+      completed: 0,
+      active: 0,
+      blocked: 0,
+      deferred: 0,
+    };
+    const goalDetails = goalsAll.map((goal) => {
+      const status = normaliseGoalStatus(goal.status);
+      if (status === 'complete') counts.completed += 1;
+      else if (status === 'blocked') counts.blocked += 1;
+      else if (status === 'deferred') counts.deferred += 1;
+      else counts.active += 1;
+      const dueDt = goal.targetDate ? toDateTime(goal.targetDate, { zone }) : null;
+      return {
+        id: goal.id,
+        ref: ensureGoalReference(goal),
+        title: goal.title || 'Goal',
+        status,
+        progress: goal.progress ?? goal.percentComplete ?? null,
+        dueDisplay: dueDt ? formatDate(dueDt, { locale }) : null,
+        deepLink: makeDeepLink('goal', ensureGoalReference(goal)),
+      };
+    });
+    const topGoals = goalDetails
+      .filter((g) => g.status !== 'complete')
+      .sort((a, b) => {
+        const aProgress = Number(a.progress || 0);
+        const bProgress = Number(b.progress || 0);
+        return aProgress - bProgress;
+      })
+      .slice(0, 5);
+    goalProgress = Object.assign({}, counts, {
+      percentComplete: counts.total ? Math.round((counts.completed / counts.total) * 100) : null,
+      goals: topGoals,
+    });
+  }
+
+  let sprintProgress = null;
+  if (sprints.length) {
+    const activeSprint =
+      sprints.find((sprint) => normaliseSprintStatus(sprint.status) === 1) ||
+      sprints.find((sprint) => normaliseSprintStatus(sprint.status) === 0) ||
+      null;
+    if (activeSprint) {
+      const sprintStories = storiesAll.filter((story) => story.sprintId === activeSprint.id);
+      const completedStories = sprintStories.filter((story) => normaliseStoryStatus(story.status) === 'done').length;
+      const pendingStories = sprintStories
+        .filter((story) => STORY_NOT_STARTED_STATUSES.has(normaliseStoryStatus(story.status)))
+        .map((story) => {
+          const goal = story.goalId ? (goalLookup.get(story.goalId) || goalsById.get(story.goalId)) : null;
+          const due = toDateTime(story.sprintDueDate || story.targetDate, { zone });
+          const status = normaliseStoryStatus(story.status);
+          return {
+            id: story.id,
+            ref: ensureStoryReference(story),
+            title: story.title || 'Story',
+            status,
+            goal: goal?.title || null,
+            dueDisplay: due ? formatDate(due, { locale }) : null,
+            deepLink: makeDeepLink('story', ensureStoryReference(story)),
+          };
+        })
+        .slice(0, 5);
+      const totalStories = sprintStories.length;
+      sprintProgress = {
+        sprintId: activeSprint.id,
+        sprintName: activeSprint.name || activeSprint.ref || `Sprint ${activeSprint.id.slice(0, 4)}`,
+        startDate: activeSprint.startDate || null,
+        endDate: activeSprint.endDate || null,
+        totalStories,
+        completedStories,
+        percentComplete: totalStories ? Math.round((completedStories / totalStories) * 100) : null,
+        pendingStories,
+      };
+    }
+  }
+
+  const budgetProgress = monzo?.budgetProgress || null;
+
   const manualRerunCallable = 'sendDailySummaryNow';
 
   const schedulerChanges = schedulerSnap.docs[0]?.data()?.changes || [];
@@ -640,6 +789,9 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     monzo,
     profile,
     schedulerChanges,
+    goalProgress,
+    sprintProgress,
+    budgetProgress,
   };
 };
 
