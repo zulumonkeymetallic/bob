@@ -798,7 +798,7 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   let converted = [];
   if (autoApply) {
     const conversions = suggestions
-      .filter(s => s.taskId && s.storyTitle)
+      .filter(s => s.taskId && s.storyTitle && s.convert === true)
       .map(s => ({ taskId: s.taskId, storyTitle: s.storyTitle, storyDescription: s.storyDescription || '', points: s.points }));
     if (conversions.length && exports.convertTasksToStories?.run) {
       try {

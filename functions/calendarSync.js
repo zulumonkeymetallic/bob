@@ -14,6 +14,14 @@ function getGoogleOAuthConfig() {
   return { clientId, clientSecret, redirectUri };
 }
 
+function buildAbsoluteUrl(path) {
+  const origin = process.env.APP_BASE_URL || 'https://bob.jc1.tech';
+  if (!path) return origin;
+  if (path.startsWith('http')) return path;
+  if (!path.startsWith('/')) return `${origin}/${path}`;
+  return `${origin}${path}`;
+}
+
 // Enhanced calendar block sync function
 exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
@@ -72,7 +80,7 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
             if (s.exists) {
               const sd = s.data() || {};
               const storyRef = sd.ref || s.id;
-              const link = `https://bob20250810.web.app/stories?storyId=${encodeURIComponent(s.id)}`;
+              const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
               const acArr = Array.isArray(sd.acceptanceCriteria)
                 ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
                 : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
@@ -142,7 +150,7 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
             if (s.exists) {
               const sd = s.data() || {};
               const storyRef = sd.ref || s.id;
-              const link = `https://bob20250810.web.app/stories?storyId=${encodeURIComponent(s.id)}`;
+              const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
               const acArr = Array.isArray(sd.acceptanceCriteria)
                 ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
                 : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
