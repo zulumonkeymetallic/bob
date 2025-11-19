@@ -53,3 +53,24 @@
 3. Assemble a masked dataset (sandbox) to regression-test upcoming changes and measure analytics accuracy before deploy.
 4. After remediation, schedule a follow-up audit to confirm compliance and close gaps.
 
+---
+
+## 2025-11-18 Remediation Summary
+
+The Monzo integration has been hardened end-to-end:
+
+- **Single OAuth surface + nonce persistence.** Clients now call `createMonzoOAuthSession` which writes `monzo_oauth_sessions/{sessionId}` with a nonce/TTL. `/api/monzo/start` and `/api/monzo/callback` validate the session before exchanging tokens, so replayed or spoofed callbacks are rejected.
+- **Refresh tokens encrypted with Cloud KMS.** `MONZO_KMS_KEY` must be set to the full key resource (e.g., `projects/bob20250810/locations/europe-west2/keyRings/app-default/cryptoKeys/monzoTokens`). Fields are stored as `encryptedRefreshToken` and legacy plaintext values are migrated on read.
+- **Secure revocation + logging.** `revokeMonzoAccess` now revokes upstream, deletes KMS-wrapped secrets, clears integration status, and records automation/webhook logs so disconnects are auditable.
+- **Webhook + job queue.** `/api/monzo/webhook` validates the `X-Monzo-Signature` HMAC and drops a `monzo_sync_jobs` document. A Firestore trigger processes jobs (webhook, OAuth bootstrap, or manual) and writes telemetry to `integration_status/monzo_{uid}` + `automation_status/monzo_sync_{uid}`.
+- **Monitoring & UX.** Integration Settings subscribes to `integration_status` to show last sync time, source, analytics refresh, webhook heartbeat, and recent errors. A scheduled `monzoIntegrationMonitor` raises activity/email alerts if analytics are stale for >24h.
+- **Emulator guardrail.** `scripts/test-monzo-analytics.js` seeds fake transactions against the Firestore emulator and ensures `computeMonzoAnalytics` populates `budgetProgress` and theme alignment before deploying daily summary changes.
+
+### Key Rotation & Token Hygiene
+
+1. **Create a new KMS key version** (`gcloud kms keys versions create --location=europe-west2 --keyring=app-default --key=monzoTokens`).
+2. **Update the runtime variable** `MONZO_KMS_KEY` to point to the new version and redeploy functions (`firebase deploy --only functions:monzo*`).
+3. **Force token re-encryption** by calling `syncMonzo` for each active user (backstop will migrate automatically, but `scripts/test-monzo-analytics.js` doubles as a quick verification harness).
+4. **Rotate Monzo client secrets** via `firebase functions:secrets:set MONZO_CLIENT_SECRET` followed by a redeploy. Users can reconnect through the new OAuth flow; revoking access now propagates upstream immediately.
+
+Keep `scripts/test-monzo-analytics.js` as part of the release checklist: it validates analytics invariants inside the emulator before `firebase deploy --only functions:monzo*`.

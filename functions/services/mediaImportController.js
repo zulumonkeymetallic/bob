@@ -2,11 +2,12 @@
 // Creates Stories + Tasks from external media sources (Trakt, Steam, Goodreads-like inputs)
 
 const admin = require('firebase-admin');
+const { ensureTaskPoints } = require('../utils/taskPoints');
 
 async function createStory(db, uid, payload) {
   const ref = db.collection('stories').doc();
   const now = Date.now();
-  await ref.set({
+  await ref.set(ensureTaskPoints({
     id: ref.id,
     ownerUid: uid,
     persona: 'personal',
@@ -23,7 +24,7 @@ async function createStory(db, uid, payload) {
     externalId: payload.externalId || null,
     createdAt: now,
     updatedAt: now,
-  }, { merge: true });
+  }), { merge: true });
   return ref.id;
 }
 
@@ -150,4 +151,3 @@ module.exports = {
   importFromTrakt,
   importFromGoodreadsLike,
 };
-

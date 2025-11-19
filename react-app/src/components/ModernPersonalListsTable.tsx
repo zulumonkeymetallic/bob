@@ -420,7 +420,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
       backgroundColor: themeVars.panel, 
       borderRadius: '8px', 
       border: `1px solid ${themeVars.border}`, 
-      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+      boxShadow: '0 1px 3px 0 var(--glass-shadow-color)',
       overflow: 'hidden' 
     }}>
       {/* Header with controls */}
@@ -580,7 +580,7 @@ const ModernPersonalListsTable: React.FC<ModernPersonalListsTableProps> = ({
           backgroundColor: themeVars.panel,
           borderLeft: `1px solid ${themeVars.border}`,
           transition: 'transform 0.3s ease',
-          boxShadow: '-4px 0 16px 0 rgba(0, 0, 0, 0.1)',
+          boxShadow: '-4px 0 16px 0 var(--glass-shadow-color)',
           transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
         }}>
           <div style={{ 

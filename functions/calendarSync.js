@@ -2,6 +2,7 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { google } = require('googleapis');
 const { loadThemesForUser, mapThemeIdToLabel, getGoogleColorForThemeId } = require('./services/themeManager');
+const { buildAbsoluteUrl } = require('./utils/urlHelpers');
 
 function getGoogleOAuthConfig() {
   const projectId = process.env.GCLOUD_PROJECT;
@@ -71,8 +72,8 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
             const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
             if (s.exists) {
               const sd = s.data() || {};
-              const storyRef = sd.ref || s.id;
-              const link = `https://bob20250810.web.app/stories?storyId=${encodeURIComponent(s.id)}`;
+      const storyRef = sd.ref || s.id;
+      const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
               const acArr = Array.isArray(sd.acceptanceCriteria)
                 ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
                 : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
@@ -141,8 +142,8 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
             const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
             if (s.exists) {
               const sd = s.data() || {};
-              const storyRef = sd.ref || s.id;
-              const link = `https://bob20250810.web.app/stories?storyId=${encodeURIComponent(s.id)}`;
+      const storyRef = sd.ref || s.id;
+      const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
               const acArr = Array.isArray(sd.acceptanceCriteria)
                 ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
                 : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);

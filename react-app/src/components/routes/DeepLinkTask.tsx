@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Modal, Spinner } from 'react-bootstrap';
 import { useLocation, useParams } from 'react-router-dom';
-import { doc, getDoc, updateDoc, serverTimestamp, collection, query, where, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import TaskListView from '../TaskListView';
 import EntityDetailModal from '../EntityDetailModal';
 import { useNavigate } from 'react-router-dom';
+import { resolveEntityByRef } from '../../utils/entityLookup';
 
 const DeepLinkTask: React.FC = () => {
   const { id: refOrId } = useParams();
@@ -18,6 +19,8 @@ const DeepLinkTask: React.FC = () => {
   const [item, setItem] = useState<any | null>(null);
   const [open, setOpen] = useState(true);
   const [loaded, setLoaded] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   // updates handled inside modal
 
@@ -25,51 +28,55 @@ const DeepLinkTask: React.FC = () => {
     let cancelled = false;
     const run = async () => {
       if (!refOrId) return;
+      setLoading(true);
+      setNotFound(false);
+      setItem(null);
       // Try by human-readable ref first; fall back to common alt field names
-      const q = query(collection(db, 'tasks'), where('ref', '==', refOrId), limit(1));
-      let qs = await getDocs(q);
-      let opened = false;
-      if (!qs.empty) {
-        const d = qs.docs[0];
-        const it = { id: d.id, ...(d.data() || {}) } as any;
-        setItem(it);
-        opened = true;
-      }
-      if (!opened) {
-        const q2 = query(collection(db, 'tasks'), where('referenceNumber', '==', refOrId), limit(1));
-        qs = await getDocs(q2);
-        if (!qs.empty) {
-          const d = qs.docs[0];
-          const it = { id: d.id, ...(d.data() || {}) } as any;
-          setItem(it);
-          opened = true;
-        }
-      }
-      if (!opened) {
-        const snap = await getDoc(doc(db, 'tasks', refOrId));
-        if (cancelled) return;
-        if (snap.exists()) {
-          const it = { id: snap.id, ...(snap.data() || {}) } as any;
-          setItem(it);
-        }
+      const entity = await resolveEntityByRef<any>('tasks', refOrId);
+      if (cancelled) return;
+      if (entity) {
+        setItem(entity);
+      } else {
+        setNotFound(true);
       }
       setLoaded(true);
+      setLoading(false);
     };
     run();
     return () => { cancelled = true; };
   }, [refOrId]);
+
+  const handleClose = () => {
+    setOpen(false);
+    navigate('/tasks', { replace: true });
+  };
 
   // Render the main list view beneath the sidebar for full context
   return (
     <>
       <TaskListView />
       <EntityDetailModal
-        show={open}
-        onHide={() => { setOpen(false); navigate('/tasks', { replace: true }); }}
+        show={open && !!item}
+        onHide={handleClose}
         type="task"
         item={item}
         initialTab={initialTab as any}
       />
+      <Modal show={open && loading} backdrop="static" keyboard={false} centered>
+        <Modal.Body className="text-center">
+          <Spinner animation="border" role="status" className="mb-2" />
+          <div>Loading task…</div>
+        </Modal.Body>
+      </Modal>
+      <Modal show={open && !loading && loaded && notFound} onHide={handleClose} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Task Not Found</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          We couldn&apos;t find a task matching reference <code>{refOrId}</code>. It may have been deleted or the
+          reference has changed. Return to the task list to continue.
+        </Modal.Body>
+      </Modal>
     </>
   );
 };

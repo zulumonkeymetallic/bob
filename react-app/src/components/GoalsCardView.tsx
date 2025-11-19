@@ -13,7 +13,7 @@ import AddStoryModal from './AddStoryModal';
 import { ChoiceMigration } from '../config/migration';
 import { ChoiceHelper } from '../config/choices';
 import { getStatusName } from '../utils/statusHelpers';
-import { themeVars } from '../utils/themeVars';
+import { themeVars, rgbaCard } from '../utils/themeVars';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { toDate, formatDate } from '../utils/firestoreAdapters';
 import type { GlobalTheme } from '../constants/globalThemes';
@@ -84,14 +84,11 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     })
     .join('')}`;
 
-  const hexToRgba = (hex: string, alpha: number) => {
-    const value = hex.replace('#', '');
-    const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value;
-    const bigint = parseInt(full, 16);
-    const r = (bigint >> 16) & 255;
-    const g = (bigint >> 8) & 255;
-    const b = bigint & 255;
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  const withAlpha = (color: string, alpha: number) => {
+    const pct = Math.round(Math.max(0, Math.min(1, alpha)) * 100);
+    if (pct <= 0) return 'transparent';
+    if (pct >= 100) return color;
+    return `color-mix(in srgb, ${color} ${pct}%, transparent)`;
   };
 
   const lightenColor = (hex: string, amount: number) => {
@@ -388,7 +385,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     <div className="goals-card-view" style={{ padding: '20px' }}>
       <ToastContainer position="bottom-end" className="p-3">
         <Toast bg={toastVariant === 'success' ? 'success' : toastVariant === 'danger' ? 'danger' : 'info'} onClose={() => setToastMsg(null)} show={!!toastMsg} delay={2200} autohide>
-          <Toast.Body className="text-white">{toastMsg}</Toast.Body>
+          <Toast.Body style={{ color: toastVariant === 'info' ? themeVars.text : themeVars.onAccent }}>
+            {toastMsg}
+          </Toast.Body>
         </Toast>
       </ToastContainer>
       <div className={gridClassName}>
@@ -400,10 +399,10 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const gradientStart = lightenColor(themeColor, showDetailed ? 0.35 : 0.55);
           const gradientEnd = lightenColor(themeColor, showDetailed ? 0.6 : 0.78);
           const cardBackground = `linear-gradient(165deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
-          const defaultText = typeof themeVars.text === 'string' ? themeVars.text : '#1f1f1f';
-          const defaultMuted = typeof themeVars.muted === 'string' ? themeVars.muted : 'rgba(0,0,0,0.6)';
-          const textColor = showDetailed ? (themeDef.textColor || '#ffffff') : defaultText;
-          const mutedTextColor = showDetailed ? hexToRgba(themeColor, 0.75) : defaultMuted;
+          const defaultText = themeVars.text as string;
+          const defaultMuted = themeVars.muted as string;
+          const textColor = showDetailed ? (themeDef.textColor || (themeVars.onAccent as string)) : defaultText;
+          const mutedTextColor = showDetailed ? withAlpha(themeColor, 0.75) : defaultMuted;
           const totalStories = (goal as any).storyCount ?? (goal as any).storiesCount ?? (goal as any).story_counts ?? null;
           const doneStories = (goal as any).doneStories ?? (goal as any).completedStories ?? null;
           const allocatedMinutes = goalTimeAllocations[goal.id];
@@ -440,8 +439,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 className={`h-100 goals-card goals-card--${showDetailed ? 'comfortable' : 'grid'}`}
                 style={{
                 height: '100%',
-                border: isSelected ? `3px solid ${themeColor}` : '1px solid rgba(0,0,0,0.06)',
-                boxShadow: isSelected ? '0 0 0 0 transparent' : '0 10px 24px rgba(15, 23, 42, 0.12)',
+                border: isSelected ? `3px solid ${themeColor}` : `1px solid ${rgbaCard(0.06)}`,
+                boxShadow: isSelected ? '0 0 0 0 transparent' : '0 10px 24px var(--glass-shadow-color)',
                 borderRadius: showDetailed ? '16px' : '14px',
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
@@ -602,10 +601,10 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         <span>Progress</span>
                         <span>{progressPercent}%</span>
                       </div>
-                      <div className="goals-card-progress__bar" style={{ background: hexToRgba(themeColor, 0.18) }}>
+                    <div className="goals-card-progress__bar" style={{ background: withAlpha(themeColor, 0.18) }}>
                         <div
                           className="goals-card-progress__bar-fill"
-                          style={{ width: `${progressPercent}%`, background: hexToRgba(themeColor, 0.45) }}
+                          style={{ width: `${progressPercent}%`, background: withAlpha(themeColor, 0.45) }}
                         />
                       </div>
                       <div className="goals-card-progress__footer">
@@ -642,8 +641,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   <div style={{ 
                     marginBottom: '16px',
                     padding: '12px',
-                    backgroundColor: hexToRgba(themeColor, 0.16),
-                    border: `1px solid ${hexToRgba(themeColor, 0.35)}`,
+                    backgroundColor: withAlpha(themeColor, 0.16),
+                    border: `1px solid ${withAlpha(themeColor, 0.35)}`,
                     borderRadius: '10px'
                   }}>
                     <div style={{ 
@@ -696,10 +695,10 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         <span>Progress</span>
                         <span>{progressPercent}%</span>
                       </div>
-                      <div className="goals-card-progress__bar" style={{ background: hexToRgba(themeColor, 0.2) }}>
+                    <div className="goals-card-progress__bar" style={{ background: withAlpha(themeColor, 0.2) }}>
                         <div
                           className="goals-card-progress__bar-fill"
-                          style={{ width: `${progressPercent}%`, background: hexToRgba(themeColor, 0.5) }}
+                          style={{ width: `${progressPercent}%`, background: withAlpha(themeColor, 0.5) }}
                         />
                       </div>
                       <div className="goals-card-progress__footer" style={{ color: textColor }}>
@@ -755,7 +754,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     justifyContent: 'space-between',
                     alignItems: 'center',
                     paddingTop: showDetailed ? '16px' : '8px',
-                    borderTop: showDetailed ? `1px solid ${hexToRgba(themeColor, 0.25)}` : '1px solid rgba(255,255,255,0.18)',
+                    borderTop: showDetailed ? `1px solid ${withAlpha(themeColor, 0.25)}` : `1px solid ${withAlpha('var(--on-accent)', 0.18)}`,
                     fontSize: '12px',
                     color: mutedTextColor
                   }}

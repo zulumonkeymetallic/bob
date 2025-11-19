@@ -13,6 +13,163 @@ import { validateRef } from '../utils/referenceGenerator';
 import GoalChatModal from './GoalChatModal';
 import ResearchDocModal from './ResearchDocModal';
 import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
+import { ChoiceHelper } from '../config/choices';
+import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
+
+interface EntityLookupInputProps {
+  type: 'goal' | 'story';
+  ownerUid?: string;
+  value?: string;
+  onSelect: (id: string | null) => void;
+  placeholder: string;
+  initialOptions: Array<{ id: string; title: string; ref?: string | null }>;
+}
+
+const EntityLookupInput: React.FC<EntityLookupInputProps> = ({
+  type,
+  ownerUid,
+  value,
+  onSelect,
+  placeholder,
+  initialOptions,
+}) => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<EntitySummary[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [selectedLabel, setSelectedLabel] = useState('');
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!value) {
+      setSelectedLabel('');
+      return;
+    }
+    const local = initialOptions.find((opt) => opt.id === value);
+    if (local) {
+      setSelectedLabel(formatEntityLabel(local));
+      return;
+    }
+    let active = true;
+    loadEntitySummary(type, value).then((summary) => {
+      if (!active) return;
+      setSelectedLabel(summary ? formatEntityLabel(summary) : '');
+    });
+    return () => {
+      active = false;
+    };
+  }, [value, initialOptions, type]);
+
+  useEffect(() => {
+    if (!ownerUid || query.trim().length < 3) {
+      setResults([]);
+      setOpen(false);
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    searchEntities(type, ownerUid, query)
+      .then((items) => {
+        if (!active) return;
+        setResults(items);
+        setOpen(true);
+      })
+      .catch(() => setResults([]))
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [query, ownerUid, type]);
+
+  useEffect(() => {
+    const handler = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const handleSelect = (summary: EntitySummary | null) => {
+    if (!summary) {
+      onSelect(null);
+      setSelectedLabel('');
+    } else {
+      onSelect(summary.id);
+      setSelectedLabel(formatEntityLabel(summary));
+    }
+    setQuery('');
+    setOpen(false);
+  };
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', minWidth: 200 }}>
+      <Form.Control
+        size="sm"
+        type="text"
+        placeholder={placeholder}
+        value={query}
+        onFocus={() => { if (results.length) setOpen(true); }}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            left: 0,
+            right: 0,
+            zIndex: 20,
+            backgroundColor: 'var(--bs-body-bg, #fff)',
+            border: `1px solid ${rgbaCard(0.12)}`,
+            borderRadius: 6,
+            maxHeight: 220,
+            overflowY: 'auto',
+            boxShadow: '0 6px 16px rgba(15,23,42,0.18)',
+          }}
+        >
+          {loading ? (
+            <div className="p-2 small text-muted">Searching…</div>
+          ) : results.length === 0 ? (
+            <div className="p-2 small text-muted">No matches</div>
+          ) : (
+            <ListGroup variant="flush">
+              {results.map((item) => (
+                <ListGroup.Item
+                  key={item.id}
+                  action
+                  onClick={() => handleSelect(item)}
+                  className="py-1 px-2"
+                >
+                  <div className="fw-semibold" style={{ fontSize: 12 }}>
+                    {item.ref ? `${item.ref} · ${item.title}` : item.title}
+                  </div>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          )}
+        </div>
+      )}
+      <div className="small text-muted" style={{ marginTop: 4 }}>
+        {selectedLabel ? `Selected: ${selectedLabel}` : 'No selection'}
+        {selectedLabel && (
+          <Button
+            size="sm"
+            variant="link"
+            className="p-0 ms-2 align-baseline"
+            onClick={() => handleSelect(null)}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+};
 
 interface GlobalSidebarProps {
   goals: Goal[];
@@ -41,6 +198,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [showChat, setShowChat] = useState(false);
   const [showResearch, setShowResearch] = useState(false);
   const [orchestrating, setOrchestrating] = useState(false);
+  // Quick edit state for inline updates
+  const [quickEdit, setQuickEdit] = useState<any>({});
 
   // Ensure status labels/variants match each entity’s board semantics
   const getStatusDisplay = (
@@ -173,9 +332,95 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     };
   }, [isVisible, isCollapsed, getSidebarWidth]);
 
+  // Status options aligned with board lanes (built unconditionally to satisfy hooks rules)
+  const statusOptions = React.useMemo(() => {
+    if (selectedType === 'goal') return ChoiceHelper.getOptions('goal', 'status');
+    if (selectedType === 'story') return ChoiceHelper.getOptions('story', 'status');
+    return ChoiceHelper.getOptions('task', 'status');
+  }, [selectedType]);
+
+  // Seed quick edit when selection changes
+  React.useEffect(() => {
+    if (!selectedItem || !selectedType) return;
+    const base: any = { status: (selectedItem as any).status };
+    if (selectedType === 'task') {
+      base.dueDate = toDateInput((selectedItem as any).dueDate || (selectedItem as any).dueDateMs || (selectedItem as any).targetDate || null);
+      base.sprintId = (selectedItem as any).sprintId || '';
+      base.storyId = (selectedItem as any).storyId || (selectedItem as any).parentId || '';
+      base.goalId = (selectedItem as any).goalId || '';
+      base.description = (selectedItem as any).description || '';
+      base.points = (selectedItem as any).points ?? 1;
+    } else if (selectedType === 'story') {
+      base.sprintId = (selectedItem as any).sprintId || '';
+      base.goalId = (selectedItem as any).goalId || '';
+      base.description = (selectedItem as any).description || '';
+    } else if (selectedType === 'goal') {
+      base.description = (selectedItem as any).description || '';
+      base.parentGoalId = (selectedItem as any).parentGoalId || '';
+    }
+    setQuickEdit(base);
+  }, [selectedItem, selectedType]);
+
   if (!isVisible || !selectedItem || !selectedType) {
     return null;
   }
+
+
+  const applyQuickEdit = async () => {
+    if (!selectedItem || !selectedType) return;
+    try {
+      const updates: any = {};
+      const before: any = {};
+      if (quickEdit.status !== undefined && quickEdit.status !== (selectedItem as any).status) { updates.status = Number(quickEdit.status); before.status = (selectedItem as any).status; }
+      if (quickEdit.description !== undefined && quickEdit.description !== (selectedItem as any).description) { updates.description = String(quickEdit.description || ''); before.description = (selectedItem as any).description || ''; }
+      if (selectedType === 'task') {
+        const newDueMs = fromDateInput(quickEdit.dueDate);
+        const prevDue = (selectedItem as any).dueDate || (selectedItem as any).dueDateMs || (selectedItem as any).targetDate || null;
+        if ((newDueMs || null) !== (prevDue || null)) { updates.dueDate = newDueMs; before.dueDate = prevDue; }
+        if (quickEdit.sprintId !== (selectedItem as any).sprintId) { updates.sprintId = quickEdit.sprintId || null; before.sprintId = (selectedItem as any).sprintId || null; }
+        const newStoryId = typeof quickEdit.storyId === 'string' ? quickEdit.storyId : quickEdit.storyId?.toString() || '';
+        const prevStory = (selectedItem as any).storyId || (selectedItem as any).parentId || '';
+        if ((newStoryId || '') !== (prevStory || '')) { updates.storyId = newStoryId || null; before.storyId = prevStory || null; }
+        const newGoalId = typeof quickEdit.goalId === 'string' ? quickEdit.goalId : quickEdit.goalId?.toString() || '';
+        const prevGoal = (selectedItem as any).goalId || '';
+        if ((newGoalId || '') !== (prevGoal || '')) { updates.goalId = newGoalId || null; before.goalId = prevGoal || null; }
+        if (quickEdit.points !== undefined) {
+          const rawPoints = Number(quickEdit.points);
+          const normalized = Math.max(1, Math.min(8, Number.isNaN(rawPoints) ? 1 : Math.round(rawPoints)));
+          const prevPoints = Number((selectedItem as any).points);
+          if (!Number.isFinite(prevPoints) || prevPoints !== normalized) {
+            updates.points = normalized;
+            before.points = Number.isFinite(prevPoints) ? prevPoints : null;
+          }
+        }
+      } else if (selectedType === 'story') {
+        if (quickEdit.sprintId !== (selectedItem as any).sprintId) { updates.sprintId = quickEdit.sprintId || null; before.sprintId = (selectedItem as any).sprintId || null; }
+        const newGoalId = typeof quickEdit.goalId === 'string' ? quickEdit.goalId : quickEdit.goalId?.toString() || '';
+        const prevGoal = (selectedItem as any).goalId || '';
+        if ((newGoalId || '') !== (prevGoal || '')) { updates.goalId = newGoalId || null; before.goalId = prevGoal || null; }
+      } else if (selectedType === 'goal') {
+        const newParentGoalId = typeof quickEdit.parentGoalId === 'string' ? quickEdit.parentGoalId : quickEdit.parentGoalId?.toString() || '';
+        const prevParent = (selectedItem as any).parentGoalId || '';
+        if ((newParentGoalId || '') !== (prevParent || '')) { updates.parentGoalId = newParentGoalId || null; before.parentGoalId = prevParent || null; }
+      }
+      if (Object.keys(updates).length === 0) return;
+      await updateItem({ ...selectedItem, ...updates });
+      if (currentUser) {
+        const refNum = generateReferenceNumber();
+        for (const field of Object.keys(updates)) {
+          const oldValue = (before as any)[field];
+          const newValue = (updates as any)[field];
+          if (field === 'status') {
+            await ActivityStreamService.logStatusChange(selectedItem.id, selectedType, currentUser.uid, currentUser.email || undefined, oldValue, newValue, undefined, refNum);
+          } else if (field === 'sprintId') {
+            await ActivityStreamService.logSprintChange(selectedItem.id, (selectedType === 'task' || selectedType === 'story') ? selectedType : 'story', String(oldValue || ''), String(newValue || ''), currentUser.uid, currentUser.email || undefined, undefined, refNum);
+          } else {
+            await ActivityStreamService.logFieldChange(selectedItem.id, selectedType, currentUser.uid, currentUser.email || undefined, field, oldValue, newValue, undefined, refNum);
+          }
+        }
+      }
+    } catch (e) { console.error('[quick-edit] failed', e); }
+  };
 
   const handleSave = async () => {
     try {
@@ -348,6 +593,20 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     if (!timestamp) return 'Not set';
     const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+  };
+  const toDateInput = (value: any): string => {
+    if (!value) return '';
+    const date = (value && typeof value.toDate === 'function') ? value.toDate() : new Date(value);
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+  const fromDateInput = (s: string): number | null => {
+    if (!s) return null;
+    const ms = Date.parse(s);
+    return Number.isNaN(ms) ? null : ms;
   };
 
   const getThemeName = (themeValue: number): string => {
@@ -816,6 +1075,95 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
               {/* Activity Stream */}
               <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
+                {/* Quick Edit */}
+                <div style={{ marginBottom: '12px', padding: '8px', backgroundColor: rgbaCard(0.06), borderRadius: 6, border: `1px solid ${rgbaCard(0.08)}` }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div>
+                      <label className="small" style={{ display: 'block', marginBottom: 4 }}>Status</label>
+                      <Form.Select size="sm" value={Number(quickEdit.status ?? (selectedItem as any).status) || 0} onChange={(e) => setQuickEdit((q: any) => ({ ...q, status: Number(e.target.value) }))}>
+                        {statusOptions.map(opt => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
+                      </Form.Select>
+                    </div>
+                    <div>
+                      <label className="small" style={{ display: 'block', marginBottom: 4 }}>Due</label>
+                      <Form.Control size="sm" type="date" value={quickEdit.dueDate || ''} onChange={(e) => setQuickEdit((q: any) => ({ ...q, dueDate: e.target.value }))} />
+                    </div>
+                    {(selectedType === 'task' || selectedType === 'story') && (
+                      <div>
+                        <label className="small" style={{ display: 'block', marginBottom: 4 }}>Sprint</label>
+                        <Form.Select size="sm" value={quickEdit.sprintId || ''} onChange={(e) => setQuickEdit((q: any) => ({ ...q, sprintId: e.target.value }))}>
+                          <option value="">None</option>
+                          {sprints.map(s => (<option key={s.id} value={s.id}>{s.name}</option>))}
+                        </Form.Select>
+                      </div>
+                    )}
+                    {selectedType === 'task' && (
+                      <div>
+                        <label className="small" style={{ display: 'block', marginBottom: 4 }}>Story</label>
+                        <EntityLookupInput
+                          type="story"
+                          ownerUid={(selectedItem as any).ownerUid}
+                          value={quickEdit.storyId || ''}
+                          onSelect={(id) => setQuickEdit((q: any) => ({ ...q, storyId: id || '' }))}
+                          placeholder="Search stories…"
+                          initialOptions={stories.map((st) => ({ id: st.id, title: st.title, ref: st.ref }))}
+                        />
+                      </div>
+                    )}
+                    {(selectedType === 'task' || selectedType === 'story') && (
+                      <div>
+                        <label className="small" style={{ display: 'block', marginBottom: 4 }}>Goal</label>
+                        <EntityLookupInput
+                          type="goal"
+                          ownerUid={(selectedItem as any).ownerUid}
+                          value={quickEdit.goalId || ''}
+                          onSelect={(id) => setQuickEdit((q: any) => ({ ...q, goalId: id || '' }))}
+                          placeholder="Search goals…"
+                          initialOptions={goals.map((g) => ({ id: g.id, title: g.title, ref: (g as any).ref }))}
+                        />
+                      </div>
+                    )}
+                    {selectedType === 'task' && (
+                      <div>
+                        <label className="small" style={{ display: 'block', marginBottom: 4 }}>Points</label>
+                        <Form.Control
+                          size="sm"
+                          type="number"
+                          min={1}
+                          max={8}
+                          value={quickEdit.points ?? ''}
+                          onChange={(e) => {
+                            const value = Number(e.target.value);
+                            const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
+                            setQuickEdit((q: any) => ({ ...q, points: normalized }));
+                          }}
+                        />
+                      </div>
+                    )}
+                    {selectedType === 'goal' && (
+                      <div>
+                        <label className="small" style={{ display: 'block', marginBottom: 4 }}>Parent Goal</label>
+                        <EntityLookupInput
+                          type="goal"
+                          ownerUid={(selectedItem as any).ownerUid}
+                          value={quickEdit.parentGoalId || ''}
+                          onSelect={(id) => setQuickEdit((q: any) => ({ ...q, parentGoalId: id || '' }))}
+                          placeholder="Search goals…"
+                          initialOptions={goals
+                            .filter((g) => g.id !== (selectedItem as any).id)
+                            .map((g) => ({ id: g.id, title: g.title, ref: (g as any).ref }))}
+                        />
+                      </div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 200 }}>
+                      <label className="small" style={{ display: 'block', marginBottom: 4 }}>Description</label>
+                      <Form.Control size="sm" type="text" value={quickEdit.description || ''} onChange={(e) => setQuickEdit((q: any) => ({ ...q, description: e.target.value }))} placeholder="Short description" />
+                    </div>
+                    <div style={{ alignSelf: 'end' }}>
+                      <Button size="sm" variant="primary" onClick={applyQuickEdit}>Apply</Button>
+                    </div>
+                  </div>
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeHex, margin: 0 }}>
                     Activity Stream

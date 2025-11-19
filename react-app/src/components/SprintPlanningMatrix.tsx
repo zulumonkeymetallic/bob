@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Container, Row, Col, Button, Form, Badge, Dropdown } from 'react-bootstrap';
+import { Card, Container, Row, Col, Button, Form, Badge, Dropdown, Alert } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -254,6 +254,7 @@ const SprintPlanningMatrix: React.FC = () => {
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [moveError, setMoveError] = useState<string | null>(null);
   
   // Filters
   const [filterGoal, setFilterGoal] = useState<string>('all');
@@ -378,6 +379,14 @@ const SprintPlanningMatrix: React.FC = () => {
   };
 
   // Handle drag end
+  const applyLocalSprintChange = (storyId: string, sprintId: string | null) => {
+    setStories(prev => prev.map(story => (
+      story.id === storyId
+        ? ({ ...story, sprintId: sprintId ?? undefined })
+        : story
+    )));
+  };
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
@@ -394,6 +403,9 @@ const SprintPlanningMatrix: React.FC = () => {
 
     if (currentSprintId === targetSprintId) return;
 
+    applyLocalSprintChange(storyId, targetSprintId);
+    setMoveError(null);
+
     try {
       await updateDoc(doc(db, 'stories', storyId), {
         sprintId: targetSprintId,
@@ -401,6 +413,8 @@ const SprintPlanningMatrix: React.FC = () => {
       });
     } catch (error) {
       console.error('❌ Error moving story:', error);
+      applyLocalSprintChange(storyId, currentSprintId);
+      setMoveError('Failed to move story. Please try again.');
     }
   };
 
@@ -520,6 +534,16 @@ const SprintPlanningMatrix: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      {moveError && (
+        <Row className="mt-3">
+          <Col>
+            <Alert variant="danger" dismissible onClose={() => setMoveError(null)}>
+              {moveError}
+            </Alert>
+          </Col>
+        </Row>
+      )}
 
       {/* Sprint Matrix */}
       <DndContext
