@@ -89,8 +89,8 @@ const GoalRoadmapV3: React.FC = () => {
     const pad = Math.max(21 * DAY_MS, Math.round((max - min) * 0.05));
     const start = new Date(min - pad);
     const end = new Date(max + pad);
-    start.setHours(0,0,0,0);
-    end.setHours(0,0,0,0);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
     return { start, end };
   }, [goals]);
 
@@ -134,7 +134,7 @@ const GoalRoadmapV3: React.FC = () => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [linkHoverGoalId, setLinkHoverGoalId] = useState<string | null>(null);
   const linkHoverGoalRef = useRef<string | null>(null);
-  const [financeOnTrack, setFinanceOnTrack] = useState<boolean|null>(null);
+  const [financeOnTrack, setFinanceOnTrack] = useState<boolean | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [schedulingId, setSchedulingId] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
@@ -178,20 +178,20 @@ const GoalRoadmapV3: React.FC = () => {
     if (customRange) {
       const start = new Date(customRange.start);
       const end = new Date(customRange.end);
-      start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+      start.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
       return { start, end };
     }
     const today = new Date();
-    today.setHours(0,0,0,0);
-    const startOfWeek = (d: Date) => { const c=new Date(d); const day=(c.getDay()+6)%7; c.setDate(c.getDate()-day); c.setHours(0,0,0,0); return c; };
+    today.setHours(0, 0, 0, 0);
+    const startOfWeek = (d: Date) => { const c = new Date(d); const day = (c.getDay() + 6) % 7; c.setDate(c.getDate() - day); c.setHours(0, 0, 0, 0); return c; };
     const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
-    const startOfQuarter = (d: Date) => new Date(d.getFullYear(), Math.floor(d.getMonth()/3)*3, 1);
+    const startOfQuarter = (d: Date) => new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3, 1);
     const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
     let start = new Date(today); let end = new Date(today);
     if (zoom === 'weeks') {
       // Show 6 weeks forward from this week
       start = startOfWeek(today);
-      end = new Date(start); end.setDate(start.getDate() + 7*6 - 1);
+      end = new Date(start); end.setDate(start.getDate() + 7 * 6 - 1);
     } else if (zoom === 'months') {
       // Show 6 months forward from current month
       start = startOfMonth(today);
@@ -199,13 +199,13 @@ const GoalRoadmapV3: React.FC = () => {
     } else if (zoom === 'quarters') {
       // Show 6 quarters (18 months) forward from current quarter
       start = startOfQuarter(today);
-      end = new Date(start); end.setMonth(start.getMonth() + 3*6); end.setDate(end.getDate() - 1);
+      end = new Date(start); end.setMonth(start.getMonth() + 3 * 6); end.setDate(end.getDate() - 1);
     } else {
       // Years view supports variable spans: 1y, 3y, 5y — forward from current year
       start = startOfYear(today);
       end = new Date(start.getFullYear() + yearSpan, 0, 1); end.setDate(end.getDate() - 1);
     }
-    start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+    start.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
     if (datasetRange) {
       // Limit scrollable domain to data extents (no far-right empty timeline)
       const dataStart = datasetRange.start.getTime();
@@ -225,7 +225,7 @@ const GoalRoadmapV3: React.FC = () => {
       }
 
       start = new Date(s); end = new Date(e);
-      start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+      start.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
     }
     return { start, end };
   }, [zoom, yearSpan, customRange, datasetRange]);
@@ -246,7 +246,7 @@ const GoalRoadmapV3: React.FC = () => {
 
   const daysBetween = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime()) / 86400000);
   const xFromDate = useCallback((date: Date) => daysBetween(timeRange.start, date) * pxPerDay, [timeRange.start, pxPerDay]);
-  const dateFromX = useCallback((x: number) => { const d = new Date(timeRange.start); d.setDate(d.getDate() + Math.round(x / pxPerDay)); d.setHours(0,0,0,0); return d; }, [timeRange.start, pxPerDay]);
+  const dateFromX = useCallback((x: number) => { const d = new Date(timeRange.start); d.setDate(d.getDate() + Math.round(x / pxPerDay)); d.setHours(0, 0, 0, 0); return d; }, [timeRange.start, pxPerDay]);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -271,7 +271,7 @@ const GoalRoadmapV3: React.FC = () => {
         const categories: Array<any> = Array.isArray((summarySnap.data() as any)?.categories) ? (summarySnap.data() as any).categories : [];
         const byKey: Record<string, number> = {};
         for (const [k, v] of Object.entries(budgets.byCategory || {})) { byKey[String(k).toLowerCase()] = Number(v || 0); }
-        const totalBudget = Object.values(byKey).reduce((a,b) => a + (Number(b)||0), 0);
+        const totalBudget = Object.values(byKey).reduce((a, b) => a + (Number(b) || 0), 0);
         let actual = 0;
         for (const c of categories) {
           const key = String(c.label || '').toLowerCase();
@@ -303,11 +303,11 @@ const GoalRoadmapV3: React.FC = () => {
     if (mins.length && maxs.length) {
       let min = Math.min(...mins);
       let max = Math.max(...maxs);
-      if (min === max) max = min + 30*86400000; // ensure non-zero span
+      if (min === max) max = min + 30 * 86400000; // ensure non-zero span
       const pad = Math.round((max - min) * 0.08);
       const start = new Date(min - pad);
       const end = new Date(max + pad);
-      start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+      start.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
       setCustomRange({ start, end });
       setZoom('years'); // compact single-line style for fit scale
     }
@@ -465,7 +465,7 @@ const GoalRoadmapV3: React.FC = () => {
   }, [filterHasStories, filterInSelectedSprint, filterOverlapSelectedSprint, selectedSprintId, sprints, storyCounts]);
 
   // Drag+resize implementation
-  const dragState = useRef<{ id: string|null; type: 'move'|'start'|'end'|'link'|null; startX: number; origStart: Date; origEnd: Date; goal: Goal | null }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null });
+  const dragState = useRef<{ id: string | null; type: 'move' | 'start' | 'end' | 'link' | null; startX: number; origStart: Date; origEnd: Date; goal: Goal | null }>({ id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null });
   const [guideXs, setGuideXs] = useState<number[]>([]);
   const [activeGuideX, setActiveGuideX] = useState<number | null>(null);
   const pointerMove = useCallback((ev: PointerEvent) => {
@@ -473,17 +473,17 @@ const GoalRoadmapV3: React.FC = () => {
     if (s.type === 'link') return;
     const dx = ev.clientX - s.startX; const deltaDays = Math.round(dx / pxPerDay);
     let ns = new Date(s.origStart), ne = new Date(s.origEnd);
-    if (s.type === 'move') { ns.setDate(ns.getDate()+deltaDays); ne.setDate(ne.getDate()+deltaDays); }
-    if (s.type === 'start') { ns.setDate(ns.getDate()+deltaDays); if (ns > ne) ns = new Date(ne); }
-    if (s.type === 'end') { ne.setDate(ne.getDate()+deltaDays); if (ne < ns) ne = new Date(ns); }
-    ns.setHours(0,0,0,0); ne.setHours(0,0,0,0);
+    if (s.type === 'move') { ns.setDate(ns.getDate() + deltaDays); ne.setDate(ne.getDate() + deltaDays); }
+    if (s.type === 'start') { ns.setDate(ns.getDate() + deltaDays); if (ns > ne) ns = new Date(ne); }
+    if (s.type === 'end') { ne.setDate(ne.getDate() + deltaDays); if (ne < ns) ne = new Date(ns); }
+    ns.setHours(0, 0, 0, 0); ne.setHours(0, 0, 0, 0);
     const el = document.querySelector(`[data-grv3-goal="${s.id}"]`) as HTMLElement | null;
-    if (el) { const left = xFromDate(ns); const right = xFromDate(ne); el.style.left = `${left}px`; el.style.width = `${Math.max(14, right-left)}px`; }
-    const tip = tooltipRef.current; if (tip) { tip.style.display = 'block'; tip.style.left = `${ev.clientX+8}px`; tip.style.top = `${ev.clientY+8}px`; tip.textContent = `${ns.toLocaleDateString()} → ${ne.toLocaleDateString()}`; }
+    if (el) { const left = xFromDate(ns); const right = xFromDate(ne); el.style.left = `${left}px`; el.style.width = `${Math.max(14, right - left)}px`; }
+    const tip = tooltipRef.current; if (tip) { tip.style.display = 'block'; tip.style.left = `${ev.clientX + 8}px`; tip.style.top = `${ev.clientY + 8}px`; tip.textContent = `${ns.toLocaleDateString()} → ${ne.toLocaleDateString()}`; }
     if (guideXs.length > 0) {
       const sx = xFromDate(ns);
       let best = guideXs[0]; let bd = Math.abs(best - sx);
-      for (let i=1;i<guideXs.length;i++){ const d = Math.abs(guideXs[i]-sx); if (d < bd) { bd = d; best = guideXs[i]; } }
+      for (let i = 1; i < guideXs.length; i++) { const d = Math.abs(guideXs[i] - sx); if (d < bd) { bd = d; best = guideXs[i]; } }
       setActiveGuideX(best);
     }
     if (s.type === 'move' && s.goal) {
@@ -532,15 +532,15 @@ const GoalRoadmapV3: React.FC = () => {
       return;
     }
     const left = parseFloat(el.style.left || '0'); const width = parseFloat(el.style.width || '0');
-    let newStart = dateFromX(left); let newEnd = dateFromX(left+width);
+    let newStart = dateFromX(left); let newEnd = dateFromX(left + width);
     // Optional snapping strategy on drop
     if (snapEnabled) {
-      const startOfWeek = (d: Date) => { const c = new Date(d); const day = (c.getDay()+6)%7; c.setDate(c.getDate()-day); c.setHours(0,0,0,0); return c; };
-      const endOfWeek = (d: Date) => { const s = startOfWeek(d); const e = new Date(s); e.setDate(s.getDate()+6); e.setHours(0,0,0,0); return e; };
-      const startOfMonth = (d: Date) => { const c = new Date(d.getFullYear(), d.getMonth(), 1); c.setHours(0,0,0,0); return c; };
-      const endOfMonth = (d: Date) => { const c = new Date(d.getFullYear(), d.getMonth()+1, 0); c.setHours(0,0,0,0); return c; };
-      const startOfQuarter = (d: Date) => { const q = Math.floor(d.getMonth()/3)*3; const c = new Date(d.getFullYear(), q, 1); c.setHours(0,0,0,0); return c; };
-      const endOfQuarter = (d: Date) => { const q = Math.floor(d.getMonth()/3)*3+2; const c = new Date(d.getFullYear(), q+1, 0); c.setHours(0,0,0,0); return c; };
+      const startOfWeek = (d: Date) => { const c = new Date(d); const day = (c.getDay() + 6) % 7; c.setDate(c.getDate() - day); c.setHours(0, 0, 0, 0); return c; };
+      const endOfWeek = (d: Date) => { const s = startOfWeek(d); const e = new Date(s); e.setDate(s.getDate() + 6); e.setHours(0, 0, 0, 0); return e; };
+      const startOfMonth = (d: Date) => { const c = new Date(d.getFullYear(), d.getMonth(), 1); c.setHours(0, 0, 0, 0); return c; };
+      const endOfMonth = (d: Date) => { const c = new Date(d.getFullYear(), d.getMonth() + 1, 0); c.setHours(0, 0, 0, 0); return c; };
+      const startOfQuarter = (d: Date) => { const q = Math.floor(d.getMonth() / 3) * 3; const c = new Date(d.getFullYear(), q, 1); c.setHours(0, 0, 0, 0); return c; };
+      const endOfQuarter = (d: Date) => { const q = Math.floor(d.getMonth() / 3) * 3 + 2; const c = new Date(d.getFullYear(), q + 1, 0); c.setHours(0, 0, 0, 0); return c; };
       if (zoom === 'weeks') { newStart = startOfWeek(newStart); newEnd = endOfWeek(newEnd); }
       else if (zoom === 'months') { newStart = startOfWeek(newStart); newEnd = endOfWeek(newEnd); }
       else if (zoom === 'quarters') { newStart = startOfQuarter(newStart); newEnd = endOfQuarter(newEnd); }
@@ -576,7 +576,7 @@ const GoalRoadmapV3: React.FC = () => {
       }
     } catch (e) { console.error('Failed to update goal dates', e); }
     finally {
-      const tip = tooltipRef.current; if (tip) tip.style.display='none';
+      const tip = tooltipRef.current; if (tip) tip.style.display = 'none';
       setGuideXs([]); setActiveGuideX(null);
       dragState.current = { id: null, type: null, startX: 0, origStart: new Date(), origEnd: new Date(), goal: null };
       setDraggingId(null);
@@ -612,10 +612,10 @@ const GoalRoadmapV3: React.FC = () => {
     }
   }, [handleLinkPointerMove, wouldCreateCycle]);
 
-  const startDrag = useCallback((ev: React.PointerEvent, goal: Goal, type: 'move'|'start'|'end') => {
+  const startDrag = useCallback((ev: React.PointerEvent, goal: Goal, type: 'move' | 'start' | 'end') => {
     ev.preventDefault();
     const startDate = goal.startDate ? new Date(goal.startDate) : new Date();
-    const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now()+90*DAY_MS));
+    const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now() + 90 * DAY_MS));
 
     if (type === 'move' && (ev.metaKey || ev.altKey)) {
       dragState.current = { id: goal.id, type: 'link', startX: ev.clientX, origStart: startDate, origEnd: endDate, goal };
@@ -638,14 +638,14 @@ const GoalRoadmapV3: React.FC = () => {
     const guides: number[] = [];
     const start = new Date(timeRange.start);
     const end = new Date(timeRange.end);
-    const startOfWeek = (d: Date) => { const c = new Date(d); const day=(c.getDay()+6)%7; c.setDate(c.getDate()-day); c.setHours(0,0,0,0); return c; };
+    const startOfWeek = (d: Date) => { const c = new Date(d); const day = (c.getDay() + 6) % 7; c.setDate(c.getDate() - day); c.setHours(0, 0, 0, 0); return c; };
     if (zoom === 'weeks' || zoom === 'months') {
       let c = startOfWeek(start);
-      while (c <= end) { guides.push(xFromDate(new Date(c))); c.setDate(c.getDate()+7); }
+      while (c <= end) { guides.push(xFromDate(new Date(c))); c.setDate(c.getDate() + 7); }
     } else if (zoom === 'quarters') {
-      for (let y=start.getFullYear(); y<=end.getFullYear(); y++) { [0,3,6,9].forEach(m => { const d=new Date(y,m,1); if(d>=start&&d<=end) guides.push(xFromDate(d)); }); }
+      for (let y = start.getFullYear(); y <= end.getFullYear(); y++) { [0, 3, 6, 9].forEach(m => { const d = new Date(y, m, 1); if (d >= start && d <= end) guides.push(xFromDate(d)); }); }
     } else if (zoom === 'years') {
-      for (let y=start.getFullYear(); y<=end.getFullYear(); y++) { const d=new Date(y,0,1); if(d>=start&&d<=end) guides.push(xFromDate(d)); }
+      for (let y = start.getFullYear(); y <= end.getFullYear(); y++) { const d = new Date(y, 0, 1); if (d >= start && d <= end) guides.push(xFromDate(d)); }
     }
     setGuideXs(guides);
   }, [pointerMove, pointerUp, timeRange.start.getTime(), timeRange.end.getTime(), xFromDate, zoom, handleLinkPointerMove, handleLinkPointerUp]);
@@ -653,7 +653,7 @@ const GoalRoadmapV3: React.FC = () => {
   // Keyboard nudges for accessibility and precision
   const onKeyNudge = useCallback(async (e: React.KeyboardEvent, g: Goal) => {
     const start = g.startDate ? new Date(g.startDate) : new Date();
-    const end = g.endDate ? new Date(g.endDate) : new Date(Date.now()+90*DAY_MS);
+    const end = g.endDate ? new Date(g.endDate) : new Date(Date.now() + 90 * DAY_MS);
     let ds = 0, de = 0;
     const step = e.shiftKey ? 7 : 1;
     if (e.key === 'ArrowLeft') { ds -= step; de -= step; }
@@ -662,8 +662,8 @@ const GoalRoadmapV3: React.FC = () => {
     if (e.key === 'ArrowDown') { de += step; }
     if (ds === 0 && de === 0) return;
     e.preventDefault();
-    const ns = new Date(start); ns.setDate(ns.getDate()+ds); ns.setHours(0,0,0,0);
-    const ne = new Date(end); ne.setDate(ne.getDate()+de); ne.setHours(0,0,0,0);
+    const ns = new Date(start); ns.setDate(ns.getDate() + ds); ns.setHours(0, 0, 0, 0);
+    const ne = new Date(end); ne.setDate(ne.getDate() + de); ne.setHours(0, 0, 0, 0);
     try {
       await updateDoc(doc(db, 'goals', g.id), { startDate: ns.getTime(), endDate: ne.getTime(), updatedAt: serverTimestamp() });
       if (currentUser?.uid) {
@@ -833,16 +833,16 @@ const GoalRoadmapV3: React.FC = () => {
       '--axis-h': `${axisHeight}px`,
       '--toolbar-h': `${toolbarHeight}px`,
       '--header-overlap': `${HEADER_OVERLAP_PX}px`,
-      '--axis-gap': `0px`
+      '--axis-gap': `${AXIS_GAP_PX}px`
     }) as React.CSSProperties,
     [axisHeight, toolbarHeight]
   );
 
-  
+
 
   const handleGenerateStories = useCallback(async (goalId: string) => {
     try { const callable = httpsCallable(functions, 'generateStoriesForGoal'); await callable({ goalId }); }
-    catch (e:any) { alert('AI story generation failed: ' + (e?.message || 'unknown')); }
+    catch (e: any) { alert('AI story generation failed: ' + (e?.message || 'unknown')); }
   }, [functions]);
 
   const handleAiOrchestrate = useCallback(async (goalId: string) => {
@@ -861,12 +861,12 @@ const GoalRoadmapV3: React.FC = () => {
       setSchedulingId(g.id);
       const runPlanner = httpsCallable(functions, 'runPlanner');
       const minutes = Math.min(Math.max(60, (g.timeToMasterHours || 2) * 60), 300);
-      const startDate = new Date().toISOString().slice(0,10);
+      const startDate = new Date().toISOString().slice(0, 10);
       const result = await runPlanner({ persona: 'personal', startDate, days: 7, focusGoalId: g.id, goalTimeRequest: minutes });
-      const data:any = result.data || {};
+      const data: any = result.data || {};
       const blocksCreated = data?.llm?.blocksCreated || (Array.isArray(data?.llm?.blocks) ? data.llm.blocks.length : 0);
       window.alert(`AI scheduled ${blocksCreated} time block${blocksCreated === 1 ? '' : 's'} for "${g.title}"`);
-    } catch (err:any) {
+    } catch (err: any) {
       const rawMessage = String(err?.message || 'unknown');
       const friendly = rawMessage.toLowerCase().includes('blocks is not iterable')
         ? 'The AI scheduler could not create new calendar blocks. Try updating the goal with a clear date range or duration and run the planner again.'
@@ -880,7 +880,7 @@ const GoalRoadmapV3: React.FC = () => {
   const handleAddNote = useCallback(async () => {
     if (!noteGoalId || !currentUser?.uid || !noteDraft.trim()) return;
     await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft.trim(), currentUser.uid, currentUser.email || '', 'personal', noteGoalId, 'human');
-    try { await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft.trim(), updatedAt: serverTimestamp() }); } catch {}
+    try { await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft.trim(), updatedAt: serverTimestamp() }); } catch { }
     setNoteDraft(''); setNoteGoalId(null);
   }, [noteGoalId, noteDraft, currentUser?.uid]);
 
@@ -908,7 +908,7 @@ const GoalRoadmapV3: React.FC = () => {
   type TimedGoal = { id: string; start: number; end: number; raw: Goal };
   const computeLanes = useCallback((items: TimedGoal[]): Map<string, number> => {
     // Greedy interval graph coloring by start time
-    const sorted = [...items].sort((a,b) => a.start - b.start || a.end - b.end);
+    const sorted = [...items].sort((a, b) => a.start - b.start || a.end - b.end);
     const laneEnds: number[] = [];
     const assignment = new Map<string, number>();
     for (const it of sorted) {
@@ -954,8 +954,8 @@ const GoalRoadmapV3: React.FC = () => {
         const timedGoals: TimedGoal[] = allGoals.map(g => {
           const start = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
           const end = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now() + 90 * DAY_MS));
-          start.setHours(0,0,0,0);
-          end.setHours(0,0,0,0);
+          start.setHours(0, 0, 0, 0);
+          end.setHours(0, 0, 0, 0);
           return { id: g.id, start: start.getTime(), end: end.getTime(), raw: g };
         });
         const laneAssignment = computeLanes(timedGoals);
@@ -1005,8 +1005,8 @@ const GoalRoadmapV3: React.FC = () => {
           {row.visibleGoals.map((g) => {
             const startDate = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
             const endDateRaw = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now() + 90 * DAY_MS));
-            const start = new Date(startDate); start.setHours(0,0,0,0);
-            const end = new Date(endDateRaw); end.setHours(0,0,0,0);
+            const start = new Date(startDate); start.setHours(0, 0, 0, 0);
+            const end = new Date(endDateRaw); end.setHours(0, 0, 0, 0);
             if (end < start) end.setTime(start.getTime());
             const durationMs = end.getTime() - start.getTime();
             const isMilestone = durationMs >= 0 && durationMs < MILESTONE_THRESHOLD_MS;
@@ -1229,7 +1229,7 @@ const GoalRoadmapV3: React.FC = () => {
         {/* Sticky zoom controls on the top-left */}
         <Button size="sm" variant="outline-secondary" onClick={() => {
           // Step zoom in: 5y -> 3y -> 1y -> quarters -> months -> weeks
-          const presets: { z: Zoom; y?: 1|3|5 }[] = [
+          const presets: { z: Zoom; y?: 1 | 3 | 5 }[] = [
             { z: 'weeks' }, { z: 'months' }, { z: 'quarters' }, { z: 'years', y: 1 }, { z: 'years', y: 3 }, { z: 'years', y: 5 }
           ];
           const idx = presets.findIndex(p => p.z === zoom && (p.z !== 'years' || p.y === yearSpan));
@@ -1240,7 +1240,7 @@ const GoalRoadmapV3: React.FC = () => {
         }} aria-label="Zoom In"><ZoomIn size={14} /></Button>
         <Button size="sm" variant="outline-secondary" onClick={() => {
           // Step zoom out: weeks -> months -> quarters -> 1y -> 3y -> 5y
-          const presets: { z: Zoom; y?: 1|3|5 }[] = [
+          const presets: { z: Zoom; y?: 1 | 3 | 5 }[] = [
             { z: 'weeks' }, { z: 'months' }, { z: 'quarters' }, { z: 'years', y: 1 }, { z: 'years', y: 3 }, { z: 'years', y: 5 }
           ];
           const idx = presets.findIndex(p => p.z === zoom && (p.z !== 'years' || p.y === yearSpan));
@@ -1250,17 +1250,17 @@ const GoalRoadmapV3: React.FC = () => {
           if (next.z === 'years' && next.y) setYearSpan(next.y);
         }} aria-label="Zoom Out"><ZoomOut size={14} /></Button>
         <ButtonGroup size="sm" className="ms-1">
-          <Button variant={zoom==='weeks' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('weeks'); }}>Week</Button>
-          <Button variant={zoom==='months' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('months'); }}>Month</Button>
-          <Button variant={zoom==='quarters' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('quarters'); }}>Quarter</Button>
-          <Button variant={zoom==='years' && yearSpan===1 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(1); }}>1y</Button>
-          <Button variant={zoom==='years' && yearSpan===3 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(3); }}>3y</Button>
-          <Button variant={zoom==='years' && yearSpan===5 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(5); }}>5y</Button>
+          <Button variant={zoom === 'weeks' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('weeks'); }}>Week</Button>
+          <Button variant={zoom === 'months' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('months'); }}>Month</Button>
+          <Button variant={zoom === 'quarters' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('quarters'); }}>Quarter</Button>
+          <Button variant={zoom === 'years' && yearSpan === 1 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(1); }}>1y</Button>
+          <Button variant={zoom === 'years' && yearSpan === 3 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(3); }}>3y</Button>
+          <Button variant={zoom === 'years' && yearSpan === 5 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(5); }}>5y</Button>
         </ButtonGroup>
         {/* Horizontal pan controls */}
         <ButtonGroup size="sm" className="ms-2">
-          <Button variant="outline-secondary" aria-label="Scroll left" onClick={() => { const el = containerRef.current; if (el) el.scrollBy({ left: -Math.round(el.clientWidth*0.6), behavior: 'smooth' }); }}><ChevronLeft size={16} /></Button>
-          <Button variant="outline-secondary" aria-label="Scroll right" onClick={() => { const el = containerRef.current; if (el) el.scrollBy({ left: Math.round(el.clientWidth*0.6), behavior: 'smooth' }); }}><ChevronRight size={16} /></Button>
+          <Button variant="outline-secondary" aria-label="Scroll left" onClick={() => { const el = containerRef.current; if (el) el.scrollBy({ left: -Math.round(el.clientWidth * 0.6), behavior: 'smooth' }); }}><ChevronLeft size={16} /></Button>
+          <Button variant="outline-secondary" aria-label="Scroll right" onClick={() => { const el = containerRef.current; if (el) el.scrollBy({ left: Math.round(el.clientWidth * 0.6), behavior: 'smooth' }); }}><ChevronRight size={16} /></Button>
         </ButtonGroup>
         <Button size="sm" variant={customRange ? 'primary' : 'outline-secondary'} onClick={() => {
           // Fit all goals into view
@@ -1274,17 +1274,17 @@ const GoalRoadmapV3: React.FC = () => {
           if (bounds.length >= 2) {
             let min = Math.min(...bounds);
             let max = Math.max(...bounds);
-            if (min === max) max = min + 30*86400000;
+            if (min === max) max = min + 30 * 86400000;
             const pad = Math.round((max - min) * 0.08);
             const start = new Date(min - pad);
             const end = new Date(max + pad);
-            start.setHours(0,0,0,0); end.setHours(0,0,0,0);
+            start.setHours(0, 0, 0, 0); end.setHours(0, 0, 0, 0);
             setCustomRange({ start, end });
             setZoom('years');
           }
         }} aria-label="Fit All"><Maximize2 size={14} /></Button>
         {/* Global activity feed button removed; open per-goal Activity Stream from the goal actions. */}
-        <Button size="sm" variant="outline-secondary" onClick={() => { 
+        <Button size="sm" variant="outline-secondary" onClick={() => {
           // Zoom to Month around today and filter to goals with stories in selected sprint
           setCustomRange(null);
           setZoom('months');

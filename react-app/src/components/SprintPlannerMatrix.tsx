@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Card, Button, Row, Col, Badge } from 'react-bootstrap';
-import { 
-  ChevronDown, 
-  ChevronRight, 
+import { Card, Button, Row, Col, Badge, Container } from 'react-bootstrap';
+import {
+  ChevronDown,
+  ChevronRight,
   Calendar,
   Layers,
   Bullseye,
@@ -57,7 +57,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   const [subGoals, setSubGoals] = useState<SubGoal[]>([]);
   const [stories, setStories] = useState<EnhancedStory[]>([]);
   const [capacityBySprint, setCapacityBySprint] = useState<Record<string, number>>({});
-  
+
   // UI state
   const [rowExpansion, setRowExpansion] = useState<PlannerRowExpansion>({});
   const [loading, setLoading] = useState(true);
@@ -65,7 +65,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   // Auth and persona context
   const { currentUser } = useAuth();
   const { currentPersona: contextPersona } = usePersona();
-  
+
   // Use the passed persona or context persona
   const activePersona = currentPersona || contextPersona;
 
@@ -157,7 +157,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', activePersona)
     );
-    
+
     const goalsUnsub = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -174,7 +174,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', activePersona)
     );
-    
+
     const storiesUnsub = onSnapshot(storiesQuery, (snapshot) => {
       const storiesData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -199,7 +199,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
         setRowExpansion(JSON.parse(savedExpansion));
       }
     }
-    
+
     setLoading(false);
 
     return () => {
@@ -251,7 +251,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   // Group goals by theme
   const goalsByTheme = useMemo(() => {
     const grouped: Record<string, Goal[]> = {};
-    
+
     goals.forEach(goal => {
       const themeId = goal.theme || 'Health'; // Use existing theme field
       if (!grouped[themeId]) {
@@ -266,7 +266,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
   // Group subgoals by goal
   const subGoalsByGoal = useMemo(() => {
     const grouped: Record<string, SubGoal[]> = {};
-    
+
     subGoals.forEach(subGoal => {
       const goalId = subGoal.goalId;
       if (!grouped[goalId]) {
@@ -294,9 +294,9 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
         className={`matrix-cell h-100${isOver ? ' is-over' : ''}`}
         style={{
           minHeight: '120px',
-          border: isOver ? `2px dashed ${themeColor}` : '1px solid var(--line)',
-          backgroundColor: cellStories.length > 0 ? 'var(--card)' : 'var(--panel)',
-          transition: 'border-color 0.15s ease',
+          border: isOver ? '2px dashed var(--brand, #0d6efd)' : '1px solid var(--line)',
+          backgroundColor: isOver ? 'rgba(13, 110, 253, 0.05)' : (cellStories.length > 0 ? 'var(--card)' : 'var(--panel)'),
+          transition: 'border-color 0.15s ease, background-color 0.15s ease',
         }}
         data-testid={`planner-cell-${sprintId}-${goal.id}-${subGoal?.id || 'root'}`}
       >
@@ -349,215 +349,222 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
 
   return (
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-      <div className="sprint-planner-matrix">
-      {/* Header */}
-      <Row className="mb-3 align-items-center">
-        <Col>
-          <h4 className="d-flex align-items-center gap-2">
-            <Calendar size={20} />
-            Sprint Planner Matrix
-            <Badge bg="secondary">{stories.length} stories</Badge>
-          </h4>
-          <p className="text-muted mb-0">
-            2-D view: Themes → Goals → SubGoals (rows) × Sprints (columns)
-          </p>
-        </Col>
-        <Col xs="auto" className="text-end">
-          <SprintSelector className="d-inline-block" />
-        </Col>
-      </Row>
+      <Container fluid className="p-3">
+        <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+          <Card.Body className="p-4">
+            <div className="sprint-planner-matrix">
+              {/* Header */}
+              <Row className="mb-3 align-items-center">
+                <Col>
+                  <h4 className="d-flex align-items-center gap-2">
+                    <Calendar size={20} />
+                    Sprint Planner Matrix
+                    <Badge bg="secondary">{stories.length} stories</Badge>
+                  </h4>
+                  <p className="text-muted mb-0">
+                    2-D view: Themes → Goals → SubGoals (rows) × Sprints (columns)
+                  </p>
+                </Col>
+                <Col xs="auto" className="text-end">
+                  <SprintSelector className="d-inline-block" />
+                </Col>
+              </Row>
 
-      {sprints.length === 0 ? (
-        <div className="text-center py-5">
-          <h5 className="text-muted">No sprints found</h5>
-          <p className="text-muted">Create some sprints to see the matrix view.</p>
-        </div>
-      ) : (
-        <>
-          {/* Sprint columns header */}
-          <div className="matrix-header mb-3">
-            <Row>
-              <Col xs={3} className="fw-bold">
-                Themes → Goals → SubGoals
-              </Col>
-              {sprints.map(sprint => {
-                const cap = capacityBySprint[sprint.id] || 20;
-                const total = stories.filter(st => (st as any).sprintId === sprint.id).reduce((sum, st) => sum + (st.points || 1), 0);
-                const over = total > cap;
-                const isSelected = selectedSprintId ? selectedSprintId === sprint.id : false;
-                return (
-                  <Col key={sprint.id} className="text-center">
-                    <Card
-                      className={`sprint-header ${isSelected ? 'border-primary shadow-sm' : ''}`}
-                      role="button"
-                      onClick={() => setSelectedSprintId(sprint.id)}
-                      style={{
-                        cursor: 'pointer',
-                        border: isSelected ? '2px solid var(--bs-primary)' : undefined,
-                      }}
-                    >
-                      <Card.Body className="p-2">
-                        <div className="fw-bold">{sprint.name}</div>
-                        <small className="text-muted d-block mb-1">
-                          {sprint.startDate ? new Date(sprint.startDate).toLocaleDateString() : 'No date'}
-                        </small>
-                        <div className="d-flex justify-content-center align-items-center gap-2">
-                          <span className={`badge ${over ? 'bg-danger' : 'bg-primary'}`}>{total}/{cap} pts</span>
-                          <Button size="sm" variant="outline-secondary" onClick={async () => {
-                            const raw = prompt('Set sprint capacity (points):', String(cap));
-                            const next = raw ? parseInt(raw) : NaN;
-                            if (!Number.isFinite(next) || next <= 0) return;
-                            try {
-                              const { doc, updateDoc } = await import('firebase/firestore');
-                              const { db } = await import('../firebase');
-                              await updateDoc(doc(db, 'sprints', sprint.id), { capacityPoints: next, updatedAt: Date.now() } as any);
-                            } catch (e) { console.warn('capacity update failed', e); }
-                          }}>Cap</Button>
-                        </div>
-                      </Card.Body>
-                    </Card>
-                  </Col>
-                );
-              })}
-            </Row>
-          </div>
-
-          {/* Matrix body */}
-          <div className="matrix-body">
-            {Object.entries(goalsByTheme).length === 0 ? (
-              <div className="text-center py-4">
-                <p className="text-muted">No goals found for the current persona. Create some goals to populate the matrix.</p>
-              </div>
-            ) : (
-              Object.entries(goalsByTheme).map(([themeId, themeGoals]) => {
-                const themeColor = getThemeColorById(themeId, themes);
-
-                return (
-                  <div key={themeId} className="theme-section mb-4">
-                    {/* Theme header */}
-                    <div 
-                      className="theme-header p-2 mb-2 rounded"
-                      style={{ 
-                        backgroundColor: `${themeColor.primary}20`,
-                        borderLeft: `4px solid ${themeColor.primary}`
-                      }}
-                    >
-                      <h6 className="mb-0 d-flex align-items-center gap-2">
-                        <Layers size={16} />
-                        {themeId}
-                        <Badge bg="light" text="dark">{themeGoals.length} goals</Badge>
-                      </h6>
-                    </div>
-
-                    {/* Goals */}
-                    {themeGoals.map(goal => {
-                      const goalSubGoals = subGoalsByGoal[goal.id] || [];
-                      const isExpanded = rowExpansion[themeId]?.[goal.id] || false;
-                      const goalColor = getThemeColorById(getThemeName(goal.theme) || 'Health', themes);
-
-                      return (
-                        <div key={goal.id} className="goal-section mb-3">
-                          {/* Goal row */}
-                          <Row className="goal-row mb-2">
-                            <Col xs={3} className="goal-label">
-                              <div className="d-flex align-items-center gap-2">
-                                {goalSubGoals.length > 0 && (
-                                  <Button
-                                    variant="link"
-                                    size="sm"
-                                    className="p-0"
-                                    onClick={() => toggleThemeExpansion(themeId, goal.id)}
-                                  >
-                                    {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                  </Button>
-                                )}
-                                <Bullseye size={16} style={{ color: goalColor.primary }} />
-                                <span className="fw-medium">{goal.title}</span>
-                            {goalSubGoals.length > 0 && (
-                                  <Badge bg="light" text="dark">{goalSubGoals.length}</Badge>
-                                )}
-                              </div>
-                            </Col>
-                            {sprints.map(sprint => (
-                              <Col key={`${goal.id}-${sprint.id}`}>
-                                <MatrixCell
-                                  sprintId={sprint.id}
-                                  goal={goal}
-                                  themeColor={goalColor.primary}
-                                />
-                              </Col>
-                            ))}
-                          </Row>
-
-                          {/* SubGoal rows (if expanded) */}
-                          {isExpanded && goalSubGoals.map(subGoal => (
-                            <Row key={subGoal.id} className="subgoal-row mb-2 ms-4">
-                              <Col xs={3} className="subgoal-label">
-                                <div className="d-flex align-items-center gap-2">
-                                  <Flag size={14} style={{ color: goalColor.primary }} />
-                                  <span className="text-muted">{subGoal.title}</span>
+              {sprints.length === 0 ? (
+                <div className="text-center py-5">
+                  <h5 className="text-muted">No sprints found</h5>
+                  <p className="text-muted">Create some sprints to see the matrix view.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Sprint columns header */}
+                  <div className="matrix-header mb-3">
+                    <Row>
+                      <Col xs={3} className="fw-bold">
+                        Themes → Goals → SubGoals
+                      </Col>
+                      {sprints.map(sprint => {
+                        const cap = capacityBySprint[sprint.id] || 20;
+                        const total = stories.filter(st => (st as any).sprintId === sprint.id).reduce((sum, st) => sum + (st.points || 1), 0);
+                        const over = total > cap;
+                        const isSelected = selectedSprintId ? selectedSprintId === sprint.id : false;
+                        return (
+                          <Col key={sprint.id} className="text-center">
+                            <Card
+                              className={`sprint-header ${isSelected ? 'border-primary shadow-sm' : ''}`}
+                              role="button"
+                              onClick={() => setSelectedSprintId(sprint.id)}
+                              style={{
+                                cursor: 'pointer',
+                                border: isSelected ? '2px solid var(--bs-primary)' : undefined,
+                              }}
+                            >
+                              <Card.Body className="p-2">
+                                <div className="fw-bold">{sprint.name}</div>
+                                <small className="text-muted d-block mb-1">
+                                  {sprint.startDate ? new Date(sprint.startDate).toLocaleDateString() : 'No date'}
+                                </small>
+                                <div className="d-flex justify-content-center align-items-center gap-2">
+                                  <span className={`badge ${over ? 'bg-danger' : 'bg-primary'}`}>{total}/{cap} pts</span>
+                                  <Button size="sm" variant="outline-secondary" onClick={async () => {
+                                    const raw = prompt('Set sprint capacity (points):', String(cap));
+                                    const next = raw ? parseInt(raw) : NaN;
+                                    if (!Number.isFinite(next) || next <= 0) return;
+                                    try {
+                                      const { doc, updateDoc } = await import('firebase/firestore');
+                                      const { db } = await import('../firebase');
+                                      await updateDoc(doc(db, 'sprints', sprint.id), { capacityPoints: next, updatedAt: Date.now() } as any);
+                                    } catch (e) { console.warn('capacity update failed', e); }
+                                  }}>Cap</Button>
                                 </div>
-                              </Col>
-                              {sprints.map(sprint => (
-                                <Col key={`${subGoal.id}-${sprint.id}`}>
-                                  <MatrixCell
-                                    sprintId={sprint.id}
-                                    goal={goal}
-                                    subGoal={subGoal}
-                                    themeColor={goalColor.primary}
-                                  />
-                                </Col>
-                              ))}
-                            </Row>
-                          ))}
-                        </div>
-                      );
-                    })}
+                              </Card.Body>
+                            </Card>
+                          </Col>
+                        );
+                      })}
+                    </Row>
                   </div>
-                );
-              })
-            )}
-          </div>
-        </>
-      )}
 
-      {/* Capacity overview */}
-      <div className="mt-3">
-        <h6>Sprint Capacity</h6>
-        <div className="d-flex flex-wrap gap-2">
-          {sprints.map((s) => {
-            const cap = capacityBySprint[s.id] || 20;
-            const total = stories.filter(st => (st as any).sprintId === s.id).reduce((sum, st) => sum + (st.points || 1), 0);
-            const over = total > cap;
-            const pct = Math.min(100, Math.round((total / Math.max(1, cap)) * 100));
-            return (
-              <div key={s.id} className="border rounded px-2 py-1 small">
-                <strong>{s.name}</strong> – {total}/{cap} pts
-                <div className="progress" style={{ height: 6, width: 160 }}>
-                  <div className={`progress-bar ${over ? 'bg-danger' : 'bg-success'}`} role="progressbar" style={{ width: `${pct}%` }} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}></div>
+                  {/* Matrix body */}
+                  <div className="matrix-body">
+                    {Object.entries(goalsByTheme).length === 0 ? (
+                      <div className="text-center py-4">
+                        <p className="text-muted">No goals found for the current persona. Create some goals to populate the matrix.</p>
+                      </div>
+                    ) : (
+                      Object.entries(goalsByTheme).map(([themeId, themeGoals]) => {
+                        const themeColor = getThemeColorById(themeId, themes);
+
+                        return (
+                          <div key={themeId} className="theme-section mb-4">
+                            {/* Theme header */}
+                            <div
+                              className="theme-header p-2 mb-2 rounded"
+                              style={{
+                                backgroundColor: `${themeColor.primary}20`,
+                                borderLeft: `4px solid ${themeColor.primary}`
+                              }}
+                            >
+                              <h6 className="mb-0 d-flex align-items-center gap-2">
+                                <Layers size={16} />
+                                {themeId}
+                                <Badge bg="light" text="dark">{themeGoals.length} goals</Badge>
+                              </h6>
+                            </div>
+
+                            {/* Goals */}
+                            {themeGoals.map(goal => {
+                              const goalSubGoals = subGoalsByGoal[goal.id] || [];
+                              const isExpanded = rowExpansion[themeId]?.[goal.id] || false;
+                              const goalColor = getThemeColorById(getThemeName(goal.theme) || 'Health', themes);
+
+                              return (
+                                <div key={goal.id} className="goal-section mb-3">
+                                  {/* Goal row */}
+                                  <Row className="goal-row mb-2">
+                                    <Col xs={3} className="goal-label">
+                                      <div className="d-flex align-items-center gap-2">
+                                        {goalSubGoals.length > 0 && (
+                                          <Button
+                                            variant="link"
+                                            size="sm"
+                                            className="p-0"
+                                            onClick={() => toggleThemeExpansion(themeId, goal.id)}
+                                          >
+                                            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                          </Button>
+                                        )}
+                                        <Bullseye size={16} style={{ color: goalColor.primary }} />
+                                        <span className="fw-medium">{goal.title}</span>
+                                        {goalSubGoals.length > 0 && (
+                                          <Badge bg="light" text="dark">{goalSubGoals.length}</Badge>
+                                        )}
+                                      </div>
+                                    </Col>
+                                    {sprints.map(sprint => (
+                                      <Col key={`${goal.id}-${sprint.id}`}>
+                                        <MatrixCell
+                                          sprintId={sprint.id}
+                                          goal={goal}
+                                          themeColor={goalColor.primary}
+                                        />
+                                      </Col>
+                                    ))}
+                                  </Row>
+
+                                  {/* SubGoal rows (if expanded) */}
+                                  {isExpanded && goalSubGoals.map(subGoal => (
+                                    <Row key={subGoal.id} className="subgoal-row mb-2 ms-4">
+                                      <Col xs={3} className="subgoal-label">
+                                        <div className="d-flex align-items-center gap-2">
+                                          <Flag size={14} style={{ color: goalColor.primary }} />
+                                          <span className="text-muted">{subGoal.title}</span>
+                                        </div>
+                                      </Col>
+                                      {sprints.map(sprint => (
+                                        <Col key={`${subGoal.id}-${sprint.id}`}>
+                                          <MatrixCell
+                                            sprintId={sprint.id}
+                                            goal={goal}
+                                            subGoal={subGoal}
+                                            themeColor={goalColor.primary}
+                                          />
+                                        </Col>
+                                      ))}
+                                    </Row>
+                                  ))}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* Capacity overview */}
+              <div className="mt-3">
+                <h6>Sprint Capacity</h6>
+                <div className="d-flex flex-wrap gap-2">
+                  {sprints.map((s) => {
+                    const cap = capacityBySprint[s.id] || 20;
+                    const total = stories.filter(st => (st as any).sprintId === s.id).reduce((sum, st) => sum + (st.points || 1), 0);
+                    const over = total > cap;
+                    const pct = Math.min(100, Math.round((total / Math.max(1, cap)) * 100));
+                    return (
+                      <div key={s.id} className="border rounded px-2 py-1 small">
+                        <strong>{s.name}</strong> – {total}/{cap} pts
+                        <div className="progress" style={{ height: 6, width: 160 }}>
+                          <div className={`progress-bar ${over ? 'bg-danger' : 'bg-success'}`} role="progressbar" style={{ width: `${pct}%` }} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}></div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      </div>
 
-      {/* Instructions */}
-      <div className="mt-4 p-3 bg-light rounded">
-        <h6>📋 Sprint Planner Matrix (v3.0.8 - Real Data)</h6>
-        <small className="text-muted">
-          This is the 2-D Sprint Planner Matrix from the v3.0.8 specification. 
-          Stories are organized by Theme → Goal → SubGoal hierarchy (rows) and Sprint timeline (columns).
-          <br />
-          <strong>Status:</strong> Using live Firebase data with real-time updates
-          <br />
-          <strong>Features:</strong> Reference numbers (STRY-###), theme colors, priority display, drag &amp; drop reassignment, data persistence
-          <br />
-          <strong>Next iterations:</strong> SubGoal management, enhanced cell interactions, matrix analytics
-        </small>
-      </div>
-      </div>
-    </DndContext>
+              {/* Instructions */}
+              <div className="mt-4 p-3 bg-light rounded">
+                <h6>📋 Sprint Planner Matrix (v3.0.8 - Real Data)</h6>
+                <small className="text-muted">
+                  This is the 2-D Sprint Planner Matrix from the v3.0.8 specification.
+                  Stories are organized by Theme → Goal → SubGoal hierarchy (rows) and Sprint timeline (columns).
+                  <br />
+                  <strong>Status:</strong> Using live Firebase data with real-time updates
+                  <br />
+                  <strong>Features:</strong> Reference numbers (STRY-###), theme colors, priority display, drag &amp; drop reassignment, data persistence
+                  <br />
+                  <strong>Next iterations:</strong> SubGoal management, enhanced cell interactions, matrix analytics
+                </small>
+              </div>
+            </div>
+
+          </Card.Body>
+        </Card>
+      </Container>
+    </DndContext >
   );
 };
 

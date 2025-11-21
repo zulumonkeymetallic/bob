@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup, Badge } from 'react-bootstrap';
-import { Plus, Upload, List, Grid } from 'lucide-react';
+import { Plus, Upload, List, Grid, BookOpen, Inbox, TrendingUp, CheckCircle, FolderOpen } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Story, Goal, Task } from '../types';
+import { Story, Goal, Task, Sprint } from '../types';
 import ModernStoriesTable from './ModernStoriesTable';
 import AddStoryModal from './AddStoryModal';
 import EditStoryModal from './EditStoryModal';
@@ -18,22 +18,29 @@ import CompactSprintMetrics from './CompactSprintMetrics';
 import { themeVars } from '../utils/themeVars';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
+import StatCard from './common/StatCard';
+import PageHeader from './common/PageHeader';
+import { SkeletonStatCard } from './common/SkeletonLoader';
+import EmptyState from './common/EmptyState';
+import { colors } from '../utils/colors';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { sprints } = useSprint();
+  const [searchParams] = useSearchParams();
+  const { sprints: contextSprints } = useSprint(); // Renamed to avoid conflict
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [sprints, setSprints] = useState<Sprint[]>([]); // Local state for sprints
+  const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [filterGoalInput, setFilterGoalInput] = useState<string>('');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
   const [showEditStoryModal, setShowEditStoryModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -45,26 +52,13 @@ const StoriesManagement: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 📍 PAGE TRACKING
+  // Handle query parameters from Dashboard
   useEffect(() => {
-    console.log('🏠 PAGE NAVIGATION: Stories Management component mounted');
-    console.log('🌐 Current URL:', window.location.href);
-    console.log('📍 Current pathname:', window.location.pathname);
-    console.log('👤 Current user:', currentUser?.email);
-    console.log('🎭 Current persona:', currentPersona);
-    
-    return () => {
-      console.log('🏠 PAGE NAVIGATION: Stories Management component unmounted');
-    };
-  }, []);
-
-  // 🔧 FILTER TRACKING
-  useEffect(() => {
-    console.log('🔧 FILTER CHANGE - Stories Management:');
-    console.log('📋 Filter Status:', filterStatus);
-    console.log('🎯 Filter Goal:', filterGoal);
-    console.log('🔍 Search Term:', searchTerm || '(empty)');
-  }, [filterStatus, filterGoal, searchTerm]);
+    const filter = searchParams.get('filter');
+    if (filter === 'active') {
+      setFilterStatus('1'); // Status 1 = In Progress for stories
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const state = ((location as unknown) as { state?: { themeId?: string } | null }).state ?? null;
@@ -253,11 +247,11 @@ const StoriesManagement: React.FC = () => {
       console.log('📚 Adding new story:', storyData);
       console.log('👤 Current user:', currentUser?.email);
       console.log('🎭 Current persona:', currentPersona);
-      
+
       // Generate short reference like ST-3FUCOB, ensure uniqueness across current refs
       const existingRefs = stories.map(s => s.ref).filter(Boolean) as string[];
       const refNumber = generateRef('story', existingRefs);
-      
+
       const maxOrderIndex = stories.length > 0
         ? Math.max(...stories.map(s => (typeof s.orderIndex === 'number' ? s.orderIndex : 0)))
         : 0;
@@ -284,13 +278,13 @@ const StoriesManagement: React.FC = () => {
 
       // Add to Firestore
       const docRef = await addDoc(collection(db, 'stories'), newStory);
-      
+
       console.log('✅ Story created successfully with ID:', docRef.id);
       console.log('🔄 Real-time listener should pick this up automatically...');
-      
+
       // Small delay to ensure Firestore processes the write
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
     } catch (error) {
       console.error('❌ Error adding story:', error);
       throw error;
@@ -321,15 +315,6 @@ const StoriesManagement: React.FC = () => {
     return true;
   });
 
-  // Debug filtering
-  console.log('🔍 FILTER DEBUG:');
-  console.log('📊 Total stories:', stories.length);
-  console.log('🎯 Filter goal:', filterGoal);
-  console.log('📋 Filter status:', filterStatus);
-  console.log('🔍 Search term:', searchTerm);
-  console.log('✅ Filtered stories:', filteredStories.length);
-  console.log('📝 Stories being passed to table:', filteredStories.map(s => ({ id: s.id, title: s.title, goalId: s.goalId })));
-
   const orderedFilteredStories = [...filteredStories].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
 
   // Get counts for dashboard cards
@@ -341,132 +326,129 @@ const StoriesManagement: React.FC = () => {
   };
 
   return (
-    <div style={{ 
-      padding: '24px', 
+    <div style={{
+      padding: '24px',
       backgroundColor: themeVars.bg as string,
       minHeight: '100vh',
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
-        {/* Header */}
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center', 
-          marginBottom: '24px' 
-        }}>
-          <div>
-            <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
-              Stories Management
-            </h2>
-            <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '16px' }}>
-              Manage user stories and their relationships to goals
-            </p>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            {/* View Mode Toggle */}
-            <div style={{ display: 'flex', border: `1px solid ${themeVars.border}`, borderRadius: '6px', overflow: 'hidden' }}>
+        <PageHeader
+          title="Stories Management"
+          subtitle="Manage user stories and their relationships to goals"
+          breadcrumbs={[
+            { label: 'Home', href: '/' },
+            { label: 'Stories' }
+          ]}
+          actions={
+            <>
+              {/* View Mode Toggle */}
+              <div style={{ display: 'flex', border: `1px solid ${themeVars.border}`, borderRadius: '6px', overflow: 'hidden' }}>
+                <Button
+                  variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
+                  size="sm"
+                  onClick={() => setViewMode('list')}
+                  style={{
+                    borderRadius: '0',
+                    borderRight: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  <List size={14} />
+                  List
+                </Button>
+                <Button
+                  variant={viewMode === 'cards' ? 'primary' : 'outline-secondary'}
+                  size="sm"
+                  onClick={() => setViewMode('cards')}
+                  style={{
+                    borderRadius: '0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  <Grid size={14} />
+                  Cards
+                </Button>
+              </div>
+
+              <CompactSprintMetrics />
               <Button
-                variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
-                size="sm"
-                onClick={() => setViewMode('list')}
-                style={{ 
-                  borderRadius: '0',
-                  borderRight: 'none',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px'
-                }}
+                variant="outline-secondary"
+                onClick={() => setShowImportModal(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
               >
-                <List size={14} />
-                List
+                <Upload size={16} />
+                Import
               </Button>
               <Button
-                variant={viewMode === 'cards' ? 'primary' : 'outline-secondary'}
-                size="sm"
-                onClick={() => setViewMode('cards')}
-                style={{ 
-                  borderRadius: '0',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px'
-                }}
+                variant="primary"
+                onClick={() => setShowAddStoryModal(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
               >
-                <Grid size={14} />
-                Cards
+                <Plus size={16} />
+                Add Story
               </Button>
-            </div>
-            
-            <CompactSprintMetrics />
-            <Button 
-              variant="outline-secondary" 
-              onClick={() => setShowImportModal(true)}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-            >
-              <Upload size={16} />
-              Import
-            </Button>
-            <Button 
-              variant="primary" 
-              onClick={() => setShowAddStoryModal(true)}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-            >
-              <Plus size={16} />
-              Add Story
-            </Button>
-          </div>
-        </div>
+            </>
+          }
+        />
 
         {/* Dashboard Cards */}
         <Row className="mb-4">
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.text as string }}>
-                  {storyCounts.total}
-                </h3>
-                <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '14px', fontWeight: '500' }}>
-                  Total Stories
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.muted as string }}>
-                  {storyCounts.backlog}
-                </h3>
-                <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '14px', fontWeight: '500' }}>
-                  Backlog
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: themeVars.brand as string }}>
-                  {storyCounts.active}
-                </h3>
-                <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '14px', fontWeight: '500' }}>
-                  Active
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--green)' }}>
-                  {storyCounts.done}
-                </h3>
-                <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '14px', fontWeight: '500' }}>
-                  Done
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
+          {loading ? (
+            <>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard />
+              </Col>
+            </>
+          ) : (
+            <>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Total Stories"
+                  value={storyCounts.total}
+                  icon={BookOpen}
+                  iconColor={colors.brand.primary}
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Backlog"
+                  value={storyCounts.backlog}
+                  icon={Inbox}
+                  iconColor={colors.neutral[500]}
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Active"
+                  value={storyCounts.active}
+                  icon={TrendingUp}
+                  iconColor={colors.info.primary}
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Done"
+                  value={storyCounts.done}
+                  icon={CheckCircle}
+                  iconColor={colors.success.primary}
+                />
+              </Col>
+            </>
+          )}
         </Row>
 
         {/* Filters */}
@@ -542,8 +524,8 @@ const StoriesManagement: React.FC = () => {
                     </Button>
                   </div>
                 )}
-                <Button 
-                  variant="outline-secondary" 
+                <Button
+                  variant="outline-secondary"
                   onClick={() => {
                     setFilterStatus('all');
                     setFilterGoal('all');
@@ -562,10 +544,10 @@ const StoriesManagement: React.FC = () => {
 
         {/* Modern Stories Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))', minHeight: '600px' }}>
-          <Card.Header style={{ 
-            backgroundColor: themeVars.panel as string, 
-            borderBottom: `1px solid ${themeVars.border}`, 
-            padding: '20px 24px' 
+          <Card.Header style={{
+            backgroundColor: themeVars.panel as string,
+            borderBottom: `1px solid ${themeVars.border}`,
+            padding: '20px 24px'
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
               Stories ({orderedFilteredStories.length})
@@ -573,8 +555,8 @@ const StoriesManagement: React.FC = () => {
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
             {loading ? (
-              <div style={{ 
-                textAlign: 'center', 
+              <div style={{
+                textAlign: 'center',
                 padding: '60px 20px',
                 display: 'flex',
                 flexDirection: 'column',
@@ -584,6 +566,17 @@ const StoriesManagement: React.FC = () => {
                 <div className="spinner-border" style={{ marginBottom: '16px' }} />
                 <p style={{ margin: 0, color: themeVars.muted as string }}>Loading stories...</p>
               </div>
+            ) : orderedFilteredStories.length === 0 ? (
+              <EmptyState
+                icon={FolderOpen}
+                title="No stories found"
+                description="Get started by creating your first story or adjust your filters to see more results."
+                action={{
+                  label: 'Add Story',
+                  onClick: () => setShowAddStoryModal(true),
+                  variant: 'primary'
+                }}
+              />
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }} data-component="StoriesManagement">
                 {viewMode === 'list' ? (
@@ -601,7 +594,7 @@ const StoriesManagement: React.FC = () => {
                     onStoryReorder={handleStoryReorder}
                   />
                 ) : (
-                  <StoriesCardView 
+                  <StoriesCardView
                     stories={orderedFilteredStories}
                     goals={goals}
                     onStoryUpdate={handleStoryUpdate}
@@ -668,13 +661,13 @@ const StoriesManagement: React.FC = () => {
       )}
 
       {/* Add Story Modal */}
-      <AddStoryModal 
-        show={showAddStoryModal} 
+      <AddStoryModal
+        show={showAddStoryModal}
         onClose={() => {
           setShowAddStoryModal(false);
           // Refresh stories data when modal closes
           loadStoriesData();
-        }} 
+        }}
       />
 
       {/* Edit Story Modal */}

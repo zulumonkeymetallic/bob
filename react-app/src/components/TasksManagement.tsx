@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card, Container, Row, Col, Button, Form, Modal, Badge, Dropdown } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
@@ -8,22 +9,28 @@ import { useSprint } from '../contexts/SprintContext';
 import { Task, Story, Goal } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import { useSidebar } from '../contexts/SidebarContext';
-import { BookOpen, Target, Calendar, Plus, Filter, Search, Upload } from 'lucide-react';
+import { BookOpen, Target, Calendar, Plus, Filter, Search, Upload, ListChecks, Link, Unlink, FolderOpen } from 'lucide-react';
 import ImportModal from './ImportModal';
+import StatCard from './common/StatCard';
+import PageHeader from './common/PageHeader';
+import { SkeletonStatCard } from './common/SkeletonLoader';
+import EmptyState from './common/EmptyState';
+import { colors } from '../utils/colors';
 
 const TasksManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
   const { showSidebar } = useSidebar();
-  
+  const [searchParams] = useSearchParams();
+
   // State
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   const [showImportModal, setShowImportModal] = useState(false);
-  
+
   // Filters
   const [filterStory, setFilterStory] = useState<string>('all');
   const [filterGoal, setFilterGoal] = useState<string>('all');
@@ -93,20 +100,31 @@ const TasksManagement: React.FC = () => {
   }, [currentUser, currentPersona]);
 
   useEffect(() => {
-    if (initializedSprintDefault) return;
-    const active = sprints.find(s => (s.status ?? 0) === 1);
-    if (active) {
-      setFilterSprint(active.id);
+    const sprintParam = searchParams.get('sprint');
+    const filterParam = searchParams.get('filter');
+
+    if (sprintParam) {
+      setFilterSprint(sprintParam);
       setInitializedSprintDefault(true);
+    } else if (!initializedSprintDefault) {
+      const active = sprints.find(s => (s.status ?? 0) === 1);
+      if (active) {
+        setFilterSprint(active.id);
+        setInitializedSprintDefault(true);
+      }
     }
-  }, [sprints, initializedSprintDefault]);
+
+    if (filterParam === 'pending') {
+      setFilterStatus('0');
+    }
+  }, [sprints, initializedSprintDefault, searchParams]);
 
   // Filter tasks based on story/goal/sprint relationships
   const filteredTasks = tasks.filter(task => {
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     if (filterStatus !== 'all' && (task.status !== undefined ? task.status : 0).toString() !== filterStatus) return false;
     if (filterSprint !== 'all' && task.sprintId !== filterSprint) return false;
-    
+
     // Filter by story
     if (filterStory !== 'all') {
       if (filterStory === 'unlinked') {
@@ -115,7 +133,7 @@ const TasksManagement: React.FC = () => {
         if (task.storyId !== filterStory) return false;
       }
     }
-    
+
     // Filter by goal (through story relationship)
     if (filterGoal !== 'all') {
       if (filterGoal === 'unlinked') {
@@ -127,7 +145,7 @@ const TasksManagement: React.FC = () => {
         if (!story || story.goalId !== filterGoal) return false;
       }
     }
-    
+
     return true;
   });
 
@@ -135,12 +153,12 @@ const TasksManagement: React.FC = () => {
   const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
     try {
       console.log(`🔄 Updating task ${taskId}:`, updates);
-      
+
       await updateDoc(doc(db, 'tasks', taskId), {
         ...updates,
         updatedAt: serverTimestamp()
       });
-      
+
       console.log(`✅ Task ${taskId} updated successfully`);
     } catch (error) {
       console.error('❌ Error updating task:', error);
@@ -201,83 +219,81 @@ const TasksManagement: React.FC = () => {
 
   return (
     <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: '100vh' }}>
-      {/* Header */}
-      <Row className="mb-4">
-        <Col>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: 'var(--text)' }}>
-                Task Management
-              </h2>
-              <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
-                {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
-              </Badge>
-            </div>
-            
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <Button variant="outline-primary" onClick={() => setShowImportModal(true)}>
-                <Upload size={16} style={{ marginRight: '8px' }} />
-                Import
-              </Button>
-              <Button variant="primary" href="/task">
-                <Plus size={16} style={{ marginRight: '8px' }} />
-                Add Task
-              </Button>
-            </div>
-          </div>
-        </Col>
-      </Row>
+      <PageHeader
+        title="Task Management"
+        subtitle="Manage and track all tasks across stories and goals"
+        breadcrumbs={[
+          { label: 'Home', href: '/' },
+          { label: 'Tasks' }
+        ]}
+        badge={{ label: `${currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona`, variant: 'primary' }}
+        actions={
+          <>
+            <Button variant="outline-primary" onClick={() => setShowImportModal(true)}>
+              <Upload size={16} style={{ marginRight: '8px' }} />
+              Import
+            </Button>
+            <Button variant="primary" href="/task">
+              <Plus size={16} style={{ marginRight: '8px' }} />
+              Add Task
+            </Button>
+          </>
+        }
+      />
 
       {/* Statistics Cards */}
       <Row className="mb-4">
-        <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
-            <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--text)' }}>
-                {taskStats.total}
-              </div>
-              <div style={{ fontSize: '14px', color: 'var(--muted)', marginTop: '4px' }}>
-                Total Tasks
-              </div>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
-            <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--green)' }}>
-                {taskStats.linked}
-              </div>
-              <div style={{ fontSize: '14px', color: 'var(--muted)', marginTop: '4px' }}>
-                Linked to Stories
-              </div>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
-            <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--red)' }}>
-                {taskStats.unlinked}
-              </div>
-              <div style={{ fontSize: '14px', color: 'var(--muted)', marginTop: '4px' }}>
-                Unlinked Tasks
-              </div>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={3}>
-          <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
-            <Card.Body style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--purple)' }}>
-                {taskStats.withGoals}
-              </div>
-              <div style={{ fontSize: '14px', color: 'var(--muted)', marginTop: '4px' }}>
-                Connected to Goals
-              </div>
-            </Card.Body>
-          </Card>
-        </Col>
+        {loading ? (
+          <>
+            <Col md={3}>
+              <SkeletonStatCard />
+            </Col>
+            <Col md={3}>
+              <SkeletonStatCard />
+            </Col>
+            <Col md={3}>
+              <SkeletonStatCard />
+            </Col>
+            <Col md={3}>
+              <SkeletonStatCard />
+            </Col>
+          </>
+        ) : (
+          <>
+            <Col md={3}>
+              <StatCard
+                label="Total Tasks"
+                value={taskStats.total}
+                icon={ListChecks}
+                iconColor={colors.brand.primary}
+              />
+            </Col>
+            <Col md={3}>
+              <StatCard
+                label="Linked to Stories"
+                value={taskStats.linked}
+                icon={Link}
+                iconColor={colors.success.primary}
+              />
+            </Col>
+            <Col md={3}>
+              <StatCard
+                label="Unlinked Tasks"
+                value={taskStats.unlinked}
+                icon={Unlink}
+                iconColor={colors.danger.primary}
+              />
+            </Col>
+            <Col md={3}>
+              <StatCard
+                label="Connected to Goals"
+                value={taskStats.withGoals}
+                icon={Target}
+                iconColor={colors.themes.growth}
+              />
+            </Col>
+          </>
+        )}
       </Row>
 
       {/* Filters */}
@@ -410,57 +426,62 @@ const TasksManagement: React.FC = () => {
       <Row>
         <Col>
           <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
-            <Card.Header style={{ 
-              backgroundColor: 'var(--card)', 
-              borderBottom: '1px solid var(--line)', 
-              padding: '20px 24px' 
+            <Card.Header style={{
+              backgroundColor: 'var(--card)',
+              borderBottom: '1px solid var(--line)',
+              padding: '20px 24px'
             }}>
               <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
                 Tasks ({filteredTasks.length})
               </h5>
             </Card.Header>
             <Card.Body style={{ padding: 0 }}>
-              <div style={{ height: '600px', overflow: 'auto' }}>
-                <ModernTaskTable
-                  tasks={filteredTasks}
-                  stories={stories}
-                  goals={goals}
-                  sprints={sprints}
-                  onTaskUpdate={handleTaskUpdate}
-                  onTaskDelete={handleTaskDelete}
-                  onTaskPriorityChange={handleTaskPriorityChange}
+              {loading ? (
+                <div style={{
+                  textAlign: 'center',
+                  padding: '60px 20px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <div className="spinner-border" style={{ marginBottom: '16px' }} />
+                  <p style={{ margin: 0, color: 'var(--muted)' }}>Loading tasks...</p>
+                </div>
+              ) : filteredTasks.length === 0 ? (
+                <EmptyState
+                  icon={FolderOpen}
+                  title="No tasks found"
+                  description="Get started by creating your first task or adjust your filters to see more results."
+                  action={{
+                    label: 'Add Task',
+                    onClick: () => window.location.href = '/task',
+                    variant: 'primary'
+                  }}
                 />
-              </div>
+              ) : (
+                <div style={{ height: '600px', overflow: 'auto' }}>
+                  <ModernTaskTable
+                    tasks={filteredTasks}
+                    stories={stories}
+                    goals={goals}
+                    sprints={sprints}
+                    onTaskUpdate={handleTaskUpdate}
+                    onTaskDelete={handleTaskDelete}
+                    onTaskPriorityChange={handleTaskPriorityChange}
+                  />
+                </div>
+              )}
             </Card.Body>
           </Card>
         </Col>
       </Row>
 
-      {/* Empty State */}
-      {filteredTasks.length === 0 && (
-        <Row className="mt-4">
-          <Col>
-            <Card style={{ border: 'none', textAlign: 'center', padding: '60px 20px' }}>
-              <Card.Body>
-                <BookOpen size={48} style={{ color: 'var(--muted)', marginBottom: '16px' }} />
-                <h5 style={{ color: 'var(--text)', marginBottom: '8px' }}>No tasks found</h5>
-                <p style={{ color: 'var(--muted)', marginBottom: '24px' }}>
-                  Create your first task or adjust your filters to see tasks.
-                </p>
-                <Button variant="primary" href="/task">
-                  Create Task
-                </Button>
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
-      )}
-
-      {/* Import Tasks Modal */}
+      {/* Import Modal */}
       <ImportModal
-        entityType="tasks"
         show={showImportModal}
         onHide={() => setShowImportModal(false)}
+        entityType="tasks"
         onImportComplete={() => {
           setShowImportModal(false);
           // Tasks will auto-refresh via subscription

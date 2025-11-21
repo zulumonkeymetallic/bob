@@ -29,14 +29,14 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     status: 'New',
     priority: 2,
     estimatedCost: '',
-    kpis: [] as Array<{name: string; target: number; unit: string}>,
+    kpis: [] as Array<{ name: string; target: number; unit: string }>,
     parentGoalId: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
-const [submitResult, setSubmitResult] = useState<string | null>(null);
-const [toastMsg, setToastMsg] = useState<string | null>(null);
-const { themes } = useGlobalThemes();
-const [themeInput, setThemeInput] = useState('');
+  const [submitResult, setSubmitResult] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const { themes } = useGlobalThemes();
+  const [themeInput, setThemeInput] = useState('');
   const resolveThemeId = useCallback((input: string, fallback: number) => {
     const trimmed = (input || '').trim();
     if (!trimmed) return fallback;
@@ -104,39 +104,60 @@ const [themeInput, setThemeInput] = useState('');
 
   // Load goal data when modal opens
   useEffect(() => {
-    if (goal && show) {
-      // Map database values back to form values
-      const sizeMap = { 1: 'XS', 2: 'S', 3: 'M', 4: 'L', 5: 'XL' };
-      const statusMap = { 0: 'New', 1: 'Work in Progress', 2: 'Complete', 3: 'Blocked', 4: 'Deferred' };
-      
-      const startDateStr = (() => {
-        const d = toDate((goal as any).startDate);
-        return d ? d.toISOString().slice(0, 10) : '';
-      })();
-      const endDateStr = (() => {
-        const d = toDate((goal as any).endDate);
-        return d ? d.toISOString().slice(0, 10) : '';
-      })();
+    if (show) {
+      if (goal) {
+        // EDIT MODE: Map database values back to form values
+        const sizeMap = { 1: 'XS', 2: 'S', 3: 'M', 4: 'L', 5: 'XL' };
+        const statusMap = { 0: 'New', 1: 'Work in Progress', 2: 'Complete', 3: 'Blocked', 4: 'Deferred' };
 
-      setFormData({
-        title: goal.title || '',
-        description: goal.description || '',
-        theme: migrateThemeValue(goal.theme) || 1, // Migrate and default to Health & Fitness
-        size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
-        timeToMasterHours: goal.timeToMasterHours || 40,
-        confidence: goal.confidence || 0.5,
-        startDate: startDateStr,
-        endDate: endDateStr,
-        status: statusMap[goal.status as keyof typeof statusMap] || 'New',
-        priority: goal.priority || 2,
-        estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
-        kpis: goal.kpis || [],
-        parentGoalId: goal.parentGoalId || ''
-      });
-      const current = migrateThemeValue(goal.theme);
-      const themeObj = themes.find(t => t.id === current);
-      setThemeInput(themeObj?.label || '');
-      setParentSearch('');
+        const startDateStr = (() => {
+          const d = toDate((goal as any).startDate);
+          return d ? d.toISOString().slice(0, 10) : '';
+        })();
+        const endDateStr = (() => {
+          const d = toDate((goal as any).endDate);
+          return d ? d.toISOString().slice(0, 10) : '';
+        })();
+
+        setFormData({
+          title: goal.title || '',
+          description: goal.description || '',
+          theme: migrateThemeValue(goal.theme) || 1,
+          size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
+          timeToMasterHours: goal.timeToMasterHours || 40,
+          confidence: goal.confidence || 0.5,
+          startDate: startDateStr,
+          endDate: endDateStr,
+          status: statusMap[goal.status as keyof typeof statusMap] || 'New',
+          priority: goal.priority || 2,
+          estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
+          kpis: goal.kpis || [],
+          parentGoalId: goal.parentGoalId || ''
+        });
+        const current = migrateThemeValue(goal.theme);
+        const themeObj = themes.find(t => t.id === current);
+        setThemeInput(themeObj?.label || '');
+        setParentSearch('');
+      } else {
+        // CREATE MODE: Reset to defaults
+        setFormData({
+          title: '',
+          description: '',
+          theme: 1,
+          size: 'M',
+          timeToMasterHours: 40,
+          confidence: 0.5,
+          startDate: '',
+          endDate: '',
+          status: 'New',
+          priority: 2,
+          estimatedCost: '',
+          kpis: [],
+          parentGoalId: ''
+        });
+        setThemeInput('');
+        setParentSearch('');
+      }
     }
   }, [goal, show, themes]);
 
@@ -148,7 +169,7 @@ const [themeInput, setThemeInput] = useState('');
         const snap = await getDocs(q);
         const list = snap.docs.map(d => ({ id: (d.data() as any).potId || d.id, name: (d.data() as any).name || 'Pot' }));
         setMonzoPots(list);
-      } catch {}
+      } catch { }
     };
     if (show && currentUserId) loadPots();
   }, [show, currentUserId]);
@@ -159,9 +180,9 @@ const [themeInput, setThemeInput] = useState('');
     try {
       const qref = query(
         collection(db, 'activity_stream'),
-        where('entityType','==','goal'),
-        where('entityId','==', goal.id),
-        orderBy('createdAt','desc'),
+        where('entityType', '==', 'goal'),
+        where('entityId', '==', goal.id),
+        orderBy('createdAt', 'desc'),
         limit(15)
       );
       const unsub = onSnapshot(qref, (snap) => {
@@ -169,7 +190,7 @@ const [themeInput, setThemeInput] = useState('');
         setRecentActivity(list);
       });
       return () => unsub();
-    } catch {}
+    } catch { }
   }, [goal, show]);
 
   // KPI Management functions
@@ -194,31 +215,23 @@ const [themeInput, setThemeInput] = useState('');
   };
 
   const handleSubmit = async () => {
-    if (!goal || !formData.title.trim()) return;
+    if (!formData.title.trim()) return;
 
     setIsSubmitting(true);
     setSubmitResult(null);
 
     try {
-      console.log('🚀 EditGoalModal: Starting GOAL update', {
-        action: 'goal_update_start',
-        goalId: goal.id,
-        title: formData.title.trim(),
-        timestamp: new Date().toISOString()
-      });
-
       // Map form values back to database values
       const sizeMap = { 'XS': 1, 'S': 2, 'M': 3, 'L': 4, 'XL': 5 };
       const statusMap = { 'New': 0, 'Work in Progress': 1, 'Complete': 2, 'Blocked': 3, 'Deferred': 4 };
-      
+
       const selectedSize = sizes.find(s => s.value === formData.size);
-      
       const themeId = resolveThemeId(themeInput, formData.theme);
 
-      const goalUpdates: any = {
+      const goalData: any = {
         title: formData.title.trim(),
         description: formData.description.trim(),
-        theme: themeId, // Ensure numeric theme ID is persisted
+        theme: themeId,
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
@@ -237,46 +250,48 @@ const [themeInput, setThemeInput] = useState('');
       const rec = (document.getElementById('goal-recurrence') as HTMLSelectElement | null)?.value || '';
       const ty = (document.getElementById('goal-target-year') as HTMLInputElement | null)?.value || '';
       const potSel = (document.getElementById('goal-pot-id') as HTMLSelectElement | null)?.value || '';
-      if (ct) goalUpdates.costType = ct;
-      else goalUpdates.costType = null;
-      if (rec) goalUpdates.recurrence = rec;
-      else goalUpdates.recurrence = null;
-      goalUpdates.targetYear = ty ? Number(ty) : null;
-      goalUpdates.potId = potSel ? potSel : null;
+      if (ct) goalData.costType = ct;
+      else goalData.costType = null;
+      if (rec) goalData.recurrence = rec;
+      else goalData.recurrence = null;
+      goalData.targetYear = ty ? Number(ty) : null;
+      goalData.potId = potSel ? potSel : null;
 
-      console.log('💾 EditGoalModal: Updating GOAL in database', {
-        action: 'goal_update_save',
-        goalId: goal.id,
-        updates: goalUpdates,
-        timestamp: new Date().toISOString()
-      });
+      if (goal) {
+        // UPDATE existing goal
+        console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
+        await updateDoc(doc(db, 'goals', goal.id), goalData);
+        setSubmitResult(`✅ Goal updated successfully!`);
+        setToastMsg('Goal updated');
+      } else {
+        // CREATE new goal
+        console.log('🚀 EditGoalModal: Creating NEW goal');
+        goalData.createdAt = serverTimestamp();
+        goalData.ownerUid = currentUserId;
+        // Default persona if available, or fetch from context if passed (not available in props currently, assuming currentUserId context)
+        // For now, we'll rely on the parent component to handle persona or add it here if needed.
+        // Ideally, we should pass persona as a prop.
+        // Adding a safe fallback or update later.
 
-      await updateDoc(doc(db, 'goals', goal.id), goalUpdates);
+        await import('firebase/firestore').then(async ({ addDoc, collection }) => {
+          await addDoc(collection(db, 'goals'), goalData);
+        });
 
-      console.log('✅ EditGoalModal: GOAL updated successfully', {
-        action: 'goal_update_success',
-        goalId: goal.id,
-        timestamp: new Date().toISOString()
-      });
+        setSubmitResult(`✅ Goal created successfully!`);
+        setToastMsg('Goal created');
+      }
 
       setFormData(prev => ({ ...prev, theme: themeId }));
-      setSubmitResult(`✅ Goal updated successfully!`);
-      setToastMsg('Goal updated');
-      
+
       // Auto-close after success
       setTimeout(() => {
         onClose();
         setSubmitResult(null);
       }, 1500);
 
-    } catch (error) {
-      console.error('❌ EditGoalModal: GOAL update failed', {
-        action: 'goal_update_error',
-        error: error.message,
-        goalId: goal.id,
-        timestamp: new Date().toISOString()
-      });
-      setSubmitResult(`❌ Failed to update goal: ${error.message}`);
+    } catch (error: any) {
+      console.error('❌ EditGoalModal: Operation failed', error);
+      setSubmitResult(`❌ Failed: ${error.message}`);
     }
     setIsSubmitting(false);
   };
@@ -286,7 +301,7 @@ const [themeInput, setThemeInput] = useState('');
     onClose();
   };
 
-  if (!goal) return null;
+  // if (!goal) return null; // Removed to allow create mode
 
   return (
     <Modal show={show} onHide={handleClose} centered size="lg">
@@ -296,7 +311,7 @@ const [themeInput, setThemeInput] = useState('');
         </Toast>
       </ToastContainer>
       <Modal.Header closeButton>
-        <Modal.Title>Edit Goal: {goal.title}</Modal.Title>
+        <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <Form>
@@ -325,49 +340,49 @@ const [themeInput, setThemeInput] = useState('');
               />
             </InputGroup>
             <Form.Text className="text-muted">
-          Used for finance projections and Monzo pot alignment.
-        </Form.Text>
-      </Form.Group>
+              Used for finance projections and Monzo pot alignment.
+            </Form.Text>
+          </Form.Group>
 
-      <div className="row">
-        <div className="col-md-4">
-          <Form.Group className="mb-3">
-            <Form.Label>Cost Type</Form.Label>
-            <Form.Select id="goal-cost-type" defaultValue={(goal as any)?.costType || ''}>
-              <option value="">Not set</option>
-              <option value="one_off">One-off</option>
-              <option value="recurring">Recurring</option>
-            </Form.Select>
-          </Form.Group>
-        </div>
-        <div className="col-md-4">
-          <Form.Group className="mb-3">
-            <Form.Label>Recurrence</Form.Label>
-            <Form.Select id="goal-recurrence" defaultValue={(goal as any)?.recurrence || ''}>
-              <option value="">Not set</option>
-              <option value="monthly">Monthly</option>
-              <option value="annual">Annual</option>
-            </Form.Select>
-          </Form.Group>
-        </div>
-        <div className="col-md-4">
-          <Form.Group className="mb-3">
-            <Form.Label>Target Year</Form.Label>
-            <Form.Control id="goal-target-year" type="number" min="2024" step="1" defaultValue={(goal as any)?.targetYear || ''} placeholder="e.g., 2026" />
-          </Form.Group>
-        </div>
-      </div>
+          <div className="row">
+            <div className="col-md-4">
+              <Form.Group className="mb-3">
+                <Form.Label>Cost Type</Form.Label>
+                <Form.Select id="goal-cost-type" defaultValue={(goal as any)?.costType || ''}>
+                  <option value="">Not set</option>
+                  <option value="one_off">One-off</option>
+                  <option value="recurring">Recurring</option>
+                </Form.Select>
+              </Form.Group>
+            </div>
+            <div className="col-md-4">
+              <Form.Group className="mb-3">
+                <Form.Label>Recurrence</Form.Label>
+                <Form.Select id="goal-recurrence" defaultValue={(goal as any)?.recurrence || ''}>
+                  <option value="">Not set</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="annual">Annual</option>
+                </Form.Select>
+              </Form.Group>
+            </div>
+            <div className="col-md-4">
+              <Form.Group className="mb-3">
+                <Form.Label>Target Year</Form.Label>
+                <Form.Control id="goal-target-year" type="number" min="2024" step="1" defaultValue={(goal as any)?.targetYear || ''} placeholder="e.g., 2026" />
+              </Form.Group>
+            </div>
+          </div>
 
-      <Form.Group className="mb-3">
-        <Form.Label>Link Monzo Pot (optional)</Form.Label>
-        <Form.Select id="goal-pot-id" defaultValue={(goal as any)?.potId || ''}>
-          <option value="">No pot linked</option>
-          {monzoPots.map(p => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </Form.Select>
-        <Form.Text className="text-muted">If set, analytics will use this pot rather than name matching.</Form.Text>
-      </Form.Group>
+          <Form.Group className="mb-3">
+            <Form.Label>Link Monzo Pot (optional)</Form.Label>
+            <Form.Select id="goal-pot-id" defaultValue={(goal as any)?.potId || ''}>
+              <option value="">No pot linked</option>
+              {monzoPots.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </Form.Select>
+            <Form.Text className="text-muted">If set, analytics will use this pot rather than name matching.</Form.Text>
+          </Form.Group>
 
           <Form.Group className="mb-3">
             <Form.Label>Description</Form.Label>
@@ -424,10 +439,10 @@ const [themeInput, setThemeInput] = useState('');
                   onChange={(e) => {
                     const size = e.target.value;
                     const sizeData = sizes.find(s => s.value === size);
-                    setFormData({ 
-                      ...formData, 
-                      size, 
-                      timeToMasterHours: sizeData?.hours || 40 
+                    setFormData({
+                      ...formData,
+                      size,
+                      timeToMasterHours: sizeData?.hours || 40
                     });
                   }}
                 >
@@ -436,8 +451,8 @@ const [themeInput, setThemeInput] = useState('');
                   ))}
                 </Form.Select>
               </Form.Group>
+            </div>
           </div>
-        </div>
 
           <div className="row">
             <div className="col-md-12">
@@ -642,7 +657,7 @@ const [themeInput, setThemeInput] = useState('');
           onClick={handleSubmit}
           disabled={isSubmitting || !formData.title.trim()}
         >
-          {isSubmitting ? 'Updating...' : 'Update Goal'}
+          {isSubmitting ? (goal ? 'Updating...' : 'Creating...') : (goal ? 'Update Goal' : 'Create Goal')}
         </Button>
       </Modal.Footer>
     </Modal>

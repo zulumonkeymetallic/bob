@@ -151,8 +151,8 @@ function summariseTransactions(transactions) {
       // Basic recurring detection: appears in ≥2 distinct months and amount variance small
       const monthCount = entry.months.size;
       const amounts = entry.amounts || [];
-      const mean = amounts.length ? amounts.reduce((a,b)=>a+b,0) / amounts.length : 0;
-      const variance = amounts.length ? amounts.reduce((a,b)=>a + Math.pow(b-mean,2), 0) / amounts.length : 0;
+      const mean = amounts.length ? amounts.reduce((a, b) => a + b, 0) / amounts.length : 0;
+      const variance = amounts.length ? amounts.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / amounts.length : 0;
       const std = Math.sqrt(variance);
       const cv = mean > 0 ? std / mean : 0;
       const isRecurring = monthCount >= 2 && cv <= 0.25; // low variance across months
@@ -213,7 +213,7 @@ function buildBudgetProgress(totals, categories, budgetByCategory, budgetLabelIn
   return entries;
 }
 
-function buildGoalAlignment(pots, goals) {
+function buildGoalAlignment(pots, goals, avgMonthlySavings = 0) {
   const potIndex = new Map();
   pots.forEach((snap) => {
     const pot = snap.data ? snap.data() : snap;
@@ -257,6 +257,12 @@ function buildGoalAlignment(pots, goals) {
     const shortfall = estimatedCost ? Math.max(estimatedCost - potBalance, 0) : 0;
     const fundedPercent = estimatedCost ? Math.min((potBalance / estimatedCost) * 100, 100) : null;
 
+    // Calculate time to save based on shortfall and average monthly savings
+    let monthsToSave = null;
+    if (shortfall > 0 && avgMonthlySavings > 0) {
+      monthsToSave = Math.ceil(shortfall / avgMonthlySavings);
+    }
+
     goalSummaries.push({
       goalId,
       title,
@@ -269,6 +275,7 @@ function buildGoalAlignment(pots, goals) {
       fundedAmount,
       fundedPercent,
       shortfall,
+      monthsToSave,
     });
 
     if (!themeTotals[themeId]) {
@@ -331,7 +338,15 @@ async function computeMonzoAnalytics(uidOrDb, maybeUid) {
   }
 
   const aggregation = summariseTransactions(txSnap.docs);
-  const alignment = buildGoalAlignment(potSnap.docs, goalsSnap.docs);
+
+  // Calculate average monthly savings
+  const months = Object.values(aggregation.monthly);
+  const validMonths = months.filter(m => m.savings > 0);
+  const avgMonthlySavings = validMonths.length > 0
+    ? validMonths.reduce((sum, m) => sum + m.savings, 0) / validMonths.length
+    : 0;
+
+  const alignment = buildGoalAlignment(potSnap.docs, goalsSnap.docs, avgMonthlySavings);
 
   const summaryDoc = {
     ownerUid: uid,

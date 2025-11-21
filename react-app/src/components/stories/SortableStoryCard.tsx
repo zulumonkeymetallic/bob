@@ -132,6 +132,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                   event.stopPropagation();
                   showSidebar(story, 'story');
                 }}
+                onPointerDown={(e) => e.stopPropagation()}
               >
                 <Activity size={12} />
               </Button>
@@ -142,6 +143,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                 style={{ width: 24, height: 24, color: themeVars.muted }}
                 title="AI: Generate tasks for this story"
                 onClick={handleGenerateTasks}
+                onPointerDown={(e) => e.stopPropagation()}
               >
                 <Wand2 size={12} />
               </Button>
@@ -153,6 +155,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                   style={{ width: 24, height: 24, color: themeVars.muted }}
                   title="Edit story"
                   onClick={handleEditClick}
+                  onPointerDown={(e) => e.stopPropagation()}
                 >
                   <Edit3 size={12} />
                 </Button>
@@ -165,6 +168,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                   style={{ width: 24, height: 24, color: 'var(--red)' }}
                   title="Delete story"
                   onClick={handleDeleteClick}
+                  onPointerDown={(e) => e.stopPropagation()}
                 >
                   <Trash2 size={12} />
                 </Button>

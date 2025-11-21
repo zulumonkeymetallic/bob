@@ -1,0 +1,124 @@
+{"users": [
+{
+  "localId": "3L3nnXSuTPfr08c8DTXG5zYX37A2",
+  "email": "jdonnelly@jc1.tech",
+  "emailVerified": true,
+  "displayName": "Jim Donnelly",
+  "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocJv7eYkjIfBTW8fpsWHahxU23tonp1_pG56SsrrGL2qhSQiOqclCQ=s96-c",
+  "lastSignedInAt": "1763714257149",
+  "createdAt": "1754868542465",
+  "providerUserInfo": [
+    {
+      "providerId": "google.com",
+      "rawId": "111338066349076950508",
+      "email": "jdonnelly@jc1.tech",
+      "displayName": "Jim Donnelly",
+      "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocJv7eYkjIfBTW8fpsWHahxU23tonp1_pG56SsrrGL2qhSQiOqclCQ=s96-c"
+    }
+  ]
+},
+{
+  "localId": "5OoE6EOEdKhpmcpmNWO9rnN27D22",
+  "email": "test@jc1.tech",
+  "emailVerified": false,
+  "passwordHash": "LWwPLae0Lmwb9Do6XZcnTLvXGbpbHtE+d67q303Cgnb8YAfrd9gN36Ozek9cZf3Ho9PeKMK4W3p0FZHkU3IaaQ==",
+  "salt": "/ZO/e4Rmol4YUA==",
+  "lastSignedInAt": "1762243029949",
+  "createdAt": "1758297782995",
+  "disabled": false,
+  "providerUserInfo": []
+},
+{
+  "localId": "Cdmmvv8BhWMF2CvUgoNzQfxtGx62",
+  "email": "donnelly.jim@gmail.com",
+  "emailVerified": true,
+  "displayName": "Jim Donnelly",
+  "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocKtGoKVleQR-kNfbNeC1wxtqMO2AR4rjTQjlbVxPikdTfJmHw=s96-c",
+  "lastSignedInAt": "1763714864578",
+  "createdAt": "1756332118520",
+  "disabled": false,
+  "providerUserInfo": [
+    {
+      "providerId": "google.com",
+      "rawId": "101013448566815589276",
+      "email": "donnelly.jim@gmail.com",
+      "displayName": "Jim Donnelly",
+      "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocKtGoKVleQR-kNfbNeC1wxtqMO2AR4rjTQjlbVxPikdTfJmHw=s96-c"
+    }
+  ]
+},
+{
+  "localId": "DqXiL3LrtSZFuNWxY0ecaTZMSAE3",
+  "email": "veyilew195@etenx.com",
+  "emailVerified": false,
+  "passwordHash": "IWNdup8336DMb7dHwS4XgZcp1w9CBZ0yD5DBzEXMAiaGeI3HJtcBOK9BQvbzlVVEDW7ZRSNTQgSE72+6XBRMSw==",
+  "salt": "1g1wBLAY2c+LZg==",
+  "lastSignedInAt": "1759261216753",
+  "createdAt": "1759261216753",
+  "disabled": true,
+  "providerUserInfo": []
+},
+{
+  "localId": "GWmQRZIc0oXX69UYB9OQJXovmlq1",
+  "email": "123@jc1.tech",
+  "emailVerified": false,
+  "passwordHash": "RAiC7ZlZx1u6kDzZbm8UfaOJdTtGxP549qWIiNdyYvyR+z9xRYEkG24Tc2MYMvYgquC4hXmI01HSPsdCIe+yUA==",
+  "salt": "PmmslsUAYptTzA==",
+  "lastSignedInAt": "1758641311188",
+  "createdAt": "1758641252450",
+  "disabled": false,
+  "providerUserInfo": []
+},
+{
+  "localId": "agentic-ai-test-user",
+  "email": "agenticaitestuser@jc1.tech",
+  "emailVerified": true,
+  "passwordHash": "Mxq7KqzPFD/L5oEmmlN1B2DG8IHJICKARGpvqRCftQVuXAXopQAcGq3PE/upOzlL+ZQ/75UHYHY1sKk8g2cPPQ==",
+  "salt": "4+zt2xTBk1kaWA==",
+  "displayName": "Agentic AI Test User",
+  "lastSignedInAt": "1762106994759",
+  "createdAt": "1756805287284",
+  "disabled": false,
+  "providerUserInfo": []
+},
+{
+  "localId": "dFRC4DtXWeVsU2qnZTUAI0kEziu1",
+  "email": "jc1tech.servicenow@gmail.com",
+  "emailVerified": true,
+  "displayName": "jc1servicenow",
+  "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocL1u3F4oW8Z4VLjLc16SR_nMO9pMXbHWy63yYEDqUjjYQuHZQ=s96-c",
+  "lastSignedInAt": "1756728619137",
+  "createdAt": "1756587522383",
+  "disabled": true,
+  "providerUserInfo": [
+    {
+      "providerId": "google.com",
+      "rawId": "108362195034077886567",
+      "email": "jc1tech.servicenow@gmail.com",
+      "displayName": "jc1servicenow",
+      "photoUrl": "https://lh3.googleusercontent.com/a/ACg8ocL1u3F4oW8Z4VLjLc16SR_nMO9pMXbHWy63yYEDqUjjYQuHZQ=s96-c"
+    }
+  ]
+},
+{
+  "localId": "demo-user-jc1-tech",
+  "email": "demo@jc1.tech",
+  "emailVerified": true,
+  "passwordHash": "M1rQIZbm3AI9EM3y9YfUsvpaC0OgZB4Qzep4YrGWvs9Qc5abdNpAih5Lwx0meXa74mhmXgTc5VvxeUQmmlHgtA==",
+  "salt": "lQuxgXhhgQpiNw==",
+  "displayName": "Demo User",
+  "lastSignedInAt": "1756846464935",
+  "createdAt": "1756838369125",
+  "disabled": false,
+  "providerUserInfo": []
+},
+{
+  "localId": "dwlQ87iOU9gZolqus4MWAsQkHpw2",
+  "email": "testuser@jc1.tech",
+  "emailVerified": false,
+  "passwordHash": "+rXxis1xr+ze4eux78w+/m9Cg2tY0lwPZHrq7Ltg0CXJ8VXgb2WhJfxqn//Cz39PDCrIC1l+3piaKkg4rs9fQQ==",
+  "salt": "AcBqdLCTdnuVoQ==",
+  "lastSignedInAt": "1756799493573",
+  "createdAt": "1756799493573",
+  "providerUserInfo": []
+}]}

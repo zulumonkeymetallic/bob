@@ -28,7 +28,7 @@ interface BacklogItem {
     price?: number;
     genres?: string[];
     releaseDate?: string;
-    
+
     // Trakt specific
     traktId?: string;
     imdbId?: string;
@@ -62,13 +62,21 @@ const BacklogManager: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  
-  const [newItem, setNewItem] = useState({
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const [newItem, setNewItem] = useState<{
+    title: string;
+    description: string;
+    priority: 'low' | 'medium' | 'high';
+    tags: string;
+    source: 'manual' | 'steam' | 'trakt';
+  }>({
     title: '',
     description: '',
-    priority: 'medium' as const,
+    priority: 'medium',
     tags: '',
-    source: 'manual' as const
+    source: 'manual'
   });
 
   const loadBacklogs = useCallback(() => {
@@ -85,17 +93,17 @@ const BacklogManager: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    
+
     // Load backlogs from localStorage or API
     loadBacklogs();
-    
+
     // Load goals and sprints from Firebase
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
-    
+
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -103,7 +111,7 @@ const BacklogManager: React.FC = () => {
       })) as Goal[];
       setGoals(goalsData);
     });
-    
+
     return () => {
       unsubscribeGoals();
     };
@@ -137,27 +145,50 @@ const BacklogManager: React.FC = () => {
     }
   };
 
-  const addItem = () => {
+  const handleSave = () => {
     if (!newItem.title.trim()) return;
 
-    const item: BacklogItem = {
-      id: Date.now().toString(),
-      title: newItem.title,
-      description: newItem.description || undefined,
-      status: 'wishlist',
-      priority: newItem.priority,
-      dateAdded: new Date(),
-      tags: newItem.tags.split(',').map(t => t.trim()).filter(t => t),
-      source: newItem.source
-    };
+    let updatedBacklogs;
 
-    const updatedBacklogs = {
-      ...backlogs,
-      [activeTab]: [...backlogs[activeTab], item]
-    };
+    if (editingId) {
+      // Update existing item
+      updatedBacklogs = {
+        ...backlogs,
+        [activeTab]: backlogs[activeTab].map(item =>
+          item.id === editingId
+            ? {
+              ...item,
+              title: newItem.title,
+              description: newItem.description || undefined,
+              priority: newItem.priority,
+              tags: newItem.tags.split(',').map(t => t.trim()).filter(t => t),
+              // Keep original status and other fields
+            }
+            : item
+        )
+      };
+    } else {
+      // Add new item
+      const item: BacklogItem = {
+        id: Date.now().toString(),
+        title: newItem.title,
+        description: newItem.description || undefined,
+        status: 'wishlist',
+        priority: newItem.priority,
+        dateAdded: new Date(),
+        tags: newItem.tags.split(',').map(t => t.trim()).filter(t => t),
+        source: newItem.source
+      };
+
+      updatedBacklogs = {
+        ...backlogs,
+        [activeTab]: [...backlogs[activeTab], item]
+      };
+    }
 
     saveBacklogs(updatedBacklogs);
     setShowAddModal(false);
+    setEditingId(null);
     setNewItem({
       title: '',
       description: '',
@@ -167,16 +198,28 @@ const BacklogManager: React.FC = () => {
     });
   };
 
+  const handleEdit = (item: BacklogItem) => {
+    setEditingId(item.id);
+    setNewItem({
+      title: item.title,
+      description: item.description || '',
+      priority: item.priority,
+      tags: item.tags.join(', '),
+      source: item.source
+    });
+    setShowAddModal(true);
+  };
+
   const updateItemStatus = (itemId: string, newStatus: BacklogItem['status']) => {
     const updatedBacklogs = {
       ...backlogs,
       [activeTab]: backlogs[activeTab].map(item =>
         item.id === itemId
           ? {
-              ...item,
-              status: newStatus,
-              completedDate: newStatus === 'completed' ? new Date() : undefined
-            }
+            ...item,
+            status: newStatus,
+            completedDate: newStatus === 'completed' ? new Date() : undefined
+          }
           : item
       )
     };
@@ -193,7 +236,7 @@ const BacklogManager: React.FC = () => {
 
   const convertToStory = async (item: BacklogItem, goalId: string, sprintId?: string) => {
     if (!currentUser) return;
-    
+
     try {
       // Create a new story from the backlog item
       const storyData = {
@@ -201,8 +244,8 @@ const BacklogManager: React.FC = () => {
         description: item.description || '',
         goalId: goalId,
         status: 'backlog' as const,
-        priority: isPriority(item.priority, 'high') ? 3 : 
-                 isPriority(item.priority, 'medium') ? 2 : 1,
+        priority: isPriority(item.priority, 'high') ? 3 :
+          isPriority(item.priority, 'medium') ? 2 : 1,
         points: 3, // Default points
         wipLimit: 3,
         orderIndex: Date.now(),
@@ -213,12 +256,12 @@ const BacklogManager: React.FC = () => {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
-      
+
       await addDoc(collection(db, 'stories'), storyData);
-      
+
       // Update the backlog item status to completed (converted)
       updateItemStatus(item.id, 'completed');
-      
+
     } catch (error) {
       console.error('Error converting item to story:', error);
     }
@@ -236,7 +279,7 @@ const BacklogManager: React.FC = () => {
         default: return 'light';
       }
     }
-    
+
     // Legacy string support
     switch (theme) {
       case 'Health': return 'success';
@@ -269,8 +312,8 @@ const BacklogManager: React.FC = () => {
 
   const filteredItems = backlogs[activeTab].filter(item => {
     const matchesSearch = item.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         item.description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         item.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()));
+      item.description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      item.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()));
     const matchesFilter = filterStatus === 'all' || item.status === filterStatus;
     return matchesSearch && matchesFilter;
   });
@@ -365,7 +408,17 @@ const BacklogManager: React.FC = () => {
               Schedule via n8n ({selectedIds.length})
             </Button>
           )}
-          <Button variant="success" onClick={() => setShowAddModal(true)}>
+          <Button variant="success" onClick={() => {
+            setEditingId(null);
+            setNewItem({
+              title: '',
+              description: '',
+              priority: 'medium',
+              tags: '',
+              source: 'manual'
+            });
+            setShowAddModal(true);
+          }}>
             <Plus className="me-1" />
             Add Item
           </Button>
@@ -480,27 +533,27 @@ const BacklogManager: React.FC = () => {
                             />
                           </div>
                           <div className="flex-grow-1">
-                          <div className="d-flex align-items-center mb-1">
-                            <h6 className="mb-0 me-2">{item.title}</h6>
-                            <Badge bg={getStatusColor(item.status)} className="me-2">
-                              {item.status}
-                            </Badge>
-                            <Badge bg={getPriorityColor(item.priority)}>
-                              {item.priority}
-                            </Badge>
-                          </div>
-                          {item.description && (
-                            <p className="text-muted mb-1">{item.description}</p>
-                          )}
-                          {item.tags.length > 0 && (
-                            <div className="d-flex gap-1 flex-wrap">
-                              {item.tags.map(tag => (
-                                <Badge key={tag} bg="light" text="dark" style={{ fontSize: '0.7rem' }}>
-                                  {tag}
-                                </Badge>
-                              ))}
+                            <div className="d-flex align-items-center mb-1">
+                              <h6 className="mb-0 me-2">{item.title}</h6>
+                              <Badge bg={getStatusColor(item.status)} className="me-2">
+                                {item.status}
+                              </Badge>
+                              <Badge bg={getPriorityColor(item.priority)}>
+                                {item.priority}
+                              </Badge>
                             </div>
-                          )}
+                            {item.description && (
+                              <p className="text-muted mb-1">{item.description}</p>
+                            )}
+                            {item.tags.length > 0 && (
+                              <div className="d-flex gap-1 flex-wrap">
+                                {item.tags.map(tag => (
+                                  <Badge key={tag} bg="light" text="dark" style={{ fontSize: '0.7rem' }}>
+                                    {tag}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="d-flex flex-column gap-1">
@@ -526,8 +579,8 @@ const BacklogManager: React.FC = () => {
                                       <div className="mt-1">
                                         <small className="text-muted">Add to Sprint:</small>
                                         {sprints.slice(0, 3).map(sprint => (
-                                          <div 
-                                            key={sprint.id} 
+                                          <div
+                                            key={sprint.id}
                                             className="ps-2 py-1 border-start border-2 border-light cursor-pointer"
                                             onClick={(e) => {
                                               e.stopPropagation();
@@ -544,7 +597,7 @@ const BacklogManager: React.FC = () => {
                               </Dropdown.Menu>
                             </Dropdown>
                           )}
-                          
+
                           <Form.Select
                             size="sm"
                             value={item.status}
@@ -559,7 +612,7 @@ const BacklogManager: React.FC = () => {
                           <Button
                             variant="outline-primary"
                             size="sm"
-                            onClick={() => {/* TODO: Add edit functionality */}}
+                            onClick={() => handleEdit(item)}
                             className="me-1"
                           >
                             Edit
@@ -629,7 +682,7 @@ const BacklogManager: React.FC = () => {
                                 <Dropdown.Menu>
                                   <Dropdown.Header>Select Goal</Dropdown.Header>
                                   {goals.map(goal => (
-                                    <Dropdown.Item 
+                                    <Dropdown.Item
                                       key={goal.id}
                                       onClick={() => convertToStory(item, goal.id)}
                                     >
@@ -644,7 +697,7 @@ const BacklogManager: React.FC = () => {
                                 </Dropdown.Menu>
                               </Dropdown>
                             )}
-                            
+
                             <div className="d-flex gap-1">
                               <Form.Select
                                 size="sm"
@@ -656,6 +709,13 @@ const BacklogManager: React.FC = () => {
                                 <option value="completed">Completed</option>
                                 <option value="dropped">Dropped</option>
                               </Form.Select>
+                              <Button
+                                variant="outline-primary"
+                                size="sm"
+                                onClick={() => handleEdit(item)}
+                              >
+                                ✎
+                              </Button>
                               <Button
                                 variant="outline-danger"
                                 size="sm"
@@ -676,10 +736,10 @@ const BacklogManager: React.FC = () => {
         </Row>
       </Tab.Container>
 
-      {/* Add Item Modal */}
+      {/* Add/Edit Item Modal */}
       <Modal show={showAddModal} onHide={() => setShowAddModal(false)}>
         <Modal.Header closeButton>
-          <Modal.Title>Add {activeTab.slice(0, -1).charAt(0).toUpperCase() + activeTab.slice(1, -1)}</Modal.Title>
+          <Modal.Title>{editingId ? 'Edit' : 'Add'} {activeTab.slice(0, -1).charAt(0).toUpperCase() + activeTab.slice(1, -1)}</Modal.Title>
         </Modal.Header>
         <Modal.Body>
           <Form>
@@ -692,7 +752,7 @@ const BacklogManager: React.FC = () => {
                 placeholder={`Enter ${activeTab.slice(0, -1)} title`}
               />
             </Form.Group>
-            
+
             <Form.Group className="mb-3">
               <Form.Label>Description</Form.Label>
               <Form.Control
@@ -703,7 +763,7 @@ const BacklogManager: React.FC = () => {
                 placeholder="Optional description"
               />
             </Form.Group>
-            
+
             <Form.Group className="mb-3">
               <Form.Label>Priority</Form.Label>
               <Form.Select
@@ -715,7 +775,7 @@ const BacklogManager: React.FC = () => {
                 <option value="high">High</option>
               </Form.Select>
             </Form.Group>
-            
+
             <Form.Group className="mb-3">
               <Form.Label>Tags</Form.Label>
               <Form.Control
@@ -734,8 +794,8 @@ const BacklogManager: React.FC = () => {
           <Button variant="secondary" onClick={() => setShowAddModal(false)}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={addItem} disabled={!newItem.title.trim()}>
-            Add {activeTab.slice(0, -1).charAt(0).toUpperCase() + activeTab.slice(1, -1)}
+          <Button variant="primary" onClick={handleSave} disabled={!newItem.title.trim()}>
+            {editingId ? 'Save Changes' : `Add ${activeTab.slice(0, -1).charAt(0).toUpperCase() + activeTab.slice(1, -1)}`}
           </Button>
         </Modal.Footer>
       </Modal>
@@ -745,4 +805,4 @@ const BacklogManager: React.FC = () => {
 
 export default BacklogManager;
 
-export {};
+export { };

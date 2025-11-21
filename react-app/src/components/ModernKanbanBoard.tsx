@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Card, Row, Col, Button, Form, Modal, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { Card, Row, Col, Button, Form, Modal } from 'react-bootstrap';
 import {
   DndContext,
   closestCenter,
@@ -22,7 +22,7 @@ import {
 } from '@dnd-kit/sortable';
 import { pointerWithin } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { Edit3, Trash2, Target, BookOpen, Activity, SquarePlus, ListTodo, KanbanSquare, Maximize2, Minimize2, GripVertical, Wand2 } from 'lucide-react';
+import { Edit3, Trash2, Target, BookOpen, Activity, Plus, List, Grid, Maximize2, Minimize2, GripVertical, Wand2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs, limit } from 'firebase/firestore';
@@ -75,13 +75,13 @@ const DroppableArea: React.FC<{
 // Broad lane-level droppable to allow forgiving drops anywhere in a column
 const LaneDroppable: React.FC<{ id: string; children: React.ReactNode; style?: React.CSSProperties }>
   = ({ id, children, style }) => {
-  const { setNodeRef, isOver } = useDroppable({ id });
-  return (
-    <div ref={setNodeRef} className={`lane-drop-target${isOver ? ' is-over' : ''}`} style={style}>
-      {children}
-    </div>
-  );
-};
+    const { setNodeRef, isOver } = useDroppable({ id });
+    return (
+      <div ref={setNodeRef} className={`lane-drop-target${isOver ? ' is-over' : ''}`} style={style}>
+        {children}
+      </div>
+    );
+  };
 
 // Sortable Task Card Component
 const SortableTaskCard: React.FC<{
@@ -200,6 +200,7 @@ const SortableTaskCard: React.FC<{
                 style={{ width: 24, height: 24, color: themeVars.muted }}
                 title={converting ? 'Converting…' : 'Convert to Story'}
                 onClick={handleConvertToStory}
+                onPointerDown={(e) => e.stopPropagation()}
                 disabled={converting}
               >
                 <Wand2 size={11} />
@@ -214,6 +215,7 @@ const SortableTaskCard: React.FC<{
                   event.stopPropagation();
                   onEdit(task);
                 }}
+                onPointerDown={(e) => e.stopPropagation()}
               >
                 <Edit3 size={11} />
               </Button>
@@ -285,14 +287,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     padding: 6,
     borderRadius: 10
   };
-  
+
   // Data state
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const { sprints } = useSprint();
   const [loading, setLoading] = useState(true);
-  
+
   // UI state
   const [selectedItem, setSelectedItem] = useState<Story | Task | null>(null);
   const [selectedType, setSelectedType] = useState<'story' | 'task'>('story');
@@ -341,7 +343,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       const margin = 24; // a little breathing room
       const h = Math.max(320, Math.floor((window.innerHeight || document.documentElement.clientHeight) - top - margin));
       setBoardHeight(h);
-    } catch {}
+    } catch { }
   }, []);
 
   useEffect(() => {
@@ -357,10 +359,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         });
         if (boardContainerRef.current) ro.observe(boardContainerRef.current);
       }
-    } catch {}
+    } catch { }
     return () => {
       window.removeEventListener('resize', recomputeBoardHeight);
-      try { if (ro) ro.disconnect(); } catch {}
+      try { if (ro) ro.disconnect(); } catch { }
     };
   }, [recomputeBoardHeight]);
 
@@ -378,14 +380,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             if (derivation.sprintId && derivation.sprintId !== (existing as any).sprintId) {
               payload.sprintId = derivation.sprintId;
               const sprintName = sprintNameForId(sprints, derivation.sprintId) || derivation.sprintId;
-              const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0,10) : 'unknown';
+              const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0, 10) : 'unknown';
               try {
                 await addNote(existing.id, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.`, (existing as any).ref);
                 await trackFieldChange(existing.id, 'task', 'sprintId', String((existing as any).sprintId || ''), String(derivation.sprintId || ''), (existing as any).ref);
-              } catch {}
+              } catch { }
             }
           }
-        } catch {}
+        } catch { }
       }
       await updateDoc(docRef, payload);
     };
@@ -485,7 +487,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   // Sprint-aware filtering
   // When "All Sprints" is selected (selectedSprintId === ''), do not filter by sprint.
   // Only use active sprint fallback when no explicit selection is present (undefined/null).
-  const resolvedSprintId = (selectedSprintId === '' ? undefined : selectedSprintId) 
+  const resolvedSprintId = (selectedSprintId === '' ? undefined : selectedSprintId)
     ?? (sprints.find(s => isStatus(s.status, 'active'))?.id);
   const storiesInScope = resolvedSprintId
     ? stories.filter(s => (s as any).sprintId === resolvedSprintId)
@@ -530,9 +532,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
 
   const tasksInScope = resolvedSprintId
     ? tasks.filter(t => {
-        const explicit = (t as any).sprintId === resolvedSprintId;
-        return explicit || isDueDateInSprint(t);
-      })
+      const explicit = (t as any).sprintId === resolvedSprintId;
+      return explicit || isDueDateInSprint(t);
+    })
     : tasks;
 
   const getStoriesForLane = (status: string): Story[] => {
@@ -686,7 +688,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       });
       setTasks(tasksData);
       setLoading(false);
-    }, (error) => console.warn('[Kanban] tasks subscribe error', error?.message || error));
+    }, (error) => {
+      console.warn('[Kanban] tasks subscribe error', error?.message || error);
+      setLoading(false);
+    });
 
     return () => {
       unsubscribeGoals();
@@ -698,10 +703,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   // DnD handlers
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id);
-    
+
     const story = stories.find(s => s.id === event.active.id);
     const task = tasks.find(t => t.id === event.active.id);
-    
+
     setActiveDragItem(story || task || null);
   };
 
@@ -742,7 +747,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           if (oldLabel !== newLabel) {
             await trackFieldChange(story.id, 'story', 'status', oldLabel, newLabel, (story as any).ref);
           }
-        } catch {}
+        } catch { }
       } else {
         const task = tasks.find(t => t.id === activeId);
         if (!task) return;
@@ -760,7 +765,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           if (oldLabel !== newLabel) {
             await trackFieldChange(task.id, 'task', 'status', oldLabel, newLabel, (task as any).ref);
           }
-        } catch {}
+        } catch { }
       }
     } catch (error) {
       console.error('Error updating item status:', error);
@@ -818,11 +823,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
               payload.sprintId = derivation.sprintId;
               // log alignment reason
               const sprintName = sprintNameForId(sprints, derivation.sprintId) || derivation.sprintId;
-              const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0,10) : 'unknown';
+              const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0, 10) : 'unknown';
               try {
-                await addNote(existing.id, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.` , (existing as any).ref);
+                await addNote(existing.id, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.`, (existing as any).ref);
                 await trackFieldChange(existing.id, 'task', 'sprintId', String((existing as any).sprintId || ''), String(derivation.sprintId), (existing as any).ref);
-              } catch {}
+              } catch { }
             }
           }
         }
@@ -848,7 +853,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       ));
       const existingRefs = existingItems.docs.map(doc => doc.data().ref).filter(Boolean) as string[];
       const ref = generateRef(addType, existingRefs);
-      
+
       await addDoc(collection(db, collection_name), {
         ...addForm,
         ref,
@@ -857,7 +862,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      
+
       setShowAddModal(false);
     } catch (error) {
       console.error('Error adding item:', error);
@@ -900,46 +905,42 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           Stories Kanban Board
         </h1>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-          <OverlayTrigger placement="bottom" overlay={<Tooltip id="add-story-tip">Add story</Tooltip>}>
-            <Button
-              variant="outline-primary"
-              onClick={() => handleAdd('story')}
-              aria-label="Add story"
-              style={iconButtonStyle}
-            >
-              <SquarePlus size={16} />
-            </Button>
-          </OverlayTrigger>
-          <OverlayTrigger placement="bottom" overlay={<Tooltip id="add-task-tip">Add task</Tooltip>}>
-            <Button
-              variant="outline-secondary"
-              onClick={() => handleAdd('task')}
-              aria-label="Add task"
-              style={iconButtonStyle}
-            >
-              <ListTodo size={16} />
-            </Button>
-          </OverlayTrigger>
-          <OverlayTrigger placement="bottom" overlay={<Tooltip id="planning-matrix-tip">Open planning matrix</Tooltip>}>
-            <Button
-              variant="outline-secondary"
-              onClick={handleOpenPlanningMatrix}
-              aria-label="Open planning matrix"
-              style={iconButtonStyle}
-            >
-              <KanbanSquare size={16} />
-            </Button>
-          </OverlayTrigger>
-          <OverlayTrigger placement="bottom" overlay={<Tooltip id="fullscreen-tip">{isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}</Tooltip>}>
-            <Button
-              variant="outline-secondary"
-              onClick={toggleFullscreen}
-              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-              style={iconButtonStyle}
-            >
-              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            </Button>
-          </OverlayTrigger>
+          <Button
+            variant="outline-primary"
+            onClick={() => handleAdd('story')}
+            aria-label="Add story"
+            title="Add story"
+            style={iconButtonStyle}
+          >
+            <Plus size={16} />
+          </Button>
+          <Button
+            variant="outline-secondary"
+            onClick={() => handleAdd('task')}
+            aria-label="Add task"
+            title="Add task"
+            style={iconButtonStyle}
+          >
+            <List size={16} />
+          </Button>
+          <Button
+            variant="outline-secondary"
+            onClick={handleOpenPlanningMatrix}
+            aria-label="Open planning matrix"
+            title="Open planning matrix"
+            style={iconButtonStyle}
+          >
+            <Grid size={16} />
+          </Button>
+          <Button
+            variant="outline-secondary"
+            onClick={toggleFullscreen}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            style={iconButtonStyle}
+          >
+            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </Button>
         </div>
       </div>
 
@@ -972,123 +973,124 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         )}
 
         {/* Kanban Board */}
-        <DndContext 
-          sensors={sensors} 
+        <DndContext
+          sensors={sensors}
           collisionDetection={pointerWithin}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
           <div style={{ height: boardHeight ? `${boardHeight}px` : 'calc(100dvh - 140px)', overflowY: 'auto', overflowX: 'auto' }}>
-          <Row style={{ minHeight: '600px' }}>
-          {swimLanes.map((lane) => {
-            const lgCols = Math.max(1, Math.floor(12 / swimLanes.length));
-            const mdCols = Math.min(12, Math.max(6, lgCols * 2));
-            return (
-            <Col xs={12} md={mdCols as any} lg={lgCols as any} key={lane.id} style={{ marginBottom: '20px' }}>
-              <Card style={{
-                height: '100%',
-                display: 'flex',
-                flexDirection: 'column',
-                border: 'none',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-              }}>
-                <Card.Header style={{ 
-                  backgroundColor: lane.color, 
-                  color: themeVars.onAccent,
-                  padding: '16px 20px',
-                  border: 'none',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 2
-                }}>
-                  <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600' }}>
-                    {lane.title}
-                  </h5>
-                </Card.Header>
-                <LaneDroppable id={`lane-${lane.status}`}>
-                <Card.Body style={{ padding: '16px' }}>
-                  {/* Stories Section */}
-                  <div style={{ marginBottom: '24px' }}>
-                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
-                      Stories
-                    </h6>
-                    <DroppableArea id={`${lane.status}-stories`}>
-                      <SortableContext 
-                        items={getStoriesForLane(lane.status).map(story => story.id)}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        {getStoriesForLane(lane.status).map((story) => {
-                          const goal = getGoalForStory(story.id);
-                          const taskCount = getTasksForStory(story.id).length;
-                          const themeColor = themeColorForGoal(goal);
-                          
-                          return (
-                            <SortableStoryCard
-                              key={story.id}
-                              story={story}
-                              goal={goal}
-                              taskCount={taskCount}
-                              themeColor={themeColor}
-                              onEdit={(story) => handleEdit(story, 'story')}
-                              onDelete={(story) => handleDelete(story, 'story')}
-                              onItemClick={(story) => handleItemClick(story, 'story')}
-                            />
-                          );
-                        })}
-                      </SortableContext>
-                    </DroppableArea>
-                  </div>
+            <Row style={{ minHeight: '600px' }}>
+              {swimLanes.map((lane) => {
+                const lgCols = Math.max(1, Math.floor(12 / swimLanes.length));
+                const mdCols = Math.min(12, Math.max(6, lgCols * 2));
+                return (
+                  <Col xs={12} md={mdCols as any} lg={lgCols as any} key={lane.id} style={{ marginBottom: '20px' }}>
+                    <Card style={{
+                      height: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      border: 'none',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                    }}>
+                      <Card.Header style={{
+                        backgroundColor: lane.color,
+                        color: themeVars.onAccent,
+                        padding: '16px 20px',
+                        border: 'none',
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 2
+                      }}>
+                        <h5 style={{ margin: 0, fontSize: '16px', fontWeight: '600' }}>
+                          {lane.title}
+                        </h5>
+                      </Card.Header>
+                      <LaneDroppable id={`lane-${lane.status}`}>
+                        <Card.Body style={{ padding: '16px' }}>
+                          {/* Stories Section */}
+                          <div style={{ marginBottom: '24px' }}>
+                            <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
+                              Stories
+                            </h6>
+                            <DroppableArea id={`${lane.status}-stories`}>
+                              <SortableContext
+                                items={getStoriesForLane(lane.status).map(story => story.id)}
+                                strategy={verticalListSortingStrategy}
+                              >
+                                {getStoriesForLane(lane.status).map((story) => {
+                                  const goal = getGoalForStory(story.id);
+                                  const taskCount = getTasksForStory(story.id).length;
+                                  const themeColor = themeColorForGoal(goal);
 
-                  {/* Tasks Section */}
-                  <div>
-                    <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
-                      Tasks
-                    </h6>
-                    <DroppableArea id={`${lane.status}-tasks`}>
-                      <SortableContext 
-                        items={getTasksForLane(lane.status).map(task => task.id)}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        {getTasksForLane(lane.status).map((task) => {
-                          const story = getStoryForTask(task.id);
-                          const goal = story ? getGoalForStory(story.id) : undefined;
-                          const themeColor = themeColorForGoal(goal);
-                          
-                          return (
-                            <SortableTaskCard
-                              key={task.id}
-                              task={task}
-                              story={story}
-                              themeColor={themeColor}
-                              onEdit={(task) => handleEdit(task, 'task')}
-                              onItemClick={(task) => handleItemClick(task, 'task')}
-                            />
-                          );
-                        })}
-                      </SortableContext>
-                    </DroppableArea>
-                  </div>
-                </Card.Body>
-                </LaneDroppable>
-              </Card>
-            </Col>
-          );})}
-        </Row>
-        </div>
+                                  return (
+                                    <SortableStoryCard
+                                      key={story.id}
+                                      story={story}
+                                      goal={goal}
+                                      taskCount={taskCount}
+                                      themeColor={themeColor}
+                                      onEdit={(story) => handleEdit(story, 'story')}
+                                      onDelete={(story) => handleDelete(story, 'story')}
+                                      onItemClick={(story) => handleItemClick(story, 'story')}
+                                    />
+                                  );
+                                })}
+                              </SortableContext>
+                            </DroppableArea>
+                          </div>
 
-        {/* Drag Overlay */}
-        <DragOverlay>
-          {activeDragItem && (
-            <div style={{ opacity: 0.8 }}>
-              {'points' in activeDragItem ? (
-                <div>Story: {activeDragItem.title}</div>
-              ) : (
-                <div>Task: {activeDragItem.title}</div>
-              )}
-            </div>
-          )}
-        </DragOverlay>
-      </DndContext>
+                          {/* Tasks Section */}
+                          <div>
+                            <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
+                              Tasks
+                            </h6>
+                            <DroppableArea id={`${lane.status}-tasks`}>
+                              <SortableContext
+                                items={getTasksForLane(lane.status).map(task => task.id)}
+                                strategy={verticalListSortingStrategy}
+                              >
+                                {getTasksForLane(lane.status).map((task) => {
+                                  const story = getStoryForTask(task.id);
+                                  const goal = story ? getGoalForStory(story.id) : undefined;
+                                  const themeColor = themeColorForGoal(goal);
+
+                                  return (
+                                    <SortableTaskCard
+                                      key={task.id}
+                                      task={task}
+                                      story={story}
+                                      themeColor={themeColor}
+                                      onEdit={(task) => handleEdit(task, 'task')}
+                                      onItemClick={(task) => handleItemClick(task, 'task')}
+                                    />
+                                  );
+                                })}
+                              </SortableContext>
+                            </DroppableArea>
+                          </div>
+                        </Card.Body>
+                      </LaneDroppable>
+                    </Card>
+                  </Col>
+                );
+              })}
+            </Row>
+          </div>
+
+          {/* Drag Overlay */}
+          <DragOverlay>
+            {activeDragItem && (
+              <div style={{ opacity: 0.8 }}>
+                {'points' in activeDragItem ? (
+                  <div>Story: {activeDragItem.title}</div>
+                ) : (
+                  <div>Task: {activeDragItem.title}</div>
+                )}
+              </div>
+            )}
+          </DragOverlay>
+        </DndContext>
 
       </div>
 
@@ -1148,7 +1150,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                       <Form.Label>Due Date</Form.Label>
                       <Form.Control
                         type="date"
-                        value={(editForm as any).dueDate ? new Date((editForm as any).dueDate).toISOString().slice(0,10) : ''}
+                        value={(editForm as any).dueDate ? new Date((editForm as any).dueDate).toISOString().slice(0, 10) : ''}
                         onChange={(e) => setEditForm({ ...(editForm as any), dueDate: e.target.value ? new Date(e.target.value).getTime() : null })}
                       />
                     </Form.Group>
@@ -1186,7 +1188,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
               <Form.Control
                 type="text"
                 value={addForm.title || ''}
-                onChange={(e) => setAddForm({...addForm, title: e.target.value})}
+                onChange={(e) => setAddForm({ ...addForm, title: e.target.value })}
                 required
               />
             </Form.Group>
@@ -1196,7 +1198,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                 as="textarea"
                 rows={3}
                 value={addForm.description || ''}
-                onChange={(e) => setAddForm({...addForm, description: e.target.value})}
+                onChange={(e) => setAddForm({ ...addForm, description: e.target.value })}
               />
             </Form.Group>
             <Form.Group className="mb-3">

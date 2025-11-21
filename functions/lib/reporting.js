@@ -184,13 +184,13 @@ const collectGoalsAndStories = async (db, taskDocs, storyDocs) => {
   const [goalSnapshots, storySnapshots] = await Promise.all([
     goalIds.size
       ? Promise.all(
-          Array.from(goalIds).map((goalId) => db.collection('goals').doc(goalId).get())
-        )
+        Array.from(goalIds).map((goalId) => db.collection('goals').doc(goalId).get())
+      )
       : [],
     storyIds.size
       ? Promise.all(
-          Array.from(storyIds).map((storyId) => db.collection('stories').doc(storyId).get())
-        )
+        Array.from(storyIds).map((storyId) => db.collection('stories').doc(storyId).get())
+      )
       : [],
   ]);
 
@@ -273,11 +273,11 @@ const makeDeepLink = (type, refOrId) => {
   if (!type || !refOrId) return null;
   const base =
     type === 'task' ? '/task/' :
-    type === 'story' ? '/story/' :
-    type === 'goal' ? '/goal/' :
-    type === 'chore' ? '/chore/' :
-    type === 'routine' ? '/routine/' :
-    '/';
+      type === 'story' ? '/story/' :
+        type === 'goal' ? '/goal/' :
+          type === 'chore' ? '/chore/' :
+            type === 'routine' ? '/routine/' :
+              '/';
   return `${base}${refOrId}`;
 };
 
@@ -485,13 +485,13 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const storiesToStart = stories
     .filter((story) => (story.sprintDueDate || story.targetDate || story.plannedStartDate))
     .map((story) => {
-        const goal = story.goalId ? (goalsById.get(story.goalId) || goalLookup.get(story.goalId)) : null;
+      const goal = story.goalId ? (goalsById.get(story.goalId) || goalLookup.get(story.goalId)) : null;
       const due = toDateTime(story.sprintDueDate || story.targetDate, { zone });
       const acceptanceCriteria = Array.isArray(story.acceptanceCriteria)
         ? story.acceptanceCriteria.filter(Boolean)
         : typeof story.acceptanceCriteria === 'string'
-        ? story.acceptanceCriteria.split('\n').map((item) => item.trim()).filter(Boolean)
-        : [];
+          ? story.acceptanceCriteria.split('\n').map((item) => item.trim()).filter(Boolean)
+          : [];
       const activity = latestByEntity.get(`story:${story.id}`) || null;
       return {
         id: story.id,
@@ -760,7 +760,21 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     }
   }
 
-  const budgetProgress = monzo?.budgetProgress || null;
+  const budgetProgress = monzo?.totals && monzo?.budgetProgress ? monzo.budgetProgress : null;
+
+  let financeAlerts = [];
+  if (monzo?.budgetProgress) {
+    const overBudget = monzo.budgetProgress.filter(b => b.variance < 0).map(b => `${b.key}: Over by £${Math.abs(b.variance).toFixed(2)}`);
+    if (overBudget.length > 0) {
+      financeAlerts.push(...overBudget);
+    }
+  }
+  if (monzo?.goalAlignment?.themes) {
+    const themeShortfalls = monzo.goalAlignment.themes.filter(t => t.totalShortfall > 0).map(t => `${t.themeName}: Shortfall £${t.totalShortfall.toFixed(2)}`);
+    if (themeShortfalls.length > 0) {
+      financeAlerts.push(...themeShortfalls);
+    }
+  }
 
   const manualRerunCallable = 'sendDailySummaryNow';
 
@@ -787,6 +801,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     worldSummary: worldSummary ? { summary: worldSummary, weather: worldWeather, source: worldSource } : null,
     fitness,
     monzo,
+    financeAlerts,
     profile,
     schedulerChanges,
     goalProgress,

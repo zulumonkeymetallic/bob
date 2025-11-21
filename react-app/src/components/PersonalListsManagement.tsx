@@ -1,27 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
+import { ListTodo, Circle, PlayCircle, CheckCircle2, FolderOpen } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import ModernPersonalListsTable from './ModernPersonalListsTable';
 import { isStatus, isTheme } from '../utils/statusHelpers';
-
-// Define PersonalItem interface locally
-interface PersonalItem {
-  id: string;
-  title: string;
-  description?: string;
-  category: 'personal' | 'work' | 'learning' | 'health' | 'finance';
-  priority: 'low' | 'medium' | 'high';
-  status: 'todo' | 'in-progress' | 'waiting' | 'done';
-  dueDate?: number;
-  tags?: string[];
-  createdAt: number;
-  updatedAt: number;
-  ownerUid: string;
-  persona: string;
-}
+import EditPersonalItemModal, { PersonalItem } from './EditPersonalItemModal';
+import StatCard from './common/StatCard';
+import PageHeader from './common/PageHeader';
+import { SkeletonStatCard } from './common/SkeletonLoader';
+import EmptyState from './common/EmptyState';
+import { colors } from '../utils/colors';
 
 const PersonalListsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -31,14 +22,16 @@ const PersonalListsManagement: React.FC = () => {
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [editItem, setEditItem] = useState<PersonalItem | null>(null);
+  const [showModal, setShowModal] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
     const loadPersonalItems = () => {
       if (!currentUser) return;
-      
+
       setLoading(true);
-      
+
       // Load personal items data
       const itemsQuery = query(
         collection(db, 'personalItems'),
@@ -46,7 +39,7 @@ const PersonalListsManagement: React.FC = () => {
         where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
-      
+
       // Subscribe to real-time updates
       const unsubscribeItems = onSnapshot(itemsQuery, (snapshot) => {
         const itemsData = snapshot.docs.map(doc => ({
@@ -113,83 +106,80 @@ const PersonalListsManagement: React.FC = () => {
   };
 
   return (
-    <div style={{ 
-      padding: '24px', 
+    <div style={{
+      padding: '24px',
       backgroundColor: '#f8f9fa',
       minHeight: '100vh',
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
-        {/* Header */}
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center', 
-          marginBottom: '24px' 
-        }}>
-          <div>
-            <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
-              Personal Lists
-            </h2>
-            <p style={{ margin: 0, color: '#6b7280', fontSize: '16px' }}>
-              Manage personal tasks across all life categories
-            </p>
-          </div>
-          <Button variant="primary" onClick={() => alert('Add new personal item - coming soon')}>
-            Add Item
-          </Button>
-        </div>
+        <PageHeader
+          title="Personal Lists"
+          subtitle="Manage personal tasks across all life categories"
+          breadcrumbs={[
+            { label: 'Home', href: '/' },
+            { label: 'Personal Lists' }
+          ]}
+          actions={
+            <Button variant="primary" onClick={() => { setEditItem(null); setShowModal(true); }}>
+              Add Item
+            </Button>
+          }
+        />
 
         {/* Dashboard Cards */}
         <Row className="mb-4">
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
-                  {itemCounts.total}
-                </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Total Items
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#6b7280' }}>
-                  {itemCounts.todo}
-                </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  To Do
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#2563eb' }}>
-                  {itemCounts.inProgress}
-                </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  In Progress
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: '#059669' }}>
-                  {itemCounts.done}
-                </h3>
-                <p style={{ margin: 0, color: '#6b7280', fontSize: '14px', fontWeight: '500' }}>
-                  Done
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
+          {loading ? (
+            <>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard />
+              </Col>
+            </>
+          ) : (
+            <>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Total Items"
+                  value={itemCounts.total}
+                  icon={ListTodo}
+                  iconColor={colors.brand.primary}
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="To Do"
+                  value={itemCounts.todo}
+                  icon={Circle}
+                  iconColor={colors.neutral[400]}
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="In Progress"
+                  value={itemCounts.inProgress}
+                  icon={PlayCircle}
+                  iconColor={colors.info.primary}
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Done"
+                  value={itemCounts.done}
+                  icon={CheckCircle2}
+                  iconColor={colors.success.primary}
+                />
+              </Col>
+            </>
+          )}
         </Row>
 
         {/* Filters */}
@@ -246,8 +236,8 @@ const PersonalListsManagement: React.FC = () => {
             </Row>
             <Row style={{ marginTop: '16px' }}>
               <Col>
-                <Button 
-                  variant="outline-secondary" 
+                <Button
+                  variant="outline-secondary"
                   onClick={() => {
                     setFilterStatus('all');
                     setFilterCategory('all');
@@ -264,10 +254,10 @@ const PersonalListsManagement: React.FC = () => {
 
         {/* Modern Personal Lists Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
-          <Card.Header style={{ 
-            backgroundColor: 'var(--card)', 
-            borderBottom: '1px solid var(--line)', 
-            padding: '20px 24px' 
+          <Card.Header style={{
+            backgroundColor: 'var(--card)',
+            borderBottom: '1px solid var(--line)',
+            padding: '20px 24px'
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
               Personal Items ({filteredItems.length})
@@ -275,8 +265,8 @@ const PersonalListsManagement: React.FC = () => {
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
             {loading ? (
-              <div style={{ 
-                textAlign: 'center', 
+              <div style={{
+                textAlign: 'center',
                 padding: '60px 20px',
                 display: 'flex',
                 flexDirection: 'column',
@@ -299,6 +289,14 @@ const PersonalListsManagement: React.FC = () => {
           </Card.Body>
         </Card>
       </div>
+
+      <EditPersonalItemModal
+        item={editItem}
+        show={showModal}
+        onClose={() => { setShowModal(false); setEditItem(null); }}
+        currentUserId={currentUser?.uid || ''}
+        currentPersona={currentPersona}
+      />
     </div>
   );
 };

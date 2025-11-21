@@ -50,6 +50,7 @@ import CalendarIntegrationView from './components/calendar/CalendarIntegrationVi
 import SprintManagementView from './components/sprints/SprintManagementView';
 import SprintsPage from './components/sprints/SprintsPage';
 import SprintTablePage from './components/sprints/SprintTablePage';
+import SprintRetrospective from './components/SprintRetrospective';
 import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import MobileView from './components/MobileView';
@@ -66,10 +67,11 @@ import SprintKanbanPage from './components/SprintKanbanPage';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
-import FinanceDashboard from './components/FinanceDashboard';
+import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
 import CategoriesBuckets from './components/finance/CategoriesBuckets';
 import BudgetsPage from './components/finance/BudgetsPage';
+import GoalPotLinking from './components/finance/GoalPotLinking';
 import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
@@ -117,14 +119,13 @@ function AppContent() {
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
-  const [forceRender, setForceRender] = useState(0);
-  
+
   // Root path redirect that is mobile-aware
   const RootRedirect: React.FC = () => {
     const dev = useDeviceInfo();
     return <Navigate to={dev?.isMobile ? '/mobile' : '/sprints/kanban'} replace />;
   };
-  
+
   // Data for the global sidebar
   const [goals, setGoals] = useState([]);
   const [stories, setStories] = useState([]);
@@ -140,28 +141,12 @@ function AppContent() {
     };
   }, []);
 
-  // Debug location changes and force re-render
+  // Debug location changes
   useEffect(() => {
     logger.debug('nav', 'Location change', { path: location.pathname, key: location.key });
-    try { performance.mark('route_start'); } catch {}
-    setForceRender(prev => prev + 1);
   }, [location.pathname, location.key]);
 
-  // After route render completes, record timing
-  useEffect(() => {
-    try {
-      performance.mark('route_done');
-      performance.measure('route', 'route_start', 'route_done');
-      const entries = performance.getEntriesByName('route');
-      const last = entries[entries.length - 1];
-      if (last) {
-        logger.debug('perf', 'route', { durationMs: Math.round(last.duration) });
-      }
-      performance.clearMarks('route_start');
-      performance.clearMarks('route_done');
-      performance.clearMeasures('route');
-    } catch {}
-  }, [forceRender]);
+
 
   // Auto-route to mobile Home on mobile devices when landing on dashboard/home
   useEffect(() => {
@@ -180,36 +165,36 @@ function AppContent() {
     // Initialize enhanced version timeout service
     logger.info('global', 'Initializing Version Timeout Service');
     // versionTimeoutService.forceVersionCheck(); // Temporarily disabled to fix cache loop
-    
+
     // Legacy update check as fallback
     checkForUpdates();
-    
+
     // Add keyboard shortcut for force refresh (Ctrl+Shift+R or Cmd+Shift+R)
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'R') {
         event.preventDefault();
         logger.info('global', 'Force refresh triggered by keyboard shortcut');
-        
+
         // Clear all caches and reload
         if ('caches' in window) {
           caches.keys().then(names => {
             names.forEach(name => caches.delete(name));
           });
         }
-        
+
         // Clear service worker cache
         if ('serviceWorker' in navigator) {
           navigator.serviceWorker.getRegistrations().then(registrations => {
             registrations.forEach(registration => registration.unregister());
           });
         }
-        
+
         window.location.reload();
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyDown);
-    
+
     // Cleanup function
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
@@ -238,21 +223,18 @@ function AppContent() {
     <ErrorBoundary>
       <MigrationManager>
         <SidebarLayout onSignOut={handleSignOut}>
-          {/* Debug current route */}
-          
-          <div key={`${location.pathname}-${forceRender}`}>
-            <Routes>
-              <Route path="/" element={<RootRedirect />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/tasks" element={<TaskListView />} />
-              <Route path="/tasks/:id" element={<DeepLinkTask />} />
-              {/* Back-compat for older deep links */}
-              <Route path="/task/:id" element={<DeepLinkTask />} />
-              <Route path="/task" element={<Navigate to="/tasks" replace />} />
-              <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
-              <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
-              <Route path="/games-backlog" element={<GamesBacklog />} />
-              <Route path="/books-backlog" element={<BooksBacklog />} />
+          <Routes>
+            <Route path="/" element={<RootRedirect />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/tasks" element={<TaskListView />} />
+            <Route path="/tasks/:id" element={<DeepLinkTask />} />
+            {/* Back-compat for older deep links */}
+            <Route path="/task/:id" element={<DeepLinkTask />} />
+            <Route path="/task" element={<Navigate to="/tasks" replace />} />
+            <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
+            <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
+            <Route path="/games-backlog" element={<GamesBacklog />} />
+            <Route path="/books-backlog" element={<BooksBacklog />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
             {/* Legacy sprint routes - redirect to consolidated */}
             <Route path="/kanban" element={<Navigate to="/sprints/kanban" replace />} />
@@ -262,7 +244,7 @@ function AppContent() {
             <Route path="/sprint-kanban" element={<Navigate to="/sprints/kanban" replace />} />
             <Route path="/sprint-matrix" element={<Navigate to="/sprints/management" replace />} />
             <Route path="/current-sprint" element={<Navigate to="/sprints/kanban" replace />} />
-            
+
             {/* Sprint routes */}
             <Route path="/sprints" element={<SprintsPage />} />
             {/* Restore dedicated Management page */}
@@ -271,12 +253,13 @@ function AppContent() {
             <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
             <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
-            
+            <Route path="/sprints/retrospective" element={<SprintRetrospective />} />
+
             <Route path="/tasks-management" element={<TasksManagement />} />
             <Route path="/chores" element={<ChoresTasksPage />} />
-              <Route path="/mobile" element={<MobileHome />} />
-              <Route path="/mobile-view" element={<MobileView />} />
-              <Route path="/mobile-checklist" element={<MobileChecklistView />} />
+            <Route path="/mobile" element={<MobileHome />} />
+            <Route path="/mobile-view" element={<MobileView />} />
+            <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<HabitsManagement />} />
             <Route path="/routines" element={<RoutinesChoresManager />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
@@ -295,7 +278,7 @@ function AppContent() {
             <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
             {/* Legacy V2 removed; no preview route retained */}
             <Route path="/goals/viz" element={<GoalVizPage />} />
-            
+
             {/* Goals Timeline uses Enhanced Gantt (V3) */}
             <Route path="/goals/timeline" element={<EnhancedGanttChart />} />
             <Route path="/calendar/integration" element={<CalendarIntegrationView />} />
@@ -308,21 +291,22 @@ function AppContent() {
             <Route
               path="/travel"
               element={
-                <Suspense fallback={<div style={{padding: 16}}>Loading Travel Map…</div>}>
+                <Suspense fallback={<div style={{ padding: 16 }}>Loading Travel Map…</div>}>
                   <TravelMap />
                 </Suspense>
               }
             />
-            
+
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
             <Route path="/calendar" element={<UnifiedPlannerPage />} />
             <Route path="/running-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
-            <Route path="/finance" element={<FinanceDashboard />} />
+            <Route path="/finance" element={<FinanceDashboardModern />} />
             <Route path="/finance/merchants" element={<MerchantMappings />} />
             <Route path="/finance/categories" element={<CategoriesBuckets />} />
             <Route path="/finance/budgets" element={<BudgetsPage />} />
+            <Route path="/finance/goals" element={<GoalPotLinking />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
@@ -339,29 +323,28 @@ function AppContent() {
             <Route path="/test" element={<Navigate to="/dashboard" replace />} />
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
           </Routes>
-        </div>
 
-        {/* Assistant (floating, near FAB but separate) */}
-        <FloatingAssistantButton onClick={() => setShowAssistant(true)} />
-        <AssistantChatModal show={showAssistant} onHide={() => setShowAssistant(false)} />
+          {/* Assistant (floating, near FAB but separate) */}
+          <FloatingAssistantButton onClick={() => setShowAssistant(true)} />
+          <AssistantChatModal show={showAssistant} onHide={() => setShowAssistant(false)} />
 
-        {/* Floating Action Button for quick adds */}
-        <FloatingActionButton onImportClick={() => setShowImportModal(true)} />
+          {/* Floating Action Button for quick adds */}
+          <FloatingActionButton onImportClick={() => setShowImportModal(true)} />
 
-        {/* Import/Export Modal */}
-        <ImportExportModal 
-          show={showImportModal} 
-          onHide={() => setShowImportModal(false)} 
-        />
+          {/* Import/Export Modal */}
+          <ImportExportModal
+            show={showImportModal}
+            onHide={() => setShowImportModal(false)}
+          />
 
-        {/* Global Sidebar */}
-        <GlobalSidebar
-          goals={goals}
-          stories={stories}
-          sprints={sprints}
-        />
-      </SidebarLayout>
-    </MigrationManager>
+          {/* Global Sidebar */}
+          <GlobalSidebar
+            goals={goals}
+            stories={stories}
+            sprints={sprints}
+          />
+        </SidebarLayout>
+      </MigrationManager>
     </ErrorBoundary>
   );
 }

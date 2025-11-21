@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Card, Button, Modal, Form, Table, Badge, ProgressBar, Alert, Dropdown } from 'react-bootstrap';
-import { 
-  Play, 
-  Square, 
-  RotateCcw, 
-  Calendar, 
-  Users, 
+import {
+  Play,
+  Square,
+  RotateCcw,
+  Calendar,
+  Users,
   Target,
   TrendingUp,
   AlertTriangle,
@@ -27,6 +27,7 @@ import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
 import SprintMetricsPanel from '../SprintMetricsPanel';
 import ModernSprintsTable from '../ModernSprintsTable';
+import ModernKanbanBoard from '../ModernKanbanBoard';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
 // Replaces /kanban route with comprehensive sprint management
@@ -36,7 +37,7 @@ const SprintManagementView = () => {
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
   const { sprints, sprintsById, selectedSprintId, setSelectedSprintId } = useSprint();
-  
+
   // State management
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -45,7 +46,7 @@ const SprintManagementView = () => {
   const [showSprintModal, setShowSprintModal] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'board' | 'table' | 'burndown' | 'retrospective'>('table');
-  
+
   // New task form
   const [newTask, setNewTask] = useState({
     title: '',
@@ -72,7 +73,7 @@ const SprintManagementView = () => {
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona)
       );
-      
+
       unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
         const goalsData = snapshot.docs.map(doc => ({
           id: doc.id,
@@ -89,7 +90,7 @@ const SprintManagementView = () => {
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona)
       );
-      
+
       unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
         const storiesData = snapshot.docs.map(doc => ({
           id: doc.id,
@@ -106,7 +107,7 @@ const SprintManagementView = () => {
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona)
       );
-      
+
       unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
         const tasksData = snapshot.docs.map(doc => ({
           id: doc.id,
@@ -266,48 +267,48 @@ const SprintManagementView = () => {
           <div className="d-flex justify-content-between align-items-center">
             <h2>Sprint Management</h2>
             <div className="d-flex gap-2">
-              <Button 
-                variant="outline-secondary" 
+              <Button
+                variant="outline-secondary"
                 size="sm"
                 onClick={() => setActiveTab('overview')}
                 className={activeTab === 'overview' ? 'active' : ''}
               >
                 Overview
               </Button>
-              <Button 
-                variant="outline-secondary" 
+              <Button
+                variant="outline-secondary"
                 size="sm"
                 onClick={() => setActiveTab('table')}
                 className={activeTab === 'table' ? 'active' : ''}
               >
                 Table View
               </Button>
-              <Button 
-                variant="outline-secondary" 
+              <Button
+                variant="outline-secondary"
                 size="sm"
                 onClick={() => setActiveTab('board')}
                 className={activeTab === 'board' ? 'active' : ''}
               >
                 Sprint Board
               </Button>
-              <Button 
-                variant="outline-secondary" 
+              <Button
+                variant="outline-secondary"
                 size="sm"
                 onClick={() => setActiveTab('burndown')}
                 className={activeTab === 'burndown' ? 'active' : ''}
               >
                 Burndown
               </Button>
-              <Button 
-                variant="outline-secondary" 
+              <Button
+                variant="outline-secondary"
                 size="sm"
                 onClick={() => setActiveTab('retrospective')}
                 className={activeTab === 'retrospective' ? 'active' : ''}
               >
                 Retrospective
               </Button>
-              <Button 
-                variant="primary" 
+              <Button
+                variant="primary"
                 size="sm"
                 onClick={() => setShowSprintModal(true)}
               >
@@ -330,7 +331,7 @@ const SprintManagementView = () => {
               <Card.Body>
                 <Row className="align-items-center">
                   <Col md={4}>
-                    <Form.Select 
+                    <Form.Select
                       value={selectedSprintId || ''}
                       onChange={(e) => {
                         const sprint = sprints.find(s => s.id === e.target.value);
@@ -405,7 +406,7 @@ const SprintManagementView = () => {
       {activeTab === 'table' && (
         <Row>
           <Col>
-            <ModernSprintsTable 
+            <ModernSprintsTable
               selectedSprintId={selectedSprintId || undefined}
               onSprintSelect={(sprintId) => {
                 setSelectedSprintId(sprintId || '');
@@ -420,265 +421,11 @@ const SprintManagementView = () => {
         </Row>
       )}
 
-      {/* Sprint Board Tab - Database-driven with inline task editing */}
+      {/* Sprint Board Tab - Replaced with ModernKanbanBoard */}
       {activeTab === 'board' && selectedSprint && (
         <Row>
           <Col>
-            <Card>
-              <Card.Header>
-                <div className="d-flex justify-content-between align-items-center">
-                  <h5>{selectedSprint.name} - Sprint Board</h5>
-                  <div>
-                    <span className="text-muted me-3">
-                      {getSprintStories().length} stories • {getSprintStories().reduce((sum, s) => sum + (s.points || 0), 0)} points
-                    </span>
-                  </div>
-                </div>
-              </Card.Header>
-              <Card.Body>
-                <Row>
-                  {swimLanes.map((lane) => (
-                    <Col key={lane.id} lg={2} md={3} sm={6}>
-                      <Card className="h-100">
-                        <Card.Header className="bg-light">
-                          <h6 className="mb-0">{lane.title}</h6>
-                          <small className="text-muted">
-                            {getSprintStories().filter(s => s.status === lane.status).length} stories
-                          </small>
-                        </Card.Header>
-                        <Card.Body style={{ maxHeight: '600px', overflowY: 'auto', padding: '10px' }}>
-                          {getSprintStories()
-                            .filter(story => story.status === lane.status)
-                            .map((story) => {
-                              const goal = goals.find(g => g.id === story.goalId);
-                              const storyTasks = getTasksForStory(story.id);
-                              const isSelected = selectedStory?.id === story.id;
-                              
-                              return (
-                                <Card 
-                                  key={story.id}
-                                  className={`mb-3 shadow-sm ${isSelected ? 'border-primary' : ''}`}
-                                  style={{ cursor: 'pointer', fontSize: '14px' }}
-                                  onClick={() => handleStoryClick(story)}
-                                >
-                                  <Card.Body className="p-3">
-                                    <div className="d-flex justify-content-between align-items-start mb-2">
-                                      <div className="flex-grow-1">
-                                        <div className="d-flex align-items-center gap-2 mb-1">
-                                          <span style={{ fontSize: '11px', fontWeight: '600', color: '#6b7280' }}>
-                                            {story.ref || `STRY-${story.id.slice(-3).toUpperCase()}`}
-                                          </span>
-                                        </div>
-                                        <h6 className="mb-0" style={{ fontSize: '14px', lineHeight: '1.2' }}>
-                                          {story.title}
-                                        </h6>
-                                      </div>
-                                      <div className="d-flex flex-column gap-1 align-items-end">
-                                        <Badge bg={getThemeColor(story.theme || 1)} style={{ fontSize: '10px' }}>
-                                          {getThemeName(story.theme || 1)}
-                                        </Badge>
-                                        <Badge bg="secondary" style={{ fontSize: '10px' }}>
-                                          P{story.priority}
-                                        </Badge>
-                                      </div>
-                                    </div>
-                                    
-                                    {goal && (
-                                      <small className="text-muted d-block mb-2">
-                                        Goal: {goal.title}
-                                      </small>
-                                    )}
-
-                                    {story.description && (
-                                      <p className="small text-muted mb-2" style={{ fontSize: '12px' }}>
-                                        {story.description.length > 60 
-                                          ? `${story.description.substring(0, 60)}...` 
-                                          : story.description
-                                        }
-                                      </p>
-                                    )}
-
-                                    <div className="d-flex justify-content-between align-items-center mb-2">
-                                      <small className="text-info">
-                                        {storyTasks.length} tasks • {story.points} pts
-                                      </small>
-                                      {isSelected && (
-                                        <Badge bg="primary" style={{ fontSize: '10px' }}>Selected</Badge>
-                                      )}
-                                    </div>
-
-                                    {/* Progress bar for tasks */}
-                                    {storyTasks.length > 0 && (
-                                      <div className="mb-2">
-                                        <ProgressBar 
-                                          now={storyTasks.length > 0 ? (storyTasks.filter(t => t.status === 2).length / storyTasks.length) * 100 : 0}
-                                          variant="success"
-                                          style={{ height: '4px' }}
-                                        />
-                                      </div>
-                                    )}
-
-                                    {/* Actions */}
-                                    <div className="d-flex justify-content-between align-items-center">
-                                      <small className="text-muted">
-                                        Click to {isSelected ? 'hide' : 'show'} tasks
-                                      </small>
-                                      <div>
-                                        <Dropdown>
-                                          <Dropdown.Toggle 
-                                            size="sm" 
-                                            variant="outline-secondary"
-                                            style={{ fontSize: '11px', padding: '2px 6px' }}
-                                            onClick={(e) => e.stopPropagation()}
-                                          >
-                                            Move
-                                          </Dropdown.Toggle>
-                                          <Dropdown.Menu>
-                                            {swimLanes.map(swimLane => (
-                                              <Dropdown.Item 
-                                                key={swimLane.id}
-                                                onClick={(e) => { 
-                                                  e.stopPropagation(); 
-                                                  updateStoryStatus(story.id, swimLane.status); 
-                                                }}
-                                              >
-                                                {swimLane.title}
-                                              </Dropdown.Item>
-                                            ))}
-                                          </Dropdown.Menu>
-                                        </Dropdown>
-                                      </div>
-                                    </div>
-                                  </Card.Body>
-                                </Card>
-                              );
-                            })}
-
-                          {getSprintStories().filter(s => s.status === lane.status).length === 0 && (
-                            <div className="text-center text-muted py-4">
-                              <p style={{ fontSize: '12px' }}>No stories in {lane.title.toLowerCase()}</p>
-                            </div>
-                          )}
-                        </Card.Body>
-                      </Card>
-                    </Col>
-                  ))}
-                </Row>
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
-      )}
-
-      {/* Inline Task Management for Selected Story */}
-      {selectedStory && activeTab === 'board' && (
-        <Row className="mt-4">
-          <Col>
-            <Card>
-              <Card.Header className="d-flex justify-content-between align-items-center">
-                <div>
-                  <h5 className="mb-0">Tasks for: {selectedStory.title}</h5>
-                  <small className="text-muted">
-                    {getTasksForStory(selectedStory.id).length} tasks • 
-                    Goal: {getGoalTitle(selectedStory.goalId)}
-                  </small>
-                </div>
-                <Button variant="primary" size="sm" onClick={() => setShowAddTask(true)}>
-                  <Plus size={14} className="me-1" />
-                  Add Task
-                </Button>
-              </Card.Header>
-              <Card.Body>
-                {getTasksForStory(selectedStory.id).length === 0 ? (
-                  <div className="text-center text-muted py-4">
-                    <p>No tasks for this story yet.</p>
-                    <Button variant="primary" onClick={() => setShowAddTask(true)}>
-                      Add First Task
-                    </Button>
-                  </div>
-                ) : (
-                  <Table responsive hover>
-                    <thead>
-                      <tr>
-                        <th>Task</th>
-                        <th>Status</th>
-                        <th>Effort</th>
-                        <th>Priority</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {getTasksForStory(selectedStory.id).map((task) => (
-                        <tr 
-                          key={task.id} 
-                          style={{ cursor: 'pointer' }}
-                          onClick={() => showSidebar && showSidebar(task, 'task')}
-                        >
-                          <td>
-                            <div>
-                              <strong>{task.title}</strong>
-                              {task.description && (
-                                <div className="text-muted small">{task.description}</div>
-                              )}
-                            </div>
-                          </td>
-                          <td onClick={(e) => e.stopPropagation()}>
-                            <Dropdown>
-                              <Dropdown.Toggle as={Badge} bg={
-                                task.status === 2 ? 'success' : 
-                                task.status === 1 ? 'warning' : 
-                                task.status === 3 ? 'danger' : 'secondary'
-                              } style={{ cursor: 'pointer' }}>
-                                {getStatusName(task.status)}
-                              </Dropdown.Toggle>
-                              <Dropdown.Menu>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 0)}>
-                                  To Do
-                                </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 1)}>
-                                  In Progress
-                                </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 2)}>
-                                  Done
-                                </Dropdown.Item>
-                                <Dropdown.Item onClick={() => updateTaskStatus(task.id, 3)}>
-                                  Blocked
-                                </Dropdown.Item>
-                              </Dropdown.Menu>
-                            </Dropdown>
-                          </td>
-                          <td>
-                            <Badge bg="outline-dark">
-                              {task.effort === 'S' ? 'Small' : task.effort === 'M' ? 'Medium' : 'Large'}
-                            </Badge>
-                          </td>
-                          <td>
-                            <Badge bg={
-                              task.priority === 1 ? 'danger' : 
-                              task.priority === 2 ? 'warning' : 'secondary'
-                            }>
-                              P{task.priority}
-                            </Badge>
-                          </td>
-                          <td>
-                            <Button 
-                              size="sm" 
-                              variant="outline-danger"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteTask(task.id);
-                              }}
-                            >
-                              Delete
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
-                )}
-              </Card.Body>
-            </Card>
+            <ModernKanbanBoard />
           </Col>
         </Row>
       )}
@@ -750,32 +497,32 @@ const SprintManagementView = () => {
           <Form>
             <Form.Group className="mb-3">
               <Form.Label>Task Title *</Form.Label>
-              <Form.Control 
-                type="text" 
+              <Form.Control
+                type="text"
                 value={newTask.title}
-                onChange={(e) => setNewTask({...newTask, title: e.target.value})}
+                onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
                 placeholder="Enter task title"
               />
             </Form.Group>
-            
+
             <Form.Group className="mb-3">
               <Form.Label>Description</Form.Label>
-              <Form.Control 
-                as="textarea" 
+              <Form.Control
+                as="textarea"
                 rows={2}
                 value={newTask.description}
-                onChange={(e) => setNewTask({...newTask, description: e.target.value})}
+                onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
                 placeholder="Optional task description"
               />
             </Form.Group>
-            
+
             <Row>
               <Col md={6}>
                 <Form.Group className="mb-3">
                   <Form.Label>Effort</Form.Label>
-                  <Form.Select 
+                  <Form.Select
                     value={newTask.effort}
-                    onChange={(e) => setNewTask({...newTask, effort: e.target.value as 'S' | 'M' | 'L'})}
+                    onChange={(e) => setNewTask({ ...newTask, effort: e.target.value as 'S' | 'M' | 'L' })}
                   >
                     <option value="S">Small (0.5-2 hours)</option>
                     <option value="M">Medium (2-8 hours)</option>
@@ -786,9 +533,9 @@ const SprintManagementView = () => {
               <Col md={6}>
                 <Form.Group className="mb-3">
                   <Form.Label>Priority</Form.Label>
-                  <Form.Select 
+                  <Form.Select
                     value={newTask.priority}
-                    onChange={(e) => setNewTask({...newTask, priority: parseInt(e.target.value) as 1 | 2 | 3})}
+                    onChange={(e) => setNewTask({ ...newTask, priority: parseInt(e.target.value) as 1 | 2 | 3 })}
                   >
                     <option value={1}>P1 (High)</option>
                     <option value={2}>P2 (Medium)</option>
@@ -803,8 +550,8 @@ const SprintManagementView = () => {
           <Button variant="secondary" onClick={() => setShowAddTask(false)}>
             Cancel
           </Button>
-          <Button 
-            variant="primary" 
+          <Button
+            variant="primary"
             onClick={addTask}
             disabled={!newTask.title.trim()}
           >

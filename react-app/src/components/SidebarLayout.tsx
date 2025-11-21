@@ -42,7 +42,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const toggleNavCollapsed = () => {
     setNavCollapsed((prev) => {
       const next = !prev;
-      try { localStorage.setItem('leftNavCollapsed', next ? '1' : '0'); } catch {}
+      try { localStorage.setItem('leftNavCollapsed', next ? '1' : '0'); } catch { }
       return next;
     });
   };
@@ -80,7 +80,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Finance',
       icon: 'piggy-bank',
       items: [
-        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' }
+        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
+        { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
+        { label: 'Categorization', path: '/finance/merchants', icon: 'tags' },
+        { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
       ]
     },
     {
@@ -112,7 +115,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' }
+        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
+        { label: 'Retrospective', path: '/sprints/retrospective', icon: 'rotate-left' }
       ]
     },
     {
@@ -177,12 +181,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const handleNavigation = (path: string) => {
     try {
       console.info('[Sidebar] navigation requested', { path, from: location.pathname, ts: new Date().toISOString() });
-      navigate(path);
+
+      // Close sidebar immediately for better UX
       setShowSidebar(false);
-      // Defer success log slightly to ensure route transition
+
+      // Use setTimeout to ensure navigation happens after any pending state updates
       setTimeout(() => {
-        console.info('[Sidebar] navigation success', { to: path, at: window.location.pathname, ts: new Date().toISOString() });
+        navigate(path, { replace: false });
+        console.info('[Sidebar] navigation executed', { to: path, ts: new Date().toISOString() });
       }, 0);
+
     } catch (error) {
       console.error('[Sidebar] navigation failed', { path, error });
     }
@@ -194,8 +202,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   }, [location.pathname]);
 
   const toggleGroup = (groupLabel: string) => {
-    setExpandedGroups(prev => 
-      prev.includes(groupLabel) 
+    setExpandedGroups(prev =>
+      prev.includes(groupLabel)
         ? prev.filter(g => g !== groupLabel)
         : [...prev, groupLabel]
     );
@@ -205,84 +213,86 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     <div className="d-flex" style={{ minHeight: '100vh' }}>
       {/* Desktop Sidebar (collapsible) */}
       {!navCollapsed && (
-      <div className="sidebar-desktop d-none d-lg-block" style={{ width: '250px', minHeight: '100vh' }}>
-        <div className="h-100 d-flex flex-column" style={{ 
-          background: 'var(--panel)', 
-          color: 'var(--notion-text)',
-          borderRight: '1px solid var(--notion-border)',
-          maxHeight: '100vh',
-          overflow: 'hidden'
-        }}>
-          {/* Brand */}
-          <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0 }}>
-            <h4 className="mb-1" style={{ color: 'var(--notion-text)', fontWeight: '600' }}>BOB</h4>
-            <small style={{ color: 'var(--notion-text-gray)' }}>Productivity Platform</small>
-          </div>
-
-          {/* User Info */}
-          {currentUser && (
-            <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0 }}>
-              <div className="d-flex align-items-center mb-2">
-                <div className="rounded-circle d-flex align-items-center justify-content-center me-2" 
-                     style={{ 
-                       width: '32px', 
-                       height: '32px', 
-                       fontSize: '14px',
-                       background: 'var(--notion-accent)',
-                       color: 'white'
-                     }}>
-                  {currentUser.displayName?.charAt(0) || 'U'}
-                </div>
-                <div className="flex-grow-1">
-                  <div className="small" style={{ color: 'var(--notion-text)' }}>
-                    {currentUser.displayName || 'User'}
-                  </div>
-                  <div className="badge" style={{ 
-                    background: 'var(--notion-accent)', 
-                    color: 'white',
-                    fontSize: '0.75rem'
-                  }}>
-                    {currentPersona}
-                  </div>
-                </div>
-              </div>
-              <div className="d-flex gap-1">
-                <Button 
-                  size="sm" 
-                  variant={currentPersona === 'personal' ? 'primary' : 'outline-primary'}
-                  onClick={() => setPersona('personal')}
-                  className="flex-fill"
-                >
-                  Personal
-                </Button>
-                <Button 
-                  size="sm" 
-                  variant={currentPersona === 'work' ? 'primary' : 'outline-primary'}
-                  onClick={() => setPersona('work')}
-                  className="flex-fill"
-                >
-                  Work
-                </Button>
+        <div className="sidebar-desktop d-none d-lg-block" style={{ width: '250px', minHeight: '100vh' }}>
+          <div className="h-100 d-flex flex-column" style={{
+            background: 'var(--panel)',
+            color: 'var(--notion-text)',
+            borderRight: '1px solid var(--notion-border)',
+            maxHeight: '100vh',
+            overflow: 'hidden'
+          }}>
+            {/* Brand */}
+            <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <img src="/logo.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+              <div>
+                <h4 className="mb-0" style={{ color: 'var(--notion-text)', fontWeight: '600', fontSize: '1rem', lineHeight: '1.2' }}>blueprint.<br />organize.build</h4>
               </div>
             </div>
-          )}
 
-          {/* Navigation - Scrollable */}
-          <div className="flex-grow-1" style={{ 
-            overflowY: 'auto', 
-            overflowX: 'hidden',
-            scrollbarWidth: 'thin',
-            msOverflowStyle: 'scrollbar'
-          }}>
-            <Nav className="flex-column py-2">{navigationGroups.map((group) => (
+            {/* User Info */}
+            {currentUser && (
+              <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0 }}>
+                <div className="d-flex align-items-center mb-2">
+                  <div className="rounded-circle d-flex align-items-center justify-content-center me-2"
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      fontSize: '14px',
+                      background: 'var(--notion-accent)',
+                      color: 'white'
+                    }}>
+                    {currentUser.displayName?.charAt(0) || 'U'}
+                  </div>
+                  <div className="flex-grow-1">
+                    <div className="small" style={{ color: 'var(--notion-text)' }}>
+                      {currentUser.displayName || 'User'}
+                    </div>
+                    <div className="badge" style={{
+                      background: 'var(--notion-accent)',
+                      color: 'white',
+                      fontSize: '0.75rem'
+                    }}>
+                      {currentPersona}
+                    </div>
+                  </div>
+                </div>
+                <div className="d-flex gap-1">
+                  <Button
+                    size="sm"
+                    variant={currentPersona === 'personal' ? 'primary' : 'outline-primary'}
+                    onClick={() => setPersona('personal')}
+                    className="flex-fill"
+                  >
+                    Personal
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={currentPersona === 'work' ? 'primary' : 'outline-primary'}
+                    onClick={() => setPersona('work')}
+                    className="flex-fill"
+                  >
+                    Work
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Navigation - Scrollable */}
+            <div className="flex-grow-1" style={{
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              scrollbarWidth: 'thin',
+              msOverflowStyle: 'scrollbar'
+            }}>
+              <Nav className="flex-column py-2">{navigationGroups.map((group) => (
                 <div key={group.label} className="mb-2">
                   {/* Group Header */}
                   <div
                     className="d-flex align-items-center justify-content-between px-3 py-2 cursor-pointer"
                     onClick={() => toggleGroup(group.label)}
-                    style={{ 
-                      cursor: 'pointer', 
-                      fontSize: '0.9rem', 
+                    style={{
+                      cursor: 'pointer',
+                      fontSize: '0.9rem',
                       fontWeight: '600',
                       color: 'var(--notion-text-gray)',
                       borderRadius: '6px',
@@ -304,7 +314,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                     </div>
                     <i className={`fas fa-chevron-${expandedGroups.includes(group.label) ? 'down' : 'right'}`}></i>
                   </div>
-                  
+
                   {/* Group Items */}
                   {expandedGroups.includes(group.label) && (
                     <div className="ms-2">
@@ -313,8 +323,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                           key={item.path}
                           className="px-3 py-2 border-0 text-start"
                           onClick={() => handleNavigation(item.path)}
-                          style={{ 
-                            cursor: 'pointer', 
+                          style={{
+                            cursor: 'pointer',
                             fontSize: '0.9rem',
                             color: 'var(--notion-text)',
                             borderRadius: '6px',
@@ -340,84 +350,85 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   )}
                 </div>
               ))}
-            </Nav>
-          </div>
+              </Nav>
+            </div>
 
-          {/* Bottom Actions - Now Sticky */}
-          <div 
-            className="p-3" 
-            style={{ 
-              borderTop: '1px solid var(--notion-border)',
-              position: 'sticky',
-              bottom: 0,
-              background: 'var(--notion-bg)',
-              zIndex: 10
-            }}
-          >
-            <div className="d-flex gap-2 mb-2">
-              <Button 
-                size="sm" 
-                onClick={toggleTheme}
-                className="flex-fill"
+            {/* Bottom Actions - Now Sticky */}
+            <div
+              className="p-3"
+              style={{
+                borderTop: '1px solid var(--notion-border)',
+                position: 'sticky',
+                bottom: 0,
+                background: 'var(--notion-bg)',
+                zIndex: 10
+              }}
+            >
+              <div className="d-flex gap-2 mb-2">
+                <Button
+                  size="sm"
+                  onClick={toggleTheme}
+                  className="flex-fill"
+                  style={{
+                    background: 'var(--notion-hover)',
+                    border: '1px solid var(--notion-border)',
+                    color: 'var(--notion-text)',
+                    borderRadius: '6px'
+                  }}
+                >
+                  {theme === 'light' ? 'Dark' : 'Light'} Mode
+                </Button>
+                {/* Removed Test/Prod toggle */}
+              </div>
+              <Button
+                size="sm"
+                onClick={onSignOut || signOut}
+                className="w-100"
                 style={{
-                  background: 'var(--notion-hover)',
+                  background: 'transparent',
                   border: '1px solid var(--notion-border)',
                   color: 'var(--notion-text)',
                   borderRadius: '6px'
                 }}
               >
-                {theme === 'light' ? 'Dark' : 'Light'} Mode
+                Sign Out
               </Button>
-              {/* Removed Test/Prod toggle */}
-            </div>
-            <Button 
-              size="sm" 
-              onClick={onSignOut || signOut}
-              className="w-100"
-              style={{
-                background: 'transparent',
-                border: '1px solid var(--notion-border)',
-                color: 'var(--notion-text)',
-                borderRadius: '6px'
-              }}
-            >
-              Sign Out
-            </Button>
 
-            {/* App Version */}
-            <div style={{ marginTop: '8px', textAlign: 'center' }}>
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '2px 8px',
-                borderRadius: '12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                border: '1px solid var(--notion-border)',
-                background: 'var(--notion-hover)',
-                color: 'var(--notion-text)'
-              }}>
-                <VersionDisplay variant="badge-only" showSessionInfo={false} />
-              </span>
+              {/* App Version */}
+              <div style={{ marginTop: '8px', textAlign: 'center' }}>
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  border: '1px solid var(--notion-border)',
+                  background: 'var(--notion-hover)',
+                  color: 'var(--notion-text)'
+                }}>
+                  <VersionDisplay variant="badge-only" showSessionInfo={false} />
+                </span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
       )}
 
       {/* Mobile Header */}
       <div className="d-lg-none fixed-top bg-dark">
         <Navbar variant="dark" className="px-3">
-          <Button 
-            variant="outline-light" 
+          <Button
+            variant="outline-light"
             size="sm"
             onClick={() => setShowSidebar(true)}
           >
             Menu
           </Button>
-          <Navbar.Brand className="mx-auto">
-            BOB
+          <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem' }}>
+            <img src="/logo.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            blueprint.organize.build
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
             <SprintSelector
@@ -426,8 +437,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             />
             {/* Test mode toggle removed */}
             {currentUser && (
-              <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center" 
-                   style={{ width: '24px', height: '24px', fontSize: '12px' }}>
+              <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center"
+                style={{ width: '24px', height: '24px', fontSize: '12px' }}>
                 {currentUser.displayName?.charAt(0) || 'U'}
               </div>
             )}
@@ -436,22 +447,25 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       </div>
 
       {/* Mobile Sidebar Offcanvas */}
-      <Offcanvas 
-        show={showSidebar} 
-        onHide={() => setShowSidebar(false)} 
+      <Offcanvas
+        show={showSidebar}
+        onHide={() => setShowSidebar(false)}
         placement="start"
         className="bg-dark text-white"
       >
         <Offcanvas.Header closeButton closeVariant="white">
-          <Offcanvas.Title>BOB Platform</Offcanvas.Title>
+          <Offcanvas.Title className="d-flex align-items-center gap-2">
+            <img src="/logo.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            blueprint.organize.build
+          </Offcanvas.Title>
         </Offcanvas.Header>
         <Offcanvas.Body>
           {/* User Info Mobile */}
           {currentUser && (
             <div className="mb-3 pb-3 border-bottom border-secondary">
               <div className="d-flex align-items-center mb-2">
-                <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center me-2" 
-                     style={{ width: '32px', height: '32px', fontSize: '14px' }}>
+                <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center me-2"
+                  style={{ width: '32px', height: '32px', fontSize: '14px' }}>
                   {currentUser.displayName?.charAt(0) || 'U'}
                 </div>
                 <div>
@@ -464,16 +478,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 </div>
               </div>
               <div className="d-flex gap-1">
-                <Button 
-                  size="sm" 
+                <Button
+                  size="sm"
                   variant={currentPersona === 'personal' ? 'primary' : 'outline-primary'}
                   onClick={() => setPersona('personal')}
                   className="flex-fill"
                 >
                   Personal
                 </Button>
-                <Button 
-                  size="sm" 
+                <Button
+                  size="sm"
                   variant={currentPersona === 'work' ? 'primary' : 'outline-primary'}
                   onClick={() => setPersona('work')}
                   className="flex-fill"
@@ -500,7 +514,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   </div>
                   <i className={`fas fa-chevron-${expandedGroups.includes(group.label) ? 'down' : 'right'}`}></i>
                 </div>
-                
+
                 {/* Group Items Mobile */}
                 {expandedGroups.includes(group.label) && (
                   <div className="ms-3">
@@ -522,7 +536,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </Nav>
 
           {/* Bottom Actions Mobile - Now Sticky */}
-          <div 
+          <div
             className="mt-auto pt-3 border-top border-secondary"
             style={{
               position: 'sticky',
@@ -533,18 +547,18 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             }}
           >
             <div className="d-flex gap-2 mb-2">
-              <Button 
-                variant="outline-light" 
-                size="sm" 
+              <Button
+                variant="outline-light"
+                size="sm"
                 onClick={toggleTheme}
                 className="flex-fill"
               >
                 {theme === 'light' ? 'Dark' : 'Light'} Mode
               </Button>
             </div>
-            <Button 
-              variant="outline-danger" 
-              size="sm" 
+            <Button
+              variant="outline-danger"
+              size="sm"
               onClick={signOut}
               className="w-100"
             >
@@ -615,4 +629,4 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
 export default SidebarLayout;
 
-export {};
+export { };

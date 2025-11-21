@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
+import { Target, BookOpen, TrendingUp, ListChecks } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc } from 'firebase/firestore';
@@ -18,6 +19,8 @@ import { format, startOfDay, endOfDay } from 'date-fns';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 import { nextDueAt } from '../utils/recurrence';
+import StatCard from './common/StatCard';
+import { colors } from '../utils/colors';
 
 interface DashboardStats {
   activeGoals: number;
@@ -61,13 +64,13 @@ const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const navigate = useNavigate();
-  
+
   // Debug logging for authentication
   console.log('🔍 Dashboard: currentUser:', currentUser);
   console.log('🔍 Dashboard: currentUser type:', typeof currentUser);
   console.log('🔍 Dashboard: currentUser uid:', currentUser?.uid);
   console.log('🔍 Dashboard: currentUser email:', currentUser?.email);
-  
+
   const [stats, setStats] = useState<DashboardStats>({
     activeGoals: 0,
     goalsDueSoon: 0,
@@ -313,7 +316,7 @@ const Dashboard: React.FC = () => {
       const res: any = await call({ tasks });
       const items = Array.isArray(res?.data?.items) ? res.data.items : [];
       const todayItem = items.find((x: any) => (x.bucket || '').toUpperCase() === 'TODAY');
-      const best = todayItem || items.sort((a: any, b: any) => (b.score||0) - (a.score||0))[0];
+      const best = todayItem || items.sort((a: any, b: any) => (b.score || 0) - (a.score || 0))[0];
       if (best) {
         const ref = tasks.find(t => t.id === best.id);
         if (ref) setPriorityBanner({ title: ref.title, score: best.score || 0, bucket: best.bucket || null });
@@ -329,8 +332,8 @@ const Dashboard: React.FC = () => {
 
   const loadTodayBlocks = async () => {
     if (!currentUser) return;
-    const start = new Date(); start.setHours(0,0,0,0);
-    const end = new Date(); end.setHours(23,59,59,999);
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end = new Date(); end.setHours(23, 59, 59, 999);
     const q = query(
       collection(db, 'calendar_blocks'),
       where('ownerUid', '==', currentUser.uid),
@@ -340,14 +343,14 @@ const Dashboard: React.FC = () => {
     const snap = await getDocs(q);
     const blocks: any[] = [];
     snap.forEach(d => blocks.push({ id: d.id, ...(d.data() || {}) }));
-    blocks.sort((a,b) => a.start - b.start);
+    blocks.sort((a, b) => a.start - b.start);
     setTodayBlocks(blocks);
   };
 
   const countTasksDueToday = async () => {
     if (!currentUser) return;
-    const start = new Date(); start.setHours(0,0,0,0);
-    const end = new Date(); end.setHours(23,59,59,999);
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end = new Date(); end.setHours(23, 59, 59, 999);
     // Tasks due today
     const tq = query(
       collection(db, 'tasks'),
@@ -571,49 +574,57 @@ const Dashboard: React.FC = () => {
 
           <Row className="g-3 mb-4">
             <Col xl={3} md={6}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Body>
-                  <div className="text-uppercase text-muted small mb-1">Goals</div>
-                  <h3 className="fw-semibold mb-1">{stats.activeGoals}</h3>
-                  <div className="text-muted small">{stats.goalsDueSoon} due in next 14 days</div>
-                </Card.Body>
-              </Card>
+              <StatCard
+                label="Active Goals"
+                value={stats.activeGoals}
+                icon={Target}
+                iconColor={colors.brand.primary}
+                onClick={() => navigate('/goals?filter=active')}
+              />
+              <div className="text-muted small mt-2" style={{ paddingLeft: '24px' }}>
+                {stats.goalsDueSoon} due in next 14 days
+              </div>
             </Col>
             <Col xl={3} md={6}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Body>
-                  <div className="text-uppercase text-muted small mb-1">Stories</div>
-                  <h3 className="fw-semibold mb-1">{stats.activeStories}</h3>
-                  <ProgressBar now={stats.storyCompletion} variant="success" className="mb-2" />
-                  <div className="text-muted small">{stats.storyCompletion}% complete</div>
-                </Card.Body>
-              </Card>
+              <StatCard
+                label="Active Stories"
+                value={stats.activeStories}
+                icon={BookOpen}
+                iconColor={colors.info.primary}
+                onClick={() => navigate('/stories?filter=active')}
+              />
+              <ProgressBar now={stats.storyCompletion} variant="success" className="mt-2" style={{ height: '6px' }} />
+              <div className="text-muted small mt-1" style={{ paddingLeft: '24px' }}>
+                {stats.storyCompletion}% complete
+              </div>
             </Col>
             <Col xl={3} md={6}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Body>
-                  <div className="text-uppercase text-muted small mb-1">Sprint Progress</div>
-                  <h3 className="fw-semibold mb-1">{stats.sprintTasksDone}/{stats.sprintTasksTotal}</h3>
-                  <ProgressBar now={sprintProgress} variant="info" className="mb-2" />
-                  <div className="text-muted small">
-                    {hasSelectedSprint
-                      ? `${sprintRemaining} tasks remaining`
-                      : 'Select a sprint to track burndown'}
-                  </div>
-                </Card.Body>
-              </Card>
+              <StatCard
+                label="Sprint Progress"
+                value={`${stats.sprintTasksDone}/${stats.sprintTasksTotal}`}
+                icon={TrendingUp}
+                iconColor={colors.success.primary}
+                onClick={() => selectedSprintId && navigate(`/tasks?sprint=${selectedSprintId}`)}
+              />
+              <ProgressBar now={sprintProgress} variant="info" className="mt-2" style={{ height: '6px' }} />
+              <div className="text-muted small mt-1" style={{ paddingLeft: '24px' }}>
+                {hasSelectedSprint
+                  ? `${sprintRemaining} tasks remaining`
+                  : 'Select a sprint to track burndown'}
+              </div>
             </Col>
             <Col xl={3} md={6}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Body>
-                  <div className="text-uppercase text-muted small mb-1">Workload</div>
-                  <h3 className="fw-semibold mb-1">{stats.pendingTasks}</h3>
-                  <ul className="list-unstyled mb-0 text-muted small">
-                    <li>Upcoming deadlines: {stats.upcomingDeadlines}</li>
-                    <li>Unlinked tasks: {stats.tasksUnlinked}</li>
-                  </ul>
-                </Card.Body>
-              </Card>
+              <StatCard
+                label="Pending Tasks"
+                value={stats.pendingTasks}
+                icon={ListChecks}
+                iconColor={colors.warning.primary}
+                onClick={() => navigate('/tasks?filter=pending')}
+              />
+              <ul className="list-unstyled mb-0 text-muted small mt-2" style={{ paddingLeft: '24px' }}>
+                <li>Upcoming deadlines: {stats.upcomingDeadlines}</li>
+                <li>Unlinked tasks: {stats.tasksUnlinked}</li>
+              </ul>
             </Col>
           </Row>
 
@@ -646,7 +657,7 @@ const Dashboard: React.FC = () => {
                   <div className="d-flex justify-content-between align-items-center mb-2">
                     <div className="text-uppercase text-muted small fw-semibold">Next up</div>
                     {(() => {
-                      const stamps = upcomingFocus.map((t:any)=> Number(t.serverUpdatedAt || t.updatedAt || 0)).filter(Number.isFinite);
+                      const stamps = upcomingFocus.map((t: any) => Number(t.serverUpdatedAt || t.updatedAt || 0)).filter(Number.isFinite);
                       const max = stamps.length ? Math.max(...stamps) : null;
                       return (
                         <div className="text-muted small">Last recompute {max ? new Date(max).toLocaleTimeString() : '—'}</div>
@@ -659,7 +670,7 @@ const Dashboard: React.FC = () => {
                         const due = decodeToDate((task as any).dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs);
                         const now = new Date();
                         const sameDay = due ? due.toDateString() === now.toDateString() : false;
-                        const overdue = due ? due.getTime() < now.setHours(0,0,0,0) : false;
+                        const overdue = due ? due.getTime() < now.setHours(0, 0, 0, 0) : false;
                         const reasons: string[] = [];
                         if (overdue) reasons.push('Overdue');
                         else if (sameDay) reasons.push('Due today');
@@ -727,7 +738,7 @@ const Dashboard: React.FC = () => {
                         <span className="fw-semibold">{weeklySummary.total}</span>
                       </div>
                       <ul className="list-unstyled small mb-0">
-                        {Object.entries(weeklySummary.byType).sort((a,b)=> (b[1] as number)-(a[1] as number)).slice(0,3).map(([k,v]) => (
+                        {Object.entries(weeklySummary.byType).sort((a, b) => (b[1] as number) - (a[1] as number)).slice(0, 3).map(([k, v]) => (
                           <li key={k} className="d-flex justify-content-between"><span>{k}</span><span className="fw-semibold">{v as number}</span></li>
                         ))}
                       </ul>
@@ -786,35 +797,39 @@ const Dashboard: React.FC = () => {
                 </Card.Body>
               </Card>
               <Card className="shadow-sm border-0 mt-3">
-                <Card.Header className="fw-semibold">Finance Snapshot</Card.Header>
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <span className="fw-semibold">Finance Snapshot</span>
+                  <Button variant="link" size="sm" className="text-decoration-none p-0" onClick={() => navigate('/finance')}>
+                    Open Hub
+                  </Button>
+                </Card.Header>
                 <Card.Body>
-                  {!monzoSummary ? (
-                    <div className="text-muted">Connect Monzo to surface spending insights.</div>
-                  ) : (
-                    <>
+                  {monzoSummary?.totals ? (
+                    <div>
                       <div className="d-flex justify-content-between mb-2">
-                        <span className="text-muted">Spent</span>
-                        <span className="fw-semibold">£{Number(monzoSummary.totals?.spent ?? 0).toFixed(2)}</span>
+                        <span className="text-muted">Mandatory</span>
+                        <span className="fw-semibold">£{monzoSummary.totals.spent?.toFixed(2) || '0.00'}</span>
                       </div>
                       <div className="d-flex justify-content-between mb-2">
-                        <span className="text-muted">Budget</span>
-                        <span className="fw-semibold">£{Number(monzoSummary.totals?.budget ?? 0).toFixed(2)}</span>
-                      </div>
-                      <div className="d-flex justify-content-between mb-3">
-                        <span className="text-muted">Remaining</span>
-                        <span className="fw-semibold">£{Number(monzoSummary.totals?.remaining ?? 0).toFixed(2)}</span>
+                        <span className="text-muted">Income</span>
+                        <span className="fw-semibold text-success">£{monzoSummary.totals.remaining?.toFixed(2) || '0.00'}</span>
                       </div>
                       {monzoSummary.categories && monzoSummary.categories.length > 0 && (
-                        <ul className="list-unstyled mb-0 small text-muted">
-                          {monzoSummary.categories.map((cat, idx) => (
-                            <li key={idx} className="d-flex justify-content-between">
-                              <span>{cat.category || cat.name || 'Category'}</span>
-                              <span>£{Number(cat.spent || 0).toFixed(2)}</span>
-                            </li>
+                        <div className="mt-3">
+                          <div className="text-muted small text-uppercase fw-bold mb-1">Top Spend</div>
+                          {monzoSummary.categories.slice(0, 3).map((cat: any, idx: number) => (
+                            <div key={idx} className="d-flex justify-content-between small mb-1">
+                              <span>{cat.name || cat.category}</span>
+                              <span>£{cat.spent?.toFixed(2)}</span>
+                            </div>
                           ))}
-                        </ul>
+                        </div>
                       )}
-                    </>
+                    </div>
+                  ) : (
+                    <div className="text-muted small">
+                      No finance data available. <Button variant="link" className="p-0 align-baseline" onClick={() => navigate('/finance')}>Connect Monzo</Button>
+                    </div>
                   )}
                 </Card.Body>
               </Card>
@@ -895,11 +910,6 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
           </Row>
-
-          
-          {/* Priority Banner */}
-          {/* Daily Brief */}
-          {/* Key Stats Row */}
         </Col>
       </Row>
     </Container>
@@ -907,5 +917,3 @@ const Dashboard: React.FC = () => {
 };
 
 export default Dashboard;
-
-export {};

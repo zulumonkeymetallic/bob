@@ -50,6 +50,19 @@ const SPRINT_NONE = '__none__';
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
 
+// Import calendar sync functions
+try {
+  const calendarSync = require('./calendarSync');
+  if (calendarSync) {
+    exports.syncCalendarBlock = calendarSync.syncCalendarBlock;
+    exports.onCalendarBlockWrite = calendarSync.onCalendarBlockWrite;
+    exports.syncFromGoogleCalendar = calendarSync.syncFromGoogleCalendar;
+    exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
+  }
+} catch (e) {
+  console.warn('[init] calendarSync not loaded', e?.message || e);
+}
+
 functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
 admin.initializeApp();
 
@@ -163,13 +176,13 @@ function normaliseRecurrence(data) {
     }
   }
   if (!('repeatInterval' in data) && interval !== 1) { out.repeatInterval = interval; changed = true; }
-  if (freq && !['daily','weekly','monthly','yearly'].includes(freq)) {
+  if (freq && !['daily', 'weekly', 'monthly', 'yearly'].includes(freq)) {
     out.repeatFrequency = undefined; // strip invalid
     changed = true;
   }
   if (freq === 'weekly' && days && days.length) {
-    const valid = ['sun','mon','tue','wed','thu','fri','sat'];
-    const cleaned = days.map((d)=>String(d||'').toLowerCase()).filter((d)=>valid.includes(d));
+    const valid = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const cleaned = days.map((d) => String(d || '').toLowerCase()).filter((d) => valid.includes(d));
     if (JSON.stringify(cleaned) !== JSON.stringify(days)) { out.daysOfWeek = cleaned; changed = true; }
   }
   return { changed, patch: out };
@@ -184,7 +197,7 @@ function* iterateNextDays(startDate, count) {
 }
 
 function dayOfWeekKey(date) {
-  return ['sun','mon','tue','wed','thu','fri','sat'][date.getDay()];
+  return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][date.getDay()];
 }
 
 function toISODate(date) {
@@ -201,7 +214,7 @@ function shouldScheduleOnDay(task, date) {
   if (freq === 'daily') {
     // If we have a baseline, respect interval
     const base = toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now();
-    const daysDiff = Math.floor((startOfDay(date).getTime() - startOfDay(new Date(base)).getTime()) / (24*60*60*1000));
+    const daysDiff = Math.floor((startOfDay(date).getTime() - startOfDay(new Date(base)).getTime()) / (24 * 60 * 60 * 1000));
     return daysDiff % interval === 0;
   }
   if (freq === 'weekly') {
@@ -221,7 +234,7 @@ function shouldScheduleOnDay(task, date) {
 
 function startOfDay(d) {
   const nd = new Date(d);
-  nd.setHours(0,0,0,0);
+  nd.setHours(0, 0, 0, 0);
   return nd;
 }
 
@@ -308,7 +321,7 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
-  const day = req?.data?.day || new Date().toISOString().slice(0,10); // YYYY-MM-DD
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const useLLM = !!req?.data?.useLLM;
   const date = new Date(day);
   if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
@@ -318,15 +331,15 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   const planId = makePlanId(uid, date);
 
   // Load blocks for the day (calendar_blocks)
-  const start = new Date(date); start.setHours(0,0,0,0);
-  const end = new Date(date); end.setHours(23,59,59,999);
+  const start = new Date(date); start.setHours(0, 0, 0, 0);
+  const end = new Date(date); end.setHours(23, 59, 59, 999);
   const blocksSnap = await db.collection('calendar_blocks')
     .where('ownerUid', '==', uid)
     .where('start', '>=', start.getTime())
     .where('start', '<=', end.getTime())
     .get();
   const blocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }))
-    .sort((a,b) => a.start - b.start);
+    .sort((a, b) => a.start - b.start);
 
   // Load candidate tasks (status not done)
   const tasksSnap = await db.collection('tasks')
@@ -340,43 +353,43 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   const choresSnap = await db.collection('chores')
     .where('ownerUid', '==', uid)
     .get();
-  const sod = new Date(date); sod.setHours(0,0,0,0);
-  const eod = new Date(date); eod.setHours(23,59,59,999);
+  const sod = new Date(date); sod.setHours(0, 0, 0, 0);
+  const eod = new Date(date); eod.setHours(23, 59, 59, 999);
   function nextDue(rruleText, dtstartMs, fromMs) {
     try {
-      const hasDt = /DTSTART/i.test(String(rruleText||''));
+      const hasDt = /DTSTART/i.test(String(rruleText || ''));
       const text = !hasDt && dtstartMs
-        ? `DTSTART:${new Date(dtstartMs).toISOString().replace(/[-:]/g,'').split('.')[0]}Z\n${rruleText}`
+        ? `DTSTART:${new Date(dtstartMs).toISOString().replace(/[-:]/g, '').split('.')[0]}Z\n${rruleText}`
         : rruleText;
       const rule = rrulestr(text);
       const next = rule.after(new Date(fromMs), true);
       return next ? next.getTime() : null;
     } catch { return null; }
   }
-  const chores = choresSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }))
+  const chores = choresSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }))
     .map(c => {
-      const due = nextDue(c.rrule, c.dtstart || c.createdAt || undefined, sod.getTime()-1);
+      const due = nextDue(c.rrule, c.dtstart || c.createdAt || undefined, sod.getTime() - 1);
       return { ...c, _due: due };
     })
     .filter(c => c._due && c._due >= sod.getTime() && c._due <= eod.getTime());
 
   // Load habits (daily, active) and derive preferred start time
   const habitsSnap = await db.collection('habits')
-    .where('ownerUid','==', uid)
-    .where('isActive','==', true)
+    .where('ownerUid', '==', uid)
+    .where('isActive', '==', true)
     .get();
   function toTimeMs(hhmm) {
-    const [hh, mm] = String(hhmm || '07:00').split(':').map(x=>Number(x));
+    const [hh, mm] = String(hhmm || '07:00').split(':').map(x => Number(x));
     const t = new Date(sod);
-    t.setHours(hh||7, mm||0, 0, 0);
+    t.setHours(hh || 7, mm || 0, 0, 0);
     return t.getTime();
   }
-  const habits = habitsSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }))
-    .filter(h => (h.frequency||'daily') === 'daily' || ((h.frequency||'') === 'weekly' && Array.isArray(h.daysOfWeek) && h.daysOfWeek.includes(new Date(sod).getDay())))
+  const habits = habitsSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .filter(h => (h.frequency || 'daily') === 'daily' || ((h.frequency || '') === 'weekly' && Array.isArray(h.daysOfWeek) && h.daysOfWeek.includes(new Date(sod).getDay())))
     .map(h => ({ ...h, _preferredStart: toTimeMs(h.scheduleTime || '07:00') }));
 
   // Score deterministically
-  const dayStart = new Date(date); dayStart.setHours(0,0,0,0);
+  const dayStart = new Date(date); dayStart.setHours(0, 0, 0, 0);
   const startOfDayMs = dayStart.getTime();
   const endOfDayMs = startOfDayMs + MS_IN_DAY - 1;
   const nowMs = Date.now();
@@ -432,7 +445,7 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
   }
 
   let ranked = tasks.map(t => ({ ...t, _score: scoreTask(t) }))
-    .sort((a,b) => b._score - a._score);
+    .sort((a, b) => b._score - a._score);
 
   const importantSet = new Set();
   const importanceLimit = Number(req?.data?.importantLimit || 12);
@@ -527,11 +540,11 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
       for (const b of blocks) {
         const state = blockFree.get(b.id);
         if (!state) continue;
-        if (it.preferredStart >= b.start && (it.preferredStart + it.minutes*60000) <= b.end) {
+        if (it.preferredStart >= b.start && (it.preferredStart + it.minutes * 60000) <= b.end) {
           // place at max(cursor, preferredStart)
           const startMs = Math.max(state.cursor, it.preferredStart);
-          const endMs = startMs + it.minutes*60000;
-          if (endMs <= b.end && (endMs - startMs)/60000 <= state.free) {
+          const endMs = startMs + it.minutes * 60000;
+          if (endMs <= b.end && (endMs - startMs) / 60000 <= state.free) {
             assignments.push({
               id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
               planId, dayKey, userId: uid, ownerUid: uid,
@@ -539,7 +552,7 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
               estimatedMinutes: it.minutes, blockId: b.id, start: startMs, end: endMs,
               status: 'planned', createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp()
             });
-            state.free -= Math.floor((endMs-startMs)/60000);
+            state.free -= Math.floor((endMs - startMs) / 60000);
             state.cursor = endMs;
             placed = true;
             break;
@@ -549,7 +562,7 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
       if (!placed) {
         // schedule without a block at preferredStart
         const startMs = it.preferredStart;
-        const endMs = startMs + it.minutes*60000;
+        const endMs = startMs + it.minutes * 60000;
         assignments.push({
           id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
           planId, dayKey, userId: uid, ownerUid: uid,
@@ -698,7 +711,7 @@ exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-    } catch {}
+    } catch { }
   }
   return { ok: true, blocksSynced, reconciled, pushed };
 });
@@ -742,7 +755,7 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }
       if (linkSuggestions && obj.suggestedGoalId && typeof obj.suggestedGoalId === 'string') {
         suggestion = String(obj.suggestedGoalId);
       }
-    } catch {}
+    } catch { }
     const ref = db.collection('tasks').doc(t.id);
     const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     if (estimateMissing && est > 0) { patch.estimateMin = est; estimatesAdded++; }
@@ -765,7 +778,7 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-  } catch {}
+  } catch { }
 
   // Optional: immediately trigger a short planning backfill after enrichment
   try {
@@ -778,7 +791,7 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }
         console.warn('[autoEnrichTasks] backfill trigger failed', e?.message || e);
       }
     }
-  } catch {}
+  } catch { }
 
   return { processed: candidates.length, updated, estimatesAdded, linksSuggested };
 });
@@ -824,12 +837,12 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
       activityType: 'task_story_conversion',
       userId: uid,
       ownerUid: uid,
-      description: `Suggested ${suggestions.length}, converted ${converted.filter(r=>r.status==='converted').length}`,
+      description: `Suggested ${suggestions.length}, converted ${converted.filter(r => r.status === 'converted').length}`,
       metadata: redact({ suggested: suggestions.length, converted: converted.length }),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-  } catch {}
+  } catch { }
 
   return { suggestions, converted };
 });
@@ -837,7 +850,7 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
 exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10);
   const persona = String(req?.data?.persona || 'personal');
   const horizonDays = Math.max(1, Math.min(Number(req?.data?.horizonDays || 1), 14));
   if (!exports.planCalendar?.run) throw new httpsV2.HttpsError('failed-precondition', 'planner not available');
@@ -1409,14 +1422,14 @@ exports.rolloverChoresAndRoutines = schedulerV2.onSchedule('every day 05:00', as
 exports.reconcilePlanFromGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const uid = req.auth.uid;
-  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10);
   const date = new Date(day);
   if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
   const db = admin.firestore();
   const dayKey = toDayKey(date);
   const access = await getAccessToken(uid);
-  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
-  const toCheck = asSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) })).filter(a => a?.external?.googleEventId);
+  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid', '==', uid).get();
+  const toCheck = asSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) })).filter(a => a?.external?.googleEventId);
   let cleared = 0;
   for (const a of toCheck) {
     const eid = a.external.googleEventId;
@@ -1581,6 +1594,7 @@ function resolveMonzoOriginFromRequest(req) {
   return defaultMonzoOrigin();
 }
 function buildMonzoRedirectUri(req) {
+  if (process.env.MONZO_REDIRECT_URI) return process.env.MONZO_REDIRECT_URI.trim();
   const origin = resolveMonzoOriginFromRequest(req);
   if (!origin) throw new Error('Unable to resolve Monzo redirect origin');
   return `${origin.replace(/\/$/, '')}/api/monzo/callback`;
@@ -1655,7 +1669,7 @@ async function enqueueMonzoSyncJob(uid, payload = {}) {
 function getGoogleRedirectUri() {
   try {
     if (process.env.GOOGLE_OAUTH_REDIRECT_URI) return process.env.GOOGLE_OAUTH_REDIRECT_URI;
-  } catch {}
+  } catch { }
   const projectId = process.env.GCLOUD_PROJECT;
   if (!projectId) return null;
   return `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
@@ -1921,7 +1935,7 @@ exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
       tasksChecked: stats.tasksChecked,
       tasksUpdated: stats.tasksUpdated,
     });
-  } catch {}
+  } catch { }
 
   return { ok: true, ...stats, changeCount: stats.changes.length };
 });
@@ -1966,17 +1980,17 @@ exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_K
       .limit(50)
       .get();
     stories = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-  } catch {}
+  } catch { }
 
   // Compute proposed approvals count
   let approvals = 0;
   try {
-  const ps = await db.collection('planning_jobs')
+    const ps = await db.collection('planning_jobs')
       .where('ownerUid', '==', uid)
       .where('status', '==', 'proposed')
       .get();
     approvals = ps.size;
-  } catch {}
+  } catch { }
 
   // Build condensed context for LLM
   const topTasks = (context.tasks || [])
@@ -2053,7 +2067,7 @@ async function getLatestSummary(threadRef) {
     if (!snap.empty) {
       return String((snap.docs[0].data() || {}).content || '');
     }
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -2080,7 +2094,7 @@ async function maybeSummarizeThread(threadRef, uid) {
     const user = convo;
     const summary = await callLLMJson({ system, user, purpose: 'chatSummary', userId: uid, expectJson: false, temperature: 0.2 });
     await threadRef.collection('summaries').add({ content: String(summary).slice(0, 2000), createdAt: admin.firestore.FieldValue.serverTimestamp() });
-  } catch {}
+  } catch { }
 }
 
 // ===== OAuth: callback
@@ -2124,7 +2138,7 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
 
     res.status(200).send("<script>window.close();</script>Connected. You can close this window.");
   } catch (e) {
-    try { console.error('OAuth callback error:', e?.message || e); } catch {}
+    try { console.error('OAuth callback error:', e?.message || e); } catch { }
     res.status(500).send("OAuth callback error: " + (e?.message || String(e)));
   }
 });
@@ -2166,7 +2180,7 @@ async function getMonzoAccessToken(uid) {
   const snap = await tokenRef.get();
   if (!snap.exists) throw new Error('Monzo not connected');
   const data = snap.data() || {};
-  const now = Math.floor(Date.now()/1000) + 60; // 60s skew
+  const now = Math.floor(Date.now() / 1000) + 60; // 60s skew
   if (data.access_token && data.expires_at && data.expires_at > now) {
     return data.access_token;
   }
@@ -2186,7 +2200,7 @@ async function getMonzoAccessToken(uid) {
   const access = tokenData.access_token;
   const expiresIn = tokenData.expires_in;
   const newRefresh = tokenData.refresh_token || refresh;
-  const expires_at = Math.floor(Date.now()/1000) + (Number(expiresIn)||0);
+  const expires_at = Math.floor(Date.now() / 1000) + (Number(expiresIn) || 0);
   const encryptedRefreshToken = await encryptMonzoSecret(newRefresh);
   await tokenRef.set({
     access_token: access,
@@ -2224,43 +2238,31 @@ exports.monzoSyncTransactions = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZ
   const accountId = String(req?.data?.accountId || '');
   const since = req?.data?.since ? new Date(req.data.since).toISOString() : undefined;
   if (!accountId) throw new httpsV2.HttpsError('invalid-argument', 'accountId required');
-  const access = await getMonzoAccessToken(uid);
-  const url = new URL('https://api.monzo.com/transactions');
-  url.searchParams.set('account_id', accountId);
-  if (since) url.searchParams.set('since', since);
-  url.searchParams.set('expand[]', 'merchant');
-  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${access}` } });
-  if (!res.ok) throw new httpsV2.HttpsError('internal', `Monzo transactions failed: ${res.status}`);
-  const data = await res.json();
-  const txs = Array.isArray(data?.transactions) ? data.transactions : [];
+
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+
+  const txSummary = await syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since });
+
+  // Update sync state
   const db = admin.firestore();
-  const batch = db.batch();
-  for (const t of txs) {
-    const txId = `${uid}_${t.id}`;
-    const ref = db.collection('finance_transactions').doc(txId);
-    const norm = {
-      ownerUid: uid,
-      provider: 'monzo',
-      accountId,
-      transactionId: t.id,
-      created: t.created ? new Date(t.created).getTime() : Date.now(),
-      amount: t.amount, // in minor units (pence)
-      currency: t.currency,
-      description: t.description,
-      category: t.category,
-      is_load: t.is_load || false,
-      settled: t.settled || null,
-      notes: t.notes || '',
-      merchant: t.merchant ? { id: t.merchant.id || null, name: t.merchant.name || null, category: t.merchant.category || null } : null,
-      raw: t,
-      updatedAt: Date.now(),
-    };
-    batch.set(ref, norm, { merge: true });
+  const syncStateRef = db.collection('monzo_sync_state').doc(`${uid}_${accountId}`);
+  const update = {
+    ownerUid: uid,
+    accountId,
+    lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+    lastSyncCount: txSummary.count,
+    lastSyncSince: since || null,
+  };
+  if (txSummary.lastCreated) {
+    update.lastTransactionCreated = txSummary.lastCreated;
+    update.lastTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.lastCreated));
   }
-  await batch.commit();
-  // update last sync
+  await syncStateRef.set(update, { merge: true });
+
+  // Update profile last sync
   await db.collection('profiles').doc(uid).set({ monzoLastSyncAt: Date.now() }, { merge: true });
-  return { ok: true, count: txs.length };
+
+  return { ok: true, count: txSummary.count };
 });
 
 // ===== Strava OAuth Start
@@ -2360,7 +2362,7 @@ exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoke
       return res.status(410).send("Session expired");
     }
 
-    const clientId = process.env.MONZO_CLIENT_ID;
+    const clientId = (process.env.MONZO_CLIENT_ID || "").trim();
     if (!clientId) return res.status(500).send("Monzo client ID not configured");
 
     const redirectUri = buildMonzoRedirectUri(req);
@@ -2406,32 +2408,61 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
     }
     await sessionRef.set({ status: 'exchanging', exchangeStartedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
-    const redirectUri = session.redirectUri || buildMonzoRedirectUri(req);
+    const redirectUri = (session.redirectUri || buildMonzoRedirectUri(req)).trim();
+    const clientId = (process.env.MONZO_CLIENT_ID || "").trim();
+    const clientSecret = (process.env.MONZO_CLIENT_SECRET || "").trim();
 
-    const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: process.env.MONZO_CLIENT_ID,
-        client_secret: process.env.MONZO_CLIENT_SECRET,
-        redirect_uri: redirectUri,
-        grant_type: "authorization_code",
-      }).toString(),
+    console.log('[Monzo OAuth] Attempting token exchange', {
+      sessionId,
+      redirectUri,
+      hasClientId: !!clientId,
+      hasClientSecret: !!clientSecret
     });
+
+    let tokenData;
+    try {
+      tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+    } catch (fetchError) {
+      console.error('[Monzo OAuth] Token exchange failed', fetchError);
+      // Try to parse error body if available
+      const errorBody = await fetchError.response?.text?.().catch(() => null);
+      console.error('[Monzo OAuth] Error body:', errorBody);
+      return res.status(400).send(`Monzo exchange failed: ${fetchError.message}`);
+    }
 
     const refresh = tokenData.refresh_token;
     const access = tokenData.access_token;
     const expiresIn = Number(tokenData.expires_in || 0);
     const expiresAt = expiresIn ? Math.floor(Date.now() / 1000) + expiresIn : null;
     const monzoUserId = tokenData.user_id || null;
-    if (!refresh || !access) {
-      try { await recordIntegrationLog(uid, 'monzo', 'error', 'Token exchange missing tokens', { keys: Object.keys(tokenData || {}) }); } catch {}
-      return res.status(400).send("Monzo tokens missing from response");
+
+    if (!access) {
+      console.error('[Monzo OAuth] Missing access_token in response', tokenData);
+      try { await recordIntegrationLog(uid, 'monzo', 'error', 'Token exchange missing access_token', { keys: Object.keys(tokenData || {}) }); } catch { }
+      return res.status(400).send("Monzo tokens missing from response: access_token");
+    }
+
+    if (!refresh) {
+      console.warn('[Monzo OAuth] No refresh_token received. Session will expire in ~30 hours.', tokenData);
+      try { await recordIntegrationLog(uid, 'monzo', 'warning', 'No refresh_token received', { scope: tokenData.scope }); } catch { }
     }
 
     const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
-    const encryptedRefreshToken = await encryptMonzoSecret(refresh);
+    let encryptedRefreshToken = null;
+    if (refresh) {
+      encryptedRefreshToken = await encryptMonzoSecret(refresh);
+    }
+
     await tokenRef.set({
       provider: 'monzo',
       ownerUid: uid,
@@ -2598,7 +2629,7 @@ exports.monzoWebhook = httpsV2.onRequest({ secrets: [MONZO_WEBHOOK_SECRET], invo
       const signatureHeader = req.get('x-monzo-signature') || req.get('X-Monzo-Signature') || '';
       const digest = crypto.createHmac('sha256', secret).update(rawBodyBuffer).digest();
       if (!verifyMonzoSignature(signatureHeader, digest)) {
-        try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'signature mismatch' }); } catch {}
+        try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'signature mismatch' }); } catch { }
         return res.status(401).send('invalid signature');
       }
     }
@@ -2611,7 +2642,7 @@ exports.monzoWebhook = httpsV2.onRequest({ secrets: [MONZO_WEBHOOK_SECRET], invo
       try {
         body = rawText ? JSON.parse(rawText) : {};
       } catch (parseError) {
-        try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'invalid_payload', error: parseError?.message || String(parseError) }); } catch {}
+        try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'invalid_payload', error: parseError?.message || String(parseError) }); } catch { }
         return res.status(400).send('invalid payload');
       }
     }
@@ -2619,7 +2650,7 @@ exports.monzoWebhook = httpsV2.onRequest({ secrets: [MONZO_WEBHOOK_SECRET], invo
     const accountId = String(body?.data?.account_id || body?.account_id || '').trim();
     if (!accountId) return res.status(400).send('Missing account_id');
     const db = admin.firestore();
-    const snap = await db.collection('monzo_accounts').where('accountId','==',accountId).limit(1).get();
+    const snap = await db.collection('monzo_accounts').where('accountId', '==', accountId).limit(1).get();
     if (snap.empty) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'account not found', accountId }); return res.json({ ok: true }); }
     const docRef = snap.docs[0];
     const uid = (docRef.data() || {}).ownerUid;
@@ -2654,7 +2685,7 @@ exports.monzoWebhook = httpsV2.onRequest({ secrets: [MONZO_WEBHOOK_SECRET], invo
     await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), event: eventType, accountId, uid });
     return res.json({ ok: true });
   } catch (e) {
-    try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), error: String(e?.message||e) }); } catch {}
+    try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), error: String(e?.message || e) }); } catch { }
     return res.status(500).send('error');
   }
 });
@@ -2721,7 +2752,7 @@ exports.deleteFinanceData = httpsV2.onCall(async (req) => {
   const db = admin.firestore();
   const cols = ['monzo_accounts', 'monzo_pots', 'monzo_transactions', 'monzo_budget_summary', 'monzo_goal_alignment'];
   for (const col of cols) {
-    const snap = await db.collection(col).where('ownerUid','==', uid).get();
+    const snap = await db.collection(col).where('ownerUid', '==', uid).get();
     const batch = db.batch();
     snap.docs.forEach(d => batch.delete(d.ref));
     await batch.commit();
@@ -2738,8 +2769,8 @@ exports.exportFinanceData = httpsV2.onCall(async (req) => {
   const result = {};
   const cols = ['monzo_accounts', 'monzo_pots', 'monzo_transactions', 'monzo_budget_summary', 'monzo_goal_alignment'];
   for (const col of cols) {
-    const snap = await db.collection(col).where('ownerUid','==', uid).get();
-    result[col] = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+    const snap = await db.collection(col).where('ownerUid', '==', uid).get();
+    result[col] = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
   }
   return { ok: true, data: result };
 });
@@ -2747,7 +2778,7 @@ exports.exportFinanceData = httpsV2.onCall(async (req) => {
 // 15-min backstop transaction sync
 exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () => {
   const db = admin.firestore();
-  const tokens = await db.collection('tokens').where('provider','==','monzo').get();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   for (const t of tokens.docs) {
     const data = t.data() || {};
     const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
@@ -2770,7 +2801,7 @@ exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () 
         ...buildTimestampPatch('lastErrorAt'),
       });
       await recordMonzoAutomationStatus({ uid, status: 'error', source: 'backstop', message: e?.message || 'Backstop sync failed' });
-      await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) });
+      await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message || e) });
     }
   }
   return { ok: true, users: tokens.size };
@@ -3002,12 +3033,12 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set merchant mapping', { merchantKey, categoryType, label }); } catch {}
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set merchant mapping', { merchantKey, categoryType, label }); } catch { }
 
   let updated = 0;
   if (applyToExisting) {
     updated = await applyMappingToExisting(uid, merchantKey, categoryType, label);
-    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch {}
+    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
   }
 
   return { ok: true, merchantKey, updated };
@@ -3052,9 +3083,99 @@ exports.bulkUpsertMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID,
       if (!m.merchantKey || !m.categoryType) continue;
       updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
     }
-    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch {}
+    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
   }
-  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Bulk upsert merchant mappings', { upserts, applied: apply }); } catch {}
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Bulk upsert merchant mappings', { upserts, applied: apply }); } catch { }
+  return { ok: true, upserts, updated };
+});
+
+exports.importMerchantMappingsCsv = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const csvText = String(req.data?.csv || '').trim();
+  const apply = !!req.data?.apply;
+  if (!csvText) throw new httpsV2.HttpsError('invalid-argument', 'csv content required');
+
+  const rows = [];
+  const lines = csvText.split(/\r?\n/);
+  // Detect separator (tab or comma)
+  const firstLine = lines[0] || '';
+  const isTab = firstLine.includes('\t');
+  const separator = isTab ? '\t' : ',';
+
+  // Skip header if it looks like one
+  let startIndex = 0;
+  if (firstLine.toLowerCase().includes('category') && firstLine.toLowerCase().includes('bucket')) {
+    startIndex = 1;
+  }
+
+  const BUCKET_MAP = {
+    'mandatory expenses': 'mandatory',
+    'discretionary expenses': 'optional',
+    'net salary': 'income',
+    'savings': 'savings',
+    'unknown': 'optional',
+  };
+
+  for (let i = startIndex; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const parts = line.split(separator).map(s => s.trim());
+    if (parts.length < 2) continue;
+
+    const merchantName = parts[0];
+    const categoryLabel = parts[1];
+    const bucketRaw = parts[2] || '';
+
+    const categoryType = BUCKET_MAP[bucketRaw.toLowerCase()] || 'optional';
+
+    rows.push({
+      merchantName,
+      label: categoryLabel,
+      categoryType,
+    });
+  }
+
+  // Reuse bulkUpsert logic
+  // We can't easily call the other export directly if it's an https function, so we duplicate the logic or extract a shared function.
+  // For now, duplicating the core logic is safer/easier than refactoring everything.
+
+  const db = admin.firestore();
+  const batch = db.batch();
+  let upserts = 0, updated = 0;
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+
+  for (const r of rows) {
+    const name = String(r.merchantName || '').trim();
+    const key = normaliseMerchantName(name);
+    if (!key) continue;
+    const type = r.categoryType;
+    if (!allowed.has(type)) continue;
+
+    const ref = db.collection('merchant_mappings').doc(`${uid}_${key}`);
+    batch.set(ref, {
+      ownerUid: uid,
+      merchantKey: key,
+      label: r.label || name,
+      categoryType: type,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    upserts++;
+  }
+
+  if (upserts) await batch.commit();
+
+  if (apply) {
+    const snaps = await db.collection('merchant_mappings').where('ownerUid', '==', uid).get();
+    for (const d of snaps.docs) {
+      const m = d.data() || {};
+      if (!m.merchantKey || !m.categoryType) continue;
+      updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
+    }
+    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
+  }
+
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Imported merchant mappings CSV', { upserts, updated }); } catch { }
   return { ok: true, upserts, updated };
 });
 
@@ -3078,8 +3199,8 @@ exports.applyMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZ
       updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
     }
   }
-  try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch {}
-  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Applied merchant mappings', { updated }); } catch {}
+  try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Applied merchant mappings', { updated }); } catch { }
   return { ok: true, updated };
 });
 
@@ -3105,7 +3226,7 @@ exports.backfillMerchantKeys = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO
     if (ops >= MAX) { await batch.commit(); batch = db.batch(); ops = 0; }
   }
   if (ops > 0) await batch.commit();
-  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Backfilled merchant keys', { updated }); } catch {}
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Backfilled merchant keys', { updated }); } catch { }
   return { ok: true, updated };
 });
 
@@ -3165,7 +3286,7 @@ exports.generateMonzoAuditReport = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, M
 // Nightly analytics refresh for all users with Monzo connected
 exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async () => {
   const db = admin.firestore();
-  const tokens = await db.collection('tokens').where('provider','==','monzo').get();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   let ok = 0, fail = 0;
   for (const t of tokens.docs) {
     try {
@@ -3176,7 +3297,7 @@ exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async 
       ok++;
     } catch (e) {
       fail++;
-      try { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message||e) }); } catch {}
+      try { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message || e) }); } catch { }
     }
   }
   return { ok, fail, scanned: tokens.size };
@@ -3341,14 +3462,32 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
         };
         docData.merchantRaw = tx.merchant;
       } else {
-        docData.merchant = null;
+        docData.merchant = {
+          id: null,
+          name: null,
+          emoji: null,
+          logo: tx.merchant.logo || null,
+        };
       }
 
-      // Apply user mapping if present so future analytics use user's choice
+      // Apply merchant mapping if available
       if (merchantKey && merchantMap.has(merchantKey)) {
         const m = merchantMap.get(merchantKey);
         docData.userCategoryType = m.type;
         if (m.label) docData.userCategoryLabel = m.label;
+      } else if (merchantName && amount < 0 && !docData.userCategoryType) {
+        // LLM Auto-Categorization for uncategorised spend
+        // We do this inline for now, but in production this might be better as a background trigger
+        // to avoid slowing down the sync loop too much. However, for immediate feedback, we'll try it.
+        // To avoid hitting rate limits or long delays, we'll only do it for "recent" transactions (last 7 days)
+        // or if we are backfilling a small batch.
+        const isRecent = tx.created && (Date.now() - new Date(tx.created).getTime() < 7 * 24 * 60 * 60 * 1000);
+        if (isRecent) {
+          // We will enqueue a background task or just mark it for LLM processing?
+          // Actually, let's add a flag 'needsClassification: true' and use a Firestore trigger or scheduled job.
+          // That is safer than awaiting an LLM call inside a loop.
+          docData.needsClassification = true;
+        }
       }
 
       batch.set(docRef, docData, { merge: true });
@@ -3373,6 +3512,89 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
 
   return { count: total, lastCreated };
 }
+
+// Background Trigger: Classify new Monzo transactions with LLM
+exports.classifyMonzoTransactions = functionsV2.firestore.onDocumentWritten('monzo_transactions/{docId}', async (event) => {
+  const after = event.data?.after?.data();
+  if (!after || !after.needsClassification || after.userCategoryType) return;
+
+  const uid = after.ownerUid;
+  const merchantName = after.merchant?.name || after.counterparty?.name || after.description;
+  const amount = after.amount;
+
+  if (!merchantName) return;
+
+  try {
+    const db = admin.firestore();
+
+    // Check if we already have a mapping for this merchant (race condition check)
+    const key = normaliseMerchantName(merchantName);
+    const mappingSnap = await db.collection('merchant_mappings').doc(`${uid}_${key}`).get();
+    if (mappingSnap.exists) {
+      const m = mappingSnap.data();
+      await event.data.after.ref.update({
+        userCategoryType: m.categoryType,
+        userCategoryLabel: m.label,
+        needsClassification: admin.firestore.FieldValue.delete(),
+      });
+      return;
+    }
+
+    // Call LLM
+    const prompt = `
+      You are a financial assistant. Categorise this transaction for a personal budget.
+      Merchant: "${merchantName}"
+      Amount: ${amount} GBP
+      
+      Rules:
+      1. Category Type must be one of: 'mandatory', 'optional', 'savings', 'income'.
+      2. Category Label should be a short, descriptive string (e.g., 'Groceries', 'Eating Out', 'Transport').
+      3. 'mandatory' = bills, rent, groceries, transport, essential home items.
+      4. 'optional' = dining out, entertainment, shopping, luxury, coffee.
+      5. 'savings' = transfers to savings accounts or investments.
+      6. 'income' = salary, refunds, dividends.
+      
+      Return JSON only: { "type": "...", "label": "..." }
+    `;
+
+    const response = await callOpenAIChat({
+      system: 'You are a helpful financial categorization engine. Output JSON only.',
+      user: prompt,
+      expectJson: true,
+      temperature: 0.1,
+    });
+
+    const result = JSON.parse(response);
+    const type = (result.type || 'optional').toLowerCase();
+    const label = result.label || 'Uncategorised';
+
+    // Save to transaction
+    await event.data.after.ref.update({
+      userCategoryType: type,
+      userCategoryLabel: label,
+      needsClassification: admin.firestore.FieldValue.delete(),
+      aiClassified: true,
+    });
+
+    // Save to merchant mappings so we don't ask again
+    await db.collection('merchant_mappings').doc(`${uid}_${key}`).set({
+      ownerUid: uid,
+      merchantKey: key,
+      label,
+      categoryType: type,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      source: 'llm_auto',
+    }, { merge: true });
+
+  } catch (e) {
+    console.error('[classifyMonzoTransactions] failed', e);
+    // Remove flag to prevent infinite retries if it's a permanent error, 
+    // but for now we might want to leave it or use a retry count.
+    // We'll delete the flag to be safe.
+    await event.data.after.ref.update({ needsClassification: admin.firestore.FieldValue.delete() });
+  }
+});
+
 
 async function syncMonzoDataForUser(uid, { since } = {}) {
   const { accessToken } = await ensureMonzoAccessToken(uid);
@@ -3409,8 +3631,18 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
     await batch.commit();
   }
 
-  const potsResp = await monzoApi(accessToken, '/pots');
-  const pots = potsResp.pots || [];
+  let allPots = [];
+  for (const account of accounts) {
+    try {
+      const potsResp = await monzoApi(accessToken, '/pots', { current_account_id: account.id });
+      if (potsResp.pots) {
+        allPots = allPots.concat(potsResp.pots);
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch pots for account ${account.id}`, err);
+    }
+  }
+  const pots = allPots;
   summary.pots = pots.length;
   if (pots.length) {
     const batch = db.batch();
@@ -3486,28 +3718,28 @@ exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API
     throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
   }
 
-  const { 
-    persona = "personal", 
-    horizonDays = 7, 
+  const {
+    persona = "personal",
+    horizonDays = 7,
     applyIfScoreGe = 0.8,
     focusGoalId = null,
     goalTimeRequest = null
   } = request.data;
-  
+
   try {
     const db = admin.firestore();
-    
+
     // 1. Assemble context for planning
     const context = await assemblePlanningContext(uid, persona, horizonDays);
     context.userId = uid; // Add userId to context for logging
-    try { await recordAiLog(uid, 'planCalendar', 'info', 'Planning started', { persona, horizonDays, focusGoalId, goalTimeRequest }); } catch {}
-    
+    try { await recordAiLog(uid, 'planCalendar', 'info', 'Planning started', { persona, horizonDays, focusGoalId, goalTimeRequest }); } catch { }
+
     // 2. Generate AI plan
     const aiResponse = await generateAIPlan(context, { focusGoalId, goalTimeRequest });
-    
+
     // 3. Validate proposed blocks
     const validationResult = await validateCalendarBlocks(aiResponse.blocks, context);
-    
+
     // 4. Apply if score is high enough
     let applied = false;
     let blocksCreated = 0;
@@ -3515,7 +3747,7 @@ exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API
       blocksCreated = await applyCalendarBlocks(uid, persona, aiResponse.blocks);
       applied = true;
     }
-    
+
     const resultPayload = {
       proposedBlocks: aiResponse.blocks,
       rationale: aiResponse.rationale,
@@ -3525,12 +3757,12 @@ exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API
       score: validationResult.score,
       focusGoalId: focusGoalId || null
     };
-    try { await recordAiLog(uid, 'planCalendar', applied ? 'success' : 'warning', applied ? 'AI plan applied' : 'AI plan proposed (not applied)', { blocksProposed: aiResponse.blocks?.length || 0, blocksCreated, score: validationResult.score, focusGoalId }); } catch {}
+    try { await recordAiLog(uid, 'planCalendar', applied ? 'success' : 'warning', applied ? 'AI plan applied' : 'AI plan proposed (not applied)', { blocksProposed: aiResponse.blocks?.length || 0, blocksCreated, score: validationResult.score, focusGoalId }); } catch { }
     return resultPayload;
-    
+
   } catch (error) {
     console.error('Calendar planning error:', error);
-    try { await recordAiLog(uid, 'planCalendar', 'error', 'Planning failed', { error: String(error?.message || error) }); } catch {}
+    try { await recordAiLog(uid, 'planCalendar', 'error', 'Planning failed', { error: String(error?.message || error) }); } catch { }
     throw new functionsV2.https.HttpsError("internal", error.message);
   }
 });
@@ -3579,7 +3811,7 @@ exports.runPlanner = functionsV2.https.onCall(async (req) => {
       const db = ensureFirestore();
       const us = await db.collection('user_settings').doc(uid).get();
       if (us.exists && typeof us.data().pushOnPlan === 'boolean') push = !!us.data().pushOnPlan;
-    } catch {}
+    } catch { }
   }
   if (push && exports.syncPlanToGoogleCalendar?.run) {
     try {
@@ -3620,7 +3852,7 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
     try {
       const settingsDoc = await db.collection('user_settings').doc(uid).get();
       basePrompt = settingsDoc.exists ? (settingsDoc.data().storyGenPrompt || null) : null;
-    } catch {}
+    } catch { }
 
     const prompt = promptOverride || basePrompt || (
       `Generate between 3 and 6 user stories for the following personal goal. ` +
@@ -3654,7 +3886,7 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
       const ref = db.collection('stories').doc();
       batch.set(ref, {
         id: ref.id,
-        ref: `STY-${now}-${Math.floor(Math.random()*10000)}`,
+        ref: `STY-${now}-${Math.floor(Math.random() * 10000)}`,
         persona: 'personal',
         title: String(s.title).slice(0, 140),
         description: String(s.description || ''),
@@ -3814,20 +4046,20 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
   const db = admin.firestore();
   const startDate = new Date();
   const endDate = new Date(Date.now() + (horizonDays * 24 * 60 * 60 * 1000));
-  
+
   // Get user's planning preferences
   const prefsDoc = await db.collection('planning_prefs').doc(uid).get();
   const prefs = prefsDoc.exists ? prefsDoc.data() : getDefaultPlanningPrefs();
-  
+
   // Get tasks for this persona
   const tasksQuery = await db.collection('tasks')
     .where('ownerUid', '==', uid)
     .where('persona', '==', persona)
     .where('status', 'in', ['planned', 'in_progress'])
     .get();
-  
+
   const tasks = tasksQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  
+
   // Get goals (if personal)
   let goals = [];
   if (persona === 'personal') {
@@ -3837,7 +4069,7 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
       .get();
     goals = goalsQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
   }
-  
+
   // Get existing calendar blocks
   const blocksQuery = await db.collection('calendar_blocks')
     .where('ownerUid', '==', uid)
@@ -3845,9 +4077,9 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
     .where('start', '>=', startDate.getTime())
     .where('start', '<=', endDate.getTime())
     .get();
-  
+
   const existingBlocks = blocksQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  
+
   // Get Google Calendar events (if connected)
   let gcalEvents = [];
   try {
@@ -3855,7 +4087,7 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
   } catch (error) {
     console.log('No Google Calendar access:', error.message);
   }
-  
+
   return {
     uid,
     persona,
@@ -3870,7 +4102,7 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
 
 async function generateAIPlan(context, options = {}) {
   const { focusGoalId, goalTimeRequest, llmProvider = 'gemini', llmModel = 'gemini-1.5-flash' } = options;
-  
+
   let systemPrompt = `You are an AI planning assistant for BOB, a personal productivity system.
 
 SCHEDULING RULES:
@@ -3952,7 +4184,7 @@ Generate a plan as JSON with:
   "rationale": "Overall planning rationale"
 }`;
 
-  const userMsg = focusGoalId ? 
+  const userMsg = focusGoalId ?
     `Please generate an optimal schedule focused on the goal "${context.goals.find(g => g.id === focusGoalId)?.title}". Create specific time blocks for goal work, skill building, and related tasks.` :
     "Please generate an optimal schedule for these tasks and goals.";
 
@@ -4045,10 +4277,10 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     const profileSnap = await db.collection('profiles').doc(uid).get();
     const email = profileSnap.exists ? (profileSnap.data() || {}).email : null;
     if (email) {
-      const html = `<h2>Research Brief: ${escapeHtml(goal.title)}</h2>`+
-        `<p><strong>Questions:</strong></p><ul>`+
-        questions.map((q) => `<li>${escapeHtml(String(q))}</li>`).join('')+
-        `</ul><hr/><div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(researchDocMd)}</div>`+
+      const html = `<h2>Research Brief: ${escapeHtml(goal.title)}</h2>` +
+        `<p><strong>Questions:</strong></p><ul>` +
+        questions.map((q) => `<li>${escapeHtml(String(q))}</li>`).join('') +
+        `</ul><hr/><div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(researchDocMd)}</div>` +
         `<p style="margin-top:16px;">Open in BOB: <a href="/goals/${goal.ref || goalId}">/goals/${goal.ref || goalId}</a></p>`;
       await sendEmail({ to: email, subject: `Research Brief · ${goal.title}`, html });
     }
@@ -4188,8 +4420,8 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
       const profileSnap = await db.collection('profiles').doc(uid).get();
       const email = profileSnap.exists ? (profileSnap.data() || {}).email : null;
       if (email) {
-        const html = `<h2>Research Brief: ${escapeHtml(story.title)}</h2>`+
-          `<div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(docMd)}</div>`+
+        const html = `<h2>Research Brief: ${escapeHtml(story.title)}</h2>` +
+          `<div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(docMd)}</div>` +
           `<p style="margin-top:16px;">Open in BOB: <a href="/stories?storyId=${storyId}">/stories?storyId=${storyId}</a></p>`;
         await sendEmail({ to: email, subject: `Research Brief · ${story.title}`, html });
       }
@@ -4221,7 +4453,7 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
   const createdTasks = [];
   for (const t of tasks.slice(0, 12)) {
     const tref = db.collection('tasks').doc();
-    const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x)=>String(x)).slice(0, 12) : [];
+    const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x) => String(x)).slice(0, 12) : [];
     const desc = 'AI-generated from story orchestration' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
     await tref.set(ensureTaskPoints({
       id: tref.id,
@@ -4287,7 +4519,7 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
 });
 
 function escapeHtml(s) {
-  return String(s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+  return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
 }
 
 // (GitHub helper removed)
@@ -4337,7 +4569,7 @@ exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
   try {
     const raw = await callLLMJson({ system, user, purpose: 'deriveFromResearch', userId: uid, expectJson: true, temperature: 0.2, provider: generationProvider, model: generationModel });
     parsed = JSON.parse(raw);
-  } catch {}
+  } catch { }
 
   const persona = 'personal';
   let newStoryId = storyId;
@@ -4425,7 +4657,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   const user = [
     `Goal: ${goalSnap.data().title}`,
     latestSummary ? `Conversation summary: ${latestSummary}` : null,
-    recent.length ? `Recent exchanges:\n${recent.map(m=>`${m.role}: ${m.content}`).join('\n')}` : null,
+    recent.length ? `Recent exchanges:\n${recent.map(m => `${m.role}: ${m.content}`).join('\n')}` : null,
     `Known theme: ${goalSnap.data().theme || 'Growth'}`,
     `User: ${message}`
   ].filter(Boolean).join('\n');
@@ -4464,7 +4696,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
     }), { merge: true });
     created.push(taskRef.id);
   }
-  try { await maybeSummarizeThread(threadRef, uid); } catch {}
+  try { await maybeSummarizeThread(threadRef, uid); } catch { }
   const actions = parsed?.actions && typeof parsed.actions === 'object' ? parsed.actions : {};
   return { ok: true, reply, tasksCreated: created.length, actions };
 });
@@ -4575,7 +4807,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
           linkUrl = `/tasks?taskId=${t.id}`;
           taskDescription = td.description || '';
         }
-      } catch {}
+      } catch { }
     }
 
     if (!title && storyId) {
@@ -4591,7 +4823,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
           storyRef = ref || null;
           storyDescription = sd.description || '';
         }
-      } catch {}
+      } catch { }
     }
 
     if (!title && habitId) {
@@ -4604,7 +4836,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
           if (!goalId && hd.linkedGoalId) goalId = hd.linkedGoalId;
           linkUrl = `/habits?habitId=${h.id}`;
         }
-      } catch {}
+      } catch { }
     }
 
     // Resolve theme from goal if needed
@@ -4615,7 +4847,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
           const gd = g.data();
           theme = themeLabelFromNumber(gd.theme);
         }
-      } catch {}
+      } catch { }
     }
     // Ensure string theme label
     if (typeof theme === 'number') theme = themeLabelFromNumber(theme);
@@ -4662,8 +4894,8 @@ async function applyCalendarBlocks(uid, persona, blocks) {
     const startMs = Number(proposed.start || 0);
     const endMs = Number(proposed.end || 0);
     const titleForHash = (enriched.title || proposed.title || '').slice(0, 48);
-    const rawKey = `${uid}:${Math.round(startMs/60000)}:${Math.round(endMs/60000)}:${titleForHash}`;
-    let h = 0; for (let i=0;i<rawKey.length;i++) h = (h*33 + rawKey.charCodeAt(i)) >>> 0;
+    const rawKey = `${uid}:${Math.round(startMs / 60000)}:${Math.round(endMs / 60000)}:${titleForHash}`;
+    let h = 0; for (let i = 0; i < rawKey.length; i++) h = (h * 33 + rawKey.charCodeAt(i)) >>> 0;
     const dedupeKey = h.toString(36);
 
     batch.set(blockRef, {
@@ -4696,7 +4928,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
         const startDate = new Date(proposed.start);
         const endDate = new Date(proposed.end);
         const mins = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
-        const dayKey = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).toISOString().slice(0,10);
+        const dayKey = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).toISOString().slice(0, 10);
         const storyRef = db.collection('stories').doc(String(enriched.storyId));
         batch.set(storyRef, {
           allocation: {
@@ -4707,7 +4939,7 @@ async function applyCalendarBlocks(uid, persona, blocks) {
           updatedAt: now
         }, { merge: true });
       }
-    } catch {}
+    } catch { }
 
     // Create scheduled_items doc if a linked entity exists
     let linkType = null, refId = null, linkTitle = null, linkUrl = enriched.linkUrl || null;
@@ -4862,24 +5094,24 @@ async function buildBlockPreviews(uid, blocks, { timezone = 'UTC' } = {}) {
       durationMinutes,
       goal: goal
         ? {
-            id: String(block.goalId),
-            title: goal.title || goal.name || 'Goal',
-            ref: goal.ref || null,
-          }
+          id: String(block.goalId),
+          title: goal.title || goal.name || 'Goal',
+          ref: goal.ref || null,
+        }
         : null,
       story: story
         ? {
-            id: String(block.storyId),
-            title: story.title || 'Story',
-            ref: story.ref || null,
-          }
+          id: String(block.storyId),
+          title: story.title || 'Story',
+          ref: story.ref || null,
+        }
         : null,
       task: task
         ? {
-            id: String(block.taskId),
-            title: task.title || 'Task',
-            ref: task.ref || null,
-          }
+          id: String(block.taskId),
+          title: task.title || 'Task',
+          ref: task.ref || null,
+        }
         : null,
       deepLink: makeDeepLink({
         taskId: block?.taskId ? String(block.taskId) : null,
@@ -4917,11 +5149,11 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
     const accessToken = await getAccessToken(uid);
     const timeMin = startDate.toISOString();
     const timeMax = endDate.toISOString();
-    
+
     const eventsResponse = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
     });
-    
+
     return eventsResponse.items.map(event => ({
       id: event.id,
       summary: event.summary || 'Untitled Event',
@@ -4929,7 +5161,7 @@ async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
       end: new Date(event.end.dateTime || event.end.date)
     }));
   } catch (error) {
-    try { await recordIntegrationLog(uid, 'google', 'error', 'Failed to fetch Google Calendar events', { start: startDate?.toISOString?.(), end: endDate?.toISOString?.(), error: String(error?.message || error) }); } catch {}
+    try { await recordIntegrationLog(uid, 'google', 'error', 'Failed to fetch Google Calendar events', { start: startDate?.toISOString?.(), end: endDate?.toISOString?.(), error: String(error?.message || error) }); } catch { }
     return [];
   }
 }
@@ -5022,7 +5254,7 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
   try {
     const level = events.length === 0 ? 'warning' : 'success';
     await recordIntegrationLog(uid, 'google', level, 'Imported Google Calendar events', { requestedStart: startDate?.toISOString?.(), requestedEnd: endDate?.toISOString?.(), eventsFetched: events.length, blocksStored: seenDocIds.size });
-  } catch {}
+  } catch { }
 
   return { events: events.length, stored: seenDocIds.size };
 }
@@ -5031,7 +5263,7 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
 exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
   const db = admin.firestore();
   // Find users with Google tokens
-  const snap = await db.collection('tokens').where('provider','==','google').get().catch(()=>null);
+  const snap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
   if (!snap || snap.empty) return;
   const today = new Date();
   const work = [];
@@ -5042,17 +5274,17 @@ exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 min
         const dayKey = toDayKey(today);
         // Perform reconciliation similar to reconcilePlanFromGoogleCalendar
         const access = await getAccessToken(uid);
-        const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
-        const toCheck = asSnap.docs.map(x=>({ id:x.id, ...(x.data()||{}) })).filter(a => a?.external?.googleEventId);
+        const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid', '==', uid).get();
+        const toCheck = asSnap.docs.map(x => ({ id: x.id, ...(x.data() || {}) })).filter(a => a?.external?.googleEventId);
         for (const a of toCheck) {
           try {
-            await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(a.external.googleEventId)}`, { headers: { 'Authorization': 'Bearer '+access } });
+            await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(a.external.googleEventId)}`, { headers: { 'Authorization': 'Bearer ' + access } });
           } catch {
             await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id)
-              .set({ status:'deferred', external:{ googleEventId: null }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+              .set({ status: 'deferred', external: { googleEventId: null }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
           }
         }
-      } catch {}
+      } catch { }
     })());
   }
   await Promise.allSettled(work);
@@ -5071,10 +5303,10 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
     const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
     try {
       await importGoogleCalendarEvents(uid, { startDate, endDate });
-      try { await recordIntegrationLog(uid, 'google', 'success', 'Hourly Google Calendar sync ran', { start: startDate.toISOString(), end: endDate.toISOString() }); } catch {}
+      try { await recordIntegrationLog(uid, 'google', 'success', 'Hourly Google Calendar sync ran', { start: startDate.toISOString(), end: endDate.toISOString() }); } catch { }
     } catch (error) {
       console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
-      try { await recordIntegrationLog(uid, 'google', 'error', 'Hourly Google Calendar sync failed', { error: String(error?.message || error) }); } catch {}
+      try { await recordIntegrationLog(uid, 'google', 'error', 'Hourly Google Calendar sync failed', { error: String(error?.message || error) }); } catch { }
     }
   }
 });
@@ -5106,7 +5338,7 @@ function normalizeTitle(s) {
 function normalizeTitleHardened(s) {
   if (!s) return '';
   let str = String(s);
-  try { str = str.normalize('NFKD'); } catch {}
+  try { str = str.normalize('NFKD'); } catch { }
   str = str.replace(/[\u0300-\u036f]/g, '');
   str = str.replace(/[\u200B-\u200D\uFEFF\u00AD\u061C\u2060-\u206F\uFE0E\uFE0F]/g, '');
   str = str.toLowerCase();
@@ -5273,18 +5505,18 @@ async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = f
       if (!Array.isArray(items) || items.length < 2) continue;
       const tasks = items;
       const canonical = tasks.slice().sort((a, b) => {
-          const deletedDiff = (a.deleted ? 1 : 0) - (b.deleted ? 1 : 0);
-          if (deletedDiff !== 0) return deletedDiff;
-          const statusA = String(a.status ?? '').toLowerCase();
-          const statusB = String(b.status ?? '').toLowerCase();
-          const doneA = statusA === 'done' || statusA === 'complete' || Number(a.status) === 2;
-          const doneB = statusB === 'done' || statusB === 'complete' || Number(b.status) === 2;
-          if (doneA !== doneB) return doneA - doneB;
-          const createdA = toMillis(a.reminderCreatedAt) ?? toMillis(a.createdAt) ?? toMillis(a.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
-          const createdB = toMillis(b.reminderCreatedAt) ?? toMillis(b.createdAt) ?? toMillis(b.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
-          if (createdA !== createdB) return createdA - createdB;
-          return String(a.id).localeCompare(String(b.id));
-        })[0];
+        const deletedDiff = (a.deleted ? 1 : 0) - (b.deleted ? 1 : 0);
+        if (deletedDiff !== 0) return deletedDiff;
+        const statusA = String(a.status ?? '').toLowerCase();
+        const statusB = String(b.status ?? '').toLowerCase();
+        const doneA = statusA === 'done' || statusA === 'complete' || Number(a.status) === 2;
+        const doneB = statusB === 'done' || statusB === 'complete' || Number(b.status) === 2;
+        if (doneA !== doneB) return doneA - doneB;
+        const createdA = toMillis(a.reminderCreatedAt) ?? toMillis(a.createdAt) ?? toMillis(a.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+        const createdB = toMillis(b.reminderCreatedAt) ?? toMillis(b.createdAt) ?? toMillis(b.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+        if (createdA !== createdB) return createdA - createdB;
+        return String(a.id).localeCompare(String(b.id));
+      })[0];
       const duplicates = tasks.filter(t => t.id !== canonical.id);
       if (!duplicates.length) continue;
       const normTitle = bucketKey;
@@ -6055,7 +6287,7 @@ exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every mond
   for (const doc of profiles.docs) {
     const uid = doc.id;
     try {
-  const q = await db.collection('activity_stream')
+      const q = await db.collection('activity_stream')
         .where('ownerUid', '==', uid)
         .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(periodStart))
         .get();
@@ -6066,7 +6298,7 @@ exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every mond
         counts[t] = (counts[t] || 0) + 1;
         total += 1;
       });
-      const weekKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7)).toISOString().slice(0,10);
+      const weekKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7)).toISOString().slice(0, 10);
       const summaryRef = db.collection('weekly_summaries').doc(`${uid}_${weekKey}`);
       await summaryRef.set({
         id: summaryRef.id,
@@ -6316,7 +6548,7 @@ exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
         confidence: sanitizeConfidence(item.confidence),
         rationale: item.rationale || '',
         goalId,
-        goalTitle: goalId ? (goalTitleById[goalId] || summary?.goal?.title || '' ) : null,
+        goalTitle: goalId ? (goalTitleById[goalId] || summary?.goal?.title || '') : null,
         points: Number.isFinite(points) ? Math.max(1, Math.min(8, Math.round(points))) : undefined,
       };
     })
@@ -6606,9 +6838,9 @@ function buildHeuristicFocus(summaryData, note) {
       news: [],
       weather: weatherContext
         ? {
-            summary: String(weatherContext.summary || weatherContext.description || ''),
-            temp: String(weatherContext.temp || weatherContext.temperature || ''),
-          }
+          summary: String(weatherContext.summary || weatherContext.description || ''),
+          temp: String(weatherContext.temp || weatherContext.temperature || ''),
+        }
         : null,
     },
   };
@@ -6692,8 +6924,8 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
     const aiItems = Array.isArray(parsed.items)
       ? parsed.items
       : Array.isArray(parsed.focus)
-      ? parsed.focus
-      : [];
+        ? parsed.focus
+        : [];
 
     const normalised = aiItems
       .map((item) => {
@@ -6735,15 +6967,15 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
 
     const weatherPayload = parsed.weather
       ? {
-          summary: String(parsed.weather.summary || parsed.weather.description || ''),
-          temp: String(parsed.weather.temp || parsed.weather.temperature || ''),
-        }
+        summary: String(parsed.weather.summary || parsed.weather.description || ''),
+        temp: String(parsed.weather.temp || parsed.weather.temperature || ''),
+      }
       : weatherContext
-      ? {
+        ? {
           summary: String(weatherContext.summary || weatherContext.description || ''),
           temp: String(weatherContext.temp || weatherContext.temperature || ''),
         }
-      : null;
+        : null;
 
     const newsLines = Array.isArray(parsed.news)
       ? parsed.news.map((item) => String(item))
@@ -6951,174 +7183,174 @@ function assembleDailyChecklist(summaryData) {
       reason: story.goal ? `Goal ${story.goal}` : null,
       deepLink: story.deepLink || null,
       checkable: false,
+    });
   });
-});
 
-// ===== Tasks normalizer + chore/routine calendar materializer
-exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async (event) => {
-  const db = admin.firestore();
-  const id = event?.params?.id;
-  const before = event?.data?.before?.data() || null;
-  const after = event?.data?.after?.data() || null;
-  if (!after) return; // deleted
+  // ===== Tasks normalizer + chore/routine calendar materializer
+  exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async (event) => {
+    const db = admin.firestore();
+    const id = event?.params?.id;
+    const before = event?.data?.before?.data() || null;
+    const after = event?.data?.after?.data() || null;
+    if (!after) return; // deleted
 
-  const ref = event.data.after.ref;
-  const patch = {};
-  let needsPatch = false;
+    const ref = event.data.after.ref;
+    const patch = {};
+    let needsPatch = false;
 
-  // Ensure updatedAt
-  patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-  needsPatch = true;
-
-  // completedAt when transitioning to done (status=2)
-  const beforeStatus = Number(before?.status ?? null);
-  const afterStatus = Number(after?.status ?? null);
-  if ((beforeStatus !== 2) && (afterStatus === 2) && !after?.completedAt) {
-    patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+    // Ensure updatedAt
+    patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
     needsPatch = true;
-  }
 
-  // One-time type inference if missing
-  if (!after?.type) {
-    const inferred = inferTaskType(after);
-    if (inferred) { patch.type = inferred; patch.typeInferredAt = admin.firestore.FieldValue.serverTimestamp(); needsPatch = true; }
-  }
-
-  // Recurrence normalization
-  const { changed, patch: norm } = normaliseRecurrence(after);
-  if (changed) { Object.assign(patch, norm); needsPatch = true; }
-
-  if (needsPatch) {
-    // Avoid infinite loops: keep patch minimal and idempotent
-    await ref.set(patch, { merge: true });
-  }
-
-  // Materialize chore/routine calendar blocks for next 14 days (active only)
-  const type = (after?.type || patch?.type || '').toLowerCase();
-  const active = Number(afterStatus) !== 2;
-  const isChoreLike = type === 'chore' || type === 'routine';
-  if (isChoreLike && active) {
-    const task = { id, ...(after || {}), ...(patch || {}) };
-    await upsertChoreBlocksForTask(db, task, 14);
-  }
-
-  // If just completed, mark nearest block done and update lastDoneAt
-  if ((beforeStatus !== 2) && (afterStatus === 2) && isChoreLike) {
-    const today = startOfDay(new Date());
-    const todayKey = toDayKey(today);
-    const blockId = `chore_${id}_${todayKey}`;
-    const blockRef = db.collection('calendar_blocks').doc(blockId);
-    const snap = await blockRef.get();
-    if (snap.exists) {
-      await blockRef.set({ status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    // completedAt when transitioning to done (status=2)
+    const beforeStatus = Number(before?.status ?? null);
+    const afterStatus = Number(after?.status ?? null);
+    if ((beforeStatus !== 2) && (afterStatus === 2) && !after?.completedAt) {
+      patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+      needsPatch = true;
     }
-    await ref.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  }
-});
 
-// ===== Nightly archiver: tasks -> tasks_archive after 30d completed
-exports.archiveCompletedTasksNightly = schedulerV2.onSchedule('every day 02:30', async () => {
-  const db = admin.firestore();
-  const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const snap = await db.collection('tasks')
-    .where('status', '==', 2)
-    .where('completedAt', '<=', cutoff)
-    .get();
-
-  let archived = 0, errors = 0;
-  for (const doc of snap.docs) {
-    try {
-      const data = doc.data() || {};
-      const archiveRef = db.collection('tasks_archive').doc(doc.id);
-      const ttl = admin.firestore.Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
-      await archiveRef.set({
-        ...data,
-        sourceTaskId: doc.id,
-        archivedAt: admin.firestore.FieldValue.serverTimestamp(),
-        deleteAt: ttl,
-      }, { merge: true });
-      await doc.ref.delete();
-      archived++;
-    } catch (err) {
-      console.error('[archiver] failed', { id: doc.id, error: err?.message || String(err) });
-      errors++;
+    // One-time type inference if missing
+    if (!after?.type) {
+      const inferred = inferTaskType(after);
+      if (inferred) { patch.type = inferred; patch.typeInferredAt = admin.firestore.FieldValue.serverTimestamp(); needsPatch = true; }
     }
-  }
-  try {
-    const activityRef = db.collection('activity_stream').doc();
-    await activityRef.set({
-      id: activityRef.id,
-      entityType: 'archiver',
-      activityType: 'tasks_archived',
-      description: `Archived ${archived} tasks (errors: ${errors})`,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  } catch {}
-});
 
-// ===== Hourly: ensure next 14 days of chore/routine blocks exist
-exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
-  const db = admin.firestore();
-  let scanned = 0, created = 0, updated = 0;
-  for (const t of ['chore','routine']) {
-    // Only open tasks (status == 0)
-    const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
+    // Recurrence normalization
+    const { changed, patch: norm } = normaliseRecurrence(after);
+    if (changed) { Object.assign(patch, norm); needsPatch = true; }
+
+    if (needsPatch) {
+      // Avoid infinite loops: keep patch minimal and idempotent
+      await ref.set(patch, { merge: true });
+    }
+
+    // Materialize chore/routine calendar blocks for next 14 days (active only)
+    const type = (after?.type || patch?.type || '').toLowerCase();
+    const active = Number(afterStatus) !== 2;
+    const isChoreLike = type === 'chore' || type === 'routine';
+    if (isChoreLike && active) {
+      const task = { id, ...(after || {}), ...(patch || {}) };
+      await upsertChoreBlocksForTask(db, task, 14);
+    }
+
+    // If just completed, mark nearest block done and update lastDoneAt
+    if ((beforeStatus !== 2) && (afterStatus === 2) && isChoreLike) {
+      const today = startOfDay(new Date());
+      const todayKey = toDayKey(today);
+      const blockId = `chore_${id}_${todayKey}`;
+      const blockRef = db.collection('calendar_blocks').doc(blockId);
+      const snap = await blockRef.get();
+      if (snap.exists) {
+        await blockRef.set({ status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
+      await ref.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+  });
+
+  // ===== Nightly archiver: tasks -> tasks_archive after 30d completed
+  exports.archiveCompletedTasksNightly = schedulerV2.onSchedule('every day 02:30', async () => {
+    const db = admin.firestore();
+    const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const snap = await db.collection('tasks')
+      .where('status', '==', 2)
+      .where('completedAt', '<=', cutoff)
+      .get();
+
+    let archived = 0, errors = 0;
     for (const doc of snap.docs) {
-      scanned++;
-      const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data()||{}) }, 14);
-      created += res.created; updated += res.updated;
+      try {
+        const data = doc.data() || {};
+        const archiveRef = db.collection('tasks_archive').doc(doc.id);
+        const ttl = admin.firestore.Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
+        await archiveRef.set({
+          ...data,
+          sourceTaskId: doc.id,
+          archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+          deleteAt: ttl,
+        }, { merge: true });
+        await doc.ref.delete();
+        archived++;
+      } catch (err) {
+        console.error('[archiver] failed', { id: doc.id, error: err?.message || String(err) });
+        errors++;
+      }
     }
-  }
-  try {
-    const activityRef = admin.firestore().collection('activity_stream').doc();
-    await activityRef.set({
-      id: activityRef.id,
-      entityType: 'chore_blocks',
-      activityType: 'ensure_blocks',
-      description: `Ensured blocks: scanned=${scanned}, created=${created}, updated=${updated}`,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  } catch {}
-});
+    try {
+      const activityRef = db.collection('activity_stream').doc();
+      await activityRef.set({
+        id: activityRef.id,
+        entityType: 'archiver',
+        activityType: 'tasks_archived',
+        description: `Archived ${archived} tasks (errors: ${errors})`,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch { }
+  });
 
-// ===== Callables: complete/snooze chore task
-exports.completeChoreTask = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const taskId = String(req?.data?.taskId || '').trim();
-  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
-  const db = admin.firestore();
-  const taskRef = db.collection('tasks').doc(taskId);
-  const snap = await taskRef.get();
-  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
-  const task = snap.data() || {};
-  if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
-  const type = String(task?.type || '').toLowerCase();
-  if (type !== 'chore' && type !== 'routine') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine');
-  const todayKey = toDayKey(new Date());
-  const blockId = `chore_${taskId}_${todayKey}`;
-  await db.collection('calendar_blocks').doc(blockId)
-    .set({ ownerUid: uid, taskId, entityType: 'chore', status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  await taskRef.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  return { ok: true };
-});
+  // ===== Hourly: ensure next 14 days of chore/routine blocks exist
+  exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
+    const db = admin.firestore();
+    let scanned = 0, created = 0, updated = 0;
+    for (const t of ['chore', 'routine']) {
+      // Only open tasks (status == 0)
+      const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
+      for (const doc of snap.docs) {
+        scanned++;
+        const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data() || {}) }, 14);
+        created += res.created; updated += res.updated;
+      }
+    }
+    try {
+      const activityRef = admin.firestore().collection('activity_stream').doc();
+      await activityRef.set({
+        id: activityRef.id,
+        entityType: 'chore_blocks',
+        activityType: 'ensure_blocks',
+        description: `Ensured blocks: scanned=${scanned}, created=${created}, updated=${updated}`,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch { }
+  });
 
-exports.snoozeChoreTask = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const taskId = String(req?.data?.taskId || '').trim();
-  const days = Math.max(1, Math.min(14, Number(req?.data?.days || 1)));
-  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
-  const db = admin.firestore();
-  const taskRef = db.collection('tasks').doc(taskId);
-  const snap = await taskRef.get();
-  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
-  const task = snap.data() || {};
-  if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
-  const until = startOfDay(new Date(Date.now() + days * 24 * 60 * 60 * 1000)).getTime();
-  await taskRef.set({ snoozedUntil: until, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  return { ok: true, snoozedUntil: until };
-});
+  // ===== Callables: complete/snooze chore task
+  exports.completeChoreTask = httpsV2.onCall(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+    const taskId = String(req?.data?.taskId || '').trim();
+    if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+    const db = admin.firestore();
+    const taskRef = db.collection('tasks').doc(taskId);
+    const snap = await taskRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+    const task = snap.data() || {};
+    if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+    const type = String(task?.type || '').toLowerCase();
+    if (type !== 'chore' && type !== 'routine') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine');
+    const todayKey = toDayKey(new Date());
+    const blockId = `chore_${taskId}_${todayKey}`;
+    await db.collection('calendar_blocks').doc(blockId)
+      .set({ ownerUid: uid, taskId, entityType: 'chore', status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await taskRef.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true };
+  });
+
+  exports.snoozeChoreTask = httpsV2.onCall(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+    const taskId = String(req?.data?.taskId || '').trim();
+    const days = Math.max(1, Math.min(14, Number(req?.data?.days || 1)));
+    if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+    const db = admin.firestore();
+    const taskRef = db.collection('tasks').doc(taskId);
+    const snap = await taskRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+    const task = snap.data() || {};
+    if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+    const until = startOfDay(new Date(Date.now() + days * 24 * 60 * 60 * 1000)).getTime();
+    await taskRef.set({ snoozedUntil: until, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true, snoozedUntil: until };
+  });
 
   return {
     generatedAt: nowIso,
@@ -7149,19 +7381,19 @@ async function buildDailyChecklistBriefing({ summaryData, checklist, userId }) {
 
     const agenda = Array.isArray(summaryData?.calendarBlocks)
       ? summaryData.calendarBlocks.slice(0, 4).map((block) => ({
-          title: block.title || 'Block',
-          start: block.startDisplay || block.startIso || null,
-          end: block.endDisplay || block.endIso || null,
-          theme: block.theme || null,
-        }))
+        title: block.title || 'Block',
+        start: block.startDisplay || block.startIso || null,
+        end: block.endDisplay || block.endIso || null,
+        theme: block.theme || null,
+      }))
       : [];
 
     const financeTotals = summaryData?.monzo?.totals
       ? {
-          spent: summaryData.monzo.totals.spent || null,
-          budget: summaryData.monzo.totals.budget || null,
-          remaining: summaryData.monzo.totals.remaining || null,
-        }
+        spent: summaryData.monzo.totals.spent || null,
+        budget: summaryData.monzo.totals.budget || null,
+        remaining: summaryData.monzo.totals.remaining || null,
+      }
       : null;
 
     const payload = {
@@ -7366,11 +7598,11 @@ async function getUserMaxHr(uid) {
 
 function hrZonesFromMax(maxHr) {
   return [
-    { name: 'Z1', min: 0.50*maxHr, max: 0.60*maxHr },
-    { name: 'Z2', min: 0.60*maxHr, max: 0.70*maxHr },
-    { name: 'Z3', min: 0.70*maxHr, max: 0.80*maxHr },
-    { name: 'Z4', min: 0.80*maxHr, max: 0.90*maxHr },
-    { name: 'Z5', min: 0.90*maxHr, max: 1.00*maxHr + 1 },
+    { name: 'Z1', min: 0.50 * maxHr, max: 0.60 * maxHr },
+    { name: 'Z2', min: 0.60 * maxHr, max: 0.70 * maxHr },
+    { name: 'Z3', min: 0.70 * maxHr, max: 0.80 * maxHr },
+    { name: 'Z4', min: 0.80 * maxHr, max: 0.90 * maxHr },
+    { name: 'Z5', min: 0.90 * maxHr, max: 1.00 * maxHr + 1 },
   ];
 }
 
@@ -7398,10 +7630,10 @@ async function enrichActivityHr(uid, activityId) {
 
   const maxHr = await getUserMaxHr(uid);
   const zones = hrZonesFromMax(maxHr);
-  const totals = { z1Time_s:0, z2Time_s:0, z3Time_s:0, z4Time_s:0, z5Time_s:0 };
-  for (let i=1; i<tm.length; i++) {
-    const dt = Math.max(1, (tm[i] - tm[i-1]));
-    const h = hr[Math.min(i, hr.length-1)];
+  const totals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  for (let i = 1; i < tm.length; i++) {
+    const dt = Math.max(1, (tm[i] - tm[i - 1]));
+    const h = hr[Math.min(i, hr.length - 1)];
     const zIdx = zones.findIndex(z => h >= z.min && h < z.max);
     if (zIdx === 0) totals.z1Time_s += dt;
     else if (zIdx === 1) totals.z2Time_s += dt;
@@ -7419,7 +7651,7 @@ exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLI
   const uid = req.auth.uid;
   const days = Math.min(Number(req.data?.days || 30), 365);
   console.log('[enrichStravaHR] uid', uid, 'days', days);
-  const since = Date.now() - days*24*60*60*1000;
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
   const q = await db.collection('metrics_workouts')
     .where('ownerUid', '==', uid)
@@ -7428,12 +7660,12 @@ exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLI
   let enriched = 0, scanned = 0;
   for (const d of q.docs) {
     const w = d.data();
-    if ((w.startDate||0) < since) continue;
+    if ((w.startDate || 0) < since) continue;
     if (!w.hasHeartrate && !w.avgHeartrate) continue;
     scanned++;
     const actId = String(w.stravaActivityId || '').trim();
     if (!actId) continue;
-    const r = await enrichActivityHr(uid, actId).catch(()=>null);
+    const r = await enrichActivityHr(uid, actId).catch(() => null);
     if (r?.ok) enriched++;
   }
   return { ok: true, enriched, scanned };
@@ -7471,7 +7703,7 @@ exports.stravaWebhook = httpsV2.onRequest({ secrets: [STRAVA_WEBHOOK_VERIFY_TOKE
             }
           } else if (aspect === 'delete') {
             const docId = `${uid}_${body.object_id}`;
-            await db.collection('metrics_workouts').doc(docId).delete().catch(()=>{});
+            await db.collection('metrics_workouts').doc(docId).delete().catch(() => { });
           }
         } else {
           console.warn('Webhook for unknown Strava athlete:', athleteId);
@@ -7521,7 +7753,7 @@ exports.disconnectGoogle = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
     await db.collection('tokens').doc(uid).delete();
   } catch (e) {
     // fallback: clear refresh_token if delete fails due to rules
-    try { await db.collection('tokens').doc(uid).set({ refresh_token: admin.firestore.FieldValue.delete(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+    try { await db.collection('tokens').doc(uid).set({ refresh_token: admin.firestore.FieldValue.delete(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch { }
   }
   try {
     const ref = db.collection('activity_stream').doc();
@@ -7536,7 +7768,7 @@ exports.disconnectGoogle = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-  } catch {}
+  } catch { }
   return { ok: true };
 });
 
@@ -7553,7 +7785,7 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
   }
   const db = admin.firestore();
   let imported = 0;
-  const slugify = (s)=> String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+  const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
   async function getParticipantsFromResultUrl(href) {
     if (!href) return { participants: null, resultUrl: null, runSeq: null };
@@ -7594,7 +7826,7 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
     else if (parts.length === 2) secs = parts[0] * 60 + parts[1];
     else continue;
     const eventSlug = slugify(eventText);
-    const docId = `${uid}_parkrun_${new Date(dateMs).toISOString().slice(0,10)}_${eventSlug}`;
+    const docId = `${uid}_parkrun_${new Date(dateMs).toISOString().slice(0, 10)}_${eventSlug}`;
     // Try to derive participants from a direct result URL if the row links to it
     let participantsCount = null; let eventResultUrl = null; let eventRunSeqNumber = null;
     if (eventHref && /\/results\//.test(eventHref)) {
@@ -7624,7 +7856,7 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
       ageGrade: ageGradeText || null,
       ageCategory: ageCatText || null,
       participantsCount: participantsCount || null,
-      percentileTop: (participantsCount && positionText) ? Number((((participantsCount - (Number(positionText)||0) + 1)/participantsCount)*100).toFixed(2)) : null,
+      percentileTop: (participantsCount && positionText) ? Number((((participantsCount - (Number(positionText) || 0) + 1) / participantsCount) * 100).toFixed(2)) : null,
       source: 'parkrun',
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -7686,69 +7918,69 @@ async function _getFitnessOverview(uid, days) {
   const workouts = workoutsSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(w => (w.startDate || 0) >= sinceMs && (w.provider === 'strava' || w.provider === 'parkrun'))
-    .sort((a,b) => (a.startDate||0) - (b.startDate||0));
+    .sort((a, b) => (a.startDate || 0) - (b.startDate || 0));
   const hrvSnap = await db.collection('metrics_hrv').where('ownerUid', '==', uid).limit(1000).get();
   const hrv = hrvSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(x => {
       const t = x.timestamp || x.date || x.day || x.measuredAt || null;
-      const ms = typeof t === 'number' ? (t > 1e12 ? t : t*1000) : (t?.toMillis ? t.toMillis() : (Date.parse(t) || null));
+      const ms = typeof t === 'number' ? (t > 1e12 ? t : t * 1000) : (t?.toMillis ? t.toMillis() : (Date.parse(t) || null));
       x._ms = ms;
       return ms && ms >= sinceMs;
     })
-    .sort((a,b) => a._ms - b._ms);
-  const km = (m)=> (typeof m === 'number' ? m/1000 : 0);
-  const sec = (s)=> (typeof s === 'number' ? s : 0);
+    .sort((a, b) => a._ms - b._ms);
+  const km = (m) => (typeof m === 'number' ? m / 1000 : 0);
+  const sec = (s) => (typeof s === 'number' ? s : 0);
   const weekly = new Map();
   let totalKm = 0, totalSec = 0, sessions = 0;
   for (const w of workouts) {
     const d = new Date(w.startDate || Date.now());
     const ws = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
     ws.setUTCDate(ws.getUTCDate() - ws.getUTCDay());
-    const key = ws.toISOString().slice(0,10);
+    const key = ws.toISOString().slice(0, 10);
     const dist = km(w.distance_m);
     const time = sec(w.movingTime_s || w.elapsedTime_s);
-    const agg = weekly.get(key) || { distanceKm:0, timeSec:0, sessions:0 };
+    const agg = weekly.get(key) || { distanceKm: 0, timeSec: 0, sessions: 0 };
     agg.distanceKm += dist; agg.timeSec += time; agg.sessions += 1;
     weekly.set(key, agg); totalKm += dist; totalSec += time; sessions += 1;
   }
-  const since30 = Date.now() - 30*24*60*60*1000;
-  const last30 = workouts.filter(w => (w.startDate||0) >= since30);
-  const dist30 = last30.reduce((s,w)=> s + km(w.distance_m), 0);
-  const time30 = last30.reduce((s,w)=> s + sec(w.movingTime_s || w.elapsedTime_s), 0);
-  const avgPaceMinPerKm = dist30 > 0 ? (time30/60) / dist30 : null;
-  const toVal = (x)=> Number(x?.value ?? x?.rMSSD ?? x?.hrv ?? null) || null;
-  const last7Ms = Date.now() - 7*24*60*60*1000;
+  const since30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const last30 = workouts.filter(w => (w.startDate || 0) >= since30);
+  const dist30 = last30.reduce((s, w) => s + km(w.distance_m), 0);
+  const time30 = last30.reduce((s, w) => s + sec(w.movingTime_s || w.elapsedTime_s), 0);
+  const avgPaceMinPerKm = dist30 > 0 ? (time30 / 60) / dist30 : null;
+  const toVal = (x) => Number(x?.value ?? x?.rMSSD ?? x?.hrv ?? null) || null;
+  const last7Ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const last30Ms = since30;
   const hrvLast7 = hrv.filter(x => x._ms >= last7Ms).map(toVal).filter(Boolean);
   const hrvLast30 = hrv.filter(x => x._ms >= last30Ms).map(toVal).filter(Boolean);
-  const avg = (arr)=> arr.length? (arr.reduce((a,b)=>a+b,0)/arr.length): null;
+  const avg = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : null;
   const hrv7 = avg(hrvLast7);
   const hrv30 = avg(hrvLast30);
   const hrvTrendPct = (hrv7 && hrv30) ? ((hrv7 - hrv30) / hrv30) * 100 : null;
   const weeks = Array.from(weekly.values());
   const recentWeeks = weeks.slice(-4);
-  const volKm = recentWeeks.reduce((s,x)=> s + x.distanceKm, 0) / Math.max(recentWeeks.length,1);
+  const volKm = recentWeeks.reduce((s, x) => s + x.distanceKm, 0) / Math.max(recentWeeks.length, 1);
   const volScore = Math.max(0, Math.min(1, volKm / 50));
   const hrvScore = (hrvTrendPct == null) ? 0.5 : Math.max(0, Math.min(1, (hrvTrendPct + 10) / 20));
-  const fitnessScore = Math.round((volScore*0.6 + hrvScore*0.4) * 100);
-  const zoneTotals = { z1Time_s:0, z2Time_s:0, z3Time_s:0, z4Time_s:0, z5Time_s:0 };
+  const fitnessScore = Math.round((volScore * 0.6 + hrvScore * 0.4) * 100);
+  const zoneTotals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
   for (const w of workouts) {
     if (w.hrZones) {
-      zoneTotals.z1Time_s += Number(w.hrZones.z1Time_s||0);
-      zoneTotals.z2Time_s += Number(w.hrZones.z2Time_s||0);
-      zoneTotals.z3Time_s += Number(w.hrZones.z3Time_s||0);
-      zoneTotals.z4Time_s += Number(w.hrZones.z4Time_s||0);
-      zoneTotals.z5Time_s += Number(w.hrZones.z5Time_s||0);
+      zoneTotals.z1Time_s += Number(w.hrZones.z1Time_s || 0);
+      zoneTotals.z2Time_s += Number(w.hrZones.z2Time_s || 0);
+      zoneTotals.z3Time_s += Number(w.hrZones.z3Time_s || 0);
+      zoneTotals.z4Time_s += Number(w.hrZones.z4Time_s || 0);
+      zoneTotals.z5Time_s += Number(w.hrZones.z5Time_s || 0);
     }
   }
   return {
     rangeDays: days,
-    totals: { distanceKm: Number(totalKm.toFixed(2)), timeHours: Number((totalSec/3600).toFixed(2)), sessions },
+    totals: { distanceKm: Number(totalKm.toFixed(2)), timeHours: Number((totalSec / 3600).toFixed(2)), sessions },
     last30: { distanceKm: Number(dist30.toFixed(2)), avgPaceMinPerKm: avgPaceMinPerKm ? Number(avgPaceMinPerKm.toFixed(2)) : null, workouts: last30.length },
     hrv: { last7Avg: hrv7 ? Number(hrv7.toFixed(1)) : null, last30Avg: hrv30 ? Number(hrv30.toFixed(1)) : null, trendPct: hrvTrendPct != null ? Number(hrvTrendPct.toFixed(1)) : null },
     hrZones: zoneTotals,
-    weekly: Array.from(weekly.entries()).map(([weekStart, w]) => ({ weekStart, ...w, paceMinPerKm: w.distanceKm>0 ? Number(((w.timeSec/60)/w.distanceKm).toFixed(2)) : null })),
+    weekly: Array.from(weekly.entries()).map(([weekStart, w]) => ({ weekStart, ...w, paceMinPerKm: w.distanceKm > 0 ? Number(((w.timeSec / 60) / w.distanceKm).toFixed(2)) : null })),
     fitnessScore
   };
 }
@@ -7772,9 +8004,9 @@ exports.enableFitnessAutomationDefaults = httpsV2.onCall(async (req) => {
   let defaultRunSeq = null;
   try {
     const snap = await db.collection('metrics_workouts')
-      .where('ownerUid','==',uid)
-      .where('provider','==','parkrun')
-      .orderBy('startDate','desc')
+      .where('ownerUid', '==', uid)
+      .where('provider', '==', 'parkrun')
+      .orderBy('startDate', 'desc')
       .limit(1)
       .get();
     if (!snap.empty) {
@@ -7782,7 +8014,7 @@ exports.enableFitnessAutomationDefaults = httpsV2.onCall(async (req) => {
       defaultSlug = d.eventSlug || null;
       defaultRunSeq = d.eventRunSeqNumber || null;
     }
-  } catch {}
+  } catch { }
 
   const payload = {
     stravaAutoSync: true,
@@ -7806,62 +8038,62 @@ exports.generateGoalStoriesAndKPIs = httpsV2.onCall(async (req) => {
 });
 
 async function _getRunFitnessAnalysis(uid, days) {
-  const sinceMs = Date.now() - days*24*60*60*1000;
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
-  const wSnap = await db.collection('metrics_workouts').where('ownerUid','==',uid).get();
-  const all = wSnap.docs.map(d=>({ id:d.id, ...d.data() }));
-  const parkruns = all.filter(x => x.provider==='parkrun' && (x.startDate||0) >= sinceMs);
-  const runs = all.filter(x => x.provider==='strava' && (x.startDate||0) >= sinceMs && (x.type==='Run' || x.run===true));
+  const wSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).get();
+  const all = wSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const parkruns = all.filter(x => x.provider === 'parkrun' && (x.startDate || 0) >= sinceMs);
+  const runs = all.filter(x => x.provider === 'strava' && (x.startDate || 0) >= sinceMs && (x.type === 'Run' || x.run === true));
   const pairs = [];
   for (const p of parkruns) {
     const pStart = p.startDate || 0;
-    const rCandidates = runs.filter(r => Math.abs((r.startDate||0)-pStart) <= 12*3600*1000);
+    const rCandidates = runs.filter(r => Math.abs((r.startDate || 0) - pStart) <= 12 * 3600 * 1000);
     let best = null, bestScore = 1e12;
     for (const r of rCandidates) {
-      const dist = Number(r.distance_m||0);
-      const dScore = Math.abs(dist - 5000) + Math.abs((r.startDate||0) - pStart)/1000;
+      const dist = Number(r.distance_m || 0);
+      const dScore = Math.abs(dist - 5000) + Math.abs((r.startDate || 0) - pStart) / 1000;
       if (dScore < bestScore) { best = r; bestScore = dScore; }
     }
     if (best) pairs.push({ parkrun: p, strava: best });
   }
   const xs = [], ys = [];
-  let zoneAgg = { z1Time_s:0, z2Time_s:0, z3Time_s:0, z4Time_s:0, z5Time_s:0 };
+  let zoneAgg = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
   for (const pair of pairs) {
     const timeSec = Number(pair.parkrun.elapsedTime_s || pair.parkrun.movingTime_s || 0);
     const avgHr = Number(pair.strava.avgHeartrate || 0);
-    if (timeSec>0 && avgHr>0) { xs.push(timeSec); ys.push(avgHr); }
+    if (timeSec > 0 && avgHr > 0) { xs.push(timeSec); ys.push(avgHr); }
     if (pair.strava.hrZones) {
-      zoneAgg.z1Time_s += Number(pair.strava.hrZones.z1Time_s||0);
-      zoneAgg.z2Time_s += Number(pair.strava.hrZones.z2Time_s||0);
-      zoneAgg.z3Time_s += Number(pair.strava.hrZones.z3Time_s||0);
-      zoneAgg.z4Time_s += Number(pair.strava.hrZones.z4Time_s||0);
-      zoneAgg.z5Time_s += Number(pair.strava.hrZones.z5Time_s||0);
+      zoneAgg.z1Time_s += Number(pair.strava.hrZones.z1Time_s || 0);
+      zoneAgg.z2Time_s += Number(pair.strava.hrZones.z2Time_s || 0);
+      zoneAgg.z3Time_s += Number(pair.strava.hrZones.z3Time_s || 0);
+      zoneAgg.z4Time_s += Number(pair.strava.hrZones.z4Time_s || 0);
+      zoneAgg.z5Time_s += Number(pair.strava.hrZones.z5Time_s || 0);
     }
   }
   function pearson(x, y) {
     const n = Math.min(x.length, y.length);
     if (!n) return null;
-    const mx = x.reduce((a,b)=>a+b,0)/n;
-    const my = y.reduce((a,b)=>a+b,0)/n;
-    let num=0, dx=0, dy=0;
-    for (let i=0;i<n;i++){ const a=x[i]-mx, b=y[i]-my; num+=a*b; dx+=a*a; dy+=b*b; }
-    const den = Math.sqrt(dx*dy);
-    return den? num/den : null;
+    const mx = x.reduce((a, b) => a + b, 0) / n;
+    const my = y.reduce((a, b) => a + b, 0) / n;
+    let num = 0, dx = 0, dy = 0;
+    for (let i = 0; i < n; i++) { const a = x[i] - mx, b = y[i] - my; num += a * b; dx += a * a; dy += b * b; }
+    const den = Math.sqrt(dx * dy);
+    return den ? num / den : null;
   }
   const corr = pearson(xs, ys);
   const byMonth = new Map();
   for (const p of parkruns) {
     const d = new Date(p.startDate || Date.now());
-    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
     const arr = byMonth.get(key) || [];
     arr.push(Number(p.elapsedTime_s || p.movingTime_s || 0));
     byMonth.set(key, arr);
   }
-  const monthly = Array.from(byMonth.entries()).map(([month, arr])=>{
-    const sorted = arr.filter(Boolean).sort((a,b)=>a-b);
-    const med = sorted.length? sorted[Math.floor(sorted.length/2)] : null;
+  const monthly = Array.from(byMonth.entries()).map(([month, arr]) => {
+    const sorted = arr.filter(Boolean).sort((a, b) => a - b);
+    const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
     return { month, parkrunMedianSec: med };
-  }).sort((a,b)=> a.month.localeCompare(b.month));
+  }).sort((a, b) => a.month.localeCompare(b.month));
   return {
     pairs: pairs.map(p => ({
       parkrun: { date: new Date(p.parkrun.startDate).toISOString(), timeSec: p.parkrun.elapsedTime_s || p.parkrun.movingTime_s, position: p.parkrun.position || null, participants: p.parkrun.participantsCount || null, percentileTop: p.parkrun.percentileTop || null, ageGrade: p.parkrun.ageGrade || null },
@@ -7898,7 +8130,7 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
   function sameDay(aMs, bMs) { return dateOnly(aMs).getTime() === dateOnly(bMs).getTime(); }
 
   async function fetchRun(runNum) {
-    const url = `${String(base).replace(/\/$/,'')}/${eventSlug}/results/${runNum}`;
+    const url = `${String(base).replace(/\/$/, '')}/${eventSlug}/results/${runNum}`;
     const html = await (await fetch(url)).text();
     const $ = cheerio.load(html);
     const contentText = $('#content').text() || $('body').text();
@@ -7915,9 +8147,9 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
   }
 
   const db = admin.firestore();
-  const snap = await db.collection('metrics_workouts').where('ownerUid','==',uid).where('provider','==','parkrun').get();
-  const items = snap.docs.map(d=>({ id:d.id, ref:d.ref, ...d.data() }));
-  const slugify = (s)=> String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+  const snap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).where('provider', '==', 'parkrun').get();
+  const items = snap.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() }));
+  const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const targets = items.filter(x => (x.eventSlug ? x.eventSlug === eventSlug : slugify(x.event) === eventSlug));
 
   let updated = 0, examined = 0;
@@ -7926,16 +8158,16 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
     if (onlyMissing && w.participantsCount) continue;
     const targetMs = w.startDate || 0;
     let found = null;
-    for (let i=0; i<maxBack; i++) {
+    for (let i = 0; i < maxBack; i++) {
       const runNum = startRun - i;
       if (runNum <= 0) break;
       let info;
       try { info = await fetchRun(runNum); } catch { continue; }
       if (info.dateMs && sameDay(info.dateMs, targetMs)) { found = info; break; }
-      if (info.dateMs && info.dateMs < (targetMs - 14*24*60*60*1000)) break;
+      if (info.dateMs && info.dateMs < (targetMs - 14 * 24 * 60 * 60 * 1000)) break;
     }
     if (found && found.participants && w.position) {
-      const percentileTop = Number((((found.participants - (Number(w.position)||0) + 1)/found.participants)*100).toFixed(2));
+      const percentileTop = Number((((found.participants - (Number(w.position) || 0) + 1) / found.participants) * 100).toFixed(2));
       await w.ref.set({
         participantsCount: found.participants,
         percentileTop,
@@ -7981,7 +8213,7 @@ exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-  } catch {}
+  } catch { }
   return { ok: true, event: ev };
 });
 
@@ -8014,7 +8246,7 @@ exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-  } catch {}
+  } catch { }
   return { ok: true, event: ev };
 });
 
@@ -8174,19 +8406,19 @@ exports.syncCalendarBlocksBidirectional = httpsV2.onCall({ secrets: [GOOGLE_OAUT
         const eid = b.googleEventId ? String(b.googleEventId) : null;
         if (eid && eventsById.has(eid)) {
           await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
-            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(body)
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           });
           updated++;
         } else if (eid) {
           // Try to PATCH; if 404 recreate
           try {
             await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
-              method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(body)
+              method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
             });
             updated++;
           } catch {
             const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-              method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(body)
+              method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
             });
             const ref = db.collection('calendar_blocks').doc(b.id);
             batch.set(ref, { googleEventId: createdEv.id, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
@@ -8194,7 +8426,7 @@ exports.syncCalendarBlocksBidirectional = httpsV2.onCall({ secrets: [GOOGLE_OAUT
           }
         } else {
           const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-            method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(body)
+            method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           });
           const ref = db.collection('calendar_blocks').doc(b.id);
           batch.set(ref, { googleEventId: createdEv.id, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
@@ -8247,7 +8479,7 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-  } catch {}
+  } catch { }
   return { ok: true };
 });
 
@@ -8255,7 +8487,7 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const uid = req.auth.uid;
-  const day = req?.data?.day || new Date().toISOString().slice(0,10);
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10);
   const date = new Date(day);
   if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
   const dayKey = toDayKey(date);
@@ -8263,8 +8495,8 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
   const db = admin.firestore();
 
   // Load assignments for the day
-  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid','==',uid).get();
-  const assignments = asSnap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid', '==', uid).get();
+  const assignments = asSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
   if (assignments.length === 0) return { ok: true, created: 0, updated: 0, parentsCreated: 0 };
 
   // Group by blockId
@@ -8282,7 +8514,7 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
     if (blockId && blockId !== 'none') {
       const bSnap = await db.collection('calendar_blocks').doc(blockId).get();
       if (bSnap.exists) {
-        blockDoc = { id: bSnap.id, ...(bSnap.data()||{}) };
+        blockDoc = { id: bSnap.id, ...(bSnap.data() || {}) };
         parentEventId = blockDoc.googleEventId || null;
       }
       // Create parent block event if missing
@@ -8295,8 +8527,8 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
             if (s.exists) {
               const sd = s.data() || {};
               const acArr = Array.isArray(sd.acceptanceCriteria)
-                ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
-                : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
+                ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
+                : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
               const storyRef = sd.ref || s.id;
               storyCtx = {
                 ref: storyRef,
@@ -8305,7 +8537,7 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
                 ac: acArr,
               };
             }
-          } catch {}
+          } catch { }
         }
         const priv = {
           'bob-block-id': blockId,
@@ -8343,7 +8575,7 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
           extendedProperties: { private: priv }
         };
         const parent = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(body)
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
         });
         parentEventId = parent.id;
         parentsCreated++;
@@ -8370,8 +8602,8 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
             if (s.exists) {
               const sd = s.data() || {};
               const acArr = Array.isArray(sd.acceptanceCriteria)
-                ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
-                : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
+                ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
+                : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
               const storyRef = sd.ref || s.id;
               storyCtx2 = {
                 ref: storyRef,
@@ -8380,7 +8612,7 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
                 ac: acArr,
               };
             }
-          } catch {}
+          } catch { }
         }
         if (storyCtx2) {
           priv2['bob-story-ref'] = String(storyCtx2.ref);
@@ -8408,10 +8640,10 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
         };
         try {
           await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(parentEventId)}`, {
-            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(patch)
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(patch)
           });
           updated++;
-        } catch {}
+        } catch { }
       }
     }
 
@@ -8432,23 +8664,23 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
       if (eid) {
         try {
           await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
-            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(evBody)
           });
           updated++;
         } catch {
           // If patch fails (deleted externally), recreate
           const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-            method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+            method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(evBody)
           });
           created++;
-          await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external||{}), googleEventId: createdEv.id } }, { merge: true });
+          await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external || {}), googleEventId: createdEv.id } }, { merge: true });
         }
       } else {
         const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type':'application/json' }, body: JSON.stringify(evBody)
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(evBody)
         });
         created++;
-        await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external||{}), googleEventId: createdEv.id } }, { merge: true });
+        await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external || {}), googleEventId: createdEv.id } }, { merge: true });
       }
     }
   }
@@ -8467,10 +8699,10 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     const db = admin.firestore();
     // Return tasks that need pushing: no reminderId and due today or overdue
     const now = Date.now();
-    const start = new Date(); start.setHours(0,0,0,0);
-    const tasksSnap = await db.collection('tasks').where('ownerUid','==',uid).get();
-    const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
-    const toPush = tasks.filter(t => !t.reminderId && t.status !== 2 && ((t.dueDate||0) <= (start.getTime()+24*3600*1000)));
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const tasksSnap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+    const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+    const toPush = tasks.filter(t => !t.reminderId && t.status !== 2 && ((t.dueDate || 0) <= (start.getTime() + 24 * 3600 * 1000)));
     const payload = toPush.map(t => {
       const themeLabel = themeLabelFromValue(t.theme || t.theme_id || 'General');
       const title = `[${themeLabel}] – ${t.title || 'Task'}`;
@@ -8488,7 +8720,7 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         title,
         dueDate: t.dueDate || null,
         // Use canonical task ref style: TK-<last6 of id, zero-padded>
-        ref: t.ref || `TK-${String(t.id||'').slice(-6).padStart(6,'0').toUpperCase()}`,
+        ref: t.ref || `TK-${String(t.id || '').slice(-6).padStart(6, '0').toUpperCase()}`,
         createdAt: t.createdAt || null,
         storyId: t.storyId || null,
         goalId: t.goalId || null,
@@ -8526,17 +8758,17 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       const reminderId = u.reminderId ? String(u.reminderId) : null;
       const completed = !!u.completed;
       const title = String(u.title || '');
-      const iosTags = Array.isArray(u.tags) ? u.tags.filter(x=>typeof x==='string').slice(0,12) : [];
+      const iosTags = Array.isArray(u.tags) ? u.tags.filter(x => typeof x === 'string').slice(0, 12) : [];
       if (!id && !reminderId) continue;
       let ref = null;
       if (id) ref = db.collection('tasks').doc(id);
       else {
         // prefer reminderId; also check duplicateKey convention
-        let snap = await db.collection('tasks').where('ownerUid','==',uid).where('reminderId','==',reminderId).limit(1).get();
+        let snap = await db.collection('tasks').where('ownerUid', '==', uid).where('reminderId', '==', reminderId).limit(1).get();
         if (!snap.empty) ref = snap.docs[0].ref;
         if (!ref && reminderId) {
           const dupKey = `reminder:${String(reminderId).toLowerCase()}`;
-          snap = await db.collection('tasks').where('ownerUid','==',uid).where('duplicateKey','==',dupKey).limit(1).get();
+          snap = await db.collection('tasks').where('ownerUid', '==', uid).where('duplicateKey', '==', dupKey).limit(1).get();
           if (!snap.empty) ref = snap.docs[0].ref;
         }
       }
@@ -8553,10 +8785,10 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         if (iosTags.length) {
           try {
             const snap = await ref.get();
-            const existing = (snap.exists && Array.isArray((snap.data()||{}).tags)) ? (snap.data().tags) : [];
-            const merged = Array.from(new Set([...(existing||[]), ...iosTags])).slice(0, 12);
+            const existing = (snap.exists && Array.isArray((snap.data() || {}).tags)) ? (snap.data().tags) : [];
+            const merged = Array.from(new Set([...(existing || []), ...iosTags])).slice(0, 12);
             data['tags'] = merged;
-          } catch {}
+          } catch { }
         }
         await ref.set(data, { merge: true });
         updated++;
@@ -8567,7 +8799,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         const dupKey = reminderId ? `reminder:${String(reminderId).toLowerCase()}` : null;
         // Check again for duplicates by duplicateKey to avoid creating a new one
         if (dupKey) {
-          const snap = await db.collection('tasks').where('ownerUid','==',uid).where('duplicateKey','==',dupKey).limit(1).get();
+          const snap = await db.collection('tasks').where('ownerUid', '==', uid).where('duplicateKey', '==', dupKey).limit(1).get();
           if (!snap.empty) {
             const existingRef = snap.docs[0].ref;
             const data = {
@@ -8577,7 +8809,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
               reminderId: reminderId,
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
-              ...(iosTags.length ? { tags: Array.from(new Set([...(snap.docs[0].data()?.tags || []), ...iosTags])).slice(0,12) } : {}),
+              ...(iosTags.length ? { tags: Array.from(new Set([...(snap.docs[0].data()?.tags || []), ...iosTags])).slice(0, 12) } : {}),
             };
             await existingRef.set(data, { merge: true });
             updated++;
@@ -8670,7 +8902,7 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
   const ref = db.collection('tasks').doc(id);
   // If the task document was deleted, proactively remove any stale index row
   if (!after) {
-    try { await db.collection('sprint_task_index').doc(id).delete(); } catch {}
+    try { await db.collection('sprint_task_index').doc(id).delete(); } catch { }
     return;
   }
 
@@ -8718,8 +8950,8 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
         patch.duplicateKey = key;
       }
       const dupSnap = await db.collection('tasks')
-        .where('ownerUid','==', ownerUid)
-        .where('duplicateKey','==', key)
+        .where('ownerUid', '==', ownerUid)
+        .where('duplicateKey', '==', key)
         .limit(2)
         .get();
       const others = dupSnap.docs.filter(d => d.id !== id);
@@ -8737,7 +8969,7 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
           if (!other.duplicateFlag) otherPatch.duplicateFlag = true;
           if (!other.duplicateKey) otherPatch.duplicateKey = key;
           if (Object.keys(otherPatch).length) await otherRef.set(otherPatch, { merge: true });
-        } catch {}
+        } catch { }
       }
     }
   } catch (e) {
@@ -8810,13 +9042,13 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
         const storySnap = await db.collection('stories').doc(String(storyId)).get();
         const story = storySnap.exists ? (storySnap.data() || {}) : {};
         if (story && story.sprintId) effectiveSprintId = story.sprintId;
-      } catch {}
+      } catch { }
     }
     if (!effectiveSprintId && after.dueDate) {
       try {
         // Load sprints for this owner (persona optional)
-        let qs = db.collection('sprints').where('ownerUid','==', ownerUid);
-        if (persona) qs = qs.where('persona','==', persona);
+        let qs = db.collection('sprints').where('ownerUid', '==', ownerUid);
+        if (persona) qs = qs.where('persona', '==', persona);
         const ss = await qs.get();
         const due = Number(after.dueDate) || null;
         if (due) {
@@ -8827,13 +9059,13 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
             }
           }
         }
-      } catch {}
+      } catch { }
     }
 
     const indexRef = db.collection('sprint_task_index').doc(id);
     if (!isOpen) {
       // Remove from index if present
-      try { await indexRef.delete(); } catch {}
+      try { await indexRef.delete(); } catch { }
       return;
     }
 
@@ -8899,24 +9131,24 @@ exports.importItems = httpsV2.onCall(async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const type = String(req.data?.type || ""); let items = req.data?.items || [];
   if (!type || !Array.isArray(items) || items.length === 0) return { ok: true, written: 0 };
-  if (items.length > 500) items = items.slice(0,500);
+  if (items.length > 500) items = items.slice(0, 500);
   const db = admin.firestore();
   const batch = db.batch();
   const now = admin.firestore.FieldValue.serverTimestamp();
-  const S = (v)=> (v==null?'':String(v)); const N=(v)=>{ const n=Number(v); return isNaN(n)?null:n; };
-  const D=(v)=>{ if(!v)return null; const d=new Date(v); return isNaN(d.getTime())?null:d.toISOString().slice(0,10); };
+  const S = (v) => (v == null ? '' : String(v)); const N = (v) => { const n = Number(v); return isNaN(n) ? null : n; };
+  const D = (v) => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); };
 
   const norm = {
-    goals: x=>({ ownerUid:req.auth.uid, text:S(x.text||x.goal||x.title), area:S(x.area||x.category||''), confidence:N(x.confidence)||0, createdAt:now, source:S(x.source||'import') }),
-    okrs:  x=>({ ownerUid:req.auth.uid, title:S(x.title||x.objective||x.okr||x.name), goalId:S(x.goalId||''), goalTitle:S(x.goalTitle||x.goal||''), kr1:S(x.kr1||x.keyResult1||''), kr2:S(x.kr2||x.keyResult2||''), kr3:S(x.kr3||x.keyResult3||''), sprint:S(x.sprint||''), priority:N(x.priority)||null, createdAt:now, source:S(x.source||'import') }),
-    tasks: x=>{ let st=S(x.status).toLowerCase(); if(st!=='doing'&&st!=='done') st='backlog'; return ({ ownerUid:req.auth.uid, title:S(x.title||x.task||x.name), storyId:S(x.storyId||''), goalId:S(x.goalId||''), goalArea:S(x.goalArea||x.area||''), status:st, effort:N(x.effort)||1, dueDate:D(x.dueDate||x.due||x.when), createdAt:now, source:S(x.source||'import') }); },
-    resources: x=>({ ownerUid:req.auth.uid, type:(S(x.type||x.kind).toLowerCase()||'reading'), title:S(x.title||x.name), url:S(x.url||x.link||x.href), source:S(x.source||'import'), createdAt:now }),
-    trips: x=>({ ownerUid:req.auth.uid, title:S(x.title||x.trip||x.name), startDate:D(x.start||x.startDate), endDate:D(x.end||x.endDate), notes:S(x.notes||''), createdAt:now, source:S(x.source||'import') }),
+    goals: x => ({ ownerUid: req.auth.uid, text: S(x.text || x.goal || x.title), area: S(x.area || x.category || ''), confidence: N(x.confidence) || 0, createdAt: now, source: S(x.source || 'import') }),
+    okrs: x => ({ ownerUid: req.auth.uid, title: S(x.title || x.objective || x.okr || x.name), goalId: S(x.goalId || ''), goalTitle: S(x.goalTitle || x.goal || ''), kr1: S(x.kr1 || x.keyResult1 || ''), kr2: S(x.kr2 || x.keyResult2 || ''), kr3: S(x.kr3 || x.keyResult3 || ''), sprint: S(x.sprint || ''), priority: N(x.priority) || null, createdAt: now, source: S(x.source || 'import') }),
+    tasks: x => { let st = S(x.status).toLowerCase(); if (st !== 'doing' && st !== 'done') st = 'backlog'; return ({ ownerUid: req.auth.uid, title: S(x.title || x.task || x.name), storyId: S(x.storyId || ''), goalId: S(x.goalId || ''), goalArea: S(x.goalArea || x.area || ''), status: st, effort: N(x.effort) || 1, dueDate: D(x.dueDate || x.due || x.when), createdAt: now, source: S(x.source || 'import') }); },
+    resources: x => ({ ownerUid: req.auth.uid, type: (S(x.type || x.kind).toLowerCase() || 'reading'), title: S(x.title || x.name), url: S(x.url || x.link || x.href), source: S(x.source || 'import'), createdAt: now }),
+    trips: x => ({ ownerUid: req.auth.uid, title: S(x.title || x.trip || x.name), startDate: D(x.start || x.startDate), endDate: D(x.end || x.endDate), notes: S(x.notes || ''), createdAt: now, source: S(x.source || 'import') }),
   };
 
   for (const row of items) {
     const doc = norm[type] ? norm[type](row) : null;
-    if (!doc) throw new httpsV2.HttpsError("invalid-argument","Unknown type: "+type);
+    if (!doc) throw new httpsV2.HttpsError("invalid-argument", "Unknown type: " + type);
     batch.set(db.collection(type).doc(), doc);
   }
   await batch.commit();
@@ -8927,7 +9159,7 @@ exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const items = req.data?.items || [];
   if (!Array.isArray(items) || items.length === 0) return { ok: true, written: 0 };
-  if (items.length > 500) items = items.slice(0,500);
+  if (items.length > 500) items = items.slice(0, 500);
 
   const db = admin.firestore();
   const batch = db.batch();
@@ -8935,13 +9167,13 @@ exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
 
   for (const item of items) {
     const doc = {
-        feature: item.feature || null,
-        description: item.description || null,
-        implemented: item.implemented || false,
-        uatStatus: item.uatStatus || 'In Progress',
-        version: item.version || null,
-        createdAt: now,
-        ownerUid: req.auth.uid,
+      feature: item.feature || null,
+      description: item.description || null,
+      implemented: item.implemented || false,
+      uatStatus: item.uatStatus || 'In Progress',
+      version: item.version || null,
+      createdAt: now,
+      ownerUid: req.auth.uid,
     };
     batch.set(db.collection("development_features").doc(), doc);
   }
@@ -9143,7 +9375,7 @@ async function hardcoverApiBaseFor(uid) {
     const p = (await db.collection('profiles').doc(uid).get()).data() || {};
     const base = String(p.hardcoverApiBase || '').trim();
     if (base) return base.replace(/\/$/, '');
-  } catch {}
+  } catch { }
   return 'https://api.hardcover.app';
 }
 
@@ -9169,7 +9401,7 @@ async function callHardcoverGraphQL(uid, query, variables) {
   });
   const json = await res.json();
   if (!res.ok || json.errors) {
-    const msg = json?.errors?.map((e)=>e.message).join('; ') || `HTTP ${res.status}`;
+    const msg = json?.errors?.map((e) => e.message).join('; ') || `HTTP ${res.status}`;
     throw new Error(`Hardcover GraphQL error: ${msg}`);
   }
   return json.data;
@@ -9216,7 +9448,7 @@ async function fetchHardcoverByStatus(uid, status, cursor) {
 async function _syncHardcover(uid) {
   const db = admin.firestore();
   const startedAt = Date.now();
-  const statuses = ['to-read','reading','read'];
+  const statuses = ['to-read', 'reading', 'read'];
   let total = 0;
   try {
     for (const status of statuses) {
@@ -9374,7 +9606,7 @@ exports.n8nCalendarWebhook = httpsV2.onRequest({ secrets: [N8N_WEBHOOK_SECRET], 
   } catch (e) {
     try {
       await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'in', ts: Date.now(), error: String(e?.message || e) });
-    } catch {}
+    } catch { }
     return res.status(500).send('Webhook error');
   }
 });
@@ -9395,7 +9627,7 @@ exports.onCalendarBlockWritten = firestoreV2.onDocumentWritten('calendar_blocks/
       body: JSON.stringify({ id, action, ownerUid, before, after, ts: Date.now() }),
     });
   } catch (e) {
-    try { await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'out', ts: Date.now(), id, action, error: String(e?.message || e) }); } catch {}
+    try { await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'out', ts: Date.now(), id, action, error: String(e?.message || e) }); } catch { }
   }
 });
 
@@ -9507,7 +9739,7 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
         await exports.enrichStravaHR.run({ auth: { uid }, data: { days: 30 } });
       } catch (error) {
         // Swallow, enrichStravaHR may not be directly invocable here; fall back to inline
-        try { await (async ()=>{ /* optional future inline */ })(); } catch{}
+        try { await (async () => { /* optional future inline */ })(); } catch { }
       }
     }
 
@@ -9758,8 +9990,8 @@ exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
   try {
     // Primary: deleteAfter reached
     const snap1 = await db.collection('tasks')
-      .where('ownerUid','==', uid)
-      .where('deleteAfter','<=', now)
+      .where('ownerUid', '==', uid)
+      .where('deleteAfter', '<=', now)
       .limit(limit)
       .get();
     for (const d of snap1.docs) {
@@ -9770,9 +10002,9 @@ exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
       const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
       const remain = limit - deleted;
       const snap2 = await db.collection('tasks')
-        .where('ownerUid','==', uid)
-        .where('status','==', 2)
-        .where('completedAt','<=', cutoff)
+        .where('ownerUid', '==', uid)
+        .where('status', '==', 2)
+        .where('completedAt', '<=', cutoff)
         .limit(remain)
         .get();
       for (const d of snap2.docs) {
@@ -9782,7 +10014,7 @@ exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
     await writer.close();
     return { ok: true, deleted };
   } catch (e) {
-    try { await writer.close(); } catch {}
+    try { await writer.close(); } catch { }
     throw new httpsV2.HttpsError('internal', 'cleanup failed: ' + (e?.message || e));
   }
 });
@@ -9797,23 +10029,23 @@ exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *'
     const writer = db.bulkWriter();
     try {
       const snap1 = await db.collection('tasks')
-        .where('ownerUid','==', uid)
-        .where('deleteAfter','<=', now)
+        .where('ownerUid', '==', uid)
+        .where('deleteAfter', '<=', now)
         .limit(500)
         .get();
       for (const d of snap1.docs) writer.delete(d.ref);
 
       const snap2 = await db.collection('tasks')
-        .where('ownerUid','==', uid)
-        .where('status','==', 2)
-        .where('completedAt','<=', cutoff)
+        .where('ownerUid', '==', uid)
+        .where('status', '==', 2)
+        .where('completedAt', '<=', cutoff)
         .limit(500)
         .get();
       for (const d of snap2.docs) writer.delete(d.ref);
     } catch (e) {
       console.warn('[cleanupOldTasksNightly]', uid, e?.message || e);
     } finally {
-      try { await writer.close(); } catch {}
+      try { await writer.close(); } catch { }
     }
   }
 });
@@ -9869,10 +10101,10 @@ exports.cleanupDuplicateTasksNow = httpsV2.onCall(async (req) => {
         const ca = typeof data.createdAt === 'number' ? data.createdAt : 0;
         const ra = typeof data.reminderCreatedAt === 'number' ? data.reminderCreatedAt : 0;
         const su = typeof data.serverUpdatedAt === 'number' ? data.serverUpdatedAt : 0;
-        const age = Math.min(...[ca||Infinity, ra||Infinity, su||Infinity].filter(x => Number.isFinite(x)));
+        const age = Math.min(...[ca || Infinity, ra || Infinity, su || Infinity].filter(x => Number.isFinite(x)));
         return { id, data, age: Number.isFinite(age) ? age : Date.now() };
       });
-      scored.sort((a,b) => a.age - b.age);
+      scored.sort((a, b) => a.age - b.age);
       const keep = scored[0];
       const drop = scored.slice(1);
       processed += arr.length;
@@ -10035,7 +10267,7 @@ async function _autoRescheduleMissedForUser(uid, { limit = 10 } = {}) {
         try {
           const updateFn = exports.updateCalendarEvent;
           if (updateFn?.run) await updateFn.run({ auth: { uid }, data: { eventId: eid, start: patch.plannedStart, end: patch.plannedEnd } });
-        } catch {}
+        } catch { }
       }
       rescheduled++;
     } catch (e) {
@@ -10057,7 +10289,7 @@ async function _autoRescheduleMissedForUser(uid, { limit = 10 } = {}) {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-  } catch {}
+  } catch { }
 
   return { ok: true, rescheduled };
 }
@@ -10663,12 +10895,12 @@ exports.sendDailyDigestNowLegacy = httpsV2.onCall(async (req) => {
   try {
     const p = await db.collection('profiles').doc(uid).get();
     if (p.exists) email = p.data()?.email || null;
-  } catch {}
+  } catch { }
   if (!email) {
     try {
       const u = await db.collection('users').doc(uid).get();
       if (u.exists) email = u.data()?.email || null;
-    } catch {}
+    } catch { }
   }
   await generateUserDigest(uid, { email });
   return { ok: true };
@@ -10682,7 +10914,7 @@ exports.generateTestToken = httpsV2.onCall(async (request) => {
   }
 
   const { uid, scope } = request.data;
-  
+
   if (!uid) {
     throw new Error('UID is required');
   }
@@ -10715,7 +10947,7 @@ exports.testLogin = httpsV2.onRequest(async (req, res) => {
   }
 
   const { token } = req.query;
-  
+
   if (!token) {
     res.status(400).json({ error: 'Token is required' });
     return;
@@ -10743,10 +10975,10 @@ exports.testLogin = httpsV2.onRequest(async (req, res) => {
     // Clean up the test token (one-time use)
     await tokenDoc.ref.delete();
 
-    res.json({ 
+    res.json({
       customToken,
       uid: tokenData.uid,
-      scope: tokenData.scope 
+      scope: tokenData.scope
     });
 
   } catch (error) {
@@ -10783,8 +11015,8 @@ async function generateAcceptanceCriteria(task, goal, { userId }) {
   const existing = Array.isArray(task.acceptanceCriteria)
     ? task.acceptanceCriteria.filter(Boolean)
     : typeof task.acceptanceCriteria === 'string'
-    ? task.acceptanceCriteria.split('\n').map((line) => line.trim()).filter(Boolean)
-    : [];
+      ? task.acceptanceCriteria.split('\n').map((line) => line.trim()).filter(Boolean)
+      : [];
   if (existing.length) return existing.slice(0, 10);
 
   const prompt = [
@@ -11145,7 +11377,7 @@ exports.ensureEntityRefs = schedulerV2.onSchedule({ schedule: 'every 2 hours', t
       const data = docSnap.data() || {};
       // For tasks, align with canonical TK-<last6> style; otherwise use time-based local ref.
       const ref = (col === 'tasks')
-        ? `TK-${String(id).slice(-6).padStart(6,'0').toUpperCase()}`
+        ? `TK-${String(id).slice(-6).padStart(6, '0').toUpperCase()}`
         : makeRefLocal(prefix);
       batch.set(docSnap.ref, { ref, updatedAt: Date.now() }, { merge: true });
       const actRef = db.collection('activity_stream').doc();
@@ -11405,13 +11637,13 @@ exports.runDailySchedulerAdjustments = schedulerV2.onSchedule({
 });
 function themeLabelFromValue(v) {
   if (typeof v === 'number') {
-    return ({1:'Health',2:'Growth',3:'Wealth',4:'Tribe',5:'Home'})[v] || 'Growth';
+    return ({ 1: 'Health', 2: 'Growth', 3: 'Wealth', 4: 'Tribe', 5: 'Home' })[v] || 'Growth';
   }
-  const s = String(v||'').trim();
+  const s = String(v || '').trim();
   if (!s) return 'Growth';
   const lower = s.toLowerCase();
-  if (['health','growth','wealth','tribe','home'].includes(lower)) {
-    return lower.charAt(0).toUpperCase()+lower.slice(1);
+  if (['health', 'growth', 'wealth', 'tribe', 'home'].includes(lower)) {
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
   }
   return s;
 }
@@ -11423,14 +11655,14 @@ async function buildTaskContext(db, task) {
   let goalId = task.goalId || null;
   let storyId = task.storyId || task.parentId || null;
   if (storyId && !goalId) {
-    try { const s = await db.collection('stories').doc(String(storyId)).get(); if (s.exists) { const d = s.data()||{}; goalId = d.goalId || goalId; ctx.storyRef = d.ref || null; if (d.sprintId) { try { const sp = await db.collection('sprints').doc(String(d.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data()||{}).ref || (sp.data()||{}).name || sp.id; } catch {} } } } catch {}
+    try { const s = await db.collection('stories').doc(String(storyId)).get(); if (s.exists) { const d = s.data() || {}; goalId = d.goalId || goalId; ctx.storyRef = d.ref || null; if (d.sprintId) { try { const sp = await db.collection('sprints').doc(String(d.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data() || {}).ref || (sp.data() || {}).name || sp.id; } catch { } } } } catch { }
   }
   if (goalId) {
-    try { const g = await db.collection('goals').doc(String(goalId)).get(); if (g.exists) { const gd = g.data()||{}; ctx.goalRef = gd.ref || g.id; if (!ctx.themeName && gd.theme != null) ctx.themeName = themeLabelFromValue(gd.theme); } } catch {}
+    try { const g = await db.collection('goals').doc(String(goalId)).get(); if (g.exists) { const gd = g.data() || {}; ctx.goalRef = gd.ref || g.id; if (!ctx.themeName && gd.theme != null) ctx.themeName = themeLabelFromValue(gd.theme); } } catch { }
   }
   // Fallback sprint from task
   if (!ctx.sprintRef && task.sprintId) {
-    try { const sp = await db.collection('sprints').doc(String(task.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data()||{}).ref || (sp.data()||{}).name || sp.id; } catch {}
+    try { const sp = await db.collection('sprints').doc(String(task.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data() || {}).ref || (sp.data() || {}).name || sp.id; } catch { }
   }
   return ctx;
 }
@@ -11438,7 +11670,7 @@ async function buildTaskContext(db, task) {
 function mergeTags(existing, toAdd) {
   const set = new Set(Array.isArray(existing) ? existing : []);
   for (const t of toAdd) {
-    const s = String(t||'').trim();
+    const s = String(t || '').trim();
     if (s) set.add(s);
   }
   // Limit to 12 tags to keep Reminders tidy
@@ -11448,10 +11680,10 @@ function mergeTags(existing, toAdd) {
 exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30 minutes', timeZone: 'UTC' }, async () => {
   const db = admin.firestore();
   const now = Date.now();
-  const cutoff = now - 24*60*60*1000; // process tasks touched in last 24h
+  const cutoff = now - 24 * 60 * 60 * 1000; // process tasks touched in last 24h
   let processed = 0, updated = 0;
   try {
-    const snap = await db.collection('tasks').orderBy('updatedAt','desc').limit(500).get();
+    const snap = await db.collection('tasks').orderBy('updatedAt', 'desc').limit(500).get();
     const batch = db.batch();
     for (const docSnap of snap.docs) {
       const t = docSnap.data() || {};
@@ -11462,14 +11694,14 @@ exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30
       const themeTag = ctx.themeName ? `theme-${ctx.themeName}` : null;
       const sprintTag = ctx.sprintRef ? `sprint-${ctx.sprintRef}` : null;
       const storyTag = ctx.storyRef ? `story-${ctx.storyRef}` : null;
-      const goalTag  = ctx.goalRef ? `goal-${ctx.goalRef}` : null;
+      const goalTag = ctx.goalRef ? `goal-${ctx.goalRef}` : null;
       const newTags = mergeTags(t.tags, [themeTag, sprintTag, storyTag, goalTag].filter(Boolean));
 
       // Deep links (absolute) for task + parents
       const taskRef = t.ref || t.referenceNumber || t.reference || t.id;
       const taskUrl = buildAbsoluteUrl(`/tasks/${encodeURIComponent(taskRef)}`);
       const storyUrl = ctx.storyRef ? buildAbsoluteUrl(`/stories/${encodeURIComponent(ctx.storyRef)}`) : null;
-      const goalUrl  = ctx.goalRef  ? buildAbsoluteUrl(`/goals/${encodeURIComponent(ctx.goalRef)}`)  : null;
+      const goalUrl = ctx.goalRef ? buildAbsoluteUrl(`/goals/${encodeURIComponent(ctx.goalRef)}`) : null;
       const themeLabel = ctx.themeName || 'Growth';
       const reminderTitle = `[${themeLabel}] – ${t.title || 'Task'}`;
       const noteLines = [
@@ -11478,7 +11710,7 @@ exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30
         goalUrl ? `Goal: ${goalUrl}` : null,
         '',
         '-------',
-        `BOB: taskRef=${taskRef}${ctx.storyRef?` storyRef=${ctx.storyRef}`:''}${ctx.goalRef?` goalRef=${ctx.goalRef}`:''} list=${t.list||''}`,
+        `BOB: taskRef=${taskRef}${ctx.storyRef ? ` storyRef=${ctx.storyRef}` : ''}${ctx.goalRef ? ` goalRef=${ctx.goalRef}` : ''} list=${t.list || ''}`,
         ctx.sprintRef ? `#sprint: ${ctx.sprintRef}` : null,
         ctx.themeName ? `#theme: ${ctx.themeName}` : null,
         ctx.storyRef ? `#story: ${ctx.storyRef}` : null,
@@ -11501,4 +11733,53 @@ exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30
     console.error('tagTasksAndBuildDeepLinks error', e?.message || e);
   }
   return { processed, updated };
+});
+
+// Sprint Retrospective Generation
+exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+  const { data, auth } = request;
+  if (!auth) throw new httpsV2.HttpsError('unauthenticated', 'User must be authenticated');
+  
+  const { sprintId, sprintName, metrics, stories, goals } = data;
+  if (!sprintId || !metrics) throw new httpsV2.HttpsError('invalid-argument', 'Missing required fields');
+
+  try {
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(GOOGLE_AI_STUDIO_API_KEY.value());
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    const prompt = `You are a helpful assistant generating a sprint retrospective summary.
+
+Sprint: ${sprintName}
+
+Metrics:
+- Stories: ${metrics.completedStories}/${metrics.totalStories} completed (${metrics.completionRate}%)
+- Tasks: ${metrics.completedTasks}/${metrics.totalTasks} completed (${metrics.taskCompletionRate}%)
+- Velocity: ${metrics.velocityPoints} story points (${metrics.completedPoints}/${metrics.totalPoints})
+- Goals in scope: ${metrics.goalsInScope.length}
+
+Goals worked on:
+${(metrics.goalsInScope || []).map((g, i) => `${i + 1}. ${g}`).join('\n')}
+
+Completed Stories:
+${(stories || []).filter(s => s.status === 2).map(s => `- ${s.title} (${s.points || 0} pts)`).join('\n') || 'None'}
+
+Generate a concise retrospective summary (3-4 paragraphs) covering:
+1. Overall sprint performance and velocity
+2. Key accomplishments and completed work
+3. Areas for improvement or blockers encountered
+4. Recommendations for the next sprint
+
+Keep it professional, actionable, and encourage the team.`;
+
+    const result = await model.generateContent(prompt);
+    const summary = result.response.text();
+
+    await aiUsageLogger.logAIUsage(auth.uid, 'gemini-retro', 'gemini-1.5-flash', prompt, summary);
+
+    return { summary };
+  } catch (error) {
+    console.error('Error generating retrospective:', error);
+    throw new httpsV2.HttpsError('internal', 'Failed to generate retrospective summary');
+  }
 });
