@@ -83,18 +83,18 @@ function computeEligibleBlocks(blocks, occurrence) {
     : allowed;
   const tagFiltered = occurrence.tags && occurrence.tags.length
     ? locationFiltered.filter((b) => {
-        const { requiredTags, excludedTags } = b.constraints || {};
-        if (excludedTags && excludedTags.some((tag) => occurrence.tags.includes(tag))) return false;
-        if (requiredTags && requiredTags.length > 0) {
-          return requiredTags.some((tag) => occurrence.tags.includes(tag));
-        }
-        return true;
-      })
+      const { requiredTags, excludedTags } = b.constraints || {};
+      if (excludedTags && excludedTags.some((tag) => occurrence.tags.includes(tag))) return false;
+      if (requiredTags && requiredTags.length > 0) {
+        return requiredTags.some((tag) => occurrence.tags.includes(tag));
+      }
+      return true;
+    })
     : locationFiltered.filter((b) => {
-        const { excludedTags } = b.constraints || {};
-        if (!excludedTags) return true;
-        return !excludedTags.length;
-      });
+      const { excludedTags } = b.constraints || {};
+      if (!excludedTags) return true;
+      return !excludedTags.length;
+    });
   return tagFiltered;
 }
 
@@ -307,11 +307,12 @@ function computeTaskOccurrences(tasks, windowStart, windowEnd, userId) {
       || (Number.isFinite(Number(task.estimatedHours)) ? Number(task.estimatedHours) * 60 : null)
       || (Number.isFinite(Number(task.points)) ? Number(task.points) * 45 : null);
     const durationMinutes = clampDurationMinutes(estimateMinutes || 60);
-    const priority = Number.isFinite(Number(task.schedulerPriority))
-      ? Number(task.schedulerPriority)
-      : Number.isFinite(Number(task.priority))
-      ? Number(task.priority)
-      : 3;
+    const priority = task.isDueTodayMandatory ? 1
+      : Number.isFinite(Number(task.schedulerPriority))
+        ? Number(task.schedulerPriority)
+        : Number.isFinite(Number(task.priority))
+          ? Number(task.priority)
+          : 3;
 
     const theme = task.theme || task.themeId || null;
     const tags = buildOccurrenceTags(task.tags, theme);
@@ -319,8 +320,8 @@ function computeTaskOccurrences(tasks, windowStart, windowEnd, userId) {
     const eligibleBlockIds = Array.isArray(task.eligibleBlockIds)
       ? task.eligibleBlockIds.filter(Boolean)
       : Array.isArray(task.candidateBlockIds)
-      ? task.candidateBlockIds.filter(Boolean)
-      : [];
+        ? task.candidateBlockIds.filter(Boolean)
+        : [];
     const policy = task.schedulerPolicy || task.policy || { mode: 'roll_forward', graceWindowMinutes: 90 };
     const taskRef = task.ref || task.reference || task.displayId || null;
 
@@ -376,8 +377,8 @@ function computeStoryOccurrences(stories, windowStart, windowEnd, userId) {
     const priority = Number.isFinite(Number(story.schedulerPriority))
       ? Number(story.schedulerPriority)
       : Number.isFinite(Number(story.priority))
-      ? Number(story.priority)
-      : 3;
+        ? Number(story.priority)
+        : 3;
 
     const theme = story.theme || story.themeId || null;
     const tags = buildOccurrenceTags(story.tags, theme);
@@ -652,12 +653,66 @@ async function planSchedule({
     .digest('hex')
     .slice(0, 16);
 
+  // Updated to use 'calendar_blocks' which seems to be the intended collection for AI blocks
+  // The previous 'blocks' might have been for the old system or templates.
+  // We need to be careful if 'blocks' are templates and 'calendar_blocks' are instances.
+  // Based on aiPlanning.js, 'calendar_blocks' are specific instances (start/end).
+  // However, the engine seems to expect 'blocks' to be templates (recurrence).
+  // If we are moving to a fully instance-based system (Rolling 7-Day), 
+  // we might need to treat 'calendar_blocks' as the "slots" available.
+
+  // Let's assume 'blocks' are the recurring templates (Routine/Work/Sleep definitions)
+  // and 'calendar_blocks' are the concrete instances generated from them OR manual overrides.
+  // For this task, we will stick to 'blocks' as templates for now to avoid breaking existing logic,
+  // BUT we need to respect the 'calendar_blocks' created by aiPlanning.js as "Fixed Constraints" or "Available Slots".
+
+  // Actually, aiPlanning.js creates 'calendar_blocks' with 'start' and 'end'.
+  // The engine's `buildBlockDaySlots` expands `blocks` (templates) into slots.
+  // If we want to use the AI-generated blocks, we should probably treat them as "Available Time" 
+  // OR as "Scheduled Items" depending on if they are empty containers or have content.
+
+  // Requirement: "Story Block... represents Stories".
+  // So a Story Block IS a scheduled item.
+
+  // Let's fetch 'blocks' (templates) to generate the skeleton (Sleep, Work, etc).
   const blocksSnap = await db
     .collection('blocks')
     .where('ownerUid', '==', userId)
     .where('enabled', '==', true)
     .get();
   const blocks = blocksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+
+  // Also fetch 'calendar_blocks' which might be manual/AI overrides or specific story blocks
+  const calBlocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', userId)
+    .where('start', '>=', windowStart.toMillis())
+    .where('end', '<=', windowEnd.toMillis())
+    .get();
+  const calBlocks = calBlocksSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // We need to merge these. If a calBlock exists, it might block time.
+  // For now, let's just pass them through or use them to adjust 'busy'.
+  // But wait, the AI generates 'calendar_blocks' for Stories. 
+  // These should probably be treated as "Already Scheduled" items (existingInstances) 
+  // so the engine doesn't double book them, OR they are the target slots.
+
+  // If the AI generates a "Story Block", it's reserving time for that story.
+  // So it effectively acts as a "Task" (occurrence) that is fixed.
+  // Let's treat AI-generated calendar_blocks as 'existingInstances' so they consume capacity.
+
+  const aiStoryBlocks = calBlocks.filter(b => b.storyId || b.aiGenerated);
+  const aiInstances = aiStoryBlocks.map(b => ({
+    id: b.id,
+    sourceType: 'story_block',
+    sourceId: b.storyId || b.id,
+    ownerUid: b.ownerUid,
+    occurrenceDate: isoDate(DateTime.fromMillis(b.start, { zone: DEFAULT_ZONE })),
+    start: b.start,
+    end: b.end,
+    title: b.title,
+    status: 'planned',
+    isFixed: true // New flag to indicate this shouldn't be moved easily
+  }));
 
   const choresSnap = await db
     .collection('chores')
@@ -679,6 +734,9 @@ async function planSchedule({
     .get();
   const existingInstances = existingSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
+  // Merge AI blocks into existing instances
+  const allExisting = [...existingInstances, ...aiInstances];
+
   const tasksSnap = await db
     .collection('tasks')
     .where('ownerUid', '==', userId)
@@ -697,13 +755,24 @@ async function planSchedule({
     ...computeTaskOccurrences(tasks, windowStart, windowEnd, userId),
     ...computeStoryOccurrences(stories, windowStart, windowEnd, userId),
   ];
+
+  // Filter out occurrences that are already covered by AI blocks to avoid duplication
+  // e.g. if we have a Story Block for Story A, we might not want to schedule Story A again 
+  // unless the block is just a container. 
+  // For now, let's assume the AI block IS the schedule for that story.
+  const coveredStoryIds = new Set(aiStoryBlocks.map(b => b.storyId).filter(Boolean));
+  const filteredOccurrences = occurrences.filter(o => {
+    if (o.sourceType === 'story' && coveredStoryIds.has(o.sourceId)) return false;
+    return true;
+  });
+
   const { results, unscheduled, conflicts } = planOccurrences({
     blocks,
-    occurrences,
+    occurrences: filteredOccurrences,
     busyByDay,
     windowStart,
     windowEnd,
-    existingInstances,
+    existingInstances: allExisting,
     solverRunId,
   });
 
@@ -712,7 +781,7 @@ async function planSchedule({
     planned: results,
     unscheduled,
     conflicts,
-    existingIds: existingInstances.map((inst) => inst.id),
+    existingIds: allExisting.map((inst) => inst.id),
   };
 }
 

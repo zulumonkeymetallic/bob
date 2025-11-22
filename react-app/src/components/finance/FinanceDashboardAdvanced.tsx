@@ -6,9 +6,9 @@ import { functions } from '../../firebase';
 import {
     PieChart, Pie, Cell, Tooltip, Legend,
     BarChart, Bar, XAxis, YAxis, CartesianGrid,
-    LineChart, Line, ResponsiveContainer, AreaChart, Area
+    LineChart, Line, ResponsiveContainer, AreaChart, Area, Sankey
 } from 'recharts';
-import { Brain } from 'lucide-react';
+import { Brain, Edit2 } from 'lucide-react';
 
 // Premium color palette
 const COLORS = {
@@ -24,9 +24,7 @@ const COLORS = {
     grid: 'rgba(255, 255, 255, 0.1)'
 };
 
-const THEME_COLORS = [
-    '#e040fb', '#00e676', '#2979ff', '#ff9100', '#ff1744', '#00b0ff'
-];
+const THEME_COLORS = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#C9CBCF', '#FF6384', '#36A2EB', '#FFCE56'];
 
 // Define types based on backend response
 interface DashboardData {
@@ -36,6 +34,10 @@ interface DashboardData {
     spendByTheme: Record<string, number>;
     spendByGoal: Record<string, number>;
     timeSeriesByGoal: Record<string, Array<{ month: string, amount: number }>>;
+    timeSeriesByBucket: Record<string, Array<{ month: string, amount: number }>>;
+    timeSeriesByCategory: Record<string, Array<{ month: string, amount: number }>>;
+    totalSubscriptionSpend: number;
+    totalDiscretionarySpend: number;
     goalProgress: Array<{
         id: string;
         title: string;
@@ -45,6 +47,15 @@ interface DashboardData {
         status: number;
     }>;
     burnDown?: Array<{ day: number, ideal: number, actual: number | null }>;
+    recentTransactions: Array<{
+        id: string;
+        merchantName: string;
+        amount: number;
+        categoryKey: string;
+        categoryLabel: string;
+        createdAt: any;
+        isSubscription?: boolean;
+    }>;
 }
 
 const FinanceDashboardAdvanced: React.FC = () => {
@@ -53,6 +64,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [filter, setFilter] = useState<'month' | 'quarter' | 'year'>('month');
     const [llmSummary, setLlmSummary] = useState<string | null>(null);
+
+    const [viewMode, setViewMode] = useState<'category' | 'bucket'>('category');
+    const [editingTx, setEditingTx] = useState<any>(null);
+    const [newCategory, setNewCategory] = useState('');
 
     const fetchData = async () => {
         setLoading(true);
@@ -85,7 +100,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
             // Generate simple heuristic summary (placeholder for LLM)
             const topCat = Object.entries(d.spendByCategory).sort((a, b) => b[1] - a[1])[0];
-            const summary = `You've spent £${(Math.abs(d.totalSpend) / 100).toFixed(2)} this ${filter}. Top spending category is ${topCat ? topCat[0] : 'none'}.`;
+            const summary = `You've spent ${formatCurrency(Math.abs(d.totalSpend) / 100)} this ${filter}. Top spending category is ${topCat ? topCat[0] : 'none'}.`;
             setLlmSummary(summary);
 
         } catch (err) {
@@ -98,7 +113,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     useEffect(() => {
         fetchData();
-    }, []);
+    }, [filter]);
 
     if (loading) {
         return (
@@ -120,9 +135,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
         .filter(d => d.value > 0);
 
     const categoryData = Object.entries(data.spendByCategory)
-        .map(([key, value]) => ({ name: key, amount: Math.abs(value) / 100 }))
-        .sort((a, b) => b.amount - a.amount)
-        .slice(0, 8);
+        .map(([key, value]) => ({ name: key, value: Math.abs(value) / 100 }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10);
 
     const themeData = Object.entries(data.spendByTheme)
         .map(([key, value]) => ({ name: key, value: Math.abs(value) / 100 }))
@@ -130,6 +145,111 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const formatCurrency = (val: number) =>
         new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(val);
+
+    // Prepare Time Series Data for the selected view
+    const timeSeriesSource = viewMode === 'bucket' ? data.timeSeriesByBucket : data.timeSeriesByCategory;
+    // Flatten for LineChart: [{ month: '2023-01', groceries: 100, rent: 500 }, ...]
+    const allMonths = new Set<string>();
+    Object.values(timeSeriesSource || {}).forEach(arr => arr.forEach(d => allMonths.add(d.month)));
+    const sortedMonths = Array.from(allMonths).sort();
+
+    const trendData = sortedMonths.map(month => {
+        const row: any = { month };
+        Object.entries(timeSeriesSource || {}).forEach(([key, arr]) => {
+            const entry = arr.find(d => d.month === month);
+            if (entry) row[key] = Math.abs(entry.amount) / 100;
+        });
+        return row;
+    });
+
+    const activeKeys = Object.keys(timeSeriesSource || {}).slice(0, 5); // Limit lines to top 5
+
+    // Prepare Sankey Data
+    const sankeyNodes: { name: string }[] = [{ name: 'Total Spend' }];
+    const sankeyLinks: { source: number; target: number; value: number }[] = [];
+    const nodeMap = new Map<string, number>();
+    nodeMap.set('Total Spend', 0);
+
+    // Add Buckets
+    Object.entries(data.spendByBucket).forEach(([bucket, val]) => {
+        if (val < 0) {
+            const name = bucket.charAt(0).toUpperCase() + bucket.slice(1);
+            if (!nodeMap.has(name)) {
+                nodeMap.set(name, sankeyNodes.length);
+                sankeyNodes.push({ name });
+            }
+            sankeyLinks.push({ source: 0, target: nodeMap.get(name)!, value: Math.abs(val) / 100 });
+        }
+    });
+
+    // Add Categories
+    Object.entries(data.spendByCategory).forEach(([cat, val]) => {
+        if (val < 0) {
+            // Find which bucket this category belongs to (heuristic or map)
+            // For now, we don't have direct category->bucket map in dashboard data, 
+            // but we can infer or just link from bucket if we had the map.
+            // Since we don't have the map easily available here without passing it, 
+            // we might need to fetch it or just link from 'Total Spend' if we can't link to bucket.
+            // BUT, the user wants "Spend tracking look like thjis" (Sankey).
+            // Ideally: Total -> Bucket -> Category.
+            // I'll use a simplified flow: Total -> Category for now if bucket mapping is missing, 
+            // OR I can use the `spendByBucket` to just show Total -> Bucket.
+            // Wait, `spendByCategory` keys are like 'groceries'.
+            // I'll try to link them to buckets if I can.
+            // Actually, I can't easily know the bucket for each category without the map.
+            // I'll just do Total -> Buckets for now as it's robust.
+            // User asked for "individual transactions... make the spend tracking look like this".
+            // The image shows "Total Expenses" -> Categories.
+            // So I will do Total -> Top 15 Categories.
+
+            const name = cat;
+            if (!nodeMap.has(name)) {
+                nodeMap.set(name, sankeyNodes.length);
+                sankeyNodes.push({ name });
+            }
+            // Link from Total directly for now as I lack the bucket map here.
+            // sankeyLinks.push({ source: 0, target: nodeMap.get(name)!, value: Math.abs(val) / 100 });
+        }
+    });
+
+    // REVISED SANKEY: Total -> Buckets. 
+    // And if I can, Buckets -> Categories. 
+    // I'll just do Total -> Buckets for now as it's robust.
+    // User asked for "individual transactions... make the spend tracking look like this".
+    // The image shows "Total Expenses" -> Categories.
+    // So I will do Total -> Top 15 Categories.
+
+    const sankeyNodes2: { name: string }[] = [{ name: 'Total Expenses' }];
+    const sankeyLinks2: { source: number; target: number; value: number }[] = [];
+
+    Object.entries(data.spendByCategory)
+        .sort((a, b) => a[1] - b[1]) // Sort by spend (negative) ascending (most negative first)
+        .slice(0, 15)
+        .forEach(([cat, val]) => {
+            if (val < 0) {
+                const name = cat;
+                sankeyNodes2.push({ name });
+                sankeyLinks2.push({ source: 0, target: sankeyNodes2.length - 1, value: Math.abs(val) / 100 });
+            }
+        });
+
+    const handleEditTx = (tx: any) => {
+        setEditingTx(tx);
+        setNewCategory(tx.categoryKey || '');
+    };
+
+    const saveTxCategory = async () => {
+        if (!editingTx) return;
+        try {
+            const fn = httpsCallable(functions, 'setTransactionCategoryOverride');
+            await fn({ transactionId: editingTx.id, categoryKey: newCategory });
+            setEditingTx(null);
+            fetchData(); // Refresh
+        } catch (e) {
+            console.error(e);
+            alert('Failed to save category');
+        }
+    };
 
     return (
         <div className="container-fluid py-4" style={{ backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
@@ -168,6 +288,130 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </Card.Body>
             </Card>
 
+            {/* Subscription & Discretionary Metrics */}
+            <Row className="g-4 mb-4">
+                <Col md={6}>
+                    <Card className="h-100 shadow-sm border-0">
+                        <Card.Body>
+                            <div className="d-flex justify-content-between align-items-center mb-3">
+                                <h5 className="fw-bold mb-0">Subscription Spend</h5>
+                                <Badge bg="warning" text="dark">Monthly Recurring</Badge>
+                            </div>
+                            <h3 className="fw-bold mb-1">{formatCurrency(Math.abs(data.totalSubscriptionSpend || 0) / 100)}</h3>
+                            <p className="text-muted small mb-0">Total spend on flagged subscriptions this period.</p>
+                        </Card.Body>
+                    </Card>
+                </Col>
+                <Col md={6}>
+                    <Card className="h-100 shadow-sm border-0">
+                        <Card.Body>
+                            <div className="d-flex justify-content-between align-items-center mb-3">
+                                <h5 className="fw-bold mb-0">Discretionary Spend</h5>
+                                <Badge bg="info">Flexible</Badge>
+                            </div>
+                            <h3 className="fw-bold mb-1">{formatCurrency(Math.abs(data.totalDiscretionarySpend || 0) / 100)}</h3>
+                            <p className="text-muted small mb-0">Spend on non-essential items (Dining, Shopping, etc).</p>
+                        </Card.Body>
+                    </Card>
+                </Col>
+            </Row>
+
+            {/* Sankey Diagram */}
+            <Card className="mb-4 border-0 shadow-sm">
+                <Card.Header className="bg-white border-0 pt-4 px-4">
+                    <h5 className="fw-bold mb-0">Spending Flow</h5>
+                </Card.Header>
+                <Card.Body>
+                    <div style={{ height: 400 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                            <Sankey
+                                data={{ nodes: sankeyNodes2, links: sankeyLinks2 }}
+                                node={{ stroke: '#77c878', strokeWidth: 2 }}
+                                nodePadding={50}
+                                margin={{ left: 20, right: 20, top: 20, bottom: 20 }}
+                                link={{ stroke: '#77c878' }}
+                            >
+                                <Tooltip />
+                            </Sankey>
+                        </ResponsiveContainer>
+                    </div>
+                </Card.Body>
+            </Card>
+
+            {/* Spending Breakdown with Toggle */}
+            <Card className="mb-4 border-0 shadow-sm">
+                <Card.Header className="bg-white border-0 pt-4 px-4 d-flex justify-content-between align-items-center">
+                    <h5 className="fw-bold mb-0">Spending Breakdown</h5>
+                    <div className="btn-group">
+                        <button
+                            className={`btn btn-sm ${viewMode === 'category' ? 'btn-primary' : 'btn-outline-primary'}`}
+                            onClick={() => setViewMode('category')}
+                        >
+                            By Category
+                        </button>
+                        <button
+                            className={`btn btn-sm ${viewMode === 'bucket' ? 'btn-primary' : 'btn-outline-primary'}`}
+                            onClick={() => setViewMode('bucket')}
+                        >
+                            By Bucket
+                        </button>
+                    </div>
+                </Card.Header>
+                <Card.Body>
+                    <Row>
+                        <Col lg={6}>
+                            <h6 className="text-muted mb-3 text-center">Distribution</h6>
+                            <div style={{ height: 300 }}>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <PieChart>
+                                        <Pie
+                                            data={viewMode === 'bucket' ? bucketData : categoryData}
+                                            cx="50%"
+                                            cy="50%"
+                                            innerRadius={60}
+                                            outerRadius={80}
+                                            paddingAngle={5}
+                                            dataKey="value"
+                                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                        >
+                                            {(viewMode === 'bucket' ? bucketData : categoryData).map((entry, index) => (
+                                                <Cell key={`cell-${index}`} fill={THEME_COLORS[index % THEME_COLORS.length]} />
+                                            ))}
+                                        </Pie>
+                                        <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                                        <Legend verticalAlign="bottom" height={36} />
+                                    </PieChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </Col>
+                        <Col lg={6}>
+                            <h6 className="text-muted mb-3 text-center">Trend Over Time</h6>
+                            <div style={{ height: 300 }}>
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={trendData}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                        <XAxis dataKey="month" />
+                                        <YAxis tickFormatter={(val) => `£${val}`} />
+                                        <Tooltip formatter={(val: number) => formatCurrency(val)} />
+                                        <Legend />
+                                        {activeKeys.map((key, index) => (
+                                            <Area
+                                                key={key}
+                                                type="monotone"
+                                                dataKey={key}
+                                                stackId="1"
+                                                stroke={THEME_COLORS[index % THEME_COLORS.length]}
+                                                fill={THEME_COLORS[index % THEME_COLORS.length]}
+                                            />
+                                        ))}
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </Col>
+                    </Row>
+                </Card.Body>
+            </Card>
+
             {/* Budget Burn Down (Only show for Month view) */}
             {filter === 'month' && data.burnDown && (
                 <Card className="mb-4 border-0 shadow-sm">
@@ -190,87 +434,80 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </Card>
             )}
 
-            {/* Top Row: Buckets & Themes */}
-            <Row className="g-4 mb-4">
-                <Col md={6} lg={4}>
-                    <Card className="h-100 shadow-sm border-0">
-                        <Card.Body>
-                            <h5 className="card-title fw-bold mb-3">Spend by Bucket</h5>
-                            <div style={{ height: 300 }}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <PieChart>
-                                        <Pie
-                                            data={bucketData}
-                                            cx="50%"
-                                            cy="50%"
-                                            innerRadius={60}
-                                            outerRadius={80}
-                                            paddingAngle={5}
-                                            dataKey="value"
-                                        >
-                                            {bucketData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={Object.values(COLORS)[index % 5]} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                                        <Legend verticalAlign="bottom" height={36} />
-                                    </PieChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </Card.Body>
-                    </Card>
-                </Col>
+            {/* Transaction List */}
+            <Card className="mb-4 border-0 shadow-sm">
+                <Card.Header className="bg-white border-0 pt-4 px-4">
+                    <h5 className="fw-bold mb-0">Recent Transactions</h5>
+                </Card.Header>
+                <Card.Body>
+                    <div className="table-responsive">
+                        <table className="table table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Merchant</th>
+                                    <th>Category</th>
+                                    <th className="text-end">Amount</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.recentTransactions?.map(tx => (
+                                    <tr key={tx.id}>
+                                        <td>{new Date(tx.createdAt._seconds * 1000).toLocaleDateString()}</td>
+                                        <td>
+                                            {tx.merchantName}
+                                            {tx.isSubscription && <Badge bg="warning" text="dark" className="ms-2">Sub</Badge>}
+                                        </td>
+                                        <td>
+                                            <Badge bg="light" text="dark" className="border">
+                                                {tx.categoryLabel || tx.categoryKey}
+                                            </Badge>
+                                        </td>
+                                        <td className="text-end">{formatCurrency(Math.abs(tx.amount) / 100)}</td>
+                                        <td className="text-end">
+                                            <button className="btn btn-sm btn-link text-secondary" onClick={() => handleEditTx(tx)}>
+                                                <Edit2 size={16} />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </Card.Body>
+            </Card>
 
-                <Col md={6} lg={4}>
-                    <Card className="h-100 shadow-sm border-0">
-                        <Card.Body>
-                            <h5 className="card-title fw-bold mb-3">Spend by Theme</h5>
-                            <div style={{ height: 300 }}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <PieChart>
-                                        <Pie
-                                            data={themeData}
-                                            cx="50%"
-                                            cy="50%"
-                                            outerRadius={80}
-                                            dataKey="value"
-                                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                                        >
-                                            {themeData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={THEME_COLORS[index % THEME_COLORS.length]} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                                    </PieChart>
-                                </ResponsiveContainer>
+            {/* Edit Category Modal */}
+            {editingTx && (
+                <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <div className="modal-dialog">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h5 className="modal-title">Edit Category</h5>
+                                <button type="button" className="btn-close" onClick={() => setEditingTx(null)}></button>
                             </div>
-                        </Card.Body>
-                    </Card>
-                </Col>
-
-                <Col md={12} lg={4}>
-                    <Card className="h-100 shadow-sm border-0">
-                        <Card.Body>
-                            <h5 className="card-title fw-bold mb-3">Top Categories</h5>
-                            <div style={{ height: 300 }}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={categoryData} layout="vertical" margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
-                                        <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                                        <XAxis type="number" hide />
-                                        <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 12 }} />
-                                        <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                                        <Bar dataKey="amount" fill="#8884d8" radius={[0, 4, 4, 0]}>
-                                            {categoryData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={THEME_COLORS[index % THEME_COLORS.length]} />
-                                            ))}
-                                        </Bar>
-                                    </BarChart>
-                                </ResponsiveContainer>
+                            <div className="modal-body">
+                                <p><strong>Merchant:</strong> {editingTx.merchantName}</p>
+                                <Form.Group>
+                                    <Form.Label>Category</Form.Label>
+                                    <Form.Control
+                                        type="text"
+                                        value={newCategory}
+                                        onChange={(e) => setNewCategory(e.target.value)}
+                                        placeholder="e.g. groceries, dining_out"
+                                    />
+                                    <Form.Text className="text-muted">Enter category key (e.g. 'groceries')</Form.Text>
+                                </Form.Group>
                             </div>
-                        </Card.Body>
-                    </Card>
-                </Col>
-            </Row>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={() => setEditingTx(null)}>Cancel</button>
+                                <button type="button" className="btn btn-primary" onClick={saveTxCategory}>Save Changes</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Goal Progress Section */}
             <h4 className="fw-bold mb-3">Goal Progress</h4>

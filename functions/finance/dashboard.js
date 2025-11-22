@@ -76,9 +76,18 @@ function aggregateTransactions(transactions, startDate, endDate) {
         const bucket = tx.userCategoryType || 'unspecified';
         result.spendByBucket[bucket] = (result.spendByBucket[bucket] || 0) + amount;
 
+        const month = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
+        if (!result.timeSeriesByBucket) result.timeSeriesByBucket = {};
+        if (!result.timeSeriesByBucket[bucket]) result.timeSeriesByBucket[bucket] = {};
+        result.timeSeriesByBucket[bucket][month] = (result.timeSeriesByBucket[bucket][month] || 0) + amount;
+
         // Category aggregation
         const catKey = tx.userCategoryKey || 'uncategorized';
         result.spendByCategory[catKey] = (result.spendByCategory[catKey] || 0) + amount;
+
+        if (!result.timeSeriesByCategory) result.timeSeriesByCategory = {};
+        if (!result.timeSeriesByCategory[catKey]) result.timeSeriesByCategory[catKey] = {};
+        result.timeSeriesByCategory[catKey][month] = (result.timeSeriesByCategory[catKey][month] || 0) + amount;
 
         // Theme aggregation
         const theme = CATEGORY_THEME_MAP[catKey] || 'Other';
@@ -89,21 +98,36 @@ function aggregateTransactions(transactions, startDate, endDate) {
             const goalId = tx.linkedGoalId;
             result.spendByGoal[goalId] = (result.spendByGoal[goalId] || 0) + amount;
 
-            const month = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
             if (!result.timeSeriesByGoal[goalId]) result.timeSeriesByGoal[goalId] = {};
             result.timeSeriesByGoal[goalId][month] = (result.timeSeriesByGoal[goalId][month] || 0) + amount;
         }
+
+        // Subscription & Discretionary tracking
+        if (amount < 0) {
+            if (tx.isSubscription) {
+                result.totalSubscriptionSpend = (result.totalSubscriptionSpend || 0) + amount;
+            }
+            if (tx.userCategoryType === 'discretionary' || tx.userCategoryType === 'optional') {
+                result.totalDiscretionarySpend = (result.totalDiscretionarySpend || 0) + amount;
+            }
+        }
     });
 
-    // Format time series
-    const formattedTimeSeries = {};
-    Object.entries(result.timeSeriesByGoal).forEach(([goalId, monthsObj]) => {
-        const arr = Object.entries(monthsObj)
-            .map(([month, amt]) => ({ month, amount: amt }))
-            .sort((a, b) => a.month.localeCompare(b.month));
-        formattedTimeSeries[goalId] = arr;
-    });
-    result.timeSeriesByGoal = formattedTimeSeries;
+    // Format time series helper
+    const formatTS = (source) => {
+        const formatted = {};
+        Object.entries(source || {}).forEach(([key, monthsObj]) => {
+            const arr = Object.entries(monthsObj)
+                .map(([month, amt]) => ({ month, amount: amt }))
+                .sort((a, b) => a.month.localeCompare(b.month));
+            formatted[key] = arr;
+        });
+        return formatted;
+    };
+
+    result.timeSeriesByGoal = formatTS(result.timeSeriesByGoal);
+    result.timeSeriesByBucket = formatTS(result.timeSeriesByBucket);
+    result.timeSeriesByCategory = formatTS(result.timeSeriesByCategory);
 
     return result;
 }
@@ -165,9 +189,20 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
     }
 
     return {
-        ...aggregation,
-        goalProgress,
-        burnDown
+        goalProgress: goalProgress.filter(g => g.linkedPotName), // Only show linked goals
+        burnDown,
+        recentTransactions: transactions
+            .sort((a, b) => (b.createdAt?.toMillis ? b.createdAt.toMillis() : 0) - (a.createdAt?.toMillis ? a.createdAt.toMillis() : 0))
+            .slice(0, 100)
+            .map(t => ({
+                id: t.id,
+                merchantName: t.merchantName || t.description,
+                amount: t.amount,
+                categoryKey: t.userCategoryKey,
+                categoryLabel: t.userCategoryLabel,
+                createdAt: t.createdAt,
+                isSubscription: t.isSubscription
+            }))
     };
 }
 

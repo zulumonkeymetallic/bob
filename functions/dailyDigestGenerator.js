@@ -116,8 +116,14 @@ const { fetchWeather, fetchNews } = require('./services/newsWeather');
 /**
  * Gather comprehensive user data for digest
  */
+/**
+ * Gather comprehensive user data for digest
+ */
 async function gatherUserData(db, userId, today) {
   const todayStr = today.toISOString().split('T')[0];
+  const nextWeek = new Date(today);
+  nextWeek.setDate(today.getDate() + 7);
+  const nextWeekStr = nextWeek.toISOString().split('T')[0];
 
   // Parallel fetch for external data
   const [weather, news] = await Promise.all([
@@ -146,7 +152,6 @@ async function gatherUserData(db, userId, today) {
     .get();
 
   // Get active stories (started or planned)
-  // We want to know if they are "started" (status == 'active' or 'in-progress')
   const activeStoriesSnapshot = await db.collection('stories')
     .where('ownerUid', '==', userId)
     .where('status', 'in', ['active', 'in-progress', 'planned'])
@@ -163,11 +168,13 @@ async function gatherUserData(db, userId, today) {
     };
   });
 
-  // Get today's calendar blocks
+  // Get 7-day calendar blocks (Rolling Window)
+  // Note: We fetch 'calendar_blocks' which are the instances.
   const calendarBlocksSnapshot = await db.collection('calendar_blocks')
     .where('ownerUid', '==', userId)
-    .where('date', '==', todayStr)
-    .orderBy('startTime')
+    .where('start', '>=', today.getTime())
+    .where('start', '<=', nextWeek.getTime())
+    .orderBy('start')
     .get();
 
   // Get current sprint information
@@ -189,7 +196,13 @@ async function gatherUserData(db, userId, today) {
     tasksDueToday: tasksDueTodaySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     overdueTasks: overdueTasks.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     stories,
-    calendarBlocks: calendarBlocksSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+    calendarBlocks: calendarBlocksSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      startDate: new Date(doc.data().start).toISOString().split('T')[0],
+      startTime: new Date(doc.data().start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+      endTime: new Date(doc.data().end).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+    })),
     currentSprint: currentSprintSnapshot.docs[0] ? { id: currentSprintSnapshot.docs[0].id, ...currentSprintSnapshot.docs[0].data() } : null,
     goals: goalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     weather,
@@ -219,8 +232,8 @@ async function generateAIInsights(userData) {
   **Active Stories (Highest Priority if Started):**
   ${userData.stories.map(s => `- [${s.isStarted ? 'STARTED' : 'PLANNED'}] ${s.title} (Status: ${s.status})`).join('\n')}
   
-  **Calendar Today:**
-  ${userData.calendarBlocks.map(b => `- ${b.startTime}-${b.endTime}: ${b.title}`).join('\n')}
+  **Calendar (Next 7 Days):**
+  ${userData.calendarBlocks.slice(0, 20).map(b => `- [${b.startDate}] ${b.startTime}-${b.endTime}: ${b.title} ${b.conflictStatus === 'requires_review' ? '(CONFLICT)' : ''}`).join('\n')}
   
   **Tasks (Due Today: ${userData.tasksDueToday.length}, Overdue: ${userData.overdueTasks.length}):**
   Overdue: ${userData.overdueTasks.map(t => t.title).join(', ')}
@@ -228,13 +241,14 @@ async function generateAIInsights(userData) {
   
   **INSTRUCTIONS:**
   1. **Determine the Single Highest Priority**: Look at "Active Stories" (especially if STARTED) and "Overdue Tasks". Pick ONE thing they MUST do. Explain WHY based on the data (e.g. "Because Story X is already started...").
-  2. **Craft a Narrative Message**: Do NOT use generic headings like "Time Management". Write a cohesive briefing paragraph.
-  3. **Integrate News/Weather**: Weave the weather or a major news headline into the intro or outro naturally (e.g. "It's a rainy day, perfect for deep work on...").
-  4. **Tone**: Professional, concise, encouraging, but direct. No fluff.
-  5. **Structure**:
+  2. **Placement Reasoning**: Briefly explain why the schedule is set this way. If there are CONFLICTS, propose a resolution.
+  3. **Craft a Narrative Message**: Do NOT use generic headings like "Time Management". Write a cohesive briefing paragraph.
+  4. **Integrate News/Weather**: Weave the weather or a major news headline into the intro or outro naturally.
+  5. **Tone**: Professional, concise, encouraging, but direct. No fluff.
+  6. **Structure**:
      - **The Briefing**: A paragraph weaving weather/news and the main focus.
      - **The Plan**: Bullet points of the specific actions for the priority items.
-     - **Heads Up**: Mention any risks (overdue items, tight calendar).
+     - **Heads Up**: Mention any risks (overdue items, tight calendar, conflicts).
   
   Do NOT give generic tips like "Drink water" or "Take breaks". Stick to the user's actual data.`;
 
@@ -328,15 +342,25 @@ async function createDigestHTML(userData, aiInsights) {
             ` : ''}
 
             ${userData.calendarBlocks.length > 0 ? `
-            <div class="section-title">Schedule</div>
-            ${userData.calendarBlocks.map(b => `
-            <div class="item">
-                <div>
-                    <div class="item-title">${b.title}</div>
+            <div class="section-title">7-Day Schedule</div>
+            ${(() => {
+        const grouped = {};
+        userData.calendarBlocks.forEach(b => {
+          if (!grouped[b.startDate]) grouped[b.startDate] = [];
+          grouped[b.startDate].push(b);
+        });
+        return Object.keys(grouped).slice(0, 7).map(date => `
+                <div style="font-size:11px; font-weight:bold; color:#6b7280; margin-top:12px; padding-left:12px;">${new Date(date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+                ${grouped[date].map(b => `
+                <div class="item">
+                    <div>
+                        <div class="item-title">${b.title} ${b.conflictStatus === 'requires_review' ? '<span style="color:red">⚠</span>' : ''}</div>
+                    </div>
+                    <div class="tag" style="background:#f3f4f6">${b.startTime}</div>
                 </div>
-                <div class="tag" style="background:#f3f4f6">${b.startTime}</div>
-            </div>
-            `).join('')}
+                `).join('')}
+              `).join('');
+      })()}
             ` : ''}
 
             <div style="text-align:center">

@@ -74,14 +74,14 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
 
     const storiesQuery = resolvedSprintId
       ? query(
-          collection(db, 'stories'),
-          where('sprintId', '==', resolvedSprintId),
-          where('ownerUid', '==', currentUser.uid)
-        )
+        collection(db, 'stories'),
+        where('sprintId', '==', resolvedSprintId),
+        where('ownerUid', '==', currentUser.uid)
+      )
       : query(
-          collection(db, 'stories'),
-          where('ownerUid', '==', currentUser.uid)
-        );
+        collection(db, 'stories'),
+        where('ownerUid', '==', currentUser.uid)
+      );
 
     const unsubscribe = onSnapshot(storiesQuery, (snapshot) => {
       const storyData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Story[];
@@ -132,6 +132,45 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     return () => unsubscribe();
   }, [currentUser, currentPersona, resolvedSprintId]);
 
+  const [capacity, setCapacity] = useState<{ total: number; used: number; remaining: number } | null>(null);
+
+  // Load calendar blocks for capacity planning
+  useEffect(() => {
+    if (!currentUser || !sprint) return;
+
+    const start = new Date(sprint.startDate);
+    const end = new Date(sprint.endDate);
+
+    // Query blocks within sprint range
+    const q = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('start', '>=', start.getTime()),
+      where('start', '<=', end.getTime())
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let usedMinutes = 0;
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        usedMinutes += (data.end - data.start) / (1000 * 60);
+      });
+
+      // Calculate total capacity: 8 hours per day * number of days
+      const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      const totalMinutes = days * 8 * 60; // 8 hours per day
+      const remainingMinutes = Math.max(0, totalMinutes - usedMinutes);
+
+      setCapacity({
+        total: Math.round(totalMinutes / 60),
+        used: Math.round(usedMinutes / 60),
+        remaining: Math.round(remainingMinutes / 60)
+      });
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, sprint]);
+
   const metrics = useMemo(() => {
     // Aggregated metrics when no sprint is selected
     if (!resolvedSprintId || !sprint) {
@@ -154,25 +193,26 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
         storyProgress: totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0,
         storiesWithOpenTasks: 0,
         standaloneTasksCount: tasks.filter(t => !t.parentId || t.parentType !== 'story').length,
-        sprint: null
+        sprint: null,
+        capacity: null
       } as any;
     }
 
     const now = new Date();
     const startDate = new Date(sprint.startDate);
     const endDate = new Date(sprint.endDate);
-    
+
     // Calculate sprint timing
     const hasStarted = now >= startDate;
     const hasEnded = now > endDate;
     const daysLeft = hasStarted ? Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))) : 0;
     const daysUntilStart = !hasStarted ? Math.ceil((startDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : 0;
-    
+
     // Story metrics
     const sprintStories = stories.filter(story => story.sprintId === resolvedSprintId);
     const completedStories = sprintStories.filter(story => story.status === 4).length; // Done status
     const totalStories = sprintStories.length;
-    
+
     // Task metrics - include both story-linked and standalone tasks
     // Business rules: 
     // 1. Tasks can be added without being linked to stories or goals
@@ -184,25 +224,25 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       }
       return false;
     });
-    
+
     // For now, standalone tasks are those not linked to stories
     // In future, could add sprintId field to tasks for direct sprint association
-    const standaloneTasks = tasks.filter(task => 
+    const standaloneTasks = tasks.filter(task =>
       !task.parentType || task.parentType !== 'story' || !task.parentId
     );
-    
+
     // Combined task metrics (story-linked tasks are primary for sprint context)
     const sprintTasks = storyLinkedTasks;
     const completedTasks = sprintTasks.filter(task => task.status === 2).length; // Done status
     const totalTasks = sprintTasks.length;
-    
+
     // Calculate overall progress based on stories (primary metric)
     const storyProgress = totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0;
-    
+
     // Check business rule: can't close story if there are open tasks
     const storiesBlockedByTasks = sprintStories.filter(story => {
       if (story.status === 4) return false; // Already closed
-      const storyTasks = storyLinkedTasks.filter(task => 
+      const storyTasks = storyLinkedTasks.filter(task =>
         task.parentType === 'story' && task.parentId === story.id
       );
       return storyTasks.length > 0 && storyTasks.some(task => task.status !== 2); // Has open tasks
@@ -222,9 +262,10 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       storyProgress,
       storiesWithOpenTasks,
       standaloneTasksCount: standaloneTasks.length,
-      sprint
+      sprint,
+      capacity
     };
-  }, [sprint, stories, tasks, selectedSprintId, resolvedSprintId]);
+  }, [sprint, stories, tasks, selectedSprintId, resolvedSprintId, capacity]);
 
   if (loading) return null;
 
@@ -247,7 +288,8 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     completedTasks,
     storyProgress,
     storiesWithOpenTasks,
-    standaloneTasksCount
+    standaloneTasksCount,
+    capacity: metricCapacity
   } = metrics;
 
   const getProgressVariant = (progress: number) => {
@@ -280,9 +322,9 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
         placement="bottom"
         overlay={
           <Tooltip>
-            {hasEnded 
-              ? 'Sprint has ended' 
-              : !hasStarted 
+            {hasEnded
+              ? 'Sprint has ended'
+              : !hasStarted
                 ? `Sprint starts in ${daysUntilStart} days`
                 : `${daysLeft} days remaining in sprint`
             }
@@ -294,6 +336,26 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
           {timeDisplay.text}
         </Badge>
       </OverlayTrigger>
+
+      {/* Capacity Metrics */}
+      {metricCapacity && (
+        <OverlayTrigger
+          placement="bottom"
+          overlay={
+            <Tooltip>
+              Capacity: {metricCapacity.remaining}h free / {metricCapacity.total}h total
+              <div className="mt-1 text-muted">
+                Based on 8h/day minus scheduled calendar blocks
+              </div>
+            </Tooltip>
+          }
+        >
+          <Badge bg={metricCapacity.remaining < 10 ? 'danger' : 'success'} className="d-flex align-items-center">
+            <TrendingUp size={14} className="me-1" />
+            {metricCapacity.remaining}h Free
+          </Badge>
+        </OverlayTrigger>
+      )}
 
       {/* Story Progress */}
       <OverlayTrigger

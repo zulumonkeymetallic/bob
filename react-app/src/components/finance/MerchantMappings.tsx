@@ -16,6 +16,7 @@ type MerchantRow = {
   lastTransactionISO?: string | null;
   months?: number;
   isRecurring?: boolean;
+  isSubscription?: boolean;
 };
 
 // Group categories by bucket for organized dropdown
@@ -30,7 +31,7 @@ const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency'
 const MerchantMappings: React.FC = () => {
   const { currentUser } = useAuth();
   const [summary, setSummary] = useState<any | null>(null);
-  const [edits, setEdits] = useState<Record<string, { categoryKey: string; label: string }>>({});
+  const [edits, setEdits] = useState<Record<string, { categoryKey: string; label: string; isSubscription?: boolean }>>({});
   const [status, setStatus] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [subKey, setSubKey] = useState('');
@@ -52,12 +53,13 @@ const MerchantMappings: React.FC = () => {
   const pending = (summary?.pendingClassification || []) as Array<any>;
   const recurring = (summary?.recurringMerchants || []) as MerchantRow[];
 
-  const setEdit = (merchantKey: string, patch: Partial<{ categoryKey: string; label: string }>) => {
+  const setEdit = (merchantKey: string, patch: Partial<{ categoryKey: string; label: string; isSubscription: boolean }>) => {
     setEdits((prev) => ({
       ...prev,
       [merchantKey]: {
         categoryKey: patch.categoryKey ?? prev[merchantKey]?.categoryKey ?? 'dining_out',
         label: patch.label ?? prev[merchantKey]?.label ?? (rows.find(r => r.merchantKey === merchantKey)?.merchantName || merchantKey),
+        isSubscription: patch.isSubscription ?? prev[merchantKey]?.isSubscription ?? (rows.find(r => r.merchantKey === merchantKey)?.isSubscription || false),
       },
     }));
   };
@@ -76,6 +78,7 @@ const MerchantMappings: React.FC = () => {
         categoryType: category?.bucket || 'discretionary',
         categoryLabel: category?.label || edit.label,
         label: edit.label,
+        isSubscription: edit.isSubscription,
         applyToExisting: apply
       });
       setStatus(`Saved mapping for ${merchantKey}${apply ? ` and updated ${res?.data?.updated || 0} transactions` : ''}.`);
@@ -273,6 +276,7 @@ const MerchantMappings: React.FC = () => {
                   <th className="text-end">Spend</th>
                   <th>Type</th>
                   <th>Label</th>
+                  <th className="text-center">Sub?</th>
                   <th>Flags</th>
                   <th></th>
                 </tr>
@@ -293,6 +297,13 @@ const MerchantMappings: React.FC = () => {
                     </td>
                     <td style={{ width: 220 }}>
                       <Form.Control size="sm" value={edits[m.merchantKey]?.label || m.merchantName} onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })} />
+                    </td>
+                    <td className="text-center">
+                      <Form.Check
+                        type="checkbox"
+                        checked={edits[m.merchantKey]?.isSubscription ?? m.isSubscription ?? false}
+                        onChange={(e) => setEdit(m.merchantKey, { isSubscription: e.target.checked })}
+                      />
                     </td>
                     <td>
                       {m.isRecurring ? <Badge bg="info">Recurring</Badge> : null}

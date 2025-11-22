@@ -64,6 +64,18 @@ try {
   console.warn('[init] calendarSync not loaded', e?.message || e);
 }
 
+// Import AI Planning functions
+try {
+  const aiPlanning = require('./aiPlanning');
+  if (aiPlanning) {
+    exports.runNightlyScheduler = aiPlanning.runNightlyScheduler;
+    exports.runMorningPlanner = aiPlanning.runMorningPlanner;
+    exports.onStoryWrite = aiPlanning.onStoryWrite;
+  }
+} catch (e) {
+  console.warn('[init] aiPlanning not loaded', e?.message || e);
+}
+
 functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
 admin.initializeApp();
 
@@ -3044,7 +3056,7 @@ exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MO
 });
 
 // Helper to apply a single merchant mapping across existing transactions
-async function applyMappingToExisting(uid, merchantKey, categoryType, categoryKey, categoryLabel, label) {
+async function applyMappingToExisting(uid, merchantKey, categoryType, categoryKey, categoryLabel, label, isSubscription) {
   const db = admin.firestore();
   const col = db.collection('monzo_transactions');
   const q = col.where('ownerUid', '==', uid).where('merchantKey', '==', merchantKey);
@@ -3054,12 +3066,18 @@ async function applyMappingToExisting(uid, merchantKey, categoryType, categoryKe
   let batch = db.batch();
   let ops = 0;
   for (const doc of snap.docs) {
-    batch.update(doc.ref, {
+    const data = doc.data();
+    if (data.manualCategory) continue; // Skip manually overridden transactions
+
+    const update = {
       userCategoryType: categoryType,
       userCategoryKey: categoryKey || null,
       userCategoryLabel: categoryLabel || label || null,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    };
+    if (isSubscription !== undefined) update.isSubscription = isSubscription;
+
+    batch.update(doc.ref, update);
     ops++; updated++;
     if (ops >= MAX_BATCH) { await batch.commit(); batch = db.batch(); ops = 0; }
   }
@@ -3077,7 +3095,7 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
   const categoryKey = String(req.data?.categoryKey || '').trim();
   const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
   const label = req.data?.label ? String(req.data.label).trim() : null;
-  const applyToExisting = !!req.data?.applyToExisting;
+  const isSubscription = req.data?.isSubscription !== undefined ? !!req.data.isSubscription : undefined;
 
   const allowed = new Set(['mandatory', 'optional', 'savings', 'income', 'discretionary']);
   if (!merchantName && !merchantKeyRaw) throw new httpsV2.HttpsError('invalid-argument', 'merchantName or merchantKey is required');
@@ -3088,7 +3106,8 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
 
   const db = admin.firestore();
   const docRef = db.collection('merchant_mappings').doc(`${uid}_${merchantKey}`);
-  await docRef.set({
+
+  const updateData = {
     ownerUid: uid,
     merchantKey,
     label: label || merchantName || merchantKey,
@@ -3096,17 +3115,76 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
     categoryKey: categoryKey || null,
     categoryLabel: categoryLabel || null,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
+  };
 
-  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set merchant mapping', { merchantKey, categoryType, categoryKey, categoryLabel, label }); } catch { }
+  if (isSubscription !== undefined) {
+    updateData.isSubscription = isSubscription;
+  }
+
+  await docRef.set(updateData, { merge: true });
+
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set merchant mapping', { merchantKey, categoryType, categoryKey, categoryLabel, label, isSubscription }); } catch { }
 
   let updated = 0;
   if (applyToExisting) {
-    updated = await applyMappingToExisting(uid, merchantKey, categoryType, categoryKey, categoryLabel, label);
+    updated = await applyMappingToExisting(uid, merchantKey, categoryType, categoryKey, categoryLabel, label, isSubscription);
     try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
   }
 
   return { ok: true, merchantKey, updated };
+});
+
+exports.setMonzoSubscriptionOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const merchantKey = String(req.data?.merchantKey || '').trim();
+  const decision = String(req.data?.decision || 'keep').trim();
+  const note = String(req.data?.note || '').trim();
+
+  if (!merchantKey) throw new httpsV2.HttpsError('invalid-argument', 'merchantKey is required');
+
+  const db = admin.firestore();
+  const docRef = db.collection('merchant_mappings').doc(`${uid}_${merchantKey}`);
+
+  await docRef.set({
+    ownerUid: uid,
+    merchantKey,
+    subscriptionDecision: decision,
+    subscriptionNote: note || null,
+    isSubscription: true, // Implicitly mark as subscription if overriding
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set subscription override', { merchantKey, decision }); } catch { }
+  try { await runMonzoAnalytics(uid, { reason: 'subscription_override' }); } catch { }
+
+  return { ok: true, merchantKey };
+});
+
+exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const transactionId = String(req.data?.transactionId || '').trim();
+  const categoryKey = String(req.data?.categoryKey || '').trim();
+  const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
+
+  if (!transactionId || !categoryKey) throw new httpsV2.HttpsError('invalid-argument', 'transactionId and categoryKey are required');
+
+  const db = admin.firestore();
+  const docRef = db.collection('monzo_transactions').doc(transactionId);
+  const snap = await docRef.get();
+
+  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Transaction not found');
+  if (snap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your transaction');
+
+  await docRef.update({
+    userCategoryKey: categoryKey,
+    userCategoryLabel: categoryLabel,
+    manualCategory: true,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true };
 });
 
 // Bulk upsert merchant mappings from CSV or UI array
@@ -3129,14 +3207,19 @@ exports.bulkUpsertMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID,
     const type = String(r.categoryType || r.type || '').trim().toLowerCase();
     if (!allowed.has(type)) continue;
     const label = r.label ? String(r.label).trim() : (name || key);
+    const isSubscription = r.isSubscription !== undefined ? !!r.isSubscription : undefined;
     const ref = db.collection('merchant_mappings').doc(`${uid}_${key}`);
-    batch.set(ref, {
+
+    const updateData = {
       ownerUid: uid,
       merchantKey: key,
       label,
       categoryType: type,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    };
+    if (isSubscription !== undefined) updateData.isSubscription = isSubscription;
+
+    batch.set(ref, updateData, { merge: true });
     upserts++;
   }
   if (upserts) await batch.commit();
@@ -3146,7 +3229,7 @@ exports.bulkUpsertMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID,
     for (const d of snaps.docs) {
       const m = d.data() || {};
       if (!m.merchantKey || !m.categoryType) continue;
-      updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
+      updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.categoryKey || null, m.categoryLabel || null, m.label || null, m.isSubscription);
     }
     try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
   }

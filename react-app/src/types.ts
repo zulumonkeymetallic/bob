@@ -15,7 +15,7 @@ export interface Goal {
   startDate?: number; // Timestamp for goal start date
   endDate?: number; // Timestamp for goal end date
   confidence: number; // 1=Low, 2=Medium, 3=High
-  kpis?: Array<{name: string; target: number; unit: string}>;
+  kpis?: Array<{ name: string; target: number; unit: string }>;
   status: number; // 0=New, 1=Work in Progress, 2=Complete, 3=Blocked, 4=Deferred
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
@@ -113,13 +113,13 @@ export interface Task {
   labels?: string[];
   blockedBy?: string[];
   dependsOn?: string[];
-  checklist?: Array<{text: string; done: boolean}>;
-  attachments?: Array<{name: string; url: string}>;
+  checklist?: Array<{ text: string; done: boolean }>;
+  attachments?: Array<{ name: string; url: string }>;
   alignedToGoal: boolean;
   theme?: number; // 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
   source: 'ios_reminder' | 'MacApp' | 'web' | 'ai' | 'gmail' | 'sheets';
   sourceRef?: string;
-  aiSuggestedLinks?: Array<{goalId: string; storyId?: string; confidence: number; rationale: string}>;
+  aiSuggestedLinks?: Array<{ goalId: string; storyId?: string; confidence: number; rationale: string }>;
   aiLinkConfidence: number;
   hasGoal: boolean;
   syncState: 'clean' | 'dirty' | 'pending_push' | 'awaiting_ack';
@@ -224,6 +224,8 @@ export interface CalendarBlock {
   supersededBy?: string;
   ownerUid: string;
   createdAt: number;
+  title?: string;
+  conflictStatus?: string;
   updatedAt: number;
 }
 
@@ -231,7 +233,7 @@ export interface PlanningPrefs {
   uid: string;
   wakeTime: string; // HH:mm format
   sleepTime: string; // HH:mm format
-  quietHours: Array<{start: string; end: string}>;
+  quietHours: Array<{ start: string; end: string }>;
   maxHiSessionsPerWeek: number;
   minRecoveryGapHours: number;
   weeklyThemeTargets: {
@@ -241,8 +243,8 @@ export interface PlanningPrefs {
     Growth: number;
     Home: number;
   };
-  poolHours?: Array<{day: number; open: string; close: string}>;
-  gymHours?: Array<{day: number; open: string; close: string}>;
+  poolHours?: Array<{ day: number; open: string; close: string }>;
+  gymHours?: Array<{ day: number; open: string; close: string }>;
   autoApplyThreshold: number;
 }
 
@@ -296,8 +298,8 @@ export interface TestLoginToken {
 }
 
 export interface Taxonomy {
-    id: string;
-    type: 'theme' | 'subtheme';
-    name: string;
-    parent?: string;
+  id: string;
+  type: 'theme' | 'subtheme';
+  name: string;
+  parent?: string;
 }

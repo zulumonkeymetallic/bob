@@ -28,7 +28,7 @@ async function syncBlockToGoogle(blockId, action, uid) {
       }
       block = blockDoc.data();
       if (block.ownerUid !== uid) {
-         throw new Error('Permission denied');
+        throw new Error('Permission denied');
       }
     } else {
       // For delete, we might need to fetch the block *before* it was deleted if we didn't pass it in.
@@ -41,144 +41,144 @@ async function syncBlockToGoogle(blockId, action, uid) {
       // Let's change the signature: syncBlockToGoogle(blockId, action, uid, blockDataOverride)
     }
   } catch (e) {
-     throw e;
+    throw e;
   }
 }
 
 // Revised helper to accept block data optionally
 async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
-    // Get user's Google Calendar credentials (stored securely)
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    const userData = userDoc.data();
-    
-    if (!userData.googleCalendarTokens) {
-      throw new Error('Google Calendar not connected');
-    }
+  // Get user's Google Calendar credentials (stored securely)
+  const userDoc = await admin.firestore().collection('users').doc(uid).get();
+  const userData = userDoc.data();
 
-    // Initialize Google Calendar API
-    const { clientId, clientSecret, redirectUri } = getGoogleOAuthConfig();
-    if (!clientId || !clientSecret || !redirectUri) {
-      throw new Error('Google OAuth not configured');
-    }
-    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-    oauth2Client.setCredentials(userData.googleCalendarTokens);
-    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  if (!userData.googleCalendarTokens) {
+    throw new Error('Google Calendar not connected');
+  }
 
-    let block = blockData;
-    if (!block && action !== 'delete') {
-       const snap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
-       if (!snap.exists) throw new Error('Block not found');
-       block = snap.data();
-    }
+  // Initialize Google Calendar API
+  const { clientId, clientSecret, redirectUri } = getGoogleOAuthConfig();
+  if (!clientId || !clientSecret || !redirectUri) {
+    throw new Error('Google OAuth not configured');
+  }
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  oauth2Client.setCredentials(userData.googleCalendarTokens);
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-    if (action === 'create') {
-         const themes = await loadThemesForUser(uid);
-         const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
-         const activityName = block.title || block.category || 'BOB Block';
-         let enrichedDesc = block.rationale || '';
-         try {
-           if (block.storyId) {
-             const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
-             if (s.exists) {
-               const sd = s.data() || {};
-               const storyRef = sd.ref || s.id;
-               const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
-               const acArr = Array.isArray(sd.acceptanceCriteria)
-                 ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
-                 : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
-               const lines = [];
-               if (enrichedDesc) lines.push(enrichedDesc);
-               lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
-               lines.push(`BOB: ${link}`);
-               if (acArr.length) {
-                 lines.push('', 'Acceptance criteria:');
-                 for (const item of acArr) lines.push(`- ${item}`);
-               }
-               enrichedDesc = lines.join('\n');
-             }
-           }
-         } catch {}
-         const event = {
-           summary: `[${themeLabel}] – ${activityName}`,
-           description: enrichedDesc || 'BOB calendar block',
-           start: { dateTime: new Date(block.start).toISOString(), timeZone: 'UTC' },
-           end: { dateTime: new Date(block.end).toISOString(), timeZone: 'UTC' },
-           colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
-           extendedProperties: {
-             private: {
-               'bob-block-id': blockId,
-               'bob-persona': block.persona,
-               'bob-theme': themeLabel,
-               'bob-theme-id': block.theme_id || null,
-               'bob-category': block.category,
-               'bob-flexibility': block.flexibility
-             }
-           }
-         };
+  let block = blockData;
+  if (!block && action !== 'delete') {
+    const snap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
+    if (!snap.exists) throw new Error('Block not found');
+    block = snap.data();
+  }
 
-         const createResponse = await calendar.events.insert({ calendarId: 'primary', resource: event });
-         await admin.firestore().collection('calendar_blocks').doc(blockId).update({
-           googleEventId: createResponse.data.id,
-           status: 'applied',
-           updatedAt: admin.firestore.FieldValue.serverTimestamp()
-         });
-         return { success: true, eventId: createResponse.data.id };
-    } 
-    else if (action === 'update') {
-        if (!block.googleEventId) throw new Error('Block not synced to Google');
-        const themes = await loadThemesForUser(uid);
-        const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
-        const activityName = block.title || block.category || 'BOB Block';
-        let enrichedDesc2 = block.rationale || '';
-         try {
-           if (block.storyId) {
-             const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
-             if (s.exists) {
-               const sd = s.data() || {};
-               const storyRef = sd.ref || s.id;
-               const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
-               const acArr = Array.isArray(sd.acceptanceCriteria)
-                 ? sd.acceptanceCriteria.filter(Boolean).map((x)=>String(x)).slice(0,3)
-                 : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x)=>String(x)).slice(0,3) : []);
-               const lines = [];
-               if (enrichedDesc2) lines.push(enrichedDesc2);
-               lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
-               lines.push(`BOB: ${link}`);
-               if (acArr.length) {
-                 lines.push('', 'Acceptance criteria:');
-                 for (const item of acArr) lines.push(`- ${item}`);
-               }
-               enrichedDesc2 = lines.join('\n');
-             }
-           }
-         } catch {}
-        const updateEvent = {
-          summary: `[${themeLabel}] – ${activityName}`,
-          description: enrichedDesc2 || 'BOB calendar block',
-          start: { dateTime: new Date(block.start).toISOString(), timeZone: 'UTC' },
-          end: { dateTime: new Date(block.end).toISOString(), timeZone: 'UTC' },
-          colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
-        };
-        await calendar.events.update({ calendarId: 'primary', eventId: block.googleEventId, resource: updateEvent });
-        await admin.firestore().collection('calendar_blocks').doc(blockId).update({ updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-        return { success: true, eventId: block.googleEventId };
-    }
-    else if (action === 'delete') {
-        // For delete, blockData must be provided or we can't get googleEventId if doc is gone
-        const googleEventId = block?.googleEventId;
-        if (googleEventId) {
-          try {
-            await calendar.events.delete({ calendarId: 'primary', eventId: googleEventId });
-          } catch(e) {
-             console.warn('GCal delete failed (might be already deleted)', e.message);
+  if (action === 'create') {
+    const themes = await loadThemesForUser(uid);
+    const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
+    const activityName = block.title || block.category || 'BOB Block';
+    let enrichedDesc = block.rationale || '';
+    try {
+      if (block.storyId) {
+        const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+        if (s.exists) {
+          const sd = s.data() || {};
+          const storyRef = sd.ref || s.id;
+          const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
+          const acArr = Array.isArray(sd.acceptanceCriteria)
+            ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
+            : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
+          const lines = [];
+          if (enrichedDesc) lines.push(enrichedDesc);
+          lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
+          lines.push(`BOB: ${link}`);
+          if (acArr.length) {
+            lines.push('', 'Acceptance criteria:');
+            for (const item of acArr) lines.push(`- ${item}`);
           }
+          enrichedDesc = lines.join('\n');
         }
-        // If doc exists (soft delete), update it. If triggered by delete, doc is gone.
-        // The caller should handle Firestore update if needed.
-        // In this function, we just handle GCal side.
-        return { success: true };
+      }
+    } catch { }
+    const event = {
+      summary: `[${themeLabel}] – ${activityName}`,
+      description: enrichedDesc || 'BOB calendar block',
+      start: { dateTime: new Date(block.start).toISOString(), timeZone: 'UTC' },
+      end: { dateTime: new Date(block.end).toISOString(), timeZone: 'UTC' },
+      colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
+      extendedProperties: {
+        private: {
+          'bob-block-id': blockId,
+          'bob-persona': block.persona,
+          'bob-theme': themeLabel,
+          'bob-theme-id': block.theme_id || null,
+          'bob-category': block.category,
+          'bob-flexibility': block.flexibility
+        }
+      }
+    };
+
+    const createResponse = await calendar.events.insert({ calendarId: 'primary', resource: event });
+    await admin.firestore().collection('calendar_blocks').doc(blockId).update({
+      googleEventId: createResponse.data.id,
+      status: 'applied',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    return { success: true, eventId: createResponse.data.id };
+  }
+  else if (action === 'update') {
+    if (!block.googleEventId) throw new Error('Block not synced to Google');
+    const themes = await loadThemesForUser(uid);
+    const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
+    const activityName = block.title || block.category || 'BOB Block';
+    let enrichedDesc2 = block.rationale || '';
+    try {
+      if (block.storyId) {
+        const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+        if (s.exists) {
+          const sd = s.data() || {};
+          const storyRef = sd.ref || s.id;
+          const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
+          const acArr = Array.isArray(sd.acceptanceCriteria)
+            ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
+            : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
+          const lines = [];
+          if (enrichedDesc2) lines.push(enrichedDesc2);
+          lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
+          lines.push(`BOB: ${link}`);
+          if (acArr.length) {
+            lines.push('', 'Acceptance criteria:');
+            for (const item of acArr) lines.push(`- ${item}`);
+          }
+          enrichedDesc2 = lines.join('\n');
+        }
+      }
+    } catch { }
+    const updateEvent = {
+      summary: `[${themeLabel}] – ${activityName}`,
+      description: enrichedDesc2 || 'BOB calendar block',
+      start: { dateTime: new Date(block.start).toISOString(), timeZone: 'UTC' },
+      end: { dateTime: new Date(block.end).toISOString(), timeZone: 'UTC' },
+      colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
+    };
+    await calendar.events.update({ calendarId: 'primary', eventId: block.googleEventId, resource: updateEvent });
+    await admin.firestore().collection('calendar_blocks').doc(blockId).update({ updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    return { success: true, eventId: block.googleEventId };
+  }
+  else if (action === 'delete') {
+    // For delete, blockData must be provided or we can't get googleEventId if doc is gone
+    const googleEventId = block?.googleEventId;
+    if (googleEventId) {
+      try {
+        await calendar.events.delete({ calendarId: 'primary', eventId: googleEventId });
+      } catch (e) {
+        console.warn('GCal delete failed (might be already deleted)', e.message);
+      }
     }
-    return { success: false };
+    // If doc exists (soft delete), update it. If triggered by delete, doc is gone.
+    // The caller should handle Firestore update if needed.
+    // In this function, we just handle GCal side.
+    return { success: true };
+  }
+  return { success: false };
 }
 
 exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
@@ -189,17 +189,17 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
     // For delete via onCall, we fetch the block first to get googleEventId
     let blockData = null;
     if (action === 'delete') {
-       const snap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
-       if (snap.exists) blockData = snap.data();
+      const snap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
+      if (snap.exists) blockData = snap.data();
     }
     const result = await syncBlockToGoogle(blockId, action, uid, blockData);
-    
+
     // If delete action via onCall, we also update the block status in Firestore
     if (action === 'delete') {
-       await admin.firestore().collection('calendar_blocks').doc(blockId).update({
-          status: 'superseded',
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-       });
+      await admin.firestore().collection('calendar_blocks').doc(blockId).update({
+        status: 'superseded',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
     }
     return result;
   } catch (error) {
@@ -217,7 +217,7 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
   if (!after) {
     // Delete
     if (before && before.googleEventId) {
-       await syncBlockToGoogle(blockId, 'delete', before.ownerUid, before);
+      await syncBlockToGoogle(blockId, 'delete', before.ownerUid, before);
     }
     return;
   }
@@ -237,16 +237,16 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
   // Check if relevant fields changed
   const relevantFields = ['start', 'end', 'title', 'category', 'theme', 'theme_id', 'rationale', 'storyId'];
   const hasChanges = relevantFields.some(f => JSON.stringify(before[f]) !== JSON.stringify(after[f]));
-  
+
   // If googleEventId changed, it's a sync update, skip
   if (before.googleEventId !== after.googleEventId) return;
 
   if (hasChanges) {
     if (after.googleEventId) {
-       await syncBlockToGoogle(blockId, 'update', uid, after);
+      await syncBlockToGoogle(blockId, 'update', uid, after);
     } else {
-       // If it doesn't have googleEventId yet, treat as create
-       await syncBlockToGoogle(blockId, 'create', uid, after);
+      // If it doesn't have googleEventId yet, treat as create
+      await syncBlockToGoogle(blockId, 'create', uid, after);
     }
   }
 });
@@ -263,7 +263,7 @@ exports.syncFromGoogleCalendar = functions.https.onCall(async (data, context) =>
     // Get user's Google Calendar credentials
     const userDoc = await admin.firestore().collection('users').doc(uid).get();
     const userData = userDoc.data();
-    
+
     if (!userData.googleCalendarTokens) {
       throw new functions.https.HttpsError('failed-precondition', 'Google Calendar not connected');
     }
@@ -300,14 +300,14 @@ exports.syncFromGoogleCalendar = functions.https.onCall(async (data, context) =>
 
       // Check if the block still exists in Firestore
       const blockDoc = await admin.firestore().collection('calendar_blocks').doc(bobBlockId).get();
-      
+
       if (blockDoc.exists) {
         const blockData = blockDoc.data();
-        
+
         // Check if Google Calendar event was modified more recently
         const gcalModified = new Date(event.updated).getTime();
         const blockModified = blockData.updatedAt;
-        
+
         if (gcalModified > blockModified) {
           // Update Firestore from Google Calendar
           await admin.firestore().collection('calendar_blocks').doc(bobBlockId).update({
@@ -316,13 +316,11 @@ exports.syncFromGoogleCalendar = functions.https.onCall(async (data, context) =>
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             rationale: event.description || blockData.rationale
           });
-          
+
           syncResults.push({ blockId: bobBlockId, action: 'updated_from_gcal' });
         }
       } else {
         // Block was deleted in Firestore but still exists in Google Calendar
-        // Option: Delete from Google Calendar or recreate in Firestore
-        // For now, let's delete from Google Calendar
         try {
           await calendar.events.delete({
             calendarId: 'primary',
@@ -333,6 +331,24 @@ exports.syncFromGoogleCalendar = functions.https.onCall(async (data, context) =>
           console.error('Error deleting orphaned event:', deleteError);
         }
       }
+    }
+
+    // If any changes were made, trigger a rebalance for the affected window
+    if (syncResults.length > 0) {
+      console.log(`Sync detected ${syncResults.length} changes. Rebalancing schedule...`);
+      const { planSchedule } = require('./scheduler/engine');
+      const today = new Date();
+      const windowStart = new Date(today);
+      const windowEnd = new Date(today);
+      windowEnd.setDate(today.getDate() + 7);
+
+      await planSchedule({
+        db: admin.firestore(),
+        userId: uid,
+        windowStart,
+        windowEnd,
+        busy: [] // Should ideally fetch busy again
+      });
     }
 
     return { success: true, syncResults };
@@ -358,7 +374,7 @@ function getColorForTheme(theme) {
 // Scheduled function to sync calendar blocks (runs every hour)
 exports.scheduledCalendarSync = functions.pubsub.schedule('every 1 hours').onRun(async (context) => {
   console.log('Running scheduled calendar sync...');
-  
+
   try {
     // Get all users who have Google Calendar connected
     const usersSnapshot = await admin.firestore()
@@ -376,7 +392,7 @@ exports.scheduledCalendarSync = functions.pubsub.schedule('every 1 hours').onRun
 
     await Promise.all(syncPromises);
     console.log(`Completed scheduled sync for ${syncPromises.length} users`);
-    
+
   } catch (error) {
     console.error('Error in scheduled calendar sync:', error);
   }
@@ -388,14 +404,14 @@ async function syncUserCalendar(uid) {
   try {
     const userDoc = await admin.firestore().collection('users').doc(uid).get();
     const userData = userDoc.data();
-    
+
     if (!userData.googleCalendarTokens) {
       return;
     }
 
     // Same sync logic as above...
     // (Implementation details omitted for brevity)
-    
+
   } catch (error) {
     console.error(`Error syncing calendar for user ${uid}:`, error);
   }
