@@ -28,6 +28,7 @@ const {
 } = require('./lib/reporting');
 const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
 const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('./services/mediaImportController');
+const { aggregateTransactions } = require('./finance/dashboard');
 const { buildAbsoluteUrl } = require('./utils/urlHelpers');
 const { ensureTaskPoints, clampTaskPoints, deriveTaskPoints } = require('./utils/taskPoints');
 // Expose advanced LLM-powered daily digest from separate module
@@ -2775,6 +2776,65 @@ exports.exportFinanceData = httpsV2.onCall(async (req) => {
   return { ok: true, data: result };
 });
 
+// Callable to list Monzo pots for the authenticated user
+exports.listUserPots = httpsV2.onCall({ secrets: [] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const potsSnap = await db.collection('monzo_pots').where('ownerUid', '==', uid).get();
+  const pots = potsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  return { ok: true, pots };
+});
+
+// Callable to set or update linked pot on a goal document
+exports.setGoalPotLink = httpsV2.onCall({ secrets: [] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const { goalId, linkedPotId } = req.data || {};
+  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
+  const db = admin.firestore();
+  const goalRef = db.collection('goals').doc(goalId);
+  const goalSnap = await goalRef.get();
+  if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
+  if (goalSnap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', "Cannot modify another user's goal");
+  await goalRef.update({ linkedPotId: linkedPotId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  return { ok: true, goalId, linkedPotId: linkedPotId || null };
+});
+
+// Callable to fetch aggregated dashboard data
+exports.fetchDashboardData = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const { startDate, endDate } = req.data || {};
+  const db = admin.firestore();
+
+  // Fetch transactions, goals, pots, and budget settings in parallel
+  const [txSnap, goalsSnap, potsSnap, budgetSnap] = await Promise.all([
+    db.collection('monzo_transactions')
+      .where('ownerUid', '==', uid)
+      .where('needsClassification', '==', false)
+      .get(),
+    db.collection('goals')
+      .where('ownerUid', '==', uid)
+      .get(),
+    db.collection('monzo_pots')
+      .where('ownerUid', '==', uid)
+      .get(),
+    db.collection('finance_budgets_v2').doc(uid).get()
+  ]);
+
+  const transactions = txSnap.docs.map(d => d.data());
+  const goals = goalsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const pots = potsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const budgetSettings = budgetSnap.exists ? budgetSnap.data() : null;
+
+  const { buildDashboardData } = require('./finance/dashboard');
+  const agg = buildDashboardData(transactions, goals, pots, budgetSettings, { startDate, endDate });
+
+  return { ok: true, data: agg };
+});
+
+
 // 15-min backstop transaction sync
 exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () => {
   const db = admin.firestore();
@@ -2984,7 +3044,7 @@ exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MO
 });
 
 // Helper to apply a single merchant mapping across existing transactions
-async function applyMappingToExisting(uid, merchantKey, categoryType, label) {
+async function applyMappingToExisting(uid, merchantKey, categoryType, categoryKey, categoryLabel, label) {
   const db = admin.firestore();
   const col = db.collection('monzo_transactions');
   const q = col.where('ownerUid', '==', uid).where('merchantKey', '==', merchantKey);
@@ -2996,7 +3056,8 @@ async function applyMappingToExisting(uid, merchantKey, categoryType, label) {
   for (const doc of snap.docs) {
     batch.update(doc.ref, {
       userCategoryType: categoryType,
-      userCategoryLabel: label || null,
+      userCategoryKey: categoryKey || null,
+      userCategoryLabel: categoryLabel || label || null,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     ops++; updated++;
@@ -3013,12 +3074,14 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
   const merchantName = String(req.data?.merchantName || req.data?.merchant || req.data?.name || '').trim();
   const merchantKeyRaw = String(req.data?.merchantKey || '').trim();
   const categoryType = String(req.data?.categoryType || req.data?.type || '').trim().toLowerCase();
+  const categoryKey = String(req.data?.categoryKey || '').trim();
+  const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
   const label = req.data?.label ? String(req.data.label).trim() : null;
   const applyToExisting = !!req.data?.applyToExisting;
 
-  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income', 'discretionary']);
   if (!merchantName && !merchantKeyRaw) throw new httpsV2.HttpsError('invalid-argument', 'merchantName or merchantKey is required');
-  if (!allowed.has(categoryType)) throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+  if (!allowed.has(categoryType)) throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, discretionary, or income');
 
   const merchantKey = merchantKeyRaw || normaliseMerchantName(merchantName);
   if (!merchantKey) throw new httpsV2.HttpsError('invalid-argument', 'merchantKey resolved empty');
@@ -3030,14 +3093,16 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
     merchantKey,
     label: label || merchantName || merchantKey,
     categoryType,
+    categoryKey: categoryKey || null,
+    categoryLabel: categoryLabel || null,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set merchant mapping', { merchantKey, categoryType, label }); } catch { }
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set merchant mapping', { merchantKey, categoryType, categoryKey, categoryLabel, label }); } catch { }
 
   let updated = 0;
   if (applyToExisting) {
-    updated = await applyMappingToExisting(uid, merchantKey, categoryType, label);
+    updated = await applyMappingToExisting(uid, merchantKey, categoryType, categoryKey, categoryLabel, label);
     try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
   }
 
@@ -11739,7 +11804,7 @@ exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30
 exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
   const { data, auth } = request;
   if (!auth) throw new httpsV2.HttpsError('unauthenticated', 'User must be authenticated');
-  
+
   const { sprintId, sprintName, metrics, stories, goals } = data;
   if (!sprintId || !metrics) throw new httpsV2.HttpsError('invalid-argument', 'Missing required fields');
 

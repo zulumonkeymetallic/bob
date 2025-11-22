@@ -30,7 +30,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     priority: 2,
     estimatedCost: '',
     kpis: [] as Array<{ name: string; target: number; unit: string }>,
-    parentGoalId: ''
+    parentGoalId: '',
+    linkedPotId: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
@@ -132,7 +133,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           priority: goal.priority || 2,
           estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
           kpis: goal.kpis || [],
-          parentGoalId: goal.parentGoalId || ''
+          parentGoalId: goal.parentGoalId || '',
+          linkedPotId: (goal as any).linkedPotId || (goal as any).potId || ''
         });
         const current = migrateThemeValue(goal.theme);
         const themeObj = themes.find(t => t.id === current);
@@ -153,7 +155,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           priority: 2,
           estimatedCost: '',
           kpis: [],
-          parentGoalId: ''
+          parentGoalId: '',
+          linkedPotId: ''
         });
         setThemeInput('');
         setParentSearch('');
@@ -255,7 +258,9 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       if (rec) goalData.recurrence = rec;
       else goalData.recurrence = null;
       goalData.targetYear = ty ? Number(ty) : null;
-      goalData.potId = potSel ? potSel : null;
+      goalData.linkedPotId = formData.linkedPotId || null;
+      // Backwards compatibility
+      goalData.potId = formData.linkedPotId || null;
 
       if (goal) {
         // UPDATE existing goal
@@ -375,7 +380,10 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
           <Form.Group className="mb-3">
             <Form.Label>Link Monzo Pot (optional)</Form.Label>
-            <Form.Select id="goal-pot-id" defaultValue={(goal as any)?.potId || ''}>
+            <Form.Select
+              value={formData.linkedPotId}
+              onChange={(e) => setFormData({ ...formData, linkedPotId: e.target.value })}
+            >
               <option value="">No pot linked</option>
               {monzoPots.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>

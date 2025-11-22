@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { db, functions } from '../../firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { DEFAULT_CATEGORIES, FinanceCategory, BUCKET_LABELS } from '../../utils/financeCategories';
 
 type MerchantRow = {
   merchantKey: string;
@@ -11,23 +12,29 @@ type MerchantRow = {
   totalSpend: number;
   transactions: number;
   primaryCategoryType: string;
+  primaryCategoryKey?: string;
   lastTransactionISO?: string | null;
   months?: number;
   isRecurring?: boolean;
 };
 
-const CATEGORY_TYPES = ['mandatory', 'optional', 'savings', 'income'] as const;
+// Group categories by bucket for organized dropdown
+const categoriesByBucket = DEFAULT_CATEGORIES.reduce((acc, cat) => {
+  if (!acc[cat.bucket]) acc[cat.bucket] = [];
+  acc[cat.bucket].push(cat);
+  return acc;
+}, {} as Record<string, FinanceCategory[]>);
 
 const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
 
 const MerchantMappings: React.FC = () => {
   const { currentUser } = useAuth();
   const [summary, setSummary] = useState<any | null>(null);
-  const [edits, setEdits] = useState<Record<string, { type: string; label: string }>>({});
+  const [edits, setEdits] = useState<Record<string, { categoryKey: string; label: string }>>({});
   const [status, setStatus] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [subKey, setSubKey] = useState('');
-  const [subDecision, setSubDecision] = useState<'keep'|'reduce'|'cancel'>('keep');
+  const [subDecision, setSubDecision] = useState<'keep' | 'reduce' | 'cancel'>('keep');
   const [subNote, setSubNote] = useState('');
 
   useEffect(() => {
@@ -45,11 +52,11 @@ const MerchantMappings: React.FC = () => {
   const pending = (summary?.pendingClassification || []) as Array<any>;
   const recurring = (summary?.recurringMerchants || []) as MerchantRow[];
 
-  const setEdit = (merchantKey: string, patch: Partial<{ type: string; label: string }>) => {
+  const setEdit = (merchantKey: string, patch: Partial<{ categoryKey: string; label: string }>) => {
     setEdits((prev) => ({
       ...prev,
       [merchantKey]: {
-        type: patch.type ?? prev[merchantKey]?.type ?? 'optional',
+        categoryKey: patch.categoryKey ?? prev[merchantKey]?.categoryKey ?? 'dining_out',
         label: patch.label ?? prev[merchantKey]?.label ?? (rows.find(r => r.merchantKey === merchantKey)?.merchantName || merchantKey),
       },
     }));
@@ -61,8 +68,16 @@ const MerchantMappings: React.FC = () => {
     if (!edit) return;
     setBusy(true); setStatus('');
     try {
+      const category = DEFAULT_CATEGORIES.find(c => c.key === edit.categoryKey);
       const fn = httpsCallable(functions, 'setMerchantMapping');
-      const res: any = await fn({ merchantKey, categoryType: edit.type, label: edit.label, applyToExisting: apply });
+      const res: any = await fn({
+        merchantKey,
+        categoryKey: edit.categoryKey,
+        categoryType: category?.bucket || 'discretionary',
+        categoryLabel: category?.label || edit.label,
+        label: edit.label,
+        applyToExisting: apply
+      });
       setStatus(`Saved mapping for ${merchantKey}${apply ? ` and updated ${res?.data?.updated || 0} transactions` : ''}.`);
     } catch (e: any) {
       setStatus(e?.message || 'Failed to save');
@@ -168,11 +183,11 @@ const MerchantMappings: React.FC = () => {
           <div className="row g-2 align-items-end">
             <div className="col-sm-4">
               <Form.Label className="mb-1">Merchant Key</Form.Label>
-              <Form.Control size="sm" value={subKey} onChange={(e)=>setSubKey(e.target.value)} placeholder="normalized key (e.g., netflix)" />
+              <Form.Control size="sm" value={subKey} onChange={(e) => setSubKey(e.target.value)} placeholder="normalized key (e.g., netflix)" />
             </div>
             <div className="col-sm-3">
               <Form.Label className="mb-1">Decision</Form.Label>
-              <Form.Select size="sm" value={subDecision} onChange={(e)=>setSubDecision(e.target.value as any)}>
+              <Form.Select size="sm" value={subDecision} onChange={(e) => setSubDecision(e.target.value as any)}>
                 <option value="keep">keep</option>
                 <option value="reduce">reduce</option>
                 <option value="cancel">cancel</option>
@@ -180,7 +195,7 @@ const MerchantMappings: React.FC = () => {
             </div>
             <div className="col-sm-5">
               <Form.Label className="mb-1">Note</Form.Label>
-              <Form.Control size="sm" value={subNote} onChange={(e)=>setSubNote(e.target.value)} placeholder="optional note" />
+              <Form.Control size="sm" value={subNote} onChange={(e) => setSubNote(e.target.value)} placeholder="optional note" />
             </div>
           </div>
           <div className="mt-2">
@@ -216,16 +231,20 @@ const MerchantMappings: React.FC = () => {
                     <tr key={p.transactionId}>
                       <td>{p.merchantName || p.description}</td>
                       <td className="text-end">{formatMoney(p.amount || 0)}</td>
-                      <td style={{ width: 160 }}>
-                        <Form.Select size="sm" value={edits[k]?.type || p.defaultCategoryType || 'optional'} onChange={(e)=>setEdit(k,{ type: e.target.value })}>
-                          {CATEGORY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                      <td style={{ width: 200 }}>
+                        <Form.Select size="sm" value={edits[k]?.categoryKey || 'dining_out'} onChange={(e) => setEdit(k, { categoryKey: e.target.value })}>
+                          {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
+                            <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
+                              {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+                            </optgroup>
+                          ))}
                         </Form.Select>
                       </td>
                       <td style={{ width: 220 }}>
-                        <Form.Control size="sm" value={edits[k]?.label || p.defaultCategoryLabel || p.merchantName || ''} onChange={(e)=>setEdit(k,{ label: e.target.value })} />
+                        <Form.Control size="sm" value={edits[k]?.label || p.defaultCategoryLabel || p.merchantName || ''} onChange={(e) => setEdit(k, { label: e.target.value })} />
                       </td>
                       <td className="text-end">
-                        <Button size="sm" onClick={()=>saveOne(k, true)} disabled={busy}>Save & Apply</Button>
+                        <Button size="sm" onClick={() => saveOne(k, true)} disabled={busy}>Save & Apply</Button>
                       </td>
                     </tr>
                   );
@@ -263,13 +282,17 @@ const MerchantMappings: React.FC = () => {
                   <tr key={m.merchantKey}>
                     <td>{m.merchantName}</td>
                     <td className="text-end">{formatMoney(m.totalSpend)}</td>
-                    <td style={{ width: 160 }}>
-                      <Form.Select size="sm" value={edits[m.merchantKey]?.type || m.primaryCategoryType || 'optional'} onChange={(e)=>setEdit(m.merchantKey,{ type: e.target.value })}>
-                        {CATEGORY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    <td style={{ width: 200 }}>
+                      <Form.Select size="sm" value={edits[m.merchantKey]?.categoryKey || m.primaryCategoryKey || 'dining_out'} onChange={(e) => setEdit(m.merchantKey, { categoryKey: e.target.value })}>
+                        {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
+                          <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
+                            {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+                          </optgroup>
+                        ))}
                       </Form.Select>
                     </td>
                     <td style={{ width: 220 }}>
-                      <Form.Control size="sm" value={edits[m.merchantKey]?.label || m.merchantName} onChange={(e)=>setEdit(m.merchantKey,{ label: e.target.value })} />
+                      <Form.Control size="sm" value={edits[m.merchantKey]?.label || m.merchantName} onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })} />
                     </td>
                     <td>
                       {m.isRecurring ? <Badge bg="info">Recurring</Badge> : null}
@@ -277,10 +300,10 @@ const MerchantMappings: React.FC = () => {
                     </td>
                     <td className="text-end">
                       <div className="d-flex gap-2 justify-content-end">
-                        <Button size="sm" variant="outline-secondary" disabled={busy} onClick={()=>saveOne(m.merchantKey, false)}>
+                        <Button size="sm" variant="outline-secondary" disabled={busy} onClick={() => saveOne(m.merchantKey, false)}>
                           Save
                         </Button>
-                        <Button size="sm" variant="primary" disabled={busy} onClick={()=>saveOne(m.merchantKey, true)}>
+                        <Button size="sm" variant="primary" disabled={busy} onClick={() => saveOne(m.merchantKey, true)}>
                           {busy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                           Save & Apply
                         </Button>

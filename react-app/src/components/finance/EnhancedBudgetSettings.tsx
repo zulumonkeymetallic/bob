@@ -31,6 +31,8 @@ const EnhancedBudgetSettings: React.FC = () => {
     const [categoryBudgets, setCategoryBudgets] = useState<Record<string, { percent?: number; amount?: number }>>({});
     const [saved, setSaved] = useState<string>('');
     const [loading, setLoading] = useState(true);
+    const [goals, setGoals] = useState<any[]>([]);
+    const [goalAllocation, setGoalAllocation] = useState<number>(20); // Default 20% for goals
 
     // Load budget data
     useEffect(() => {
@@ -46,6 +48,8 @@ const EnhancedBudgetSettings: React.FC = () => {
                     setMonthlyIncome(data.monthlyIncome || 3500);
                     setCurrency(data.currency || 'GBP');
                     setCategoryBudgets(data.categoryBudgets || {});
+                    // Load goal allocation if saved, otherwise default
+                    if ((data as any).goalAllocation) setGoalAllocation((data as any).goalAllocation);
                 } else {
                     // Initialize defaults from category definitions
                     const initialBudgets: Record<string, { percent?: number; amount?: number }> = {};
@@ -56,6 +60,14 @@ const EnhancedBudgetSettings: React.FC = () => {
                     });
                     setCategoryBudgets(initialBudgets);
                 }
+
+                // Load goals
+                const { collection, query, where, getDocs } = await import('firebase/firestore');
+                const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
+                const gSnap = await getDocs(q);
+                const gList = gSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter((g: any) => g.status !== 2);
+                setGoals(gList);
+
             } catch (error) {
                 console.error('Error loading budgets:', error);
             } finally {
@@ -75,6 +87,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                 monthlyIncome,
                 currency,
                 categoryBudgets,
+                goalAllocation,
                 updatedAt: Date.now()
             });
             setSaved('Saved');
@@ -186,16 +199,29 @@ const EnhancedBudgetSettings: React.FC = () => {
         return { percent: totalPercent, amount: totalAmount };
     };
 
+    const calculateGoalTotal = () => {
+        const amount = calculateBudgetAmount(goalAllocation, monthlyIncome);
+        return { percent: goalAllocation, amount };
+    };
+
     const bucketTotals = calculateBucketTotals();
     const grandTotal = calculateGrandTotal();
+    const goalTotal = calculateGoalTotal();
+
+    // Add goals to grand total
+    grandTotal.percent += goalTotal.percent;
+    grandTotal.amount += goalTotal.amount;
+
     const remaining = {
         percent: 100 - grandTotal.percent,
         amount: (monthlyIncome * 100) - grandTotal.amount
     };
 
-    // Group categories by bucket
+    // Group categories by bucket (excluding savings/investment as they are now goal-driven)
     const categoriesByBucket: Record<CategoryBucket, FinanceCategory[]> = {} as any;
     DEFAULT_CATEGORIES.forEach(cat => {
+        if (['short_saving', 'long_saving', 'investment'].includes(cat.bucket)) return;
+
         if (!categoriesByBucket[cat.bucket]) {
             categoriesByBucket[cat.bucket] = [];
         }
@@ -361,6 +387,69 @@ const EnhancedBudgetSettings: React.FC = () => {
                     );
                 })}
             </Accordion>
+
+            <Card className="mt-4">
+                <Card.Header className="bg-success text-white d-flex justify-content-between align-items-center">
+                    <span>Goals & Savings (Populated from Goals)</span>
+                    <span>{goalAllocation}% • £{(goalTotal.amount / 100).toFixed(2)}</span>
+                </Card.Header>
+                <Card.Body>
+                    <Row className="align-items-center mb-3">
+                        <Col md={6}>
+                            <Form.Label>Percentage of Net Salary towards Goals</Form.Label>
+                            <InputGroup>
+                                <Form.Control
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    value={goalAllocation}
+                                    onChange={(e) => setGoalAllocation(parseFloat(e.target.value) || 0)}
+                                />
+                                <InputGroup.Text>%</InputGroup.Text>
+                            </InputGroup>
+                            <Form.Text className="text-muted">
+                                This amount is distributed across your active goals.
+                            </Form.Text>
+                        </Col>
+                        <Col md={6}>
+                            <Alert variant="success" className="mb-0 py-2">
+                                <strong>Monthly Contribution:</strong> £{(goalTotal.amount / 100).toFixed(2)}
+                            </Alert>
+                        </Col>
+                    </Row>
+
+                    <h6 className="mt-4 mb-3">Active Goals</h6>
+                    {goals.length === 0 ? (
+                        <p className="text-muted">No active goals found. Create goals to see them here.</p>
+                    ) : (
+                        <Table size="sm" hover>
+                            <thead>
+                                <tr>
+                                    <th>Goal</th>
+                                    <th>Target</th>
+                                    <th>Linked Pot</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {goals.map(g => (
+                                    <tr key={g.id}>
+                                        <td>{g.title}</td>
+                                        <td>{g.estimatedCost ? `£${g.estimatedCost}` : 'Not set'}</td>
+                                        <td>
+                                            {g.linkedPotId || g.potId ? (
+                                                <Badge bg="success">Linked</Badge>
+                                            ) : (
+                                                <Badge bg="secondary">Not Linked</Badge>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </Table>
+                    )}
+                </Card.Body>
+            </Card>
+
         </div>
     );
 };

@@ -88,6 +88,7 @@ import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
 import DeepLinkTask from './components/routes/DeepLinkTask';
+import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
 
 
 // Lazy-loaded heavy routes
@@ -307,6 +308,8 @@ function AppContent() {
             <Route path="/finance/categories" element={<CategoriesBuckets />} />
             <Route path="/finance/budgets" element={<BudgetsPage />} />
             <Route path="/finance/goals" element={<GoalPotLinking />} />
+            <Route path="/finance/dashboard" element={<FinanceDashboardAdvanced />} />
+            <Route path="/finance/advanced" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
