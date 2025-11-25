@@ -4,522 +4,1004 @@
       "collectionGroup": "goals",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "scheduled_instances",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "occurrenceDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurrenceDate",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "scheduled_instances",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurrenceDate",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "plannedStart",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "goals",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "goals",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "updatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "goals",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "priority", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "priority",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "sprintId", "order": "ASCENDING" },
-        { "fieldPath": "orderIndex", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sprintId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orderIndex",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "orderIndex", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orderIndex",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "updatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "updatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "goalId", "order": "ASCENDING" },
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "orderIndex", "order": "ASCENDING" }
+        {
+          "fieldPath": "goalId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orderIndex",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "goalId", "order": "ASCENDING" },
-        { "fieldPath": "orderIndex", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "goalId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orderIndex",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "sprintId", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sprintId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "sprints",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "startDate", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startDate",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "sprints",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "sprints",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "startDate", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startDate",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "sprints",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "sprints",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "sprint_task_index",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "sprintId", "order": "ASCENDING" },
-        { "fieldPath": "isOpen", "order": "ASCENDING" },
-        { "fieldPath": "dueDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sprintId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isOpen",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dueDate",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "integration_status",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "provider", "order": "ASCENDING" },
-        { "fieldPath": "connected", "order": "ASCENDING" },
-        { "fieldPath": "lastAnalyticsEpochMs", "order": "ASCENDING" }
+        {
+          "fieldPath": "provider",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "connected",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "lastAnalyticsEpochMs",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "sprintId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sprintId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "updatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "serverUpdatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "serverUpdatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "parentId", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "dueDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "parentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dueDate",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "isImportant", "order": "ASCENDING" },
-        { "fieldPath": "dueDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isImportant",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dueDate",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "dueDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dueDate",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "priority", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "priority",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "priority", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "priority",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "priority", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "priority",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activity_stream",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "entityId", "order": "ASCENDING" },
-        { "fieldPath": "timestamp", "order": "DESCENDING" }
+        {
+          "fieldPath": "entityId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activity_stream",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "timestamp", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activity_stream",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activity_stream",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activity_stream",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "userId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activity_stream",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "userId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "planning_jobs",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "userId", "order": "ASCENDING" },
-        { "fieldPath": "completedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "completedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "daily_summaries",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "userId", "order": "ASCENDING" },
-        { "fieldPath": "generatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "generatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "data_quality_reports",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "userId", "order": "ASCENDING" },
-        { "fieldPath": "generatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "generatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "calendar_blocks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "goalId", "order": "ASCENDING" },
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "start", "order": "ASCENDING" }
+        {
+          "fieldPath": "goalId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "start",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "calendar_blocks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "startTime", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startTime",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "calendar_blocks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "start", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "start",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "calendar_blocks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "start", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "start",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "blocks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "start", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "start",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "chores",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "nextDueAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "nextDueAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "assignments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "dayKey", "order": "ASCENDING" },
-        { "fieldPath": "start", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dayKey",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "start",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "metrics_workouts",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "startDate", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startDate",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tokens",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "provider", "order": "ASCENDING" },
-        { "fieldPath": "athleteId", "order": "ASCENDING" }
-      ]
-    }
-    ,
-    {
-      "collectionGroup": "monzo_transactions",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "provider",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "athleteId",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "monzo_transactions",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "createdISO", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "monzo_transactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdISO",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "completedAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "completedAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "daily_summaries",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "generatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "generatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "planning_jobs",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "habits",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "isActive", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isActive",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "ai_usage_logs",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "performance.timestamp", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "performance.timestamp",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "data_quality_reports",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "generatedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "generatedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "planning_jobs",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "completedAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "completedAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "persona", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "dueDate", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "persona",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dueDate",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "deleteAfter", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deleteAfter",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "ownerUid", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "completedAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "completedAt",
+          "order": "ASCENDING"
+        }
       ]
     }
   ],
