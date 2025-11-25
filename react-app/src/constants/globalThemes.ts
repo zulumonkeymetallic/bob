@@ -15,25 +15,25 @@ export interface GlobalTheme {
 // Determine readable text color for a given hex background
 const contrastText = (hex: string): string => {
   const toRGB = (h: string) => {
-    const v = h.replace('#','');
-    const r = parseInt(v.substring(0,2),16);
-    const g = parseInt(v.substring(2,4),16);
-    const b = parseInt(v.substring(4,6),16);
-    return {r,g,b};
+    const v = h.replace('#', '');
+    const r = parseInt(v.substring(0, 2), 16);
+    const g = parseInt(v.substring(2, 4), 16);
+    const b = parseInt(v.substring(4, 6), 16);
+    return { r, g, b };
   };
   const lum = (h: string) => {
-    const {r,g,b} = toRGB(h);
-    const srgb = [r,g,b].map(c => {
-      const n = c/255;
-      return n <= 0.03928 ? n/12.92 : Math.pow((n+0.055)/1.055, 2.4);
+    const { r, g, b } = toRGB(h);
+    const srgb = [r, g, b].map(c => {
+      const n = c / 255;
+      return n <= 0.03928 ? n / 12.92 : Math.pow((n + 0.055) / 1.055, 2.4);
     });
-    return 0.2126*srgb[0] + 0.7152*srgb[1] + 0.0722*srgb[2];
+    return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
   };
   const Lbg = lum(hex);
   const Lwhite = lum('#ffffff');
   const Lblack = lum('#000000');
-  const cWhite = (Math.max(Lbg, Lwhite)+0.05)/(Math.min(Lbg, Lwhite)+0.05);
-  const cBlack = (Math.max(Lbg, Lblack)+0.05)/(Math.min(Lbg, Lblack)+0.05);
+  const cWhite = (Math.max(Lbg, Lwhite) + 0.05) / (Math.min(Lbg, Lwhite) + 0.05);
+  const cBlack = (Math.max(Lbg, Lblack) + 0.05) / (Math.min(Lbg, Lblack) + 0.05);
   return cWhite >= cBlack ? '#ffffff' : '#000000';
 };
 
@@ -137,6 +137,26 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     lightColor: getCssVarValue('--theme-growth-light', '#f7d6e6'),
     textColor: contrastText(getCssVarValue('--theme-growth-primary', '#d63384')),
     description: 'Personal development, spirituality, mindfulness, and self-improvement'
+  },
+  {
+    id: 10,
+    name: 'Chores',
+    label: 'Chores',
+    color: getCssVarValue('--theme-chores-primary', '#795548'),
+    darkColor: getCssVarValue('--theme-chores-dark', '#5d4037'),
+    lightColor: getCssVarValue('--theme-chores-light', '#d7ccc8'),
+    textColor: contrastText(getCssVarValue('--theme-chores-primary', '#795548')),
+    description: 'Household tasks, maintenance, cleaning, and routine chores'
+  },
+  {
+    id: 11,
+    name: 'Rest & Recovery',
+    label: 'Rest & Recovery',
+    color: getCssVarValue('--theme-rest-primary', '#607d8b'),
+    darkColor: getCssVarValue('--theme-rest-dark', '#455a64'),
+    lightColor: getCssVarValue('--theme-rest-light', '#cfd8dc'),
+    textColor: contrastText(getCssVarValue('--theme-rest-primary', '#607d8b')),
+    description: 'Downtime, relaxation, sleep, and recovery activities'
   }
 ];
 
@@ -169,17 +189,17 @@ export const getThemeById = (id: number): GlobalTheme => {
 
 export const getThemeByName = (name: string): GlobalTheme => {
   // Try direct match first
-  const directMatch = GLOBAL_THEMES.find(theme => 
+  const directMatch = GLOBAL_THEMES.find(theme =>
     theme.name === name || theme.label === name
   );
   if (directMatch) return directMatch;
-  
+
   // Try legacy mapping
   const legacyId = LEGACY_THEME_MAP[name as keyof typeof LEGACY_THEME_MAP];
   if (legacyId !== undefined) {
     return getThemeById(legacyId);
   }
-  
+
   return GLOBAL_THEMES[0]; // Default to General
 };
 
@@ -190,11 +210,11 @@ export const getThemeColor = (themeId: number, isDark: boolean = false): string 
 
 export const getThemeTextColor = (themeId: number, backgroundIsDark: boolean = false): string => {
   const theme = getThemeById(themeId);
-  
+
   // For light backgrounds with dark text colors (like yellow), use dark text
   // Derive from theme.textColor; if not sufficient, compute simple contrast
   if (!theme.textColor) return '#000000';
-  
+
   // For dark backgrounds or themes with white text, use white
   return backgroundIsDark ? '#ffffff' : theme.textColor;
 };
@@ -204,13 +224,13 @@ export const migrateThemeValue = (oldValue: any): number => {
   if (typeof oldValue === 'number') {
     return LEGACY_ID_TO_NEW_ID[oldValue as keyof typeof LEGACY_ID_TO_NEW_ID] || oldValue;
   }
-  
+
   // If it's a string, use legacy mapping
   if (typeof oldValue === 'string') {
     const theme = getThemeByName(oldValue);
     return theme.id;
   }
-  
+
   return 0; // Default to General
 };
 
