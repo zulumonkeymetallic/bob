@@ -1,0 +1,76 @@
+.theme-grid {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    overflow: hidden;
+    background: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.header-row {
+    display: flex;
+    border-bottom: 1px solid #ddd;
+    background-color: #f8f9fa;
+}
+
+.time-col {
+    width: 60px;
+    flex-shrink: 0;
+    border-right: 1px solid #ddd;
+}
+
+.day-header {
+    flex: 1;
+    text-align: center;
+    padding: 10px;
+    font-weight: 600;
+    border-left: 1px solid #ddd;
+    color: #555;
+}
+
+.day-header:first-child {
+    border-left: none;
+}
+
+.time-row {
+    display: flex;
+    height: 50px;
+    border-bottom: 1px solid #eee;
+}
+
+.time-row:last-child {
+    border-bottom: none;
+}
+
+.time-label {
+    width: 60px;
+    text-align: right;
+    padding-right: 10px;
+    color: #888;
+    font-size: 0.75rem;
+    padding-top: 5px;
+    border-right: 1px solid #ddd;
+    background-color: #fafafa;
+}
+
+.grid-cell {
+    flex: 1;
+    border-left: 1px solid #eee;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    transition: background-color 0.2s;
+}
+
+.grid-cell:hover {
+    filter: brightness(0.95);
+}
+
+.theme-label {
+    font-weight: 600;
+    color: #333;
+    pointer-events: none;
+}

@@ -1,0 +1,97 @@
+/* Kanban Board Fixes */
+
+/* Ensure modals are visible in fullscreen mode */
+.modal {
+    z-index: 9999 !important;
+}
+
+.modal-backdrop {
+    z-index: 9998 !important;
+}
+
+/* Fix for fullscreen mode */
+:fullscreen .modal,
+:-webkit-full-screen .modal,
+:-moz-full-screen .modal {
+    z-index: 9999 !important;
+}
+
+:fullscreen .modal-backdrop,
+:-webkit-full-screen .modal-backdrop,
+:-moz-full-screen .modal-backdrop {
+    z-index: 9998 !important;
+}
+
+/* Responsive Kanban Layout for iPad/Tablet */
+@media (min-width: 768px) and (max-width: 1024px) {
+
+    /* Increase column widths on tablet */
+    .kanban-board-container {
+        min-width: 100%;
+    }
+
+    .kanban-column {
+        min-width: 280px !important;
+        max-width: 320px !important;
+    }
+
+    /* Allow horizontal scroll on tablet */
+    .kanban-lanes-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Make cards more readable */
+    .kanban-card {
+        font-size: 14px;
+    }
+
+    .kanban-card__title {
+        font-size: 15px;
+        line-height: 1.4;
+    }
+
+    /* Increase touch targets */
+    .kanban-card__handle {
+        min-width: 36px;
+        min-height: 36px;
+    }
+
+    button.kanban-card__actions button {
+        min-width: 32px;
+        min-height: 32px;
+    }
+}
+
+/* iPad specific (portrait and landscape) */
+@media only screen and (min-device-width: 768px) and (max-device-width: 1024px) {
+
+    .kanban-column {
+        flex: 0 0 auto;
+        width: 340px;
+    }
+
+    /* Better spacing */
+    .kanban-card {
+        margin-bottom: 12px;
+        padding: 14px;
+    }
+
+    /* More readable text */
+    .kanban-card__meta {
+        font-size: 13px;
+    }
+}
+
+/* Fix blank icon issue - ensure Lucide icons render */
+.lucide {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+/* Ensure icon buttons are visible */
+button svg,
+.btn svg {
+    pointer-events: none;
+    display: inline-block;
+}

@@ -50,6 +50,9 @@ export const BUCKET_COLORS: Record<CategoryBucket, string> = {
 };
 
 export const DEFAULT_CATEGORIES: FinanceCategory[] = [
+    // Placeholder for uncategorized to avoid income default
+    { key: 'uncategorized', label: 'Uncategorised', bucket: 'unknown', isDefault: true },
+
     // ========== INCOME ==========
     { key: 'net_salary', label: 'Net Salary', bucket: 'net_salary', budgetPercent: 100, isDefault: true },
     { key: 'bonus', label: 'Bonus', bucket: 'irregular_income', isDefault: true },
@@ -227,8 +230,9 @@ export const autoMapMerchant = (merchantName: string): string | null => {
 /**
  * Get category by key
  */
-export const getCategoryByKey = (key: string): FinanceCategory | undefined => {
-    return DEFAULT_CATEGORIES.find(c => c.key === key);
+export const getCategoryByKey = (key: string, source?: FinanceCategory[]): FinanceCategory | undefined => {
+    const list = source && source.length ? source : DEFAULT_CATEGORIES;
+    return list.find(c => c.key === key);
 };
 
 /**
@@ -236,6 +240,21 @@ export const getCategoryByKey = (key: string): FinanceCategory | undefined => {
  */
 export const getCategoriesByBucket = (bucket: CategoryBucket): FinanceCategory[] => {
     return DEFAULT_CATEGORIES.filter(c => c.bucket === bucket);
+};
+
+/**
+ * Merge user-defined categories with defaults, de-duping on key (user wins).
+ */
+export const mergeFinanceCategories = (custom: FinanceCategory[] = []): FinanceCategory[] => {
+    const map = new Map<string, FinanceCategory>();
+    DEFAULT_CATEGORIES.forEach((c) => map.set(c.key, c));
+    custom
+        .filter((c) => c && c.key)
+        .forEach((c) => {
+            const existing = map.get(c.key);
+            map.set(c.key, { ...existing, ...c, isDefault: c.isDefault ?? false });
+        });
+    return Array.from(map.values());
 };
 
 /**

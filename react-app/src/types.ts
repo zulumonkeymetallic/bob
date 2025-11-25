@@ -28,6 +28,7 @@ export interface Goal {
   dueDate?: number;
   category?: string;
   priority?: number;
+  tags?: string[];
 }
 
 export interface Story {

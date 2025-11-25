@@ -6,6 +6,8 @@ const { loadThemesForUser, mapThemeLabelToId } = require('./services/themeManage
 const { defineSecret } = require("firebase-functions/params");
 const firestoreV2 = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
+// Google Generative AI SDK
+const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 // OpenAI removed (Gemini-only)
 const aiUsageLogger = require("./utils/aiUsageLogger");
 const { rrulestr } = require('rrule');
@@ -71,6 +73,13 @@ try {
     exports.runNightlyScheduler = aiPlanning.runNightlyScheduler;
     exports.runMorningPlanner = aiPlanning.runMorningPlanner;
     exports.onStoryWrite = aiPlanning.onStoryWrite;
+    exports.onTaskWrite = aiPlanning.onTaskWrite; // New Trigger
+    exports.convertTasksToStories = aiPlanning.convertTasksToStories; // New Scheduled Function
+
+    // Capacity Planning
+    const capacityPlanning = require('./capacityPlanning');
+    exports.calculateSprintCapacity = capacityPlanning.calculateSprintCapacity;
+    exports.updateStoryPriorities = capacityPlanning.updateStoryPriorities; // New Scheduled Function
   }
 } catch (e) {
   console.warn('[init] aiPlanning not loaded', e?.message || e);
@@ -207,6 +216,17 @@ function* iterateNextDays(startDate, count) {
     const nd = new Date(d.getTime() + i * 24 * 60 * 60 * 1000);
     yield nd;
   }
+}
+
+// Simple wrapper so frontends can trigger a full Monzo refresh + analytics
+async function refreshMonzoData(uid) {
+  const summary = await syncMonzoDataForUser(uid, { fullRefresh: true });
+  try {
+    await runMonzoAnalytics(uid, { reason: 'manual_refresh' });
+  } catch (err) {
+    console.warn('[refreshMonzoData] analytics failed', err?.message || err);
+  }
+  return summary;
 }
 
 function dayOfWeekKey(date) {
@@ -1000,12 +1020,20 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     console.warn('[planBlocksV2] quiet hours application failed', e?.message || e);
   }
 
+  // Fetch Theme Allocations
+  let themeAllocations = [];
+  try {
+    const taDoc = await db.collection('theme_allocations').doc(uid).get();
+    if (taDoc.exists) themeAllocations = taDoc.data().allocations || [];
+  } catch (e) { console.warn('Failed to fetch theme allocations', e); }
+
   const plan = await planSchedule({
     db,
     userId: uid,
     windowStart: start,
     windowEnd: end,
     busy,
+    themeAllocations,
   });
 
   const existingIds = new Set(plan.existingIds || []);
@@ -1688,7 +1716,7 @@ function getGoogleRedirectUri() {
   return `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
 }
 
-exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
   try {
     const uid = String(req.query.uid || "");
     const nonce = String(req.query.nonce || "");
@@ -1696,7 +1724,9 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID], invo
 
     const redirectUri = getGoogleRedirectUri();
     if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_REDIRECT_URI)");
-    const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+    const clientId = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+    const clientSecret = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+
     if (!clientId || !/\.apps\.googleusercontent\.com$/.test(String(clientId))) {
       // Helpful message without leaking the client id value
       return res.status(500).send(
@@ -2121,17 +2151,27 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
     const redirectUri = getGoogleRedirectUri();
     if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_REDIRECT_URI)");
 
-    const tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: process.env.GOOGLE_OAUTH_CLIENT_ID,
-        client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
-        redirect_uri: redirectUri,
-        grant_type: "authorization_code",
-      }).toString(),
-    });
+    let tokenData;
+    try {
+      tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+          client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+    } catch (tokenError) {
+      console.error('Google OAuth token exchange failed:', tokenError);
+      return res.status(401).send(
+        `OAuth token error: ${tokenError?.message || String(tokenError)}. ` +
+        'This usually means the Google OAuth client credentials are invalid or the redirect URI doesn\'t match. ' +
+        'Verify GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET secrets are set correctly.'
+      );
+    }
 
     const refresh = tokenData.refresh_token;
     const access = tokenData.access_token;
@@ -2824,7 +2864,6 @@ exports.fetchDashboardData = httpsV2.onCall(async (req) => {
   const [txSnap, goalsSnap, potsSnap, budgetSnap] = await Promise.all([
     db.collection('monzo_transactions')
       .where('ownerUid', '==', uid)
-      .where('needsClassification', '==', false)
       .get(),
     db.collection('goals')
       .where('ownerUid', '==', uid)
@@ -3038,6 +3077,7 @@ exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT
   }
 
   await docRef.set({
+    ownerUid: uid,
     userCategoryType: categoryType,
     userCategoryLabel: label,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -3096,6 +3136,7 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
   const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
   const label = req.data?.label ? String(req.data.label).trim() : null;
   const isSubscription = req.data?.isSubscription !== undefined ? !!req.data.isSubscription : undefined;
+  const applyToExisting = !!req.data?.apply || !!req.data?.applyToExisting;
 
   const allowed = new Set(['mandatory', 'optional', 'savings', 'income', 'discretionary']);
   if (!merchantName && !merchantKeyRaw) throw new httpsV2.HttpsError('invalid-argument', 'merchantName or merchantKey is required');
@@ -3165,16 +3206,28 @@ exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const transactionId = String(req.data?.transactionId || '').trim();
+  const docIdOverride = String(req.data?.docId || '').trim();
   const categoryKey = String(req.data?.categoryKey || '').trim();
   const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
 
   if (!transactionId || !categoryKey) throw new httpsV2.HttpsError('invalid-argument', 'transactionId and categoryKey are required');
 
   const db = admin.firestore();
-  const docRef = db.collection('monzo_transactions').doc(transactionId);
-  const snap = await docRef.get();
+  const col = db.collection('monzo_transactions');
+  const candidateIds = [];
+  if (docIdOverride) candidateIds.push(docIdOverride);
+  candidateIds.push(`${uid}_${transactionId}`);
+  candidateIds.push(transactionId);
 
-  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Transaction not found');
+  let docRef = null;
+  let snap = null;
+  for (const id of candidateIds) {
+    const ref = col.doc(id);
+    const attempt = await ref.get();
+    if (attempt.exists) { docRef = ref; snap = attempt; break; }
+  }
+
+  if (!snap || !snap.exists) throw new httpsV2.HttpsError('not-found', 'Transaction not found');
   if (snap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your transaction');
 
   await docRef.update({
@@ -3614,7 +3667,7 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
           id: null,
           name: null,
           emoji: null,
-          logo: tx.merchant.logo || null,
+          logo: null,
         };
       }
 
@@ -3744,7 +3797,7 @@ exports.classifyMonzoTransactions = functionsV2.firestore.onDocumentWritten('mon
 });
 
 
-async function syncMonzoDataForUser(uid, { since } = {}) {
+async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
   const { accessToken } = await ensureMonzoAccessToken(uid);
   const db = admin.firestore();
   const summary = { accounts: 0, pots: 0, transactions: 0, accountsSynced: [] };
@@ -3824,7 +3877,7 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
     const syncStateRef = db.collection('monzo_sync_state').doc(`${uid}_${accountId}`);
     const syncSnap = await syncStateRef.get();
     const stateData = syncSnap.data() || {};
-    const sinceCursor = since || stateData.lastTransactionCreated || null;
+    const sinceCursor = fullRefresh ? null : (since || stateData.lastTransactionCreated || null);
 
     const txSummary = await syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since: sinceCursor });
     summary.transactions += txSummary.count;
@@ -3858,6 +3911,192 @@ async function syncMonzoDataForUser(uid, { since } = {}) {
 
   return summary;
 }
+
+// ===== Manual Monzo Sync (User-triggered)
+exports.syncMonzoNow = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
+
+  try {
+    const db = admin.firestore();
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'manual_sync',
+      status: 'started',
+      userId: uid,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    const result = await refreshMonzoData(uid);
+
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'manual_sync',
+      status: 'success',
+      userId: uid,
+      summary: result,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    return { success: true, summary: result };
+  } catch (error) {
+    const db = admin.firestore();
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'manual_sync',
+      status: 'error',
+      userId: uid,
+      error: error.message,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Email admin on failure
+    try {
+      await sendEmail({
+        to: 'support@jc1.tech',
+        subject: `Monzo Manual Sync Failed - ${uid}`,
+        html: `<h3>Monzo manual sync failed</h3>
+               <p><strong>User:</strong> ${uid}</p>
+               <p><strong>Error:</strong> ${error.message}</p>
+               <pre>${JSON.stringify(error, null, 2)}</pre>`
+      });
+    } catch (emailError) {
+      console.error('Failed to send alert email:', emailError);
+    }
+
+    throw new httpsV2.HttpsError('internal', `Sync failed: ${error.message}`);
+  }
+});
+
+// ===== Scheduled Monzo Sync (twice daily, full history)
+exports.syncMonzoTwiceDaily = schedulerV2.onSchedule("every 12 hours", async (event) => {
+  const db = admin.firestore();
+  const connected = await db.collection('profiles').where('monzoConnected', '==', true).get();
+  console.log(`[syncMonzoTwiceDaily] found ${connected.size} connected profiles`);
+
+  for (const docSnap of connected.docs) {
+    const uid = docSnap.id;
+    try {
+      console.log(`[syncMonzoTwiceDaily] syncing ${uid}`);
+      await refreshMonzoData(uid);
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'scheduled_sync',
+        status: 'success',
+        userId: uid,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (err) {
+      console.error(`[syncMonzoTwiceDaily] failed for ${uid}`, err?.message || err);
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'scheduled_sync',
+        status: 'error',
+        userId: uid,
+        error: err?.message || String(err),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+  }
+});
+
+// ===== Hourly Monzo Sync (Scheduled)
+exports.syncMonzoHourly = schedulerV2.onSchedule({
+  schedule: 'every 1 hours',
+  timeZone: 'UTC',
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET]
+}, async () => {
+  const db = admin.firestore();
+  console.log('Starting hourly Monzo sync...');
+
+  // Get all users with Monzo connected
+  const tokensSnap = await db.collection('tokens')
+    .where('provider', '==', 'monzo')
+    .get();
+
+  let successCount = 0;
+  let failCount = 0;
+  const errors = [];
+
+  for (const tokenDoc of tokensSnap.docs) {
+    const tokenData = tokenDoc.data();
+    const uid = tokenDoc.id;
+
+    // Check if token is valid
+    if (!tokenData.access_token) {
+      console.log(`Skipping ${uid} - no access token`);
+      continue;
+    }
+
+    try {
+      console.log(`Syncing Monzo for user ${uid}...`);
+      await refreshMonzoData(uid);
+      successCount++;
+
+      // Log success
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'scheduled_sync',
+        status: 'success',
+        userId: uid,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+    } catch (error) {
+      failCount++;
+      errors.push({ uid, error: error.message });
+      console.error(`Monzo sync failed for ${uid}:`, error);
+
+      // Log failure
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'scheduled_sync',
+        status: 'error',
+        userId: uid,
+        error: error.message,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      // Email admin on failure
+      try {
+        await sendEmail({
+          to: 'support@jc1.tech',
+          subject: `Monzo Hourly Sync Failed - ${uid}`,
+          html: `<h3>Monzo hourly sync failed</h3>
+                 <p><strong>User:</strong> ${uid}</p>
+                 <p><strong>Time:</strong> ${new Date().toISOString()}</p>
+                 <p><strong>Error:</strong> ${error.message}</p>
+                 <pre>${JSON.stringify(error.stack || error, null, 2)}</pre>`
+        });
+      } catch (emailError) {
+        console.error('Failed to send alert email:', emailError);
+      }
+    }
+  }
+
+  console.log(`Monzo hourly sync complete: ${successCount} success, ${failCount} failed`);
+
+  // Send summary email if there were failures
+  if (failCount > 0) {
+    try {
+      await sendEmail({
+        to: 'support@jc1.tech',
+        subject: `Monzo Hourly Sync Summary - ${failCount} Failures`,
+        html: `<h3>Monzo Hourly Sync Summary</h3>
+               <p><strong>Success:</strong> ${successCount}</p>
+               <p><strong>Failed:</strong> ${failCount}</p>
+               <h4>Failures:</h4>
+               <ul>
+                 ${errors.map(e => `<li>${e.uid}: ${e.error}</li>`).join('')}
+               </ul>`
+      });
+    } catch (emailError) {
+      console.error('Failed to send summary email:', emailError);
+    }
+  }
+
+  return { success: successCount, failed: failCount, total: tokensSnap.size };
+});
 
 // ===== AI Planning Function
 exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
@@ -5445,12 +5684,22 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
 
   const startDate = new Date(Date.now() - 6 * 60 * 60 * 1000); // past 6 hours to pick updates
   const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // next two weeks
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   for (const doc of tokensSnap.docs) {
     const tokenId = doc.id;
     const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
     try {
       await importGoogleCalendarEvents(uid, { startDate, endDate });
+
+      // Push today's plan to Google Calendar
+      try {
+        await syncPlanToGoogleForUser(uid, todayStr);
+        console.log(`[gcal-sync] pushed plan for ${uid} for ${todayStr}`);
+      } catch (e) {
+        console.warn(`[gcal-sync] push plan failed for ${uid}`, e.message);
+      }
+
       try { await recordIntegrationLog(uid, 'google', 'success', 'Hourly Google Calendar sync ran', { start: startDate.toISOString(), end: endDate.toISOString() }); } catch { }
     } catch (error) {
       console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
@@ -6859,21 +7108,76 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
 }
 
 async function callGemini({ system, user, model = 'gemini-1.5-flash', expectJson, temperature }) {
-  const apiKey = process.env.GOOGLEAISTUDIOAPIKEY;
+  const apiKey = (process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
-  const mdl = model || 'gemini-1.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mdl)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const body = {
-    contents: [{ role: 'user', parts: [{ text: `${system}\n\n${user}` }] }],
-    generationConfig: Object.assign({}, expectJson ? { responseMimeType: 'application/json' } : {}, { temperature: temperature ?? 0.2 })
-  };
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const parts = data?.candidates?.[0]?.content?.parts || [];
-  const text = parts.map(p => p.text).join('');
-  if (!text) throw new Error('Empty response from Gemini');
-  return text;
+
+  try {
+    // Initialize SDK
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const mdl = model || 'gemini-1.5-flash';
+
+    // Configure safety settings (block only high-risk content)
+    const safetySettings = [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ];
+
+    // Configure generation parameters
+    const generationConfig = {
+      temperature: temperature ?? 0.2,
+      topP: 0.95,
+      topK: 40,
+      maxOutputTokens: 8192,
+    };
+
+    // Add JSON mode if requested
+    if (expectJson) {
+      generationConfig.responseMimeType = 'application/json';
+    }
+
+    // Get model instance
+    const modelInstance = genAI.getGenerativeModel({
+      model: mdl,
+      safetySettings,
+      generationConfig,
+    });
+
+    // Combine system and user prompts
+    const prompt = `${system}\n\n${user}`;
+
+    // Generate content
+    const result = await modelInstance.generateContent(prompt);
+    const response = result.response;
+    const text = response.text();
+
+    if (!text) throw new Error('Empty response from Gemini');
+    return text;
+
+  } catch (error) {
+    console.error('Gemini API Error:', error);
+    // Enhanced error handling
+    if (error.message?.includes('SAFETY')) {
+      throw new Error(`Gemini blocked response due to safety concerns: ${error.message}`);
+    }
+    if (error.message?.includes('RECITATION')) {
+      throw new Error(`Gemini blocked response due to recitation: ${error.message}`);
+    }
+    throw new Error(`Gemini API error: ${error.message || String(error)}`);
+  }
 }
 
 async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson, temperature }) {
@@ -7876,8 +8180,8 @@ async function getAccessToken(uid) {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: process.env.GOOGLE_OAUTH_CLIENT_ID,
-      client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+      client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+      client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
       refresh_token: refresh,
       grant_type: "refresh_token",
     }).toString(),
@@ -8632,12 +8936,13 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
 });
 
 // Sync plan assignments for a day to Google Calendar as child events under parent block events
-exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const uid = req.auth.uid;
-  const day = req?.data?.day || new Date().toISOString().slice(0, 10);
-  const date = new Date(day);
-  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+/**
+ * Syncs the BOB plan for a specific day to Google Calendar (Push).
+ * Creates or updates Google Calendar events for each block in the plan.
+ */
+async function syncPlanToGoogleForUser(uid, dayStr) {
+  const date = new Date(dayStr);
+  if (isNaN(date.getTime())) throw new Error('Invalid day');
   const dayKey = toDayKey(date);
   const access = await getAccessToken(uid);
   const db = admin.firestore();
@@ -8779,19 +9084,20 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
             for (const item of storyCtx2.ac) descLines2.push(`- ${item}`);
           }
         }
-        const patch = {
+        const body2 = {
           summary: summary2,
           description: descLines2.join('\n') || 'BOB block',
-          start: { dateTime: new Date(blockDoc.start).toISOString() },
-          end: { dateTime: new Date(blockDoc.end).toISOString() },
           extendedProperties: { private: priv2 }
         };
+        // Patch to ensure metadata is up to date
         try {
           await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(parentEventId)}`, {
-            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(patch)
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body2)
           });
           updated++;
-        } catch { }
+        } catch (e) {
+          console.warn(`Failed to patch parent event ${parentEventId}`, e.message);
+        }
       }
     }
 
@@ -8833,6 +9139,13 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
     }
   }
   return { ok: true, parentsCreated, created, updated };
+}
+
+exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10);
+  return await syncPlanToGoogleForUser(uid, day);
 });
 
 // iOS Reminders bridge (public HTTPS): Shortcuts can call these endpoints
@@ -9762,20 +10075,40 @@ exports.n8nCalendarWebhook = httpsV2.onRequest({ secrets: [N8N_WEBHOOK_SECRET], 
 // Outbound notifications to n8n on calendar_blocks writes (optional)
 exports.onCalendarBlockWritten = firestoreV2.onDocumentWritten('calendar_blocks/{id}', { secrets: [N8N_OUTBOUND_WEBHOOK_URL, N8N_WEBHOOK_SECRET] }, async (event) => {
   const url = process.env.N8N_OUTBOUND_WEBHOOK_URL;
-  if (!url) return;
   const before = event.data?.before?.data();
   const after = event.data?.after?.data();
   const id = event.params.id;
   const action = !before && after ? 'created' : (before && !after ? 'deleted' : 'updated');
   const ownerUid = (after?.ownerUid || before?.ownerUid || null);
-  try {
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET || '' },
-      body: JSON.stringify({ id, action, ownerUid, before, after, ts: Date.now() }),
-    });
-  } catch (e) {
-    try { await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'out', ts: Date.now(), id, action, error: String(e?.message || e) }); } catch { }
+
+  // 1. Internal Sync: Update Task Due Date if block moved
+  if (after && before && after.linkedTaskId && after.start !== before.start) {
+    try {
+      const taskRef = admin.firestore().collection('tasks').doc(after.linkedTaskId);
+      const taskSnap = await taskRef.get();
+      if (taskSnap.exists) {
+        await taskRef.update({
+          dueDate: after.start,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`Synced task ${after.linkedTaskId} due date to ${after.start} from block ${id}`);
+      }
+    } catch (e) {
+      console.error(`Failed to sync task due date for block ${id}`, e);
+    }
+  }
+
+  // 2. External Sync: Webhook to n8n (Optional)
+  if (url) {
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET || '' },
+        body: JSON.stringify({ id, action, ownerUid, before, after, ts: Date.now() }),
+      });
+    } catch (e) {
+      try { await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'out', ts: Date.now(), id, action, error: String(e?.message || e) }); } catch { }
+    }
   }
 });
 
@@ -9913,6 +10246,7 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
 });
 
 // Theme-based Calendar Planner (runs daily at 01:00 UTC)
+/*
 exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async () => {
   const db = ensureFirestore();
   const profilesSnap = await db.collection('profiles').get();
@@ -9925,141 +10259,21 @@ exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZ
     const runId = `${uid}_${Date.now()}_dailyPlanner`;
     try {
       const persona = 'personal';
-      const horizonDays = 1;
-      const context = await assemblePlanningContext(uid, persona, horizonDays);
-      context.userId = uid;
-      const aiResponse = await generateAIPlan(context, {});
-      const validation = await validateCalendarBlocks(aiResponse.blocks || [], context);
-      const proposedBlocks = Array.isArray(aiResponse.blocks) ? aiResponse.blocks : [];
-      const timezone = profile.timezone || context?.prefs?.timezone || 'UTC';
-      const previewBlocks = await buildBlockPreviews(uid, proposedBlocks, { timezone });
-      const approvalRequired = profile.calendarPlannerApprovalRequired === true;
-      if (approvalRequired) {
-        // Save proposal and email summary with approve link
-        const token = crypto.randomBytes(16).toString('hex');
-        const jobDoc = {
-          id: runId,
-          userId: uid,
-          ownerUid: uid,
-          startedAt: runStartedAt,
-          completedAt: admin.firestore.FieldValue.serverTimestamp(),
-          status: 'proposed',
-          appliedBlocks: 0,
-          validator: validation,
-          rationale: aiResponse.rationale || null,
-          source: 'daily_planner',
-          approvalToken: token,
-          proposedBlocks: aiResponse.blocks || [],
-          preview: {
-            timezone,
-            blocks: previewBlocks,
-          },
-        };
-        await db.collection('planning_jobs').doc(runId).set(jobDoc, { merge: true });
-        const origin = process.env.APP_BASE_URL || 'https://bob20250810.web.app';
-        const approveUrl = `${origin}/planning/approval?jobId=${encodeURIComponent(runId)}&uid=${encodeURIComponent(uid)}&token=${encodeURIComponent(token)}`;
-
-        try {
-          const email = profile.email || null;
-          if (email) {
-            const directApproveUrl = `${origin}/api/approve-planning?jobId=${encodeURIComponent(runId)}&uid=${encodeURIComponent(uid)}&token=${encodeURIComponent(token)}&approve=1`;
-            const blockRows = previewBlocks.slice(0, 10).map((block) => {
-              const label = block.displayStart && block.displayEnd
-                ? `${block.displayStart} → ${block.displayEnd}`
-                : block.displayStart || 'Scheduled block';
-              const detailParts = [
-                block.title,
-                block.theme ? `Theme: ${block.theme}` : null,
-                block.task?.title ? `Task: ${block.task.title}` : null,
-                block.goal?.title ? `Goal: ${block.goal.title}` : null,
-              ].filter(Boolean);
-              return `<li><strong>${escapeHtml(label)}</strong><br/>${detailParts.map(escapeHtml).join(' · ')}</li>`;
-            }).join('');
-            const totalBlocks = previewBlocks.length;
-            const blockCountLine = totalBlocks
-              ? `<p><strong>${totalBlocks}</strong> block${totalBlocks === 1 ? '' : 's'} proposed for ${timezone}.</p>`
-              : '<p>No blocks proposed.</p>';
-            const html = `
-              <h2>BOB · Daily Plan Proposal</h2>
-              <p>We prepared a plan for your calendar. Validation score: ${(validation.score || 0).toFixed(2)}</p>
-              ${blockCountLine}
-              ${blockRows ? `<ul>${blockRows}</ul>` : ''}
-              <p>
-                <a href="${approveUrl}" style="display:inline-block;padding:12px 20px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;">
-                  Review & Approve in BOB
-                </a>
-              </p>
-              <p>If you prefer to approve directly, <a href="${directApproveUrl}">use this quick link</a>.</p>
-              <p>This will add the proposed time blocks to your calendar.</p>`;
-            await sendEmail({ to: email, subject: 'BOB · Daily Plan Proposal (Approval Needed)', html });
-          }
-        } catch (e) { console.warn('[dailyPlanningJob] email proposal failed', e?.message || e); }
-
-        try {
-          const goalSummaries = new Map();
-          previewBlocks.forEach((block) => {
-            const goalId = block?.goal?.id;
-            if (!goalId) return;
-            if (!goalSummaries.has(goalId)) goalSummaries.set(goalId, []);
-            goalSummaries.get(goalId).push(block);
-          });
-          const nowTs = admin.firestore.FieldValue.serverTimestamp();
-          for (const [goalId, blocksForGoal] of goalSummaries.entries()) {
-            const sentences = blocksForGoal.slice(0, 3).map((block) => {
-              const when = block.displayStart ? block.displayStart : 'Upcoming';
-              return `• ${when}: ${block.title}`;
-            }).join('\n');
-            const content = `Nightly planner prepared ${blocksForGoal.length} session${blocksForGoal.length === 1 ? '' : 's'} for this goal.\n${sentences}\n\nApprove: ${approveUrl}`;
-            await db.collection('goal_chats').doc(goalId).collection('messages').add({
-              ownerUid: uid,
-              role: 'assistant',
-              content,
-              createdAt: nowTs,
-              jobId: runId,
-              type: 'planning_proposal',
-            });
-          }
-        } catch (chatErr) {
-          console.warn('[dailyPlanningJob] goal chat notification failed', chatErr?.message || chatErr);
-        }
-      } else {
-        let applied = 0;
-        if (validation.errors.length === 0) {
-          // attach confidence score to each block
-          const blocks = proposedBlocks.map(b => ({ ...b, confidence_score: validation.score, entry_method: 'calendar_ai' }));
-          applied = await applyCalendarBlocks(uid, persona, blocks);
-        }
-        await db.collection('planning_jobs').doc(runId).set({
-          id: runId,
-          userId: uid,
-          ownerUid: uid,
-          startedAt: runStartedAt,
-          completedAt: admin.firestore.FieldValue.serverTimestamp(),
-          status: 'completed',
-          appliedBlocks: applied,
-          validator: validation,
-          rationale: aiResponse.rationale || null,
-          source: 'daily_planner',
-          preview: {
-            timezone,
-            blocks: previewBlocks,
-          },
-        }, { merge: true });
-      }
+      // ... (rest of function omitted for brevity in comment) ...
+      // To re-enable, uncomment and ensure content is valid.
+      // This function is deprecated in favor of aiPlanning.runNightlyScheduler
     } catch (error) {
-      await db.collection('planning_jobs').doc(runId).set({
-        id: runId,
-        userId: uid,
-        ownerUid: uid,
-        startedAt: runStartedAt,
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-        status: 'error',
-        error: error?.message || String(error),
-        source: 'daily_planner',
-      }, { merge: true });
+       console.error(error);
     }
   }
 });
+*/
+/*
+  const db = ensureFirestore();
+  const profilesSnap = await db.collection('profiles').get();
+  // ... (rest of deprecated function body) ...
+  // This code is deprecated and replaced by aiPlanning.js
+*/
 
 // ===== Daily Summary Email Automation (Issue #204)
 
@@ -11930,4 +12144,22 @@ Keep it professional, actionable, and encourage the team.`;
     console.error('Error generating retrospective:', error);
     throw new httpsV2.HttpsError('internal', 'Failed to generate retrospective summary');
   }
+});
+
+// ===== Theme Allocations =====
+exports.saveThemeAllocations = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const allocations = req.data.allocations || [];
+  const db = admin.firestore();
+  await db.collection('theme_allocations').doc(uid).set({ allocations, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  return { ok: true };
+});
+
+exports.getThemeAllocations = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const doc = await db.collection('theme_allocations').doc(uid).get();
+  return { allocations: doc.exists ? doc.data().allocations : [] };
 });

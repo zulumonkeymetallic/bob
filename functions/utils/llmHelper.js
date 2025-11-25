@@ -16,7 +16,7 @@ async function callLLM(systemPrompt, userPrompt, modelName = 'gemini-1.5-flash')
 
     // Let's check if we can reuse the logic from index.js, but since we are making a clean util:
 
-    const apiKey = GOOGLE_AI_STUDIO_API_KEY.value();
+    const apiKey = (GOOGLE_AI_STUDIO_API_KEY.value() || '').trim();
     if (!apiKey) {
         throw new Error('GOOGLE_AI_STUDIO_API_KEY is not set');
     }

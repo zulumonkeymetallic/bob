@@ -17,10 +17,10 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { 
-  Settings, 
-  GripVertical, 
-  Eye, 
+import {
+  Settings,
+  GripVertical,
+  Eye,
   EyeOff,
   ChevronRight,
   ChevronDown,
@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { Task, Story, Goal, Sprint } from '../types';
 import { Toast, ToastContainer } from 'react-bootstrap';
+import TagInput from './common/TagInput';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
@@ -73,91 +74,91 @@ interface ModernTaskTableProps {
 }
 
 const defaultColumns: Column[] = [
-  { 
-    key: 'ref', 
-    label: 'Ref', 
-    width: '10%', 
-    visible: true, 
-    editable: false, 
-    type: 'text' 
+  {
+    key: 'ref',
+    label: 'Ref',
+    width: '10%',
+    visible: true,
+    editable: false,
+    type: 'text'
   },
-  { 
-    key: 'title', 
-    label: 'Title', 
-    width: '20%', 
-    visible: true, 
-    editable: true, 
-    type: 'text' 
+  {
+    key: 'title',
+    label: 'Title',
+    width: '20%',
+    visible: true,
+    editable: true,
+    type: 'text'
   },
-  { 
-    key: 'description', 
-    label: 'Description', 
-    width: '30%', 
-    visible: true, 
-    editable: true, 
-    type: 'text' 
+  {
+    key: 'description',
+    label: 'Description',
+    width: '30%',
+    visible: true,
+    editable: true,
+    type: 'text'
   },
-  { 
-    key: 'status', 
-    label: 'Status', 
-    width: '12%', 
-    visible: true, 
-    editable: true, 
+  {
+    key: 'status',
+    label: 'Status',
+    width: '12%',
+    visible: true,
+    editable: true,
     type: 'select',
     // values are numeric-as-string for editing; labels are rendered via taskStatusText
     // Standardize to Backlog/To Do (0), In Progress (1), Done (2)
-    options: ['0','1','2']
+    options: ['0', '1', '2']
   },
-  { 
-    key: 'priority', 
-    label: 'Priority', 
-    width: '10%', 
-    visible: true, 
-    editable: true, 
+  {
+    key: 'priority',
+    label: 'Priority',
+    width: '10%',
+    visible: true,
+    editable: true,
     type: 'select',
-    options: ['1','2','3']
+    options: ['1', '2', '3', '4', '5']
   },
-  { 
-    key: 'effort', 
-    label: 'Effort', 
-    width: '8%', 
-    visible: true, 
-    editable: true, 
+  {
+    key: 'effort',
+    label: 'Effort',
+    width: '8%',
+    visible: true,
+    editable: true,
     type: 'select',
     options: ['S', 'M', 'L']
   },
-  { 
-    key: 'dueDate', 
-    label: 'Due Date', 
-    width: '15%', 
-    visible: true, 
-    editable: true, 
-    type: 'date' 
+  {
+    key: 'dueDate',
+    label: 'Due Date',
+    width: '15%',
+    visible: true,
+    editable: true,
+    type: 'date'
   },
-  { 
-    key: 'theme', 
-    label: 'Theme', 
-    width: '12%', 
-    visible: true, 
-    editable: false, 
+  {
+    key: 'theme',
+    label: 'Theme',
+    width: '12%',
+    visible: true,
+    editable: false,
     type: 'select',
     options: ['Health', 'Growth', 'Wealth', 'Tribe', 'Home']
   },
-  { 
-    key: 'storyTitle', 
-    label: 'Story', 
-    width: '15%', 
-    visible: true, 
-    editable: true, 
+  {
+    key: 'storyTitle',
+    label: 'Story',
+    width: '15%',
+    visible: true,
+    editable: true,
     type: 'select',
     options: []
   },
-  { 
-    key: 'sprintName', 
-    label: 'Sprint', 
-    width: '15%', 
-    visible: true, 
-    editable: false, 
+  {
+    key: 'sprintName',
+    label: 'Sprint',
+    width: '15%',
+    visible: true,
+    editable: false,
     type: 'text'
   },
 ];
@@ -181,14 +182,14 @@ interface SortableRowProps {
   convertLoadingId: string | null;
 }
 
-const SortableRow: React.FC<SortableRowProps> = ({ 
-  task, 
-  columns, 
-  index, 
+const SortableRow: React.FC<SortableRowProps> = ({
+  task,
+  columns,
+  index,
   stories,
   sprints,
-  onTaskUpdate, 
-  onTaskDelete, 
+  onTaskUpdate,
+  onTaskDelete,
   onEditRequest,
   onSprintAssign,
   onConvertToStory,
@@ -225,18 +226,18 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const handleCellSave = async (key: string) => {
     try {
       const oldValue = (task as any)[key]; // Store the original value
-      
+
       // Only proceed if the value actually changed
       if (oldValue !== editValue) {
         let updates: Partial<Task>;
-        
+
         // Special handling for story selection
         if (key === 'storyTitle') {
           // Find the story by title and update storyId instead
           const selectedStory = stories.find(story => story.title === editValue);
           if (selectedStory) {
             updates = { storyId: selectedStory.id };
-            
+
             // Track the field change with story title for display
             trackFieldChange(
               task.id,
@@ -246,12 +247,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
               editValue,
               task.ref
             );
-            
+
             console.log(`🎯 Task story changed: from "${task.storyTitle || 'No story'}" to "${editValue}" (ID: ${selectedStory.id}) for task ${task.id}`);
           } else {
             // Clear story assignment
             updates = { storyId: '' };
-            
+
             trackFieldChange(
               task.id,
               'task',
@@ -260,7 +261,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               'No story',
               task.ref
             );
-            
+
             console.log(`🎯 Task story cleared for task ${task.id}`);
           }
         } else if (key === 'dueDate') {
@@ -275,7 +276,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         } else {
           // Regular field update
           updates = { [key]: editValue };
-          
+
           // Track the field change for activity stream
           trackFieldChange(
             task.id,
@@ -285,13 +286,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
             editValue,
             task.ref
           );
-          
+
           console.log(`🎯 Task field changed: ${key} from "${oldValue}" to "${editValue}" for task ${task.id}`);
         }
-        
+
         await onTaskUpdate(task.id, updates);
       }
-      
+
       setEditingCell(null);
     } catch (error) {
       console.error('Error saving task field:', error);
@@ -371,9 +372,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
                   </>
                 ) : column.key === 'priority' ? (
                   <>
-                    <option value={'1'}>High</option>
-                    <option value={'2'}>Medium</option>
-                    <option value={'3'}>Low</option>
+                    <option value={'1'}>P1 - High</option>
+                    <option value={'2'}>P2 - Med-High</option>
+                    <option value={'3'}>P3 - Medium</option>
+                    <option value={'4'}>P4 - Low-Med</option>
+                    <option value={'5'}>P5 - Low</option>
                   </>
                 ) : (
                   (column.options || []).map(option => (
@@ -382,7 +385,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 )}
               </select>
             </div>
-          </td>
+          </td >
         );
       }
 
@@ -414,9 +417,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
 
     return (
-      <td 
-        key={column.key} 
-        style={{ 
+      <td
+        key={column.key}
+        style={{
           width: column.width,
           padding: '12px 8px',
           borderRight: `1px solid ${themeVars.border}`,
@@ -559,7 +562,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
           <button
             onClick={() => onConvertToStory(task)}
             disabled={isConverting}
-            style={{ 
+            style={{
               color: isConverting ? themeVars.muted as string : themeVars.brand as string,
               padding: 4,
               borderRadius: 4,
@@ -615,7 +618,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   compact = false,
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
-  
+
   // Initialize columns based on defaultColumns prop or use all columns
   const initializeColumns = () => {
     if (defaultColumnKeys && defaultColumnKeys.length > 0) {
@@ -627,7 +630,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     }
     return defaultColumns;
   };
-  
+
   const [columns, setColumns] = useState<Column[]>(initializeColumns());
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -656,9 +659,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
   // Update story column options when stories change
   useEffect(() => {
-    setColumns(prev => 
-      prev.map(col => 
-        col.key === 'storyTitle' 
+    setColumns(prev =>
+      prev.map(col =>
+        col.key === 'storyTitle'
           ? { ...col, options: stories.map(story => story.title) }
           : col
       )
@@ -718,11 +721,11 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       // Activity stream annotation when due date causes sprint alignment
       if ('dueDate' in updates && (derivation.sprintId ?? null) !== (existingTask.sprintId ?? null)) {
         const sprintName = sprintNameForId(sprints, derivation.sprintId ?? null);
-        const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0,10) : 'unknown';
+        const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0, 10) : 'unknown';
         try {
           await addNote(taskId, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.`, (existingTask as any).ref);
           await trackFieldChange(taskId, 'task', 'sprintId', String(existingTask.sprintId || ''), String(derivation.sprintId || ''), (existingTask as any).ref);
-        } catch {}
+        } catch { }
       }
     } catch (error: any) {
       console.error('ModernTaskTable: failed to update task', { taskId, updates, error });
@@ -770,7 +773,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     if (over && active.id !== over.id) {
       const oldIndex = tableRows.findIndex(item => item.id === active.id);
       const newIndex = tableRows.findIndex(item => item.id === over.id);
-      
+
       console.log('🎯 ModernTaskTable: Task reorder operation', {
         action: 'task_reorder',
         taskId: active.id,
@@ -785,7 +788,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       try {
         // Update priority based on new position (1-indexed)
         await onTaskPriorityChange(active.id as string, newIndex + 1);
-        
+
         console.log('✅ ModernTaskTable: Task reorder successful', {
           action: 'task_reorder_success',
           taskId: active.id,
@@ -855,8 +858,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   };
 
   const toggleColumn = (key: string) => {
-    setColumns(prev => 
-      prev.map(col => 
+    setColumns(prev =>
+      prev.map(col =>
         col.key === key ? { ...col, visible: !col.visible } : col
       )
     );
@@ -866,550 +869,560 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
   return (
     <>
-    <div style={{ 
-      position: 'relative', 
-      backgroundColor: themeVars.panel as string, 
-      borderRadius: '8px', 
-      border: `1px solid ${themeVars.border}`,
-      boxShadow: '0 1px 3px 0 var(--glass-shadow-color)',
-      overflow: 'hidden' 
-    }}>
-      {/* Header with controls */}
       <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '16px',
-        borderBottom: `1px solid ${themeVars.border}`,
-        backgroundColor: themeVars.card as string,
+        position: 'relative',
+        backgroundColor: themeVars.panel as string,
+        borderRadius: '8px',
+        border: `1px solid ${themeVars.border}`,
+        boxShadow: '0 1px 3px 0 var(--glass-shadow-color)',
+        overflow: 'hidden'
       }}>
-        <div>
-          <h3 style={{ 
-            fontSize: '18px', 
-            fontWeight: '600', 
-            color: themeVars.text as string, 
-            margin: 0, 
-            marginBottom: '4px' 
-          }}>
-            Tasks
-          </h3>
-          <p style={{ 
-            fontSize: '14px', 
-            color: themeVars.muted as string, 
-            margin: 0 
-          }}>
-            {filteredTasks.length} of {tasks.length} tasks • {visibleColumnsCount} columns visible
-          </p>
-          <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
-            <label style={{ fontSize: '12px', color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              Sprint
-              <select
-                value={sprintFilter}
-                onChange={(e) => setSprintFilter(e.target.value)}
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                  border: `1px solid ${themeVars.border}`,
-                  backgroundColor: themeVars.panel as string,
-                  color: themeVars.text as string,
-                  fontSize: '12px'
-                }}
-              >
-                <option value="all">All</option>
-                <option value="none">No Sprint</option>
-                {sprints.map((sprint) => (
-                  <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </div>
-        <button
-          onClick={() => setShowConfig(!showConfig)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '8px 12px',
-            borderRadius: '6px',
-            fontSize: '14px',
-            fontWeight: '500',
-            transition: 'all 0.15s ease',
-            cursor: 'pointer',
-            border: showConfig ? `1px solid ${themeVars.brand}` : `1px solid ${themeVars.border}`,
-            backgroundColor: showConfig ? rgbaCard(0.2) : (themeVars.panel as string),
-            color: themeVars.text as string,
-          }}
-          onMouseEnter={(e) => {
-            if (!showConfig) {
-              e.currentTarget.style.backgroundColor = themeVars.card as string;
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!showConfig) {
-              e.currentTarget.style.backgroundColor = themeVars.panel as string;
-            }
-          }}
-        >
-          <Settings size={16} />
-          {showConfig ? 'Hide Configuration' : 'Configure Table'}
-        </button>
-      </div>
-
-      <div style={{ display: 'flex' }}>
-        {/* Main Table */}
+        {/* Header with controls */}
         <div style={{
-          flex: 1,
-          overflowX: 'auto',
-          transition: 'margin-right 0.3s ease',
-          marginRight: showConfig ? '320px' : '0',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '16px',
+          borderBottom: `1px solid ${themeVars.border}`,
+          backgroundColor: themeVars.card as string,
         }}>
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <table style={{ 
-              width: '100%',
-              borderCollapse: 'collapse',
+          <div>
+            <h3 style={{
+              fontSize: '18px',
+              fontWeight: '600',
+              color: themeVars.text as string,
+              margin: 0,
+              marginBottom: '4px'
             }}>
-              <thead style={{ 
-                backgroundColor: themeVars.card as string, 
-                borderBottom: `1px solid ${themeVars.border}` 
-              }}>
-                <tr>
-                  <th style={{
-                    padding: '12px 8px',
-                    textAlign: 'left',
-                    fontSize: '12px',
-                    fontWeight: '500',
-                    color: themeVars.muted as string,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    borderRight: `1px solid ${themeVars.border}`,
-                    width: '48px',
-                  }}>
-                    Order
-                  </th>
-                  {columns.filter(col => col.visible).map(column => (
-                    <th 
-                      key={column.key} 
-                      style={{
-                        padding: '12px 8px',
-                        textAlign: 'left',
-                        fontSize: '12px',
-                        fontWeight: '500',
-                        color: themeVars.muted as string,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.05em',
-                        borderRight: `1px solid ${themeVars.border}`,
-                        width: column.width,
-                      }}
-                    >
-                      {column.label}
-                    </th>
-                  ))}
-                  <th style={{
-                    padding: '12px 8px',
-                    textAlign: 'center',
-                    fontSize: '12px',
-                    fontWeight: '500',
-                    color: themeVars.muted as string,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    width: '96px',
-                  }}>
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <SortableContext 
-                  items={tableRows.map(row => row.id)}
-                  strategy={verticalListSortingStrategy}
+              Tasks
+            </h3>
+            <p style={{
+              fontSize: '14px',
+              color: themeVars.muted as string,
+              margin: 0
+            }}>
+              {filteredTasks.length} of {tasks.length} tasks • {visibleColumnsCount} columns visible
+            </p>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: '12px', color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                Sprint
+                <select
+                  value={sprintFilter}
+                  onChange={(e) => setSprintFilter(e.target.value)}
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: 6,
+                    border: `1px solid ${themeVars.border}`,
+                    backgroundColor: themeVars.panel as string,
+                    color: themeVars.text as string,
+                    fontSize: '12px'
+                  }}
                 >
-                  {tableRows.map((task, index) => (
-                    <SortableRow
-                      key={task.id}
-                      task={task}
-                      columns={columns}
-                      index={index}
-                      stories={stories}
-                      sprints={sprints}
-                      onTaskUpdate={handleValidatedUpdate}
-                      onTaskDelete={onTaskDelete}
-                      onEditRequest={(t) => {
-                        setEditingTask(t);
-                        setEditForm({ ...t });
-                        setStorySearch(t.storyTitle || '');
-                        setShowEditModal(true);
-                      }}
-                      onSprintAssign={handleSprintAssign}
-                      onConvertToStory={handleConvertToStory}
-                      convertLoadingId={convertLoadingId}
-                    />
+                  <option value="all">All</option>
+                  <option value="none">No Sprint</option>
+                  {sprints.map((sprint) => (
+                    <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
                   ))}
-                </SortableContext>
-              </tbody>
-            </table>
-          </DndContext>
+                </select>
+              </label>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowConfig(!showConfig)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontWeight: '500',
+              transition: 'all 0.15s ease',
+              cursor: 'pointer',
+              border: showConfig ? `1px solid ${themeVars.brand}` : `1px solid ${themeVars.border}`,
+              backgroundColor: showConfig ? rgbaCard(0.2) : (themeVars.panel as string),
+              color: themeVars.text as string,
+            }}
+            onMouseEnter={(e) => {
+              if (!showConfig) {
+                e.currentTarget.style.backgroundColor = themeVars.card as string;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!showConfig) {
+                e.currentTarget.style.backgroundColor = themeVars.panel as string;
+              }
+            }}
+          >
+            <Settings size={16} />
+            {showConfig ? 'Hide Configuration' : 'Configure Table'}
+          </button>
         </div>
 
-        {/* Optional: Add Task button */}
-        {onTaskCreate && (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '16px' }}>
-            <button
-              onClick={() => {
-                setEditingTask(null);
-                setEditForm({ title: '', description: '', priority: 2, status: 0 as any });
-                setStorySearch('');
-                setShowEditModal(true);
-              }}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '10px 16px',
-                border: `2px dashed ${themeVars.brand}`,
-                background: 'transparent',
-                color: themeVars.brand as string,
-                borderRadius: 8,
-                cursor: 'pointer',
-                fontWeight: 600
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor = rgbaCard(0.03);
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-              }}
-              title="Add Task"
-            >
-              <span style={{ fontSize: 18, lineHeight: 1 }}>+</span>
-              Add Task
-            </button>
-          </div>
-        )}
-
-        {/* Configuration Panel */}
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          height: '100%',
-          width: '320px',
-          backgroundColor: themeVars.panel as string,
-          borderLeft: `1px solid ${themeVars.border}`,
-          transition: 'transform 0.3s ease',
-          boxShadow: '-4px 0 16px 0 var(--glass-shadow-color)',
-          transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
-        }}>
-          <div style={{ 
-            padding: '16px', 
-            height: '100%', 
-            overflowY: 'auto' 
+        <div style={{ display: 'flex' }}>
+          {/* Main Table */}
+          <div style={{
+            flex: 1,
+            overflowX: 'auto',
+            transition: 'margin-right 0.3s ease',
+            marginRight: showConfig ? '320px' : '0',
           }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              {/* Column Configuration */}
-              <div>
-                <button
-                  onClick={() => setConfigExpanded(prev => ({ ...prev, columns: !prev.columns }))}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    width: '100%',
-                    padding: '8px',
-                    textAlign: 'left',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    color: themeVars.text as string,
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.15s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = themeVars.card as string;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  <span>Column Visibility</span>
-                  {configExpanded.columns ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                </button>
-                
-                {configExpanded.columns && (
-                  <div style={{ 
-                    marginTop: '12px', 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    gap: '8px' 
-                  }}>
-                    {columns.map(column => (
-                      <div key={column.key} style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '8px',
-                        borderRadius: '4px',
-                        transition: 'background-color 0.15s ease',
-                        cursor: 'pointer',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = themeVars.card as string;
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                      onClick={() => toggleColumn(column.key)}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <table style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+              }}>
+                <thead style={{
+                  backgroundColor: themeVars.card as string,
+                  borderBottom: `1px solid ${themeVars.border}`
+                }}>
+                  <tr>
+                    <th style={{
+                      padding: '12px 8px',
+                      textAlign: 'left',
+                      fontSize: '12px',
+                      fontWeight: '500',
+                      color: themeVars.muted as string,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      borderRight: `1px solid ${themeVars.border}`,
+                      width: '48px',
+                    }}>
+                      Order
+                    </th>
+                    {columns.filter(col => col.visible).map(column => (
+                      <th
+                        key={column.key}
+                        style={{
+                          padding: '12px 8px',
+                          textAlign: 'left',
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          color: themeVars.muted as string,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.05em',
+                          borderRight: `1px solid ${themeVars.border}`,
+                          width: column.width,
+                        }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <div style={{
-                            width: '20px',
-                            height: '20px',
-                            borderRadius: '4px',
-                            border: '2px solid',
-                            borderColor: column.visible ? (themeVars.brand as string) : (themeVars.border as string),
-                            backgroundColor: column.visible ? (themeVars.brand as string) : 'transparent',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            transition: 'all 0.15s ease',
-                          }}>
-                            {column.visible && (
-                              <svg width="12" height="12" viewBox="0 0 12 12" fill="white">
-                                <path d="M10 3L4.5 8.5L2 6" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                              </svg>
+                        {column.label}
+                      </th>
+                    ))}
+                    <th style={{
+                      padding: '12px 8px',
+                      textAlign: 'center',
+                      fontSize: '12px',
+                      fontWeight: '500',
+                      color: themeVars.muted as string,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      width: '96px',
+                    }}>
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <SortableContext
+                    items={tableRows.map(row => row.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {tableRows.map((task, index) => (
+                      <SortableRow
+                        key={task.id}
+                        task={task}
+                        columns={columns}
+                        index={index}
+                        stories={stories}
+                        sprints={sprints}
+                        onTaskUpdate={handleValidatedUpdate}
+                        onTaskDelete={onTaskDelete}
+                        onEditRequest={(t) => {
+                          setEditingTask(t);
+                          setEditForm({ ...t });
+                          setStorySearch(t.storyTitle || '');
+                          setShowEditModal(true);
+                        }}
+                        onSprintAssign={handleSprintAssign}
+                        onConvertToStory={handleConvertToStory}
+                        convertLoadingId={convertLoadingId}
+                      />
+                    ))}
+                  </SortableContext>
+                </tbody>
+              </table>
+            </DndContext>
+          </div>
+
+          {/* Optional: Add Task button */}
+          {onTaskCreate && (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '16px' }}>
+              <button
+                onClick={() => {
+                  setEditingTask(null);
+                  setEditForm({ title: '', description: '', priority: 2, status: 0 as any, tags: [] });
+                  setStorySearch('');
+                  setShowEditModal(true);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 16px',
+                  border: `2px dashed ${themeVars.brand}`,
+                  background: 'transparent',
+                  color: themeVars.brand as string,
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = rgbaCard(0.03);
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                }}
+                title="Add Task"
+              >
+                <span style={{ fontSize: 18, lineHeight: 1 }}>+</span>
+                Add Task
+              </button>
+            </div>
+          )}
+
+          {/* Configuration Panel */}
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            height: '100%',
+            width: '320px',
+            backgroundColor: themeVars.panel as string,
+            borderLeft: `1px solid ${themeVars.border}`,
+            transition: 'transform 0.3s ease',
+            boxShadow: '-4px 0 16px 0 var(--glass-shadow-color)',
+            transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
+          }}>
+            <div style={{
+              padding: '16px',
+              height: '100%',
+              overflowY: 'auto'
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                {/* Column Configuration */}
+                <div>
+                  <button
+                    onClick={() => setConfigExpanded(prev => ({ ...prev, columns: !prev.columns }))}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      width: '100%',
+                      padding: '8px',
+                      textAlign: 'left',
+                      fontSize: '14px',
+                      fontWeight: '500',
+                      color: themeVars.text as string,
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = themeVars.card as string;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <span>Column Visibility</span>
+                    {configExpanded.columns ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  </button>
+
+                  {configExpanded.columns && (
+                    <div style={{
+                      marginTop: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px'
+                    }}>
+                      {columns.map(column => (
+                        <div key={column.key} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '8px',
+                          borderRadius: '4px',
+                          transition: 'background-color 0.15s ease',
+                          cursor: 'pointer',
+                        }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = themeVars.card as string;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
+                          onClick={() => toggleColumn(column.key)}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{
+                              width: '20px',
+                              height: '20px',
+                              borderRadius: '4px',
+                              border: '2px solid',
+                              borderColor: column.visible ? (themeVars.brand as string) : (themeVars.border as string),
+                              backgroundColor: column.visible ? (themeVars.brand as string) : 'transparent',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.15s ease',
+                            }}>
+                              {column.visible && (
+                                <svg width="12" height="12" viewBox="0 0 12 12" fill="white">
+                                  <path d="M10 3L4.5 8.5L2 6" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              )}
+                            </div>
+                            <span style={{ fontSize: '14px', color: themeVars.text as string }}>{column.label}</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            {column.visible ? (
+                              <Eye size={14} style={{ color: themeVars.muted as string }} />
+                            ) : (
+                              <EyeOff size={14} style={{ color: themeVars.muted as string }} />
                             )}
                           </div>
-                          <span style={{ fontSize: '14px', color: themeVars.text as string }}>{column.label}</span>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          {column.visible ? (
-                            <Eye size={14} style={{ color: themeVars.muted as string }} />
-                          ) : (
-                            <EyeOff size={14} style={{ color: themeVars.muted as string }} />
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-              {/* Table Settings */}
-              <div>
-                <button
-                  onClick={() => setConfigExpanded(prev => ({ ...prev, display: !prev.display }))}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    width: '100%',
-                    padding: '8px',
-                    textAlign: 'left',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    color: themeVars.text as string,
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.15s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = themeVars.card as string;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  <span>Display Options</span>
-                  {configExpanded.display ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                </button>
-                
-                {configExpanded.display && (
-                  <div style={{ 
-                    marginTop: '12px', 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    gap: '12px' 
-                  }}>
+                {/* Table Settings */}
+                <div>
+                  <button
+                    onClick={() => setConfigExpanded(prev => ({ ...prev, display: !prev.display }))}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      width: '100%',
+                      padding: '8px',
+                      textAlign: 'left',
+                      fontSize: '14px',
+                      fontWeight: '500',
+                      color: themeVars.text as string,
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = themeVars.card as string;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <span>Display Options</span>
+                    {configExpanded.display ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  </button>
+
+                  {configExpanded.display && (
                     <div style={{
-                      padding: '12px',
-                      backgroundColor: themeVars.card as string,
-                      borderRadius: '8px',
+                      marginTop: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px'
                     }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: themeVars.text as string, 
-                        margin: '0 0 8px 0' 
+                      <div style={{
+                        padding: '12px',
+                        backgroundColor: themeVars.card as string,
+                        borderRadius: '8px',
                       }}>
-                        Text Wrapping
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: themeVars.muted as string, 
-                        margin: '0 0 8px 0',
-                        lineHeight: '1.4',
-                      }}>
-                        Table cells automatically wrap text for better readability with proper line height and spacing
-                      </p>
-                      <div style={{ 
-                        width: '100%', 
-                        height: '8px', 
-                        backgroundColor: rgbaCard(0.15), 
-                        borderRadius: '4px' 
-                      }}>
-                        <div style={{ 
-                          height: '8px', 
-                          backgroundColor: 'var(--green)', 
-                          borderRadius: '4px',
+                        <h4 style={{
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          color: themeVars.text as string,
+                          margin: '0 0 8px 0'
+                        }}>
+                          Text Wrapping
+                        </h4>
+                        <p style={{
+                          fontSize: '12px',
+                          color: themeVars.muted as string,
+                          margin: '0 0 8px 0',
+                          lineHeight: '1.4',
+                        }}>
+                          Table cells automatically wrap text for better readability with proper line height and spacing
+                        </p>
+                        <div style={{
                           width: '100%',
-                        }}></div>
+                          height: '8px',
+                          backgroundColor: rgbaCard(0.15),
+                          borderRadius: '4px'
+                        }}>
+                          <div style={{
+                            height: '8px',
+                            backgroundColor: 'var(--green)',
+                            borderRadius: '4px',
+                            width: '100%',
+                          }}></div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: '12px',
+                        backgroundColor: themeVars.card as string,
+                        borderRadius: '8px',
+                      }}>
+                        <h4 style={{
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          color: themeVars.text as string,
+                          margin: '0 0 8px 0'
+                        }}>
+                          Inline Editing
+                        </h4>
+                        <p style={{
+                          fontSize: '12px',
+                          color: themeVars.muted as string,
+                          margin: 0,
+                          lineHeight: '1.4',
+                        }}>
+                          Click any editable cell to modify values directly in the table with modern form controls
+                        </p>
+                      </div>
+
+                      <div style={{
+                        padding: '12px',
+                        backgroundColor: themeVars.card as string,
+                        borderRadius: '8px',
+                      }}>
+                        <h4 style={{
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          color: themeVars.text as string,
+                          margin: '0 0 8px 0'
+                        }}>
+                          Modern Actions
+                        </h4>
+                        <p style={{
+                          fontSize: '12px',
+                          color: themeVars.muted as string,
+                          margin: 0,
+                          lineHeight: '1.4',
+                        }}>
+                          Text-based action buttons (Edit/Delete) follow design system guidelines with proper hover states
+                        </p>
                       </div>
                     </div>
-                    
-                    <div style={{
-                      padding: '12px',
-                      backgroundColor: themeVars.card as string,
-                      borderRadius: '8px',
-                    }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: themeVars.text as string, 
-                        margin: '0 0 8px 0' 
-                      }}>
-                        Inline Editing
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: themeVars.muted as string, 
-                        margin: 0,
-                        lineHeight: '1.4',
-                      }}>
-                        Click any editable cell to modify values directly in the table with modern form controls
-                      </p>
-                    </div>
-
-                    <div style={{
-                      padding: '12px',
-                      backgroundColor: themeVars.card as string,
-                      borderRadius: '8px',
-                    }}>
-                      <h4 style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '500', 
-                        color: themeVars.text as string, 
-                        margin: '0 0 8px 0' 
-                      }}>
-                        Modern Actions
-                      </h4>
-                      <p style={{ 
-                        fontSize: '12px', 
-                        color: themeVars.muted as string, 
-                        margin: 0,
-                        lineHeight: '1.4',
-                      }}>
-                        Text-based action buttons (Edit/Delete) follow design system guidelines with proper hover states
-                      </p>
-                    </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
 
-    {/* Edit/Create Modal (lightweight) */}
-    {showEditModal && (
-      <div className="modal d-block" tabIndex={-1} role="dialog" style={{ background: 'var(--bs-backdrop-bg)' }}>
-        <div className="modal-dialog modal-lg" role="document">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h5 className="modal-title">{editingTask ? 'Edit Task' : 'Add Task'}</h5>
-              <button type="button" className="btn-close" onClick={() => setShowEditModal(false)} />
-            </div>
-            <div className="modal-body">
-              <div className="mb-3">
-                <label className="form-label">Title</label>
-                <input className="form-control" value={editForm.title || ''} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} />
+      {/* Edit/Create Modal (lightweight) */}
+      {showEditModal && (
+        <div className="modal d-block" tabIndex={-1} role="dialog" style={{ background: 'var(--bs-backdrop-bg)' }}>
+          <div className="modal-dialog modal-lg" role="document">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">{editingTask ? 'Edit Task' : 'Add Task'}</h5>
+                <button type="button" className="btn-close" onClick={() => setShowEditModal(false)} />
               </div>
-              <div className="mb-3">
-                <label className="form-label">Description</label>
-                <textarea className="form-control" rows={3} value={editForm.description || ''} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
-              </div>
-              <div className="row">
-                <div className="col-md-6 mb-3">
-                  <label className="form-label">Link to Story</label>
-                  <input className="form-control" placeholder="Type to search..." value={storySearch} onChange={(e) => setStorySearch(e.target.value)} />
-                  <div className="list-group" style={{ maxHeight: 180, overflow: 'auto' }}>
-                    {stories.filter(s => s.title?.toLowerCase().includes((storySearch||'').toLowerCase())).slice(0, 10).map(s => (
-                      <button key={s.id} type="button" className="list-group-item list-group-item-action"
-                        onClick={() => {
-                          setEditForm({ ...editForm, storyId: s.id, storyTitle: s.title, priority: (editingTask ? editingTask.priority : (editForm.priority as any)) || (s as any).priority || 2 });
-                          setStorySearch(s.title || '');
-                        }}
-                      >{s.title}</button>
-                    ))}
+              <div className="modal-body">
+                <div className="mb-3">
+                  <label className="form-label">Title</label>
+                  <input className="form-control" value={editForm.title || ''} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} />
+                </div>
+                <div className="mb-3">
+                  <label className="form-label">Description</label>
+                  <textarea className="form-control" rows={3} value={editForm.description || ''} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+                </div>
+                <div className="mb-3">
+                  <label className="form-label">Tags</label>
+                  <TagInput
+                    value={editForm.tags || []}
+                    onChange={(tags) => setEditForm({ ...editForm, tags })}
+                    placeholder="Add tags..."
+                  />
+                </div>
+                <div className="row">
+                  <div className="col-md-6 mb-3">
+                    <label className="form-label">Link to Story</label>
+                    <input className="form-control" placeholder="Type to search..." value={storySearch} onChange={(e) => setStorySearch(e.target.value)} />
+                    <div className="list-group" style={{ maxHeight: 180, overflow: 'auto' }}>
+                      {stories.filter(s => s.title?.toLowerCase().includes((storySearch || '').toLowerCase())).slice(0, 10).map(s => (
+                        <button key={s.id} type="button" className="list-group-item list-group-item-action"
+                          onClick={() => {
+                            setEditForm({ ...editForm, storyId: s.id, storyTitle: s.title, priority: (editingTask ? editingTask.priority : (editForm.priority as any)) || (s as any).priority || 2 });
+                            setStorySearch(s.title || '');
+                          }}
+                        >{s.title}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="col-md-3 mb-3">
+                    <label className="form-label">Priority</label>
+                    <select className="form-select" value={String(editForm.priority ?? '2')} onChange={(e) => setEditForm({ ...editForm, priority: parseInt(e.target.value) as any })}>
+                      <option value="1">P1 - High</option>
+                      <option value="2">P2 - Med-High</option>
+                      <option value="3">P3 - Medium</option>
+                      <option value="4">P4 - Low-Med</option>
+                      <option value="5">P5 - Low</option>
+                    </select>
+                  </div>
+                  <div className="col-md-3 mb-3">
+                    <label className="form-label">Due Date</label>
+                    <input type="date" className="form-control" value={editForm.dueDate ? new Date(editForm.dueDate as any).toISOString().slice(0, 10) : ''} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value ? new Date(e.target.value).getTime() : undefined })} />
                   </div>
                 </div>
-                <div className="col-md-3 mb-3">
-                  <label className="form-label">Priority</label>
-                  <select className="form-select" value={String(editForm.priority ?? '2')} onChange={(e) => setEditForm({ ...editForm, priority: parseInt(e.target.value) as any })}>
-                    <option value="1">High</option>
-                    <option value="2">Medium</option>
-                    <option value="3">Low</option>
-                  </select>
-                </div>
-                <div className="col-md-3 mb-3">
-                  <label className="form-label">Due Date</label>
-                  <input type="date" className="form-control" value={editForm.dueDate ? new Date(editForm.dueDate as any).toISOString().slice(0,10) : ''} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value ? new Date(e.target.value).getTime() : undefined })} />
-                </div>
               </div>
-            </div>
-            <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
-              <button type="button" className="btn btn-primary" onClick={async () => {
-                if (!editForm.title) return;
-                if (editingTask) {
-                  await handleValidatedUpdate(editingTask.id, {
-                    title: editForm.title,
-                    description: editForm.description,
-                    priority: editForm.priority as any,
-                    dueDate: editForm.dueDate as any,
-                    storyId: (editForm as any).storyId
-                  });
-                } else if (onTaskCreate) {
-                  await onTaskCreate({
-                    title: editForm.title,
-                    description: editForm.description,
-                    priority: editForm.priority as any,
-                    dueDate: editForm.dueDate as any,
-                    storyId: (editForm as any).storyId
-                  });
-                }
-                setShowEditModal(false);
-              }}>Save</button>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
+                <button type="button" className="btn btn-primary" onClick={async () => {
+                  if (!editForm.title) return;
+                  if (editingTask) {
+                    await handleValidatedUpdate(editingTask.id, {
+                      title: editForm.title,
+                      description: editForm.description,
+                      priority: editForm.priority as any,
+                      dueDate: editForm.dueDate as any,
+                      storyId: (editForm as any).storyId
+                    });
+                  } else if (onTaskCreate) {
+                    await onTaskCreate({
+                      title: editForm.title,
+                      description: editForm.description,
+                      priority: editForm.priority as any,
+                      dueDate: editForm.dueDate as any,
+                      storyId: (editForm as any).storyId
+                    });
+                  }
+                  setShowEditModal(false);
+                }}>Save</button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    )}
-    <ToastContainer position="bottom-end" className="p-3">
-      <Toast bg={toastState.variant} onClose={closeToast} show={toastState.show} delay={4000} autohide>
-        <Toast.Body style={{ color: toastState.variant === 'info' ? themeVars.text : themeVars.onAccent }}>
-          {toastState.message}
-        </Toast.Body>
-      </Toast>
-    </ToastContainer>
+      )}
+      <ToastContainer position="bottom-end" className="p-3">
+        <Toast bg={toastState.variant} onClose={closeToast} show={toastState.show} delay={4000} autohide>
+          <Toast.Body style={{ color: toastState.variant === 'info' ? themeVars.text : themeVars.onAccent }}>
+            {toastState.message}
+          </Toast.Body>
+        </Toast>
+      </ToastContainer>
     </>
   );
 };

@@ -57,6 +57,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Overview', path: '/dashboard', icon: 'home' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
+        { label: 'Command Center', path: '/overview/advanced', icon: 'tachometer-alt' },
       ]
     },
     // Health
@@ -84,6 +85,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
         { label: 'Categorization', path: '/finance/merchants', icon: 'tags' },
+        { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
+        { label: 'Cash Flow', path: '/finance/flow', icon: 'project-diagram' },
+        { label: 'Pots', path: '/finance/pots', icon: 'database' },
         { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
       ]
     },
@@ -117,6 +121,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
+        { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Retrospective', path: '/sprints/retrospective', icon: 'rotate-left' }
       ]
     },
@@ -125,6 +130,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'calendar',
       items: [
         { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
+        { label: 'Theme Rules', path: '/calendar/themes', icon: 'palette' },
+        { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]
     },
@@ -224,7 +231,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           }}>
             {/* Brand */}
             <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <img src="/logo.png" alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+              <img src="/logo192.png" alt="BOB Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h4 className="mb-0" style={{ color: 'var(--notion-text)', fontWeight: '600', fontSize: '1rem', lineHeight: '1.2' }}>blueprint.<br />organize.build</h4>
               </div>

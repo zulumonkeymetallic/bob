@@ -75,7 +75,10 @@ service cloud.firestore {
     match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /integration_status/{id} {
       allow create, update: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
-      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        id.matches('.*' + request.auth.uid)
+      );
     }
     match /ai_usage_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -93,35 +96,68 @@ service cloud.firestore {
     // Finance collections
     match /finance_budgets/{uid} {
       // Per-user finance budget doc keyed by uid
-      allow create: if isSignedIn() && request.auth.uid == uid;
-      allow read:   if isSignedIn() && request.auth.uid == uid;
-      allow update: if isSignedIn() && request.auth.uid == uid;
-      allow delete: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
+    match /finance_budgets_v2/{uid} {
+      // Extended budget settings keyed by uid with ownerUid on the document
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
+    match /finance_categories/{uid} {
+      // User-defined finance categories keyed by uid
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
     }
     match /monzo_budget_summary/{uid} {
       // Per-user Monzo summary doc keyed by uid
-      allow create: if isSignedIn() && request.auth.uid == uid;
-      allow read:   if isSignedIn() && request.auth.uid == uid;
-      allow update: if isSignedIn() && request.auth.uid == uid;
-      allow delete: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
     }
     match /monzo_transactions/{id} {
       // Individual transaction rows carry ownerUid
       // Create: enforce ownerUid equals request.auth.uid
       allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
       // Read/Delete: owner only
-      allow read, delete: if isSignedIn() && request.auth.uid == resource.data.ownerUid;
+      allow read, delete: if isSignedIn() && (
+        request.auth.uid == resource.data.ownerUid ||
+        (id.matches('^' + request.auth.uid + '_.*'))
+      );
       // Update: owner only and ownerUid must be immutable
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.ownerUid ||
+        (id.matches('^' + request.auth.uid + '_.*'))
+      ) && request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /monzo_pots/{id} {
+      // Per-user Monzo pots keyed by uid-prefixed id or potId; ownerUid required
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && request.auth.uid == resource.data.ownerUid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /monzo_accounts/{id} {
+      // Per-user Monzo accounts keyed by uid-prefixed id; ownerUid required
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
       allow update: if isSignedIn() && request.auth.uid == resource.data.ownerUid &&
                     request.resource.data.ownerUid == resource.data.ownerUid;
     }
 
     // Per-user goal alignment summary for finance dashboard
     match /monzo_goal_alignment/{uid} {
-      allow create: if isSignedIn() && request.auth.uid == uid;
-      allow read:   if isSignedIn() && request.auth.uid == uid;
-      allow update: if isSignedIn() && request.auth.uid == uid;
-      allow delete: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
     }
 
     // New scheduler-related collections

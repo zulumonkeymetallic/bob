@@ -1,0 +1,794 @@
+{
+  "timestamp": "2025-11-23T11:27:49.111Z",
+  "checks": {
+    "targetUser": "3L3nnXSuTPfr08c8DTXG5zYX37A2",
+    "macAgentTasksCount": 2,
+    "storyBlocksCount": 0,
+    "enrichedStoriesCount": 0,
+    "convertedStoriesCount": 0,
+    "prioritizedTasksCount": 0
+  },
+  "data": {
+    "users": [
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2",
+        "parkrunDefaultEventSlug": "",
+        "parkrunDefaultStartRun": null,
+        "parkrunAutoSync": true,
+        "ownerUid": "3L3nnXSuTPfr08c8DTXG5zYX37A2",
+        "parkrunAthleteId": "349501",
+        "stravaAthleteId": 9307373,
+        "stravaConnected": true,
+        "stravaAutoSync": true,
+        "autoSyncPlannerToGoogle": true,
+        "steamId": "76561198048999740",
+        "steamLibrarySize": 135,
+        "steamLastSyncAt": {
+          "_seconds": 1759331210,
+          "_nanoseconds": 403000000
+        },
+        "stravaLastSyncAt": null,
+        "traktUser": "ChcolateMouseGreen",
+        "autoEnrichStravaHR": true,
+        "autoComputeFitnessMetrics": true,
+        "parkrunAutoComputePercentiles": true,
+        "role": "admin",
+        "adminGrantedAt": {
+          "_seconds": 1759784504,
+          "_nanoseconds": 235000000
+        },
+        "isAdmin": true,
+        "authProvider": "google.com",
+        "photoURL": "https://lh3.googleusercontent.com/a/ACg8ocJv7eYkjIfBTW8fpsWHahxU23tonp1_pG56SsrrGL2qhSQiOqclCQ=s96-c",
+        "displayName": "Jim Donnelly",
+        "email": "jdonnelly@jc1.tech",
+        "emailLower": "jdonnelly@jc1.tech",
+        "updatedAt": {
+          "_seconds": 1760359866,
+          "_nanoseconds": 90000000
+        },
+        "hardcoverToken": "eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJIYXJkY292ZXIiLCJ2ZXJzaW9uIjoiOCIsImp0aSI6IjViMDgxZjU4LWU0MGUtNDM4ZC1hYzJkLWMyNmU0MWMwM2QxYyIsImFwcGxpY2F0aW9uSWQiOjIsInN1YiI6IjUyODg1IiwiYXVkIjoiMSIsImlkIjoiNTI4ODUiLCJsb2dnZWRJbiI6dHJ1ZSwiaWF0IjoxNzYyMDgwOTY3LCJleHAiOjE3OTM2MTY5NjcsImh0dHBzOi8vaGFzdXJhLmlvL2p3dC9jbGFpbXMiOnsieC1oYXN1cmEtYWxsb3dlZC1yb2xlcyI6WyJ1c2VyIl0sIngtaGFzdXJhLWRlZmF1bHQtcm9sZSI6InVzZXIiLCJ4LWhhc3VyYS1yb2xlIjoidXNlciIsIlgtaGFzdXJhLXVzZXItaWQiOiI1Mjg4NSJ9LCJ1c2VyIjp7ImlkIjo1Mjg4NX19.-M1dXCRiVT0KGOKMeOe0G59PDmTBDVf_yd13NXDk5Go",
+        "dailySummaryEnabled": true,
+        "nightlyMaintenanceEnabled": true,
+        "dataQualityEmailEnabled": true,
+        "quietHoursStart": 21,
+        "quietHoursEnd": 4,
+        "minBlockMinutes": 10,
+        "monzoUserId": "user_00009H1leTASTIlUXkiSwb",
+        "monzoConnected": true,
+        "parkrunLastSyncAt": {
+          "_seconds": 1763780410,
+          "_nanoseconds": 251000000
+        },
+        "googleCalendarEventCount": 199,
+        "googleCalendarLastSyncAt": {
+          "_seconds": 1763895408,
+          "_nanoseconds": 757000000
+        },
+        "monzoLastSyncAt": {
+          "_seconds": 1763896390,
+          "_nanoseconds": 684000000
+        }
+      }
+    ],
+    "stories": [
+      {
+        "id": "FBJdgTQ4GHO1tEMyIzzN",
+        "title": "get the grid and grow plotter buisiness off the ground",
+        "status": "in-progress",
+        "theme": 1,
+        "points": 3,
+        "hasAcceptanceCriteria": false,
+        "aiEnriched": false
+      },
+      {
+        "id": "hKEB3UgwFNJJsOo5uzFx",
+        "title": "Research the value proposition and market",
+        "status": "in-progress",
+        "theme": 3,
+        "points": 3,
+        "hasAcceptanceCriteria": false,
+        "aiEnriched": false
+      }
+    ],
+    "tasks": [
+      {
+        "id": "0FxSlVMLzGvINNWCzxmC",
+        "title": "Normaliser my workout day and import",
+        "status": 0,
+        "dueDate": null,
+        "source": "MacApp"
+      },
+      {
+        "id": "1mEv0r70VaHtZKwTtgUM",
+        "title": "stop parking",
+        "status": 0,
+        "dueDate": "2025-11-08T12:30:00.000Z"
+      },
+      {
+        "id": "2GJVsQAEFqQBSrcu98Hd",
+        "title": "New Reminder",
+        "status": 0,
+        "dueDate": null,
+        "source": "MacApp"
+      }
+    ],
+    "calendarBlocks": [
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhncmphZ3BsNjRzamdiOW02ZDMzaWI5azhvcWoyYjlvODRvNGNiYTQ4Y3BqOGQyNjhoMGs0Y3E1OG9fMjAyNTExMjNUMTEzMDAwWg",
+        "title": "Reflect on Last Week - Plan week -Gym, Food and Goals",
+        "start": "2025-11-23T11:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhsMzNhZHExOGQxajJiOW04OHE0YWI5azZzcGs2YmExNm9zM2NiOXA4b3IzZ2RhNTcwczNnaGk0NjRfMjAyNTExMjNUMTIxNTAwWg",
+        "title": "Lunch & Swim",
+        "start": "2025-11-23T12:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_MmI2NGMyZDkycDIyazYzODF1ZmRjYWZ1bnVfMjAyNTExMjNUMTM0NTAwWg",
+        "title": "Recovery/Easy run with Dad ",
+        "start": "2025-11-23T13:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_N2N2djM4ZzNnOTNzZDR1dmdtcW9vMjIzYmpfMjAyNTExMjNUMTQzMDAwWg",
+        "title": "Side Gig Block",
+        "start": "2025-11-23T14:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_N250NHBydjNlajZjamwwcDEwbTNoaWc3ZGJfMjAyNTExMjNUMTYzMDAwWg",
+        "title": "Gaming Block, TV or Cinema Block",
+        "start": "2025-11-23T16:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Njdya3YxZHFmcDM5ZGZ0YjdiMXB1YTdscHJfMjAyNTExMjNUMTkxNTAwWg",
+        "title": "Evening Walk + Podcast - Get Those steps in ",
+        "start": "2025-11-23T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_bzByaXFhZGN0ZGxtaWNlMjhna29hMzJkam9fMjAyNTExMjNUMTkxNTAwWg",
+        "title": "Evening walk - get steps in",
+        "start": "2025-11-23T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZwMjQ4ZWExNmgwajJiOWg2OTBqYWI5azcwb2o4YmEyNm9xazRiOW04Z3BqaWdhMTZrcmowZ2k2NjBfMjAyNTExMjNUMjAwMDAwWg",
+        "title": "Sauna and Read ",
+        "start": "2025-11-23T20:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZncmsyZTlqODhwMzRiYTE2MTI0NmI5azc0c2oyYjlvNjhwNGNiOW02OTBqNGRobzZwMTNlZ3BwNmdfMjAyNTExMjNUMjA0NTAwWg",
+        "title": "Hip flexor session ",
+        "start": "2025-11-23T20:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NjM5b2FqZTh1bGplc3IwZDUwNzZsanExanZfMjAyNTExMjNUMjEzMDAwWg",
+        "title": "Practice Chess",
+        "start": "2025-11-23T21:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzY0bzM2ZWExNjkyamNiOWg2MHFrY2I5azg0cmppYjlvNjRxMzJiYTE2b3MzZ2UxaTcxMjNpY3ExNjhfMjAyNTExMjNUMjIzNTAwWg",
+        "title": "Listen to Wind Dow",
+        "start": "2025-11-23T22:35:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_ajA3bXRqbnFhbThodjYydnZ1MjBpamJiajRfMjAyNTExMjRUMDUyMDAwWg",
+        "title": "Mediate",
+        "start": "2025-11-24T05:20:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NzlsbTluNjlzaDIxYWN2ZmpqdG1lMWhsZzFfMjAyNTExMjRUMDU0NTAwWg",
+        "title": "S&C",
+        "start": "2025-11-24T05:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_M3R1OW52MDB0Ymp2dHQzcnNuYzdhcDFvdm9fMjAyNTExMjRUMDcxNTAwWg",
+        "title": "Mornin' Walk - Get the Steps in",
+        "start": "2025-11-24T07:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZoMWpnZTFsNnQxM2FiYTE4OG8zaWI5azYwczNpYmEyNzUxajhiOWs4NHFrNGRhMjcwcjM0Y2k0Nm9fMjAyNTExMjRUMDgwMDAwWg",
+        "title": "Journal and Gratitude",
+        "start": "2025-11-24T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhkMTQyaGE1NmNwamViYTE2NHI0OGI5azhsMTQ2YjlvODhyajhiOWo4aDM0MmdobjZkMmo0Y2E1NnNfMjAyNTExMjRUMDgzMDAwWg",
+        "title": "Plan out day review & Todo list items",
+        "start": "2025-11-24T08:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_N2dtdHZjM2JsZ2ZxdTVnODVoMzJwZW81NWtfMjAyNTExMjRUMTIxNTAwWg",
+        "title": "Shorter Run & Lunch",
+        "start": "2025-11-24T12:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Xzc0cGpjZzlvNjhxazhiOWg4NG8zZ2I5azZvczNpYmEyOGQxazhiYTQ4a3FrMmRxMTZnbzQ4ZzlqOG8",
+        "title": "Big Phat Barbershop: Hair Cut",
+        "start": "2025-11-24T12:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NjVuaXM3NW9yNTAxYjNjczRsZmhucXQ0dmpfMjAyNTExMjRUMTc0NTAwWg",
+        "title": "Crossfit",
+        "start": "2025-11-24T17:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Njdya3YxZHFmcDM5ZGZ0YjdiMXB1YTdscHJfMjAyNTExMjRUMTkxNTAwWg",
+        "title": "Evening Walk + Podcast - Get Those steps in ",
+        "start": "2025-11-24T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_bzByaXFhZGN0ZGxtaWNlMjhna29hMzJkam9fMjAyNTExMjRUMTkxNTAwWg",
+        "title": "Evening walk - get steps in",
+        "start": "2025-11-24T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Xzg0cmo2YzIxNjUyMzBiYTU4NHFrMmI5azZzcGplYjlwOGwwamliOW03MHBqY2NhMzZwMmtjZGhvNzRfMjAyNTExMjRUMTk0MDAwWg",
+        "title": "Evening Swim",
+        "start": "2025-11-24T19:40:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZwMjQ4ZWExNmgwajJiOWg2OTBqYWI5azcwb2o4YmEyNm9xazRiOW04Z3BqaWdhMTZrcmowZ2k2NjBfMjAyNTExMjRUMjAwMDAwWg",
+        "title": "Sauna and Read ",
+        "start": "2025-11-24T20:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NDM3Ym1ldDBjYWJ1bWk0N2dydnZta2o4dXVfMjAyNTExMjRUMjAzMDAwWg",
+        "title": "Side Gig Block",
+        "start": "2025-11-24T20:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzY0bzM2ZWExNjkyamNiOWg2MHFrY2I5azg0cmppYjlvNjRxMzJiYTE2b3MzZ2UxaTcxMjNpY3ExNjhfMjAyNTExMjRUMjIzNTAwWg",
+        "title": "Listen to Wind Dow",
+        "start": "2025-11-24T22:35:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZnc2o2ZzluNmNzazhiOWg2a3I0Y2I5azZrcmppYmExNmNvazJiYTI2b3BrYWRxNDhrcms2Z2hqNzBfMjAyNTExMjVUMDQxNTAwWg",
+        "title": "ServiceNow Training or Exam see list below",
+        "start": "2025-11-25T04:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_ajA3bXRqbnFhbThodjYydnZ1MjBpamJiajRfMjAyNTExMjVUMDUyMDAwWg",
+        "title": "Mediate",
+        "start": "2025-11-25T05:20:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhjczQ0ZGE1NnAzMzBiOW43MHFqNmI5azhncmtjYmEyNm9xM2NiOW02OTEzOGQ5bTc1MjM0Z3BqNzBfMjAyNTExMjVUMDYzMDAwWg",
+        "title": "Adult Swim Lessons",
+        "start": "2025-11-25T06:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZjcjMwZGhsOG9xMzJiOW82cDEzNmI5azY5Mmo4YmEyOHAxajRiOWc4NHA0NmUxbDhjcWtjZWE1NjBfMjAyNTExMjVUMDgwMDAwWg",
+        "title": "Practice Skill block -  Rubik's cube *Skill Backlog List",
+        "start": "2025-11-25T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NjVuaXM3NW9yNTAxYjNjczRsZmhucXQ0dmpfMjAyNTExMjVUMTc0NTAwWg",
+        "title": "Crossfit",
+        "start": "2025-11-25T17:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Njdya3YxZHFmcDM5ZGZ0YjdiMXB1YTdscHJfMjAyNTExMjVUMTkxNTAwWg",
+        "title": "Evening Walk + Podcast - Get Those steps in ",
+        "start": "2025-11-25T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZwMjQ4ZWExNmgwajJiOWg2OTBqYWI5azcwb2o4YmEyNm9xazRiOW04Z3BqaWdhMTZrcmowZ2k2NjBfMjAyNTExMjVUMjAwMDAwWg",
+        "title": "Sauna and Read ",
+        "start": "2025-11-25T20:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZncmsyZTlqODhwMzRiYTE2MTI0NmI5azc0c2oyYjlvNjhwNGNiOW02OTBqNGRobzZwMTNlZ3BwNmdfMjAyNTExMjVUMjA0NTAwWg",
+        "title": "Hip flexor session ",
+        "start": "2025-11-25T20:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzY0bzM2ZWExNjkyamNiOWg2MHFrY2I5azg0cmppYjlvNjRxMzJiYTE2b3MzZ2UxaTcxMjNpY3ExNjhfMjAyNTExMjVUMjIzNTAwWg",
+        "title": "Listen to Wind Dow",
+        "start": "2025-11-25T22:35:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_ajA3bXRqbnFhbThodjYydnZ1MjBpamJiajRfMjAyNTExMjZUMDUyMDAwWg",
+        "title": "Mediate",
+        "start": "2025-11-26T05:20:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NzlsbTluNjlzaDIxYWN2ZmpqdG1lMWhsZzFfMjAyNTExMjZUMDU0NTAwWg",
+        "title": "S&C",
+        "start": "2025-11-26T05:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_N2dsMWU1Mzh2M29hbWJhZ3ZpbXZlaDdrcThfMjAyNTExMjZUMDY1NTAwWg",
+        "title": "Hip Flexor Rehab",
+        "start": "2025-11-26T06:55:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NXVrY2VyN3JnYTBqYWxjY3J0ODF1Njc1ZzFfMjAyNTExMjZUMDcxNTAwWg",
+        "title": "Easy 5km with Oisin or Pat",
+        "start": "2025-11-26T07:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZoMWpnZTFsNnQxM2FiYTE4OG8zaWI5azYwczNpYmEyNzUxajhiOWs4NHFrNGRhMjcwcjM0Y2k0Nm9fMjAyNTExMjZUMDgwMDAwWg",
+        "title": "Journal and Gratitude",
+        "start": "2025-11-26T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhkMTQyaGE1NmNwamViYTE2NHI0OGI5azhsMTQ2YjlvODhyajhiOWo4aDM0MmdobjZkMmo0Y2E1NnNfMjAyNTExMjZUMDgzMDAwWg",
+        "title": "Plan out day review & Todo list items",
+        "start": "2025-11-26T08:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_N2dtdHZjM2JsZ2ZxdTVnODVoMzJwZW81NWtfMjAyNTExMjZUMTIxNTAwWg",
+        "title": "Shorter Run & Lunch",
+        "start": "2025-11-26T12:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NXN1N2FzazE4ZThhZTVoYjNzNGp0bW1xMWpfMjAyNTExMjZUMTc0NTAwWg",
+        "title": "Boundary running club or Crossfit",
+        "start": "2025-11-26T17:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Njdya3YxZHFmcDM5ZGZ0YjdiMXB1YTdscHJfMjAyNTExMjZUMTkxNTAwWg",
+        "title": "Evening Walk + Podcast - Get Those steps in ",
+        "start": "2025-11-26T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_bzByaXFhZGN0ZGxtaWNlMjhna29hMzJkam9fMjAyNTExMjZUMTkxNTAwWg",
+        "title": "Evening walk - get steps in",
+        "start": "2025-11-26T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_MnV2ZzhqZTU4YW5mOWIyOGZlNXBuMWR2MTNfMjAyNTExMjZUMTkzMDAwWg",
+        "title": "Chores and Meal Prep ",
+        "start": "2025-11-26T19:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Xzg0cmo2YzIxNjUyMzBiYTU4NHFrMmI5azZzcGplYjlwOGwwamliOW03MHBqY2NhMzZwMmtjZGhvNzRfMjAyNTExMjZUMTk0MDAwWg",
+        "title": "Evening Swim",
+        "start": "2025-11-26T19:40:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZwMjQ4ZWExNmgwajJiOWg2OTBqYWI5azcwb2o4YmEyNm9xazRiOW04Z3BqaWdhMTZrcmowZ2k2NjBfMjAyNTExMjZUMjAwMDAwWg",
+        "title": "Sauna and Read ",
+        "start": "2025-11-26T20:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NGNrZGpyZjg4anMyZnY5YXFzMmFwbW1wMzlfMjAyNTExMjZUMjAxNTAwWg",
+        "title": "Fun Projects e.g AI or Deep Rearch",
+        "start": "2025-11-26T20:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZncmsyZTlqODhwMzRiYTE2MTI0NmI5azc0c2oyYjlvNjhwNGNiOW02OTBqNGRobzZwMTNlZ3BwNmdfMjAyNTExMjZUMjA0NTAwWg",
+        "title": "Hip flexor session ",
+        "start": "2025-11-26T20:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzY0bzM2ZWExNjkyamNiOWg2MHFrY2I5azg0cmppYjlvNjRxMzJiYTE2b3MzZ2UxaTcxMjNpY3ExNjhfMjAyNTExMjZUMjIzNTAwWg",
+        "title": "Listen to Wind Dow",
+        "start": "2025-11-26T22:35:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZnc2o2ZzluNmNzazhiOWg2a3I0Y2I5azZrcmppYmExNmNvazJiYTI2b3BrYWRxNDhrcms2Z2hqNzBfMjAyNTExMjdUMDQxNTAwWg",
+        "title": "ServiceNow Training or Exam see list below",
+        "start": "2025-11-27T04:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_ajA3bXRqbnFhbThodjYydnZ1MjBpamJiajRfMjAyNTExMjdUMDUyMDAwWg",
+        "title": "Mediate",
+        "start": "2025-11-27T05:20:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NzlsbTluNjlzaDIxYWN2ZmpqdG1lMWhsZzFfMjAyNTExMjdUMDU0NTAwWg",
+        "title": "S&C",
+        "start": "2025-11-27T05:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_N2dsMWU1Mzh2M29hbWJhZ3ZpbXZlaDdrcThfMjAyNTExMjdUMDY1NTAwWg",
+        "title": "Hip Flexor Rehab",
+        "start": "2025-11-27T06:55:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_M3R1OW52MDB0Ymp2dHQzcnNuYzdhcDFvdm9fMjAyNTExMjdUMDcxNTAwWg",
+        "title": "Mornin' Walk - Get the Steps in",
+        "start": "2025-11-27T07:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZjcjMwZGhsOG9xMzJiOW82cDEzNmI5azY5Mmo4YmEyOHAxajRiOWc4NHA0NmUxbDhjcWtjZWE1NjBfMjAyNTExMjdUMDgwMDAwWg",
+        "title": "Practice Skill block -  Rubik's cube *Skill Backlog List",
+        "start": "2025-11-27T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhkMTQyaGE1NmNwamViYTE2NHI0OGI5azhsMTQ2YjlvODhyajhiOWo4aDM0MmdobjZkMmo0Y2E1NnNfMjAyNTExMjdUMDgzMDAwWg",
+        "title": "Plan out day review & Todo list items",
+        "start": "2025-11-27T08:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhsMzNhZHExOGQxajJiOW04OHE0YWI5azZzcGs2YmExNm9zM2NiOXA4b3IzZ2RhNTcwczNnaGk0NjRfMjAyNTExMjdUMTIxNTAwWg",
+        "title": "Lunch & Swim",
+        "start": "2025-11-27T12:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_MGhmcXZrNnE0aGY2Y3JxMDhiaDE5NmExMDJfMjAyNTExMjdUMTgwMDAwWg",
+        "title": "Run from House - Easy Short",
+        "start": "2025-11-27T18:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_bzByaXFhZGN0ZGxtaWNlMjhna29hMzJkam9fMjAyNTExMjdUMTkxNTAwWg",
+        "title": "Evening walk - get steps in",
+        "start": "2025-11-27T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZwMjQ4ZWExNmgwajJiOWg2OTBqYWI5azcwb2o4YmEyNm9xazRiOW04Z3BqaWdhMTZrcmowZ2k2NjBfMjAyNTExMjdUMjAwMDAwWg",
+        "title": "Sauna and Read ",
+        "start": "2025-11-27T20:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZncmsyZTlqODhwMzRiYTE2MTI0NmI5azc0c2oyYjlvNjhwNGNiOW02OTBqNGRobzZwMTNlZ3BwNmdfMjAyNTExMjdUMjA0NTAwWg",
+        "title": "Hip flexor session ",
+        "start": "2025-11-27T20:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzY0bzM2ZWExNjkyamNiOWg2MHFrY2I5azg0cmppYjlvNjRxMzJiYTE2b3MzZ2UxaTcxMjNpY3ExNjhfMjAyNTExMjdUMjIzNTAwWg",
+        "title": "Listen to Wind Dow",
+        "start": "2025-11-27T22:35:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_ajA3bXRqbnFhbThodjYydnZ1MjBpamJiajRfMjAyNTExMjhUMDUyMDAwWg",
+        "title": "Mediate",
+        "start": "2025-11-28T05:20:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NzlsbTluNjlzaDIxYWN2ZmpqdG1lMWhsZzFfMjAyNTExMjhUMDU0NTAwWg",
+        "title": "S&C",
+        "start": "2025-11-28T05:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_N2dsMWU1Mzh2M29hbWJhZ3ZpbXZlaDdrcThfMjAyNTExMjhUMDY1NTAwWg",
+        "title": "Hip Flexor Rehab",
+        "start": "2025-11-28T06:55:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_M3R1OW52MDB0Ymp2dHQzcnNuYzdhcDFvdm9fMjAyNTExMjhUMDcxNTAwWg",
+        "title": "Mornin' Walk - Get the Steps in",
+        "start": "2025-11-28T07:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZoMWpnZTFsNnQxM2FiYTE4OG8zaWI5azYwczNpYmEyNzUxajhiOWs4NHFrNGRhMjcwcjM0Y2k0Nm9fMjAyNTExMjhUMDgwMDAwWg",
+        "title": "Journal and Gratitude",
+        "start": "2025-11-28T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhkMTQyaGE1NmNwamViYTE2NHI0OGI5azhsMTQ2YjlvODhyajhiOWo4aDM0MmdobjZkMmo0Y2E1NnNfMjAyNTExMjhUMDgzMDAwWg",
+        "title": "Plan out day review & Todo list items",
+        "start": "2025-11-28T08:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_M2FrZTJkZ3VwbnFsajNtcTNuY2VtaHQ2cG1fMjAyNTExMjhUMTQwMDAwWg",
+        "title": "Side Gig Block",
+        "start": "2025-11-28T14:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_bzByaXFhZGN0ZGxtaWNlMjhna29hMzJkam9fMjAyNTExMjhUMTkxNTAwWg",
+        "title": "Evening walk - get steps in",
+        "start": "2025-11-28T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzY0bzM2ZWExNjkyamNiOWg2MHFrY2I5azg0cmppYjlvNjRxMzJiYTE2b3MzZ2UxaTcxMjNpY3ExNjhfMjAyNTExMjhUMjIzNTAwWg",
+        "title": "Listen to Wind Dow",
+        "start": "2025-11-28T22:35:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_bDdqYWkzMzVzMjJib25nMWltcWgzcHFsdmtfMjAyNTExMjhUMjMzMDAwWg",
+        "title": "Weekend Bedtime",
+        "start": "2025-11-28T23:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_MHVjMXJubzZuNHRhYThocWxmNDFhNDRjcm1fMjAyNTExMjlUMDYwMDAwWg",
+        "title": "Chores ",
+        "start": "2025-11-29T06:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_M3R1OW52MDB0Ymp2dHQzcnNuYzdhcDFvdm9fMjAyNTExMjlUMDcxNTAwWg",
+        "title": "Mornin' Walk - Get the Steps in",
+        "start": "2025-11-29T07:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_MThmOHFmbmVoYTU4dHVqcnYwMHVxMTN1Z2JfMjAyNTExMjlUMDc0NTAwWg",
+        "title": "Morning Swim ",
+        "start": "2025-11-29T07:45:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZjcjMwZGhsOG9xMzJiOW82cDEzNmI5azY5Mmo4YmEyOHAxajRiOWc4NHA0NmUxbDhjcWtjZWE1NjBfMjAyNTExMjlUMDgwMDAwWg",
+        "title": "Practice Skill block -  Rubik's cube *Skill Backlog List",
+        "start": "2025-11-29T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZoMWpnZTFsNnQxM2FiYTE4OG8zaWI5azYwczNpYmEyNzUxajhiOWs4NHFrNGRhMjcwcjM0Y2k0Nm9fMjAyNTExMjlUMDgwMDAwWg",
+        "title": "Journal and Gratitude",
+        "start": "2025-11-29T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhkMTQyaGE1NmNwamViYTE2NHI0OGI5azhsMTQ2YjlvODhyajhiOWo4aDM0MmdobjZkMmo0Y2E1NnNfMjAyNTExMjlUMDgzMDAwWg",
+        "title": "Plan out day review & Todo list items",
+        "start": "2025-11-29T08:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_MWdsb2FqbXNmN2YybWRjdG9jdGRsNGJkaDNfMjAyNTExMjlUMDkwMDAwWg",
+        "title": "Park run or Crossfit",
+        "start": "2025-11-29T09:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NGVzY29iNTU2aGc5NzduOWJvcGJ1djUzdTRfMjAyNTExMjlUMTEwMDAwWg",
+        "title": "S&C session potentially",
+        "start": "2025-11-29T11:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzhsMzNhZHExOGQxajJiOW04OHE0YWI5azZzcGs2YmExNm9zM2NiOXA4b3IzZ2RhNTcwczNnaGk0NjRfMjAyNTExMjlUMTIxNTAwWg",
+        "title": "Lunch & Swim",
+        "start": "2025-11-29T12:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZncTRhaGhtNjRvNDZiOWg4cDJrNmI5azc1MzRhYjlvNzUya2FiOWo4Y3FqZ2QxajZzcGo0Y3BuODRfMjAyNTExMjlUMTIzMDAwWg",
+        "title": "Stop parking ",
+        "start": "2025-11-29T12:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZzczNpZ3E0ODUzNDhiOWw2NHMzNmI5azg0c2phYmEyNjRvMzBiYTE3NG9qOGM5bThsMTNnZDFpOGtfMjAyNTExMjlUMTMxNTAwWg",
+        "title": "Visit Parents ",
+        "start": "2025-11-29T13:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Xzhncmo2ZDFuNmNwazRiOWk4a280OGI5azZrc2o0YjlvNzRxa2FiOWc2b3FqMGMxaDZkMGo0Y2kzNm9fMjAyNTExMjlUMTQzMDAwWg",
+        "title": "Home Project Block e.g Garage Painting Garden etc",
+        "start": "2025-11-29T14:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Xzc0cDQ2ZTIyODkwajBiYTY4NTEzMmI5azZvb2o2YmEyOGgxa2FiOWg4Y3I0MmRocDY4bzNhZ2hvNm9fMjAyNTExMjlUMTYzMDAwWg",
+        "title": "Gaming Block, TV or Cinema Block",
+        "start": "2025-11-29T16:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Njdya3YxZHFmcDM5ZGZ0YjdiMXB1YTdscHJfMjAyNTExMjlUMTkxNTAwWg",
+        "title": "Evening Walk + Podcast - Get Those steps in ",
+        "start": "2025-11-29T19:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_NjM5b2FqZTh1bGplc3IwZDUwNzZsanExanZfMjAyNTExMjlUMjEzMDAwWg",
+        "title": "Practice Chess",
+        "start": "2025-11-29T21:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzY0bzM2ZWExNjkyamNiOWg2MHFrY2I5azg0cmppYjlvNjRxMzJiYTE2b3MzZ2UxaTcxMjNpY3ExNjhfMjAyNTExMjlUMjIzNTAwWg",
+        "title": "Listen to Wind Dow",
+        "start": "2025-11-29T22:35:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_bDdqYWkzMzVzMjJib25nMWltcWgzcHFsdmtfMjAyNTExMjlUMjMzMDAwWg",
+        "title": "Weekend Bedtime",
+        "start": "2025-11-29T23:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_MHVjMXJubzZuNHRhYThocWxmNDFhNDRjcm1fMjAyNTExMzBUMDYwMDAwWg",
+        "title": "Chores ",
+        "start": "2025-11-30T06:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_N2dsMWU1Mzh2M29hbWJhZ3ZpbXZlaDdrcThfMjAyNTExMzBUMDY1NTAwWg",
+        "title": "Hip Flexor Rehab",
+        "start": "2025-11-30T06:55:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_M3R1OW52MDB0Ymp2dHQzcnNuYzdhcDFvdm9fMjAyNTExMzBUMDcxNTAwWg",
+        "title": "Mornin' Walk - Get the Steps in",
+        "start": "2025-11-30T07:15:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_Xzg4b2s4aDI1NjkyNDhiOW82OHJqY2I5azg4cmthYjlwOGQxMzZiYTE2NHIzaWQ5bDY5MWppZTlqODhfMjAyNTExMzBUMDczMDAwWg",
+        "title": "Longer run Hyrox, Mountainbike or Hike",
+        "start": "2025-11-30T07:30:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZjcjMwZGhsOG9xMzJiOW82cDEzNmI5azY5Mmo4YmEyOHAxajRiOWc4NHA0NmUxbDhjcWtjZWE1NjBfMjAyNTExMzBUMDgwMDAwWg",
+        "title": "Practice Skill block -  Rubik's cube *Skill Backlog List",
+        "start": "2025-11-30T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      },
+      {
+        "id": "3L3nnXSuTPfr08c8DTXG5zYX37A2_gcal_XzZoMWpnZTFsNnQxM2FiYTE4OG8zaWI5azYwczNpYmEyNzUxajhiOWs4NHFrNGRhMjcwcjM0Y2k0Nm9fMjAyNTExMzBUMDgwMDAwWg",
+        "title": "Journal and Gratitude",
+        "start": "2025-11-30T08:00:00.000Z",
+        "type": "block",
+        "status": "synced"
+      }
+    ],
+    "storyBlocksSample": [],
+    "enrichedStoriesSample": [],
+    "macAgentStatus": "Not Found"
+  }
+}

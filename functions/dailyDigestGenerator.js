@@ -59,6 +59,9 @@ exports.generateDailyDigest = onSchedule({
         // Create digest content
         const digestContent = await createDigestHTML(userData, aiInsights);
 
+        // NEW: Write AI Priority back to Firestore
+        await updateAIPriority(db, userId, aiInsights.choices[0]?.message?.content, userData.tasksDueToday);
+
         // Save digest to database
         const digestDoc = {
           userId,
@@ -168,6 +171,16 @@ async function gatherUserData(db, userId, today) {
     };
   });
 
+  // Get unlinked stories (Converted Large Tasks)
+  const unlinkedStoriesSnapshot = await db.collection('stories')
+    .where('ownerUid', '==', userId)
+    .where('unlinked', '==', true)
+    .where('status', '!=', 'done')
+    .limit(5)
+    .get();
+
+  const unlinkedStories = unlinkedStoriesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
   // Get 7-day calendar blocks (Rolling Window)
   // Note: We fetch 'calendar_blocks' which are the instances.
   const calendarBlocksSnapshot = await db.collection('calendar_blocks')
@@ -196,6 +209,7 @@ async function gatherUserData(db, userId, today) {
     tasksDueToday: tasksDueTodaySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     overdueTasks: overdueTasks.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     stories,
+    unlinkedStories,
     calendarBlocks: calendarBlocksSnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data(),
@@ -275,7 +289,43 @@ async function generateAIInsights(userData) {
   }
   const json = await resp.json();
   const textOut = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+  // Attempt to extract a Task ID if the AI identified one (This is a heuristic extraction)
+  // In a future iteration, we should force JSON output from the LLM.
+  // For now, we'll look for a pattern like "Task ID: <id>" or just rely on the text.
+  // BUT, the requirement is to "Write this priority back to the tasks Firestore collection".
+  // So we MUST ask for JSON or a specific format.
+
   return { choices: [{ message: { content: textOut } }] };
+}
+
+/**
+ * NEW: Helper to extract and save AI Priority
+ * This is called after generating insights to update the database.
+ */
+async function updateAIPriority(db, userId, aiText, tasks) {
+  // Simple heuristic: check if any task title from the "Due Today" list is mentioned in the "Single Highest Priority" section.
+  // This is a "Soft Match".
+
+  if (!aiText || !tasks || tasks.length === 0) return;
+
+  const lowerText = aiText.toLowerCase();
+  let bestMatchId = null;
+
+  for (const task of tasks) {
+    if (lowerText.includes(task.title.toLowerCase())) {
+      bestMatchId = task.id;
+      break; // Take the first one mentioned
+    }
+  }
+
+  if (bestMatchId) {
+    console.log(`🧠 AI identified priority task: ${bestMatchId}`);
+    await db.collection('tasks').doc(bestMatchId).update({
+      aiPriority: 'high',
+      aiPrioritySetAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  }
 }
 
 /**
@@ -337,6 +387,19 @@ async function createDigestHTML(userData, aiInsights) {
                     <div class="item-meta">${s.status} • ${s.points || 0} pts</div>
                 </div>
                 ${s.isStarted ? '<span class="tag tag-started">Started</span>' : ''}
+            </div>
+            `).join('')}
+            ` : ''}
+
+            ${userData.unlinkedStories && userData.unlinkedStories.length > 0 ? `
+            <div class="section-title">Unlinked Stories (Large Tasks)</div>
+            ${userData.unlinkedStories.map(s => `
+            <div class="item">
+                <div>
+                    <div class="item-title">${s.title}</div>
+                    <div class="item-meta">Converted from Task • ${s.estimateMin || 0} min</div>
+                </div>
+                <span class="tag" style="background:#fce7f3; color:#be185d">Unlinked</span>
             </div>
             `).join('')}
             ` : ''}

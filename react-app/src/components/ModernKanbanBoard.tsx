@@ -40,6 +40,7 @@ import EditStoryModal from './EditStoryModal';
 import { DnDMutationHandler } from '../utils/dndMutations';
 import { themeVars } from '../utils/themeVars';
 import '../styles/KanbanCards.css';
+import '../styles/KanbanFixes.css';
 import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, goalThemeColor, colorWithAlpha } from '../utils/storyCardFormatting';
 import SortableStoryCard from './stories/SortableStoryCard';
 
@@ -698,7 +699,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       unsubscribeStories();
       unsubscribeTasks();
     };
-  }, [currentUser, currentPersona, sprintDueDateRange?.start, sprintDueDateRange?.end, Array.isArray(statusFilter) ? statusFilter.join(',') : '']);
+  }, [currentUser, currentPersona, resolvedSprintId, sprintDueDateRange?.start, sprintDueDateRange?.end, Array.isArray(statusFilter) ? statusFilter.join(',') : '']);
 
   // DnD handlers
   const handleDragStart = (event: DragStartEvent) => {

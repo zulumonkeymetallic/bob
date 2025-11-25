@@ -44,6 +44,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState<Goal | null>(null);
   const [showAddStoryModal, setShowAddStoryModal] = useState<string | null>(null); // Store goalId
@@ -193,6 +194,23 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     );
 
     return () => unsubscribe();
+  }, [currentUser?.uid]);
+
+  // Load Monzo pots for linked pot badge + savings progress
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const potQuery = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(potQuery, (snap) => {
+      const map: Record<string, { name: string; balance: number }> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const id = data.potId || d.id;
+        if (!id) return;
+        map[id] = { name: data.name || id, balance: data.balance || 0 };
+      });
+      setPots(map);
+    });
+    return () => unsub();
   }, [currentUser?.uid]);
 
   // Fetch time allocations for goals from calendar blocks
@@ -407,6 +425,12 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const doneStories = (goal as any).doneStories ?? (goal as any).completedStories ?? null;
           const allocatedMinutes = goalTimeAllocations[goal.id];
           const latestActivity = latestActivities[goal.id];
+          const potId = (goal as any).linkedPotId || (goal as any).potId;
+          const potInfo = potId ? pots[potId] : undefined;
+          const potBalance = potInfo?.balance || 0;
+          const estimated = (goal as any).estimatedCost || 0;
+          const savingsPct = estimated > 0 ? Math.min(100, Math.round(((potBalance / 100) / estimated) * 100)) : 0;
+          const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
           const progressPercent = totalStories && totalStories > 0
             ? Math.max(0, Math.min(100, Math.round(((doneStories ?? 0) / totalStories) * 100)))
             : 0;
@@ -439,6 +463,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 className={`h-100 goals-card goals-card--${showDetailed ? 'comfortable' : 'grid'}`}
                 style={{
                 height: '100%',
+                minHeight: showDetailed ? 320 : 260,
+                maxHeight: showDetailed ? 380 : 320,
                 border: isSelected ? `3px solid ${themeColor}` : `1px solid ${rgbaCard(0.06)}`,
                 boxShadow: isSelected ? '0 0 0 0 transparent' : '0 10px 24px var(--glass-shadow-color)',
                 borderRadius: showDetailed ? '16px' : '14px',
@@ -447,7 +473,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 cursor: 'pointer',
                 background: cardBackground,
                 color: textColor,
-                flex: '1 1 auto'
+                flex: '1 1 auto',
+                display: 'flex',
+                flexDirection: 'column'
                 }}
                 onClick={() => onGoalSelect?.(goal.id)}
                 onMouseEnter={(e) => {
@@ -486,8 +514,13 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       margin: '0 0 6px 0', 
                       fontSize: titleFontSize, 
                       fontWeight: '600',
-                      lineHeight: '1.4',
-                      wordBreak: 'break-word'
+                      lineHeight: '1.3',
+                      wordBreak: 'break-word',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical'
                     }}>
                       {goal.title}
                     </h5>
@@ -510,6 +543,15 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       >
                         {getStatusName(goal.status)}
                       </Badge>
+                      {(() => {
+                        const potId = (goal as any).linkedPotId || (goal as any).potId;
+                        const potInfo = potId ? pots[potId] : undefined;
+                        return potInfo ? (
+                          <Badge bg="light" text="dark" className="border">
+                            {potInfo.name}
+                          </Badge>
+                        ) : null;
+                      })()}
                     </div>
                   </div>
                   
@@ -612,6 +654,23 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                           ? `${doneStories ?? 0} of ${totalStories} stories`
                           : 'No stories yet'}
                       </div>
+                      {estimated > 0 && (
+                        <>
+                          <div className="goals-card-progress__header">
+                            <span>Savings</span>
+                            <span>{savingsPct}%</span>
+                          </div>
+                          <div className="goals-card-progress__bar" style={{ background: withAlpha(themeColor, 0.12) }}>
+                            <div
+                              className="goals-card-progress__bar-fill"
+                              style={{ width: `${savingsPct}%`, background: withAlpha(themeColor, 0.6) }}
+                            />
+                          </div>
+                          <div className="goals-card-progress__footer">
+                            {formatMoney(potBalance / 100)} of {formatMoney(estimated)}
+                          </div>
+                        </>
+                      )}
                     </div>
                     {/* Removed Priority and This Week per request */}
                   </div>
@@ -706,6 +765,23 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                           ? `${doneStories ?? 0} of ${totalStories} stories`
                           : 'No stories yet'}
                       </div>
+                      {estimated > 0 && (
+                        <>
+                          <div className="goals-card-progress__header">
+                            <span>Savings</span>
+                            <span>{savingsPct}%</span>
+                          </div>
+                          <div className="goals-card-progress__bar" style={{ background: withAlpha(themeColor, 0.16) }}>
+                            <div
+                              className="goals-card-progress__bar-fill"
+                              style={{ width: `${savingsPct}%`, background: withAlpha(themeColor, 0.7) }}
+                            />
+                          </div>
+                          <div className="goals-card-progress__footer" style={{ color: textColor }}>
+                            {formatMoney(potBalance / 100)} of {formatMoney(estimated)}
+                          </div>
+                        </>
+                      )}
                     </div>
                     <div className="goals-card-stats-detailed">
                       <div className="goals-card-stat-block">

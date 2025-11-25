@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Badge, Button, Card, Col, Container, Form, Modal, ProgressBar, Row, Spinner, Table } from 'react-bootstrap';
 import { collection, doc, getDoc, onSnapshot, orderBy, query, setDoc, where, limit } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { ArrowDown, ArrowUp, CreditCard, DollarSign, PieChart as PieChartIcon, Settings, TrendingUp, Wallet } from 'lucide-react';
+import { Goal, Story } from '../types';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
+import ReactECharts from 'echarts-for-react';
 
 // --- Types ---
 interface BudgetTotals {
@@ -24,6 +26,8 @@ interface TransactionRow {
     userCategoryLabel?: string | null;
     merchantName?: string | null;
     merchantLogo?: string | null;
+    potName?: string | null;
+    potId?: string | null;
 }
 
 interface BudgetSummaryDoc {
@@ -75,12 +79,44 @@ const FinanceDashboardModern: React.FC = () => {
     const [summary, setSummary] = useState<BudgetSummaryDoc | null>(null);
     const [alignment, setAlignment] = useState<GoalAlignmentDoc | null>(null);
     const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+    const [pots, setPots] = useState<Record<string, { name: string; balance?: number; currency?: string }>>({});
+    const [goals, setGoals] = useState<Goal[]>([]);
+    const [stories, setStories] = useState<Story[]>([]);
     const [loading, setLoading] = useState(true);
     const [isRecomputing, setIsRecomputing] = useState(false);
     const [showBudgetModal, setShowBudgetModal] = useState(false);
     const [budgets, setBudgets] = useState<Record<string, number>>({});
+    const [filterMode, setFilterMode] = useState<'month' | 'quarter' | 'year' | 'custom'>('month');
+    const [startDate, setStartDate] = useState<string>(() => {
+        const now = new Date();
+        return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    });
+    const [endDate, setEndDate] = useState<string>(() => {
+        const now = new Date();
+        return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+    });
 
     // --- Data Fetching ---
+    // Load pots for name lookup
+    useEffect(() => {
+        if (!currentUser) return;
+        const potsQuery = query(
+            collection(db, 'monzo_pots'),
+            where('ownerUid', '==', currentUser.uid)
+        );
+        const unsub = onSnapshot(potsQuery, (snap) => {
+            const map: Record<string, { name: string; balance?: number; currency?: string }> = {};
+            snap.docs.forEach((d) => {
+                const data = d.data() as any;
+                const id = data.potId || d.id;
+                if (!id) return;
+                map[id] = { name: data.name || id, balance: data.balance || 0, currency: data.currency || 'GBP' };
+            });
+            setPots(map);
+        });
+        return () => unsub();
+    }, [currentUser]);
+
     useEffect(() => {
         if (!currentUser) return;
         setLoading(true);
@@ -88,7 +124,6 @@ const FinanceDashboardModern: React.FC = () => {
         const summaryRef = doc(db, 'monzo_budget_summary', currentUser.uid);
         const alignmentRef = doc(db, 'monzo_goal_alignment', currentUser.uid);
         const budgetRef = doc(db, 'finance_budgets', currentUser.uid);
-
         const txQuery = query(
             collection(db, 'monzo_transactions'),
             where('ownerUid', '==', currentUser.uid),
@@ -101,15 +136,22 @@ const FinanceDashboardModern: React.FC = () => {
         const unsubTx = onSnapshot(txQuery, (snap) => {
             setTransactions(snap.docs.map(d => {
                 const data = d.data();
+                const metadata = (data.metadata || {}) as Record<string, any>;
+                const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
+                const potName = potId ? pots[potId]?.name || null : null;
+                const amount = typeof data.amount === 'number' && Math.abs(data.amount) < 10 ? data.amount * 100 : data.amount;
+                const type = data.userCategoryType || data.defaultCategoryType || null;
                 return {
                     transactionId: data.transactionId,
                     description: data.description,
-                    amount: data.amount,
+                    amount,
                     createdISO: data.createdISO,
-                    userCategoryType: data.userCategoryType,
-                    userCategoryLabel: data.userCategoryLabel,
+                    userCategoryType: type,
+                    userCategoryLabel: data.userCategoryLabel || data.defaultCategoryLabel,
                     merchantName: data.merchant?.name,
-                    merchantLogo: data.merchant?.logo
+                    merchantLogo: data.merchant?.logo,
+                    potName,
+                    potId,
                 } as TransactionRow;
             }));
             setLoading(false);
@@ -121,6 +163,61 @@ const FinanceDashboardModern: React.FC = () => {
 
         return () => { unsubSummary(); unsubAlignment(); unsubTx(); };
     }, [currentUser]);
+
+    // Load goals and stories for progress metrics
+    useEffect(() => {
+        if (!currentUser) { setGoals([]); return; }
+        const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
+        const unsub = onSnapshot(goalsQuery, (snap) => {
+            setGoals(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Goal[]);
+        });
+        return () => unsub();
+    }, [currentUser]);
+
+    useEffect(() => {
+        if (!currentUser) { setStories([]); return; }
+        const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
+        const unsub = onSnapshot(storiesQuery, (snap) => {
+            setStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Story[]);
+        });
+        return () => unsub();
+    }, [currentUser]);
+
+    // Reattach pot names when pot map updates
+    useEffect(() => {
+        if (!pots || !transactions.length) return;
+        setTransactions((prev) =>
+            prev.map((tx) => {
+                const potId = tx.potId;
+                const potName = potId ? pots[potId]?.name : undefined;
+                return potName ? { ...tx, potName } : tx;
+            })
+        );
+    }, [pots, transactions.length]);
+
+    useEffect(() => {
+        const now = new Date();
+        if (filterMode === 'month') {
+            setStartDate(new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10));
+            setEndDate(new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10));
+        } else if (filterMode === 'quarter') {
+            const q = Math.floor(now.getMonth() / 3);
+            const start = new Date(now.getFullYear(), q * 3, 1);
+            const end = new Date(now.getFullYear(), (q + 1) * 3, 0);
+            setStartDate(start.toISOString().slice(0, 10));
+            setEndDate(end.toISOString().slice(0, 10));
+        } else if (filterMode === 'year') {
+            const start = new Date(now.getFullYear(), 0, 1);
+            const end = new Date(now.getFullYear(), 11, 31);
+            setStartDate(start.toISOString().slice(0, 10));
+            setEndDate(end.toISOString().slice(0, 10));
+        }
+        // Legacy global hook for older UI buttons/modal expecting refreshMonzoData
+        (window as any).refreshMonzoData = async () => {
+            const fn = httpsCallable(functions, 'syncMonzoNow');
+            await fn({});
+        };
+    }, [filterMode]);
 
     // --- Actions ---
     const recomputeAnalytics = async () => {
@@ -146,46 +243,192 @@ const FinanceDashboardModern: React.FC = () => {
     const currency = summary?.currency || 'GBP';
     const formatMoney = (val: number) => val.toLocaleString('en-GB', { style: 'currency', currency });
 
-    const burndownData = useMemo(() => {
-        // Mock burndown for now, real implementation would need daily aggregates
-        // In a real app, we'd aggregate daily spend from transactions
-        if (!summary?.budgetProgress) return [];
-        const totalBudget = summary.budgetProgress.reduce((acc, b) => acc + b.budget, 0);
-        const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-        const today = new Date().getDate();
+    const parseMonthKey = (m: string) => {
+        if (!m) return new Date(NaN);
+        if (/^\d{4}-\d{2}$/.test(m)) {
+            const [y, mo] = m.split('-').map(Number);
+            return new Date(y, mo - 1, 1);
+        }
+        const maybe = new Date(m);
+        return maybe;
+    };
 
+    const filteredTimeline = useMemo(() => {
+        const source = summary?.spendTimeline || [];
+        if (!source.length) return [];
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        return source.filter((row) => {
+            const dt = parseMonthKey((row as any).month);
+            return dt >= start && dt <= end;
+        });
+    }, [summary?.spendTimeline, startDate, endDate]);
+
+    const filteredTotals = useMemo(() => {
+        if (filteredTimeline.length) {
+            return filteredTimeline.reduce(
+                (acc, row: any) => {
+                    acc.mandatory += row.mandatory || 0;
+                    acc.optional += row.optional || 0;
+                    acc.savings += row.savings || 0;
+                    acc.income += row.income || 0;
+                    return acc;
+                },
+                { mandatory: 0, optional: 0, savings: 0, income: 0 } as BudgetTotals
+            );
+        }
+        return summary?.totals || { mandatory: 0, optional: 0, savings: 0, income: 0 };
+    }, [filteredTimeline, summary?.totals]);
+
+    const goalProgress = useMemo(() => {
+        return goals.map((g) => {
+            const relatedStories = stories.filter((s) => s.goalId === g.id);
+            const totalPoints = relatedStories.reduce((sum, s) => sum + (s.points || 0), 0);
+            const donePoints = relatedStories.filter((s) => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+            const potId = (g as any).linkedPotId || g.potId || null;
+            const potInfo = potId ? pots[potId] : undefined;
+            const potBalance = potInfo?.balance || 0; // pence
+            const estimated = g.estimatedCost || 0; // pounds
+            const savingsPct = estimated > 0 ? Math.min(100, ((potBalance / 100) / estimated) * 100) : 0;
+            const pointsPct = totalPoints > 0 ? Math.min(100, (donePoints / totalPoints) * 100) : (g.status === 2 ? 100 : 0);
+            const themeDef = GLOBAL_THEMES.find((t) => t.id === (g as any).theme) || GLOBAL_THEMES[0];
+            return {
+                ...g,
+                totalPoints,
+                donePoints,
+                pointsPct,
+                potBalance,
+                savingsPct,
+                themeLabel: themeDef.name,
+                themeColor: themeDef.color,
+            };
+        });
+    }, [goals, stories, pots]);
+
+    const themeProgress = useMemo(() => {
+        const map = new Map<number, { themeId: number; name: string; color: string; totalPoints: number; donePoints: number; estimated: number; saved: number }>();
+        goalProgress.forEach((g: any) => {
+            const themeId = g.theme || 0;
+            const themeDef = GLOBAL_THEMES.find((t) => t.id === themeId) || GLOBAL_THEMES[0];
+            const existing = map.get(themeId) || { themeId, name: themeDef.name, color: themeDef.color, totalPoints: 0, donePoints: 0, estimated: 0, saved: 0 };
+            existing.totalPoints += g.totalPoints || 0;
+            existing.donePoints += g.donePoints || 0;
+            existing.estimated += g.estimatedCost || 0;
+            existing.saved += (g.potBalance || 0) / 100; // pounds
+            map.set(themeId, existing);
+        });
+        return Array.from(map.values()).map((t) => ({
+            ...t,
+            pointsPct: t.totalPoints > 0 ? Math.min(100, (t.donePoints / t.totalPoints) * 100) : 0,
+            savingsPct: t.estimated > 0 ? Math.min(100, (t.saved / t.estimated) * 100) : 0,
+        }));
+    }, [goalProgress]);
+
+    const burndownData = useMemo(() => {
+        const totalBudget = summary?.budgetProgress?.reduce((acc, b) => acc + b.budget, 0) || 0;
+        const spendSoFar = Math.abs(filteredTotals.mandatory + filteredTotals.optional + filteredTotals.savings);
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const daysInRange = Math.max(1, Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+        const todayIdx = Math.min(daysInRange, Math.round((Date.now() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
         const data = [];
-        let cumulativeSpend = 0;
-        // Linear projection for budget line
-        for (let i = 1; i <= daysInMonth; i++) {
-            const budgetPoint = (totalBudget / daysInMonth) * i;
-            // Mock spend accumulation (randomish)
-            if (i <= today) {
-                cumulativeSpend += (totalBudget / daysInMonth) * (0.8 + Math.random() * 0.4);
-            }
+        for (let i = 1; i <= daysInRange; i++) {
+            const budgetPoint = (totalBudget / daysInRange) * i;
+            const linearSpend = spendSoFar && todayIdx ? (spendSoFar / todayIdx) * i : spendSoFar;
             data.push({
                 day: i,
                 budget: budgetPoint,
-                spend: i <= today ? cumulativeSpend : null,
-                projected: i > today ? cumulativeSpend + ((totalBudget - cumulativeSpend) / (daysInMonth - today)) * (i - today) : null
+                spend: i <= todayIdx ? linearSpend : null,
+                projected: i > todayIdx ? (spendSoFar / todayIdx) * i : null
             });
         }
         return data;
-    }, [summary]);
+    }, [summary?.budgetProgress, filteredTotals, startDate, endDate]);
 
     const trendData = useMemo(() => {
-        return (summary?.spendTimeline || []).slice(-6).map(m => ({
+        const source = filteredTimeline.length ? filteredTimeline : summary?.spendTimeline || [];
+        return source.map((m: any) => ({
             name: m.month,
             Mandatory: m.mandatory,
             Optional: m.optional,
             Savings: m.savings
         }));
-    }, [summary]);
+    }, [filteredTimeline, summary?.spendTimeline]);
+
+    const filteredTransactions = useMemo(
+        () => transactions.filter((t) => {
+            const cat = (t.userCategoryType || '').toLowerCase();
+            return cat !== 'bank_transfer' && cat !== 'unknown';
+        }),
+        [transactions]
+    );
+
+    const burndownOption = {
+        tooltip: {
+            trigger: 'axis',
+            valueFormatter: (val: number) => formatMoney(val || 0),
+        },
+        legend: { data: ['Budget', 'Spend', 'Projected'] },
+        grid: { left: 30, right: 10, bottom: 20, top: 30 },
+        xAxis: {
+            type: 'category',
+            data: burndownData.map((d) => d.day),
+            axisLabel: { fontSize: 10 },
+        },
+        yAxis: {
+            type: 'value',
+            axisLabel: { formatter: (v: number) => formatMoney(v).replace('£', '£') },
+            splitLine: { show: true },
+        },
+        series: [
+            {
+                name: 'Budget',
+                type: 'line',
+                data: burndownData.map((d) => d.budget),
+                smooth: true,
+                lineStyle: { type: 'dashed', width: 2 },
+                symbol: 'none',
+            },
+            {
+                name: 'Spend',
+                type: 'line',
+                data: burndownData.map((d) => d.spend),
+                areaStyle: { opacity: 0.25 },
+                smooth: true,
+                lineStyle: { color: '#2563eb', width: 3 },
+            },
+            {
+                name: 'Projected',
+                type: 'line',
+                data: burndownData.map((d) => d.projected),
+                smooth: true,
+                lineStyle: { color: '#f97316', type: 'dotted', width: 2 },
+                symbol: 'none',
+            },
+        ],
+    };
+
+    const trendOption = {
+        tooltip: { trigger: 'axis', valueFormatter: (val: number) => formatMoney(val || 0) },
+        legend: { data: ['Mandatory', 'Optional', 'Savings'] },
+        grid: { left: 50, right: 10, bottom: 20, top: 30 },
+        xAxis: { type: 'category', data: trendData.map((d) => d.name) },
+        yAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatMoney(v).replace('£', '£') } },
+        series: [
+            { name: 'Mandatory', type: 'bar', stack: 'spend', data: trendData.map((d) => Math.abs(d.Mandatory || 0)) },
+            { name: 'Optional', type: 'bar', stack: 'spend', data: trendData.map((d) => Math.abs(d.Optional || 0)) },
+            { name: 'Savings', type: 'bar', stack: 'spend', data: trendData.map((d) => Math.abs(d.Savings || 0)) },
+        ],
+        color: ['#f59e0b', '#0ea5e9', '#10b981'],
+    };
 
     if (loading) return <div className="d-flex justify-content-center py-5"><Spinner animation="border" /></div>;
 
     return (
         <Container fluid className="py-2 bg-light min-vh-100">
+            <div className="d-flex justify-content-end">
+                <span className="small text-muted">Signed in as: <code>{currentUser?.uid || '—'}</code></span>
+            </div>
             {/* Header */}
             <div className="d-flex justify-content-between align-items-center mb-3">
                 <div>
@@ -208,12 +451,33 @@ const FinanceDashboardModern: React.FC = () => {
                 </div>
             </div>
 
+            <div className="d-flex flex-wrap gap-2 align-items-center mb-3">
+                <Button size="sm" variant={filterMode === 'month' ? 'primary' : 'outline-secondary'} onClick={() => setFilterMode('month')}>Month</Button>
+                <Button size="sm" variant={filterMode === 'quarter' ? 'primary' : 'outline-secondary'} onClick={() => setFilterMode('quarter')}>Quarter</Button>
+                <Button size="sm" variant={filterMode === 'year' ? 'primary' : 'outline-secondary'} onClick={() => setFilterMode('year')}>Year</Button>
+                <Form.Control
+                    type="date"
+                    size="sm"
+                    style={{ maxWidth: 160 }}
+                    value={startDate}
+                    onChange={(e) => { setStartDate(e.target.value); setFilterMode('custom'); }}
+                />
+                <Form.Control
+                    type="date"
+                    size="sm"
+                    style={{ maxWidth: 160 }}
+                    value={endDate}
+                    onChange={(e) => { setEndDate(e.target.value); setFilterMode('custom'); }}
+                />
+                <div className="text-muted small">Bank transfers excluded from all charts.</div>
+            </div>
+
             {/* Stats Row - Compact */}
             <Row className="g-2 mb-3">
                 <Col xs={6} md={3}>
                     <StatCard
                         title="Mandatory"
-                        value={formatMoney(summary?.totals.mandatory || 0)}
+                        value={formatMoney(filteredTotals.mandatory || 0)}
                         icon={Wallet}
                         color="warning"
                         subtext="Bills, Rent"
@@ -222,7 +486,7 @@ const FinanceDashboardModern: React.FC = () => {
                 <Col xs={6} md={3}>
                     <StatCard
                         title="Optional"
-                        value={formatMoney(summary?.totals.optional || 0)}
+                        value={formatMoney(filteredTotals.optional || 0)}
                         icon={CreditCard}
                         color="info"
                         subtext="Dining, Fun"
@@ -231,7 +495,7 @@ const FinanceDashboardModern: React.FC = () => {
                 <Col xs={6} md={3}>
                     <StatCard
                         title="Savings"
-                        value={formatMoney(summary?.totals.savings || 0)}
+                        value={formatMoney(filteredTotals.savings || 0)}
                         icon={PieChartIcon}
                         color="success"
                         subtext="Investments"
@@ -240,7 +504,7 @@ const FinanceDashboardModern: React.FC = () => {
                 <Col xs={6} md={3}>
                     <StatCard
                         title="Income"
-                        value={formatMoney(summary?.totals.income || 0)}
+                        value={formatMoney(filteredTotals.income || 0)}
                         icon={DollarSign}
                         color="primary"
                         subtext="Salary"
@@ -254,25 +518,7 @@ const FinanceDashboardModern: React.FC = () => {
                     <Card className="border-0 shadow-sm h-100">
                         <Card.Body className="p-2">
                             <Card.Title className="h6">Budget Burndown</Card.Title>
-                            <div style={{ height: 220 }}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={burndownData}>
-                                        <defs>
-                                            <linearGradient id="colorSpend" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#8884d8" stopOpacity={0.8} />
-                                                <stop offset="95%" stopColor="#8884d8" stopOpacity={0} />
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                        <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-                                        <YAxis tick={{ fontSize: 12 }} />
-                                        <Tooltip formatter={(val: number) => formatMoney(val)} />
-                                        <Legend wrapperStyle={{ fontSize: '12px' }} />
-                                        <Area type="monotone" dataKey="spend" stroke="#8884d8" fillOpacity={1} fill="url(#colorSpend)" name="Actual Spend" />
-                                        <Line type="monotone" dataKey="budget" stroke="#82ca9d" strokeDasharray="5 5" dot={false} name="Budget Line" />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
+                            <ReactECharts option={burndownOption} style={{ height: 240 }} />
                         </Card.Body>
                     </Card>
                 </Col>
@@ -280,20 +526,7 @@ const FinanceDashboardModern: React.FC = () => {
                     <Card className="border-0 shadow-sm h-100">
                         <Card.Body className="p-2">
                             <Card.Title className="h6">Spend Trends</Card.Title>
-                            <div style={{ height: 220 }}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={trendData}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                        <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                                        <YAxis hide />
-                                        <Tooltip formatter={(val: number) => formatMoney(val)} />
-                                        <Legend wrapperStyle={{ fontSize: '12px' }} />
-                                        <Bar dataKey="Mandatory" stackId="a" fill="#ffc107" />
-                                        <Bar dataKey="Optional" stackId="a" fill="#0dcaf0" />
-                                        <Bar dataKey="Savings" stackId="a" fill="#198754" />
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            </div>
+                            <ReactECharts option={trendOption} style={{ height: 240 }} />
                         </Card.Body>
                     </Card>
                 </Col>
@@ -334,21 +567,30 @@ const FinanceDashboardModern: React.FC = () => {
                             <Card.Title className="h6">Recent Transactions</Card.Title>
                             <div className="overflow-auto" style={{ maxHeight: '250px' }}>
                                 <Table hover responsive size="sm" className="align-middle mt-1 mb-0">
+                                    <thead>
+                                        <tr className="text-muted small">
+                                            <th>Date</th>
+                                            <th>Merchant / Pot</th>
+                                            <th>Category</th>
+                                            <th className="text-end">Amount</th>
+                                        </tr>
+                                    </thead>
                                     <tbody>
-                                        {transactions.map(tx => (
+                                        {filteredTransactions.map(tx => (
                                             <tr key={tx.transactionId}>
-                                                <td style={{ width: 40 }}>
-                                                    {tx.merchantLogo ? (
-                                                        <img src={tx.merchantLogo} alt="" className="rounded-circle" width={24} height={24} />
-                                                    ) : (
-                                                        <div className="bg-light rounded-circle d-flex align-items-center justify-content-center" style={{ width: 24, height: 24 }}>
-                                                            <DollarSign size={12} className="text-muted" />
-                                                        </div>
-                                                    )}
+                                                <td>
+                                                    <div className="fw-semibold small">{tx.createdISO ? new Date(tx.createdISO).toLocaleDateString() : '—'}</div>
+                                                    <div className="text-muted" style={{ fontSize: '0.7rem' }}>
+                                                        {tx.createdISO ? new Date(tx.createdISO).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                                    </div>
                                                 </td>
                                                 <td>
-                                                    <div className="fw-semibold text-truncate small" style={{ maxWidth: 150 }}>{tx.merchantName || tx.description}</div>
-                                                    <div className="text-muted" style={{ fontSize: '0.7rem' }}>{new Date(tx.createdISO!).toLocaleDateString()}</div>
+                                                    <div className="fw-semibold text-truncate small" style={{ maxWidth: 180 }}>{tx.merchantName || tx.description}</div>
+                                                    <div className="text-muted" style={{ fontSize: '0.7rem' }}>
+                                                        {tx.potName
+                                                            ? `${tx.amount > 0 ? 'Transfer from' : 'Transfer to'} ${tx.potName}`
+                                                            : 'No pot'}
+                                                    </div>
                                                 </td>
                                                 <td>
                                                     <Badge bg="light" text="dark" className="border" style={{ fontSize: '0.7rem' }}>

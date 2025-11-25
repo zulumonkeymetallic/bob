@@ -8,6 +8,7 @@ import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
+import WeeklyThemePlanner from './components/planner/WeeklyThemePlanner';
 import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
 import ApprovalsCenter from './components/planner/ApprovalsCenter';
 import BacklogManager from './components/BacklogManager';
@@ -72,6 +73,9 @@ import MerchantMappings from './components/finance/MerchantMappings';
 import CategoriesBuckets from './components/finance/CategoriesBuckets';
 import BudgetsPage from './components/finance/BudgetsPage';
 import GoalPotLinking from './components/finance/GoalPotLinking';
+import TransactionsList from './components/finance/TransactionsList';
+import FinanceFlowDiagram from './components/finance/FinanceFlowDiagram';
+import PotsBoard from './components/finance/PotsBoard';
 import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
@@ -88,7 +92,9 @@ import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
 import DeepLinkTask from './components/routes/DeepLinkTask';
+import AdvancedOverview from './components/AdvancedOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
+import CapacityDashboard from './components/CapacityDashboard';
 
 
 // Lazy-loaded heavy routes
@@ -227,6 +233,7 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/overview/advanced" element={<AdvancedOverview />} />
             <Route path="/tasks" element={<TaskListView />} />
             <Route path="/tasks/:id" element={<DeepLinkTask />} />
             {/* Back-compat for older deep links */}
@@ -255,6 +262,7 @@ function AppContent() {
             <Route path="/sprints/table" element={<SprintTablePage />} />
             <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
             <Route path="/sprints/retrospective" element={<SprintRetrospective />} />
+            <Route path="/sprints/capacity" element={<CapacityDashboard />} />
 
             <Route path="/tasks-management" element={<TasksManagement />} />
             <Route path="/chores" element={<ChoresTasksPage />} />
@@ -301,6 +309,7 @@ function AppContent() {
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
             <Route path="/calendar" element={<UnifiedPlannerPage />} />
+            <Route path="/calendar/themes" element={<WeeklyThemePlanner />} />
             <Route path="/running-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/finance" element={<FinanceDashboardModern />} />
@@ -308,7 +317,10 @@ function AppContent() {
             <Route path="/finance/categories" element={<CategoriesBuckets />} />
             <Route path="/finance/budgets" element={<BudgetsPage />} />
             <Route path="/finance/goals" element={<GoalPotLinking />} />
+            <Route path="/finance/transactions" element={<TransactionsList />} />
             <Route path="/finance/dashboard" element={<FinanceDashboardAdvanced />} />
+            <Route path="/finance/flow" element={<FinanceFlowDiagram />} />
+            <Route path="/finance/pots" element={<PotsBoard />} />
             <Route path="/finance/advanced" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />

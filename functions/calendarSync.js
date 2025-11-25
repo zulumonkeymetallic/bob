@@ -89,7 +89,13 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
           const lines = [];
           if (enrichedDesc) lines.push(enrichedDesc);
           lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
-          lines.push(`BOB: ${link}`);
+
+          // NEW: Mandatory Deep Links
+          lines.push(`Story Link: ${link}`);
+          if (sd.goalId) lines.push(`Goal Link: ${buildAbsoluteUrl(`/goals?goalId=${sd.goalId}`)}`);
+          if (sd.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${sd.sprintId}`)}`);
+          lines.push(`Planner: ${buildAbsoluteUrl('/planner')}`);
+
           if (acArr.length) {
             lines.push('', 'Acceptance criteria:');
             for (const item of acArr) lines.push(`- ${item}`);
@@ -143,7 +149,13 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
           const lines = [];
           if (enrichedDesc2) lines.push(enrichedDesc2);
           lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
-          lines.push(`BOB: ${link}`);
+
+          // NEW: Mandatory Deep Links
+          lines.push(`Story Link: ${link}`);
+          if (sd.goalId) lines.push(`Goal Link: ${buildAbsoluteUrl(`/goals?goalId=${sd.goalId}`)}`);
+          if (sd.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${sd.sprintId}`)}`);
+          lines.push(`Planner: ${buildAbsoluteUrl('/planner')}`);
+
           if (acArr.length) {
             lines.push('', 'Acceptance criteria:');
             for (const item of acArr) lines.push(`- ${item}`);

@@ -53,18 +53,25 @@ function aggregateTransactions(transactions, startDate, endDate) {
     // Normalize dates
     const start = startDate ? new Date(startDate) : null;
     const end = endDate ? new Date(endDate) : null;
+    const endBoundary = end ? new Date(end.getTime() + 24 * 60 * 60 * 1000) : null; // inclusive of end date
 
     transactions.forEach((tx) => {
         const txDate = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt);
 
         // Apply date filter
         if (start && txDate < start) return;
-        if (end && txDate > end) return;
+        if (endBoundary && txDate >= endBoundary) return;
 
-        const amount = typeof tx.amount === 'number' ? tx.amount : 0;
+        const minor = Number.isFinite(tx.amountMinor) ? tx.amountMinor : null;
+        const rawAmount = typeof tx.amount === 'number' ? tx.amount : 0;
+        const amount = minor !== null ? minor / 100 : (Math.abs(rawAmount) < 10 ? rawAmount * 100 : rawAmount);
+        const bucket = (tx.userCategoryType || tx.defaultCategoryType || 'unspecified').toLowerCase();
+
+        // Exclude bank transfers from all aggregates
+        if (bucket === 'bank_transfer' || bucket === 'unknown') return;
 
         // Only consider spend (negative amounts) for most aggregates
-        if (amount < 0) {
+        if (amount < 0 && bucket !== 'income') {
             result.totalSpend += amount;
 
             // Track daily spend for burn-down
@@ -73,7 +80,6 @@ function aggregateTransactions(transactions, startDate, endDate) {
         }
 
         // Bucket aggregation
-        const bucket = tx.userCategoryType || 'unspecified';
         result.spendByBucket[bucket] = (result.spendByBucket[bucket] || 0) + amount;
 
         const month = `${txDate.getFullYear()}-${String(txDate.getMonth() + 1).padStart(2, '0')}`;
@@ -82,7 +88,7 @@ function aggregateTransactions(transactions, startDate, endDate) {
         result.timeSeriesByBucket[bucket][month] = (result.timeSeriesByBucket[bucket][month] || 0) + amount;
 
         // Category aggregation
-        const catKey = tx.userCategoryKey || 'uncategorized';
+        const catKey = tx.userCategoryKey || tx.category || 'uncategorized';
         result.spendByCategory[catKey] = (result.spendByCategory[catKey] || 0) + amount;
 
         if (!result.timeSeriesByCategory) result.timeSeriesByCategory = {};
@@ -189,20 +195,32 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
     }
 
     return {
+        ...aggregation,
         goalProgress: goalProgress.filter(g => g.linkedPotName), // Only show linked goals
         burnDown,
         recentTransactions: transactions
             .sort((a, b) => (b.createdAt?.toMillis ? b.createdAt.toMillis() : 0) - (a.createdAt?.toMillis ? a.createdAt.toMillis() : 0))
             .slice(0, 100)
-            .map(t => ({
-                id: t.id,
-                merchantName: t.merchantName || t.description,
-                amount: t.amount,
-                categoryKey: t.userCategoryKey,
-                categoryLabel: t.userCategoryLabel,
-                createdAt: t.createdAt,
-                isSubscription: t.isSubscription
-            }))
+            .map(t => {
+                const metadata = t.metadata || {};
+                const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
+                const pot = potId ? potsMap[potId] : null;
+                const minor = Number.isFinite(t.amountMinor) ? t.amountMinor : null;
+                const rawAmount = typeof t.amount === 'number' ? t.amount : 0;
+                const amount = minor !== null ? minor / 100 : (Math.abs(rawAmount) < 10 ? rawAmount * 100 : rawAmount);
+                return {
+                    id: t.id,
+                    merchantName: t.merchantName || t.description,
+                    amount,
+                    categoryKey: t.userCategoryKey,
+                    categoryLabel: t.userCategoryLabel,
+                    categoryType: t.userCategoryType || t.defaultCategoryType || null,
+                    createdAt: t.createdAt,
+                    isSubscription: t.isSubscription,
+                    potId: potId || null,
+                    potName: pot ? pot.name : null,
+                };
+            })
     };
 }
 

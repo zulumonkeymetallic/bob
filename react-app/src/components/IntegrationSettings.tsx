@@ -29,6 +29,9 @@ interface MonzoTransactionPreview {
   amount: number;
   createdISO: string | null;
   categoryType?: string | null;
+  merchant?: string | null;
+  potId?: string | null;
+  potName?: string | null;
 }
 
 const defaultTotals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
@@ -74,6 +77,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [monzoLoading, setMonzoLoading] = useState(false);
   const [monzoWebhookAccountId, setMonzoWebhookAccountId] = useState('');
   const [monzoIntegrationStatus, setMonzoIntegrationStatus] = useState<any | null>(null);
+  const [monzoPots, setMonzoPots] = useState<Record<string, { name: string }>>({});
 
   const [stravaActivities, setStravaActivities] = useState<any[]>([]);
   const [stravaMessage, setStravaMessage] = useState<string | null>(null);
@@ -128,7 +132,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   // Derived flags
   const stravaConnected = !!profile?.stravaConnected;
   const monzoConnected = !!(monzoIntegrationStatus?.connected ?? profile?.monzoConnected);
-  const monzoLastSync = monzoIntegrationStatus?.lastSyncAt || profile?.monzoLastSyncAt;
+    const monzoLastSync = monzoIntegrationStatus?.lastSyncAt || profile?.monzoLastSyncAt;
   const monzoLastSyncStatus = monzoIntegrationStatus?.lastSyncStatus || (monzoConnected ? 'connected' : 'not_connected');
   const displayMonzoStatus = monzoLastSyncStatus
     ? monzoLastSyncStatus.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -158,25 +162,46 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     const txQuery = query(
       collection(db, 'monzo_transactions'),
       where('ownerUid', '==', currentUser.uid),
-      limit(10)
+      limit(15)
     );
     const unsubscribeTx = onSnapshot(txQuery, (snap) => {
-      const rows = snap.docs.map((docSnap) => {
-        const data = docSnap.data() as any;
-        return {
-          transactionId: data.transactionId,
-          description: data.description || data.defaultCategoryLabel || 'Transaction',
-          amount: Number(data.amount ?? (data.amountMinor || 0) / 100),
-          createdISO: data.createdISO || null,
-          categoryType: data.userCategoryType || data.defaultCategoryType || 'optional',
-        };
+        const rows = snap.docs.map((docSnap) => {
+            const data = docSnap.data() as any;
+            const potId = data.metadata?.pot_id || data.metadata?.destination_pot_id || data.metadata?.source_pot_id || null;
+            const rawAmount = Number(data.amount ?? (data.amountMinor || 0) / 100);
+            const amount = Math.abs(rawAmount) < 10 ? rawAmount * 100 : rawAmount;
+            return {
+              transactionId: data.transactionId,
+              description: data.description || data.defaultCategoryLabel || 'Transaction',
+              merchant: data.merchant?.name || data.counterparty?.name || null,
+              amount,
+              createdISO: data.createdISO || null,
+              categoryType: data.userCategoryType || data.defaultCategoryType || 'optional',
+              potId,
+              potName: potId ? monzoPots[potId]?.name || null : null,
+            };
       });
       rows.sort((a, b) => {
         const aTime = a.createdISO ? new Date(a.createdISO).getTime() : 0;
         const bTime = b.createdISO ? new Date(b.createdISO).getTime() : 0;
         return bTime - aTime;
       });
-      setMonzoTransactions(rows.slice(0, 5));
+      setMonzoTransactions(rows.slice(0, 10));
+    });
+
+    const potsQuery = query(
+      collection(db, 'monzo_pots'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsubscribePots = onSnapshot(potsQuery, (snap) => {
+      const map: Record<string, { name: string }> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const id = data.potId || d.id;
+        if (!id) return;
+        map[id] = { name: data.name || id };
+      });
+      setMonzoPots(map);
     });
 
     const stravaQuery = query(
@@ -234,6 +259,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     return () => {
       unsubscribeSummary();
       unsubscribeTx();
+      unsubscribePots();
       unsubscribeStrava();
       unsubscribeSteam();
       unsubscribeTrakt();
@@ -241,6 +267,18 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       unsubscribeIntegration();
     };
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!monzoTransactions.length) return;
+    setMonzoTransactions((prev) =>
+      prev.map((tx) => {
+        if (tx.potId && !tx.potName && monzoPots[tx.potId]) {
+          return { ...tx, potName: monzoPots[tx.potId].name };
+        }
+        return tx;
+      })
+    );
+  }, [monzoPots, monzoTransactions.length]);
 
   useEffect(() => {
     const loadStatus = async () => {
@@ -659,6 +697,8 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
                 <tr>
                   <th>Date</th>
                   <th>Description</th>
+                  <th>Merchant</th>
+                  <th>Pot</th>
                   <th>Category</th>
                   <th className="text-end">Amount</th>
                 </tr>
@@ -668,6 +708,8 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
                   <tr key={tx.transactionId}>
                     <td>{tx.createdISO ? new Date(tx.createdISO).toLocaleDateString() : '—'}</td>
                     <td>{tx.description}</td>
+                    <td>{tx.merchant || '—'}</td>
+                    <td>{tx.potName || '—'}</td>
                     <td><Badge bg="light" text="dark">{tx.categoryType}</Badge></td>
                     <td className="text-end">{formatCurrency(Math.abs(tx.amount))}</td>
                   </tr>

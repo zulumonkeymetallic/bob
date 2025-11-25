@@ -231,6 +231,43 @@ const Calendar: React.FC = () => {
                 <option>Health</option><option>Growth</option><option>Wealth</option><option>Tribe</option><option>Home</option>
               </Form.Select>
             </Form.Group>
+
+            <Form.Check
+              type="checkbox"
+              label="Repeat Weekly"
+              checked={newEvent.repeatWeekly}
+              onChange={e => setNewEvent({ ...newEvent, repeatWeekly: e.target.checked })}
+              className="mb-2"
+            />
+
+            {newEvent.repeatWeekly && (
+              <div className="mb-3 ms-3 border-start ps-3">
+                <Form.Label>Repeat On</Form.Label>
+                <div className="d-flex gap-2 flex-wrap mb-2">
+                  {['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'].map(day => (
+                    <Form.Check
+                      key={day}
+                      type="checkbox"
+                      label={day}
+                      checked={newEvent.repeatDays[day as keyof typeof newEvent.repeatDays]}
+                      onChange={e => setNewEvent({
+                        ...newEvent,
+                        repeatDays: { ...newEvent.repeatDays, [day]: e.target.checked }
+                      })}
+                    />
+                  ))}
+                </div>
+                <Form.Group>
+                  <Form.Label>Until (Optional)</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={newEvent.repeatUntil}
+                    onChange={e => setNewEvent({ ...newEvent, repeatUntil: e.target.value })}
+                  />
+                </Form.Group>
+              </div>
+            )}
+
           </Form>
         </Modal.Body>
         <Modal.Footer>
@@ -239,6 +276,26 @@ const Calendar: React.FC = () => {
             if (!currentUser) return;
             const start = new Date(newEvent.start);
             const end = new Date(start.getTime() + 60 * 60000);
+
+            let recurrenceRule = null;
+            if (newEvent.repeatWeekly) {
+              const days = Object.entries(newEvent.repeatDays)
+                .filter(([_, checked]) => checked)
+                .map(([day]) => day);
+
+              if (days.length > 0) {
+                let rule = `FREQ=WEEKLY;BYDAY=${days.join(',')}`;
+                if (newEvent.repeatUntil) {
+                  // Format until date as YYYYMMDD
+                  const untilDate = new Date(newEvent.repeatUntil);
+                  untilDate.setHours(23, 59, 59);
+                  const untilStr = untilDate.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+                  rule += `;UNTIL=${untilStr}`;
+                }
+                recurrenceRule = rule;
+              }
+            }
+
             await addDoc(collection(db, 'calendar_blocks'), {
               ownerUid: currentUser.uid,
               title: newEvent.title,
@@ -246,6 +303,7 @@ const Calendar: React.FC = () => {
               end: end.getTime(),
               theme: newEvent.theme,
               status: 'applied',
+              recurrence: recurrenceRule ? { rrule: recurrenceRule } : null,
               updatedAt: Date.now()
             });
             setShowCreateEvent(false);

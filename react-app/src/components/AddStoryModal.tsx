@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { generateRef } from '../utils/referenceGenerator';
+import TagInput from './common/TagInput';
 
 interface AddStoryModalProps {
   onClose: () => void;
@@ -30,7 +31,8 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     goalId: goalId || '', // Pre-select goal if provided
     sprintId: '',
     priority: 'P2',
-    points: 3
+    points: 3,
+    tags: [] as string[]
   });
   const [goalInput, setGoalInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -67,7 +69,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     }
   }, [show, currentUser, currentPersona]);
 
-    // Load goals and sprints when modal opens
+  // Load goals and sprints when modal opens
   useEffect(() => {
     if (show && currentUser) {
       let mounted = true;
@@ -86,32 +88,32 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             where('ownerUid', '==', currentUser.uid),
             orderBy('priority', 'desc')
           );
-          
+
           console.log('📊 AddStoryModal: Loading goals...', {
             action: 'goals_query_start',
             user: currentUser.uid
           });
-          
+
           const goalsSnapshot = await getDocs(goalsQuery);
           const goalsData = goalsSnapshot.docs.map(doc => ({
             id: doc.id,
             title: doc.data().title,
             theme: doc.data().theme as number
           }));
-          
+
           console.log('✅ AddStoryModal: Goals loaded successfully', {
             action: 'goals_loaded',
             count: goalsData.length,
             goals: goalsData.map(g => ({ id: g.id, title: g.title }))
           });
-          
+
           if (mounted) setGoals(goalsData);
-          
+
           console.log('🎉 AddStoryModal: All data loaded successfully', {
             action: 'modal_data_load_complete',
             goalsCount: goalsData.length,
           });
-          
+
         } catch (error) {
           console.error('❌ AddStoryModal: Error loading data', {
             action: 'modal_data_load_error',
@@ -134,7 +136,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       formData: formData,
       timestamp: new Date().toISOString()
     });
-    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3 });
+    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3, tags: [] });
     setSubmitResult(null);
     onClose();
   };
@@ -183,7 +185,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       const existingRefs = existingSnapshot.docs
         .map(doc => doc.data().ref)
         .filter(ref => ref);
-      
+
       // Generate unique reference number
       const ref = generateRef('story', existingRefs);
       console.log('🏷️ AddStoryModal: Generated reference', {
@@ -206,7 +208,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         persona: currentPersona,
         ownerUid: currentUser.uid, // Ensure ownerUid is included
         orderIndex: Date.now(), // Simple ordering by creation time
-        tags: [],
+        tags: formData.tags,
         acceptanceCriteria: [],
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -219,7 +221,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       });
 
       await addDoc(collection(db, 'stories'), storyData);
-      
+
       console.log('✅ AddStoryModal: STORY created successfully', {
         action: 'story_creation_success',
         ref: ref,
@@ -229,8 +231,8 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       });
 
       setSubmitResult(`✅ Story created successfully! (${ref})`);
-      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3 });
-      
+      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3, tags: [] });
+
       // Auto-close after success
       setTimeout(() => {
         onClose();
@@ -275,6 +277,15 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               placeholder="Describe this story..."
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Tags</Form.Label>
+            <TagInput
+              value={formData.tags}
+              onChange={(tags) => setFormData({ ...formData, tags })}
+              placeholder="Add tags..."
             />
           </Form.Group>
 
@@ -390,4 +401,4 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
 
 export default AddStoryModal;
 
-export {};
+export { };

@@ -95,7 +95,23 @@ function computeEligibleBlocks(blocks, occurrence) {
       if (!excludedTags) return true;
       return !excludedTags.length;
     });
-  return tagFiltered;
+
+  // Theme Filtering with Override Logic
+  const themeFiltered = tagFiltered.filter(b => {
+    // If block has no theme, it accepts all items
+    if (!b.theme) return true;
+
+    // If block has theme, check various override conditions:
+    const hasMatchingTheme = occurrence.theme && occurrence.theme === b.theme;
+    const hasNoTheme = !occurrence.theme; // Allow non-themed items (user hasn't categorized)
+    const isUrgent = occurrence.dueDate && occurrence.dueDate < (Date.now() + 24 * 60 * 60 * 1000);
+    const isHighPriority = occurrence.priority != null && occurrence.priority <= 2;
+
+    // Allow if: theme matches OR no theme OR urgent OR high priority
+    return hasMatchingTheme || hasNoTheme || isUrgent || isHighPriority;
+  });
+
+  return themeFiltered;
 }
 
 function splitQuietIntervals(interval, quietWindows, zone) {
@@ -297,8 +313,8 @@ function computeTaskOccurrences(tasks, windowStart, windowEnd, userId) {
     if (task.autoConverted || task.convertedToStoryId) continue;
 
     const zone = task.timezone || task.timeZone || DEFAULT_ZONE;
-    const scheduledStart = toDateTime(task.scheduledStart || task.startDate || task.plannedStart, { zone });
-    const dueDt = toDateTime(task.dueDate || task.dueDateMs || task.targetDate, { zone });
+    const scheduledStart = toDateTime(task.scheduledStart || task.startDate || task.plannedStart, zone);
+    const dueDt = toDateTime(task.dueDate || task.dueDateMs || task.targetDate, zone);
     const baseDt = scheduledStart || dueDt;
     if (!baseDt) continue;
     if (baseDt < startBoundary || baseDt > endBoundary) continue;
@@ -349,11 +365,31 @@ function computeTaskOccurrences(tasks, windowStart, windowEnd, userId) {
   return occurrences;
 }
 
-function computeStoryOccurrences(stories, windowStart, windowEnd, userId) {
+async function computeStoryOccurrences(stories, windowStart, windowEnd, userId, db) {
   const occurrences = [];
   if (!Array.isArray(stories) || !stories.length) return occurrences;
   const startBoundary = windowStart.startOf('day');
   const endBoundary = windowEnd.endOf('day');
+
+  // SPRINT DATE INHERITANCE: Fetch sprints to inherit dates for stories without explicit dates
+  const sprintCache = new Map();
+  const uniqueSprintIds = [...new Set(stories.map(s => s.sprintId).filter(Boolean))];
+  if (db && uniqueSprintIds.length > 0) {
+    try {
+      // Firestore 'in' query limited to 10 items
+      for (let i = 0; i < uniqueSprintIds.length; i += 10) {
+        const batch = uniqueSprintIds.slice(i, i + 10);
+        // Use getAll for fetching by IDs instead of where query
+        const refs = batch.map(id => db.collection('sprints').doc(id));
+        const sprintDocs = await db.getAll(...refs);
+        sprintDocs.forEach(doc => {
+          if (doc.exists) sprintCache.set(doc.id, doc.data());
+        });
+      }
+    } catch (err) {
+      console.warn('[scheduler] Failed to fetch sprints:', err.message);
+    }
+  }
 
   for (const story of stories) {
     if (!story) continue;
@@ -364,8 +400,20 @@ function computeStoryOccurrences(stories, windowStart, windowEnd, userId) {
     if (story.deleted) continue;
 
     const zone = story.timezone || story.timeZone || DEFAULT_ZONE;
-    const plannedStart = toDateTime(story.plannedStartDate || story.startDate, { zone });
-    const dueDt = toDateTime(story.sprintDueDate || story.targetDate, { zone });
+    let plannedStart = toDateTime(story.plannedStartDate || story.startDate, zone);
+    let dueDt = toDateTime(story.sprintDueDate || story.targetDate, zone);
+
+    // If story has no dates but is in a sprint, inherit sprint dates
+    if (!plannedStart && !dueDt && story.sprintId && sprintCache.has(story.sprintId)) {
+      const sprint = sprintCache.get(story.sprintId);
+      if (sprint.startDate) {
+        plannedStart = toDateTime(sprint.startDate, zone);
+      }
+      if (sprint.endDate && !dueDt) {
+        dueDt = toDateTime(sprint.endDate, zone);
+      }
+    }
+
     const baseDt = plannedStart || dueDt;
     if (!baseDt) continue;
     if (baseDt < startBoundary || baseDt > endBoundary) continue;
@@ -647,6 +695,7 @@ async function planSchedule({
   windowStart,
   windowEnd,
   busy,
+  themeAllocations = [], // User-defined theme time blocks
 }) {
   const solverRunId = createHash('md5')
     .update(`${userId}:${Date.now()}:${Math.random()}`)
@@ -674,21 +723,58 @@ async function planSchedule({
   // Requirement: "Story Block... represents Stories".
   // So a Story Block IS a scheduled item.
 
+  // THEME ALLOCATION SYNTHESIS: Convert user theme allocations into synthetic blocks
+  const syntheticBlocks = [];
+  if (Array.isArray(themeAllocations) && themeAllocations.length > 0) {
+    themeAllocations.forEach((alloc, idx) => {
+      const { dayOfWeek, startTime, endTime, theme } = alloc;
+      if (!theme || !startTime || !endTime) return;
+
+      // Calculate duration in minutes
+      const [sh, sm] = (startTime || '00:00').split(':').map(Number);
+      const [eh, em] = (endTime || '00:00').split(':').map(Number);
+      const durationMinutes = Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+
+      // Create a synthetic block with recurrence
+      syntheticBlocks.push({
+        id: `theme_alloc_${idx}_${dayOfWeek}`,
+        title: `${theme} Focus`,
+        theme: theme,
+        priority: 20, // High priority for theme blocks
+        enabled: true,
+        recurrence: {
+          rrule: `FREQ=WEEKLY;BYDAY=${['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'][dayOfWeek]}`,
+          dtstart: windowStart.toISODate(),
+          timezone: DEFAULT_ZONE
+        },
+        windows: [{
+          startTime,
+          endTime,
+          daysOfWeek: [1, 2, 3, 4, 5, 6, 7] // All days (filtered by recurrence)
+        }],
+        dailyCapacityMinutes: durationMinutes,
+        ownerUid: userId
+      });
+    });
+  }
+
   // Let's fetch 'blocks' (templates) to generate the skeleton (Sleep, Work, etc).
   const blocksSnap = await db
     .collection('blocks')
     .where('ownerUid', '==', userId)
     .where('enabled', '==', true)
     .get();
-  const blocks = blocksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const blocks = blocksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));; blocks.unshift(...syntheticBlocks);
 
   // Also fetch 'calendar_blocks' which might be manual/AI overrides or specific story blocks
+  // Simplified query to avoid composite index: filter start in query, end in memory
   const calBlocksSnap = await db.collection('calendar_blocks')
     .where('ownerUid', '==', userId)
     .where('start', '>=', windowStart.toMillis())
-    .where('end', '<=', windowEnd.toMillis())
     .get();
-  const calBlocks = calBlocksSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const calBlocks = calBlocksSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(b => b.end <= windowEnd.toMillis()); // Filter end in memory
 
   // We need to merge these. If a calBlock exists, it might block time.
   // For now, let's just pass them through or use them to adjust 'busy'.
@@ -750,10 +836,11 @@ async function planSchedule({
   const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
   const busyByDay = computeBusyByDay(busy, DEFAULT_ZONE);
+  const storyOccurrences = await computeStoryOccurrences(stories, windowStart, windowEnd, userId, db);
   const occurrences = [
     ...computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd),
     ...computeTaskOccurrences(tasks, windowStart, windowEnd, userId),
-    ...computeStoryOccurrences(stories, windowStart, windowEnd, userId),
+    ...storyOccurrences,
   ];
 
   // Filter out occurrences that are already covered by AI blocks to avoid duplication
@@ -782,6 +869,7 @@ async function planSchedule({
     unscheduled,
     conflicts,
     existingIds: allExisting.map((inst) => inst.id),
+    blocks, // Return blocks so they can be saved/inspected
   };
 }
 

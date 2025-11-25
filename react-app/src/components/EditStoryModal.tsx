@@ -6,6 +6,7 @@ import { Story, Goal, Sprint } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
 import { getPriorityName, getStatusName, getThemeName } from '../utils/statusHelpers';
+import TagInput from './common/TagInput';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -16,10 +17,10 @@ interface EditStoryModalProps {
   container?: HTMLElement | null;
 }
 
-const EditStoryModal: React.FC<EditStoryModalProps> = ({ 
-  show, 
-  onHide, 
-  story, 
+const EditStoryModal: React.FC<EditStoryModalProps> = ({
+  show,
+  onHide,
+  story,
   goals,
   onStoryUpdated,
   container
@@ -35,9 +36,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     points: 0,
     acceptanceCriteria: '',
     sprintId: '' as string | '',
-    blocked: false as boolean
+    blocked: false as boolean,
+    tags: [] as string[]
   });
-  
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [goalInput, setGoalInput] = useState('');
@@ -55,11 +57,12 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         status: (typeof story.status === 'number' ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0) : 0),
         theme: story.theme || 1,
         points: story.points || 0,
-        acceptanceCriteria: Array.isArray(story.acceptanceCriteria) 
-          ? story.acceptanceCriteria.join('\n') 
+        acceptanceCriteria: Array.isArray(story.acceptanceCriteria)
+          ? story.acceptanceCriteria.join('\n')
           : story.acceptanceCriteria || '',
         sprintId: (story as any).sprintId || '',
-        blocked: Boolean((story as any).blocked)
+        blocked: Boolean((story as any).blocked),
+        tags: (story as any).tags || []
       });
       setError(null);
       const currentGoal = goals.find(g => g.id === story.goalId);
@@ -78,7 +81,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 
     try {
       console.log('💾 EditStoryModal: Saving story updates:', editedStory);
-      
+
       const selectedGoal = goals.find(g => g.id === editedStory.goalId);
       const updates: any = {
         title: editedStory.title.trim(),
@@ -89,10 +92,11 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         blocked: !!editedStory.blocked,
         points: editedStory.points,
         sprintId: editedStory.sprintId || null,
-        acceptanceCriteria: editedStory.acceptanceCriteria.trim() 
+        acceptanceCriteria: editedStory.acceptanceCriteria.trim()
           ? editedStory.acceptanceCriteria.split('\n').map(line => line.trim()).filter(line => line.length > 0)
           : [],
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        tags: editedStory.tags
       };
       // Inherit theme from linked goal when available
       if (selectedGoal && typeof (selectedGoal as any).theme !== 'undefined') {
@@ -123,7 +127,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       <Modal.Header closeButton>
         <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
       </Modal.Header>
-      
+
       <Modal.Body>
         {error && (
           <Alert variant="danger" onClose={() => setError(null)} dismissible>
@@ -144,7 +148,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                 />
               </Form.Group>
             </Col>
-            
+
             <Col md={4}>
               <Form.Group className="mb-3">
                 <Form.Label>Story Points</Form.Label>
@@ -254,6 +258,15 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           </Form.Group>
 
           <Form.Group className="mb-3">
+            <Form.Label>Tags</Form.Label>
+            <TagInput
+              value={editedStory.tags}
+              onChange={(tags) => handleInputChange('tags', tags)}
+              placeholder="Add tags..."
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
             <Form.Label>Acceptance Criteria</Form.Label>
             <Form.Control
               as="textarea"
@@ -265,7 +278,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           </Form.Group>
         </Form>
       </Modal.Body>
-      
+
       <Modal.Footer>
         <Button variant="secondary" onClick={onHide} disabled={loading}>
           Cancel

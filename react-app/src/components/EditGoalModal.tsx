@@ -7,6 +7,7 @@ import { ActivityStreamService } from '../services/ActivityStreamService';
 import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { toDate } from '../utils/firestoreAdapters';
+import TagInput from './common/TagInput';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -31,7 +32,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     estimatedCost: '',
     kpis: [] as Array<{ name: string; target: number; unit: string }>,
     parentGoalId: '',
-    linkedPotId: ''
+    linkedPotId: '',
+    tags: [] as string[]
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
@@ -134,7 +136,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
           kpis: goal.kpis || [],
           parentGoalId: goal.parentGoalId || '',
-          linkedPotId: (goal as any).linkedPotId || (goal as any).potId || ''
+          linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
+          tags: (goal as any).tags || []
         });
         const current = migrateThemeValue(goal.theme);
         const themeObj = themes.find(t => t.id === current);
@@ -156,7 +159,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           estimatedCost: '',
           kpis: [],
           parentGoalId: '',
-          linkedPotId: ''
+          linkedPotId: '',
+          tags: []
         });
         setThemeInput('');
         setParentSearch('');
@@ -245,7 +249,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         kpis: formData.kpis,
         estimatedCost: formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost),
         parentGoalId: formData.parentGoalId ? formData.parentGoalId : null,
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        tags: formData.tags
       };
 
       // Read optional cost metadata and pot mapping from form elements
@@ -400,6 +405,15 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               placeholder="Describe this goal in detail..."
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Tags</Form.Label>
+            <TagInput
+              value={formData.tags}
+              onChange={(tags) => setFormData({ ...formData, tags })}
+              placeholder="Add tags..."
             />
           </Form.Group>
 

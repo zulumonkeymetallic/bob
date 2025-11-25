@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, Col, Form, Row, Spinner, Table } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Col, Form, Row, Spinner, Table, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { FixedSizeList as List } from 'react-window';
+import useMeasure from 'react-use-measure';
 import { useAuth } from '../../contexts/AuthContext';
 import { db, functions } from '../../firebase';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { DEFAULT_CATEGORIES, FinanceCategory, BUCKET_LABELS } from '../../utils/financeCategories';
+import { DEFAULT_CATEGORIES, FinanceCategory, BUCKET_LABELS, getCategoryByKey, mergeFinanceCategories } from '../../utils/financeCategories';
+import './MerchantMappings.css';
 
 type MerchantRow = {
   merchantKey: string;
@@ -19,36 +22,112 @@ type MerchantRow = {
   isSubscription?: boolean;
 };
 
-// Group categories by bucket for organized dropdown
-const categoriesByBucket = DEFAULT_CATEGORIES.reduce((acc, cat) => {
-  if (!acc[cat.bucket]) acc[cat.bucket] = [];
-  acc[cat.bucket].push(cat);
-  return acc;
-}, {} as Record<string, FinanceCategory[]>);
-
 const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
 
 const MerchantMappings: React.FC = () => {
   const { currentUser } = useAuth();
+  const [customCategories, setCustomCategories] = useState<FinanceCategory[]>([]);
   const [summary, setSummary] = useState<any | null>(null);
   const [edits, setEdits] = useState<Record<string, { categoryKey: string; label: string; isSubscription?: boolean }>>({});
   const [status, setStatus] = useState<string>('');
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [subKey, setSubKey] = useState('');
   const [subDecision, setSubDecision] = useState<'keep' | 'reduce' | 'cancel'>('keep');
   const [subNote, setSubNote] = useState('');
+  const [search, setSearch] = useState('');
+  const [missingOnly, setMissingOnly] = useState(false);
+  const [sortByMerchant, setSortByMerchant] = useState(true);
+  const [sortMode, setSortMode] = useState<'merchant' | 'spend_desc'>('merchant');
+  const [pendingSort, setPendingSort] = useState<'amount_desc' | 'alpha'>('amount_desc');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [tableRef, bounds] = useMeasure();
+  const [pots, setPots] = useState<Record<string, { name: string }>>({});
 
   useEffect(() => {
     if (!currentUser) return;
     const ref = doc(db, 'monzo_budget_summary', currentUser.uid);
     const unsub = onSnapshot(ref, (snap) => setSummary(snap.exists() ? snap.data() : null));
+    const potQ = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
+    const unsubPots = onSnapshot(potQ, (snap) => {
+      const map: Record<string, { name: string }> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const id = data.potId || d.id;
+        if (!id) return;
+        map[id] = { name: data.name || id };
+      });
+      setPots(map);
+    });
+    setLoading(false);
+    return () => { unsub(); unsubPots(); };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setCustomCategories([]);
+      return;
+    }
+    const ref = doc(db, 'finance_categories', currentUser.uid);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const data = snap.data() as any;
+        const arr = Array.isArray(data?.categories) ? data.categories : [];
+        setCustomCategories(arr.filter((c) => c?.key) as FinanceCategory[]);
+      },
+      (err) => console.error('Failed to load finance categories', err)
+    );
     return () => unsub();
   }, [currentUser]);
 
+  const allCategories = useMemo(() => mergeFinanceCategories(customCategories), [customCategories]);
+  const categoriesByBucket = useMemo(() => {
+    return allCategories.reduce<Record<string, FinanceCategory[]>>((acc, cat) => {
+      const bucket = cat.bucket || 'unknown';
+      if (!acc[bucket]) acc[bucket] = [];
+      acc[bucket].push(cat);
+      return acc;
+    }, {});
+  }, [allCategories]);
+
   const rows: MerchantRow[] = useMemo(() => {
     const list = (summary?.merchantSummary || []) as MerchantRow[];
+    if (Array.isArray((summary as any)?.allMerchants)) {
+      return (summary as any).allMerchants as MerchantRow[];
+    }
     return list;
   }, [summary]);
+
+  const filteredRows = useMemo(() => {
+    let list = rows;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter((r) => (r.merchantName || r.merchantKey || '').toLowerCase().includes(q));
+    }
+    if (missingOnly) {
+      list = list.filter((r) => !r.primaryCategoryKey && !r.primaryCategoryType);
+    }
+    const decorated = list.map((r) => {
+      const months = r.months || 0;
+      const tx = r.transactions || 0;
+      const txRate = months > 0 ? tx / months : tx;
+      const tx12 = Math.round(txRate * 12);
+      const tx6 = Math.round(txRate * 6);
+      return { ...r, transactions12: tx12 || tx, transactions6: tx6 || tx };
+    });
+
+    let sorted = decorated;
+    if (sortMode === 'merchant') {
+      sorted = [...decorated].sort((a, b) => {
+        const cmp = (a.merchantName || '').localeCompare(b.merchantName || '');
+        return sortDir === 'asc' ? cmp : -cmp;
+      });
+    } else if (sortMode === 'spend_desc') {
+      sorted = [...decorated].sort((a, b) => (b.totalSpend || 0) - (a.totalSpend || 0));
+    }
+    return sorted;
+  }, [rows, search, missingOnly, sortMode, sortDir]);
 
   const pending = (summary?.pendingClassification || []) as Array<any>;
   const recurring = (summary?.recurringMerchants || []) as MerchantRow[];
@@ -70,13 +149,13 @@ const MerchantMappings: React.FC = () => {
     if (!edit) return;
     setBusy(true); setStatus('');
     try {
-      const category = DEFAULT_CATEGORIES.find(c => c.key === edit.categoryKey);
+      const category = getCategoryByKey(edit.categoryKey);
       const fn = httpsCallable(functions, 'setMerchantMapping');
       const res: any = await fn({
         merchantKey,
         categoryKey: edit.categoryKey,
-        categoryType: category?.bucket || 'discretionary',
-        categoryLabel: category?.label || edit.label,
+        categoryType: mapBucketToType(getCategoryByKey(edit.categoryKey, allCategories)?.bucket || category?.bucket || 'discretionary'),
+        categoryLabel: getCategoryByKey(edit.categoryKey, allCategories)?.label || category?.label || edit.label,
         label: edit.label,
         isSubscription: edit.isSubscription,
         applyToExisting: apply
@@ -149,7 +228,10 @@ const MerchantMappings: React.FC = () => {
   };
 
   return (
-    <div className="container py-3">
+    <div className="container py-3" ref={tableRef}>
+      <div className="d-flex justify-content-between align-items-center mb-2">
+        <span className="small text-muted">Signed in as: <code>{currentUser?.uid || '—'}</code></span>
+      </div>
       <h3>Merchant Mappings</h3>
       <p className="text-muted">Map merchants to your budget categories. New transactions will auto-categorise; you can bulk-apply to history.</p>
 
@@ -210,50 +292,112 @@ const MerchantMappings: React.FC = () => {
         </Card.Body>
       </Card>
 
+      <Card className="mb-3">
+        <Card.Body>
+          <div className="d-flex flex-wrap gap-2 align-items-center">
+            <Form.Control
+              size="sm"
+              placeholder="Search merchant"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ maxWidth: 220 }}
+            />
+            <Form.Check
+              type="switch"
+              id="missing-only"
+              label="Missing category only"
+              checked={missingOnly}
+              onChange={(e) => setMissingOnly(e.target.checked)}
+            />
+            <Form.Check
+              type="switch"
+              id="sort-merchant"
+              label="Sort by merchant"
+              checked={sortByMerchant}
+              onChange={(e) => setSortByMerchant(e.target.checked)}
+            />
+          </div>
+        </Card.Body>
+      </Card>
+
       {pending?.length > 0 && (
         <Card className="mb-3">
           <Card.Header>
-            <strong>Uncategorised Suggestions</strong>
+            <div className="d-flex justify-content-between align-items-center">
+              <strong>Uncategorised Suggestions</strong>
+              <div className="d-flex align-items-center gap-2">
+                <span className="small text-muted">Sort</span>
+                <Form.Select
+                  size="sm"
+                  value={pendingSort}
+                  onChange={(e) => setPendingSort(e.target.value as 'amount_desc' | 'alpha')}
+                >
+                  <option value="amount_desc">By amount (high → low)</option>
+                  <option value="alpha">By description A→Z</option>
+                </Form.Select>
+              </div>
+            </div>
           </Card.Header>
           <Card.Body>
             <div className="small text-muted mb-2">Quickly create mappings for frequent uncategorised merchants.</div>
-            <Table size="sm" responsive hover>
-              <thead>
-                <tr>
-                  <th>Description</th>
-                  <th className="text-end">Amount</th>
-                  <th>Type</th>
-                  <th>Label</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {pending.slice(0, 10).map((p) => {
-                  const k = (p.merchantName || p.description || '').toLowerCase();
+            <div style={{ height: 360, width: '100%' }}>
+              <List
+                height={360}
+                width={bounds.width || 1100}
+                itemCount={(pending || []).length}
+                itemSize={84}
+                itemKey={(idx) => (pending[idx]?.transactionId || idx)}
+              >
+                {({ index, style }) => {
+                  const sorted = (pending || []).slice().sort((a, b) => {
+                    if (pendingSort === 'amount_desc') return (b.amount || 0) - (a.amount || 0);
+                    return (a.merchantName || a.description || '').localeCompare(b.merchantName || b.description || '');
+                  });
+                  const p = sorted[index];
+                  const merchantKey = (p.merchantName || p.description || '').toLowerCase();
+                  const potLabel = (() => {
+                    const pid = p.metadata?.pot_id || p.metadata?.destination_pot_id || p.metadata?.source_pot_id;
+                    if (pid && pots[pid]) return pots[pid].name;
+                    if (p.description && p.description.startsWith('pot_')) return p.description.replace(/^pot_/, '');
+                    return undefined;
+                  })();
+                  const defaultKey = edits[merchantKey]?.categoryKey || 'uncategorized';
+                  const defaultLabel = edits[merchantKey]?.label || potLabel || p.merchantName || p.description || '';
                   return (
-                    <tr key={p.transactionId}>
-                      <td>{p.merchantName || p.description}</td>
-                      <td className="text-end">{formatMoney(p.amount || 0)}</td>
-                      <td style={{ width: 200 }}>
-                        <Form.Select size="sm" value={edits[k]?.categoryKey || 'dining_out'} onChange={(e) => setEdit(k, { categoryKey: e.target.value })}>
-                          {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
-                            <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
-                              {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
-                            </optgroup>
-                          ))}
-                        </Form.Select>
-                      </td>
-                      <td style={{ width: 220 }}>
-                        <Form.Control size="sm" value={edits[k]?.label || p.defaultCategoryLabel || p.merchantName || ''} onChange={(e) => setEdit(k, { label: e.target.value })} />
-                      </td>
-                      <td className="text-end">
-                        <Button size="sm" onClick={() => saveOne(k, true)} disabled={busy}>Save & Apply</Button>
-                      </td>
-                    </tr>
+                    <div style={{ ...style, padding: '8px 12px', borderBottom: '1px solid #f1f3f5' }}>
+                      <Row className="align-items-center gy-2">
+                        <Col md={3}>
+                          <div className="fw-semibold text-truncate">{potLabel || p.merchantName || p.description}</div>
+                          <div className="small text-muted">{p.transactionId}</div>
+                        </Col>
+                        <Col md={2} className="text-end">
+                          <div className="fw-semibold">{formatMoney(p.amount || 0)}</div>
+                        </Col>
+                        <Col md={2}>
+                          <Form.Select size="sm" value={defaultKey} onChange={(e) => setEdit(merchantKey, { categoryKey: e.target.value })}>
+                            {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
+                              <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
+                                {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+                              </optgroup>
+                            ))}
+                          </Form.Select>
+                        </Col>
+                        <Col md={3}>
+                          <Form.Control
+                            size="sm"
+                            value={defaultLabel}
+                            onChange={(e) => setEdit(merchantKey, { label: e.target.value })}
+                          />
+                        </Col>
+                        <Col md={2} className="text-end">
+                          <Button size="sm" onClick={() => saveOne(merchantKey, true)} disabled={busy}>Save & Apply</Button>
+                        </Col>
+                      </Row>
+                    </div>
                   );
-                })}
-              </tbody>
-            </Table>
+                }}
+              </List>
+            </div>
           </Card.Body>
         </Card>
       )}
@@ -261,69 +405,133 @@ const MerchantMappings: React.FC = () => {
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
-            <strong>Top Merchants</strong>
+            <strong>All Merchants</strong>
+            <div className="text-muted small">Excel-style grid: spend, transaction cadence, category, bucket, subscription.</div>
           </div>
-          <div className="small text-muted">Month-on-month: mark recurring providers (e.g., mortgage, utilities)</div>
+          <div className="d-flex align-items-center gap-2">
+            <Form.Select
+              size="sm"
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as 'merchant' | 'spend_desc')}
+            >
+              <option value="merchant">Sort by merchant A→Z</option>
+              <option value="spend_desc">Sort by total spend (high → low)</option>
+            </Form.Select>
+            {sortMode === 'merchant' && (
+              <Form.Select
+                size="sm"
+                value={sortDir}
+                onChange={(e) => setSortDir(e.target.value as 'asc' | 'desc')}
+              >
+                <option value="asc">Ascending</option>
+                <option value="desc">Descending</option>
+              </Form.Select>
+            )}
+          </div>
         </Card.Header>
-        <Card.Body>
+        <Card.Body className="p-0">
           {rows.length === 0 ? (
             <Alert variant="light" className="mb-0">Sync Monzo to populate merchant list.</Alert>
           ) : (
-            <Table size="sm" responsive hover>
-              <thead>
-                <tr>
-                  <th>Merchant</th>
-                  <th className="text-end">Spend</th>
-                  <th>Type</th>
-                  <th>Label</th>
-                  <th className="text-center">Sub?</th>
-                  <th>Flags</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((m) => (
-                  <tr key={m.merchantKey}>
-                    <td>{m.merchantName}</td>
-                    <td className="text-end">{formatMoney(m.totalSpend)}</td>
-                    <td style={{ width: 200 }}>
-                      <Form.Select size="sm" value={edits[m.merchantKey]?.categoryKey || m.primaryCategoryKey || 'dining_out'} onChange={(e) => setEdit(m.merchantKey, { categoryKey: e.target.value })}>
-                        {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
-                          <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
-                            {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
-                          </optgroup>
-                        ))}
-                      </Form.Select>
-                    </td>
-                    <td style={{ width: 220 }}>
-                      <Form.Control size="sm" value={edits[m.merchantKey]?.label || m.merchantName} onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })} />
-                    </td>
-                    <td className="text-center">
-                      <Form.Check
-                        type="checkbox"
-                        checked={edits[m.merchantKey]?.isSubscription ?? m.isSubscription ?? false}
-                        onChange={(e) => setEdit(m.merchantKey, { isSubscription: e.target.checked })}
-                      />
-                    </td>
-                    <td>
-                      {m.isRecurring ? <Badge bg="info">Recurring</Badge> : null}
-                      {m.months && m.months >= 3 ? <Badge bg="secondary" className="ms-1">{m.months} mo</Badge> : null}
-                    </td>
-                    <td className="text-end">
-                      <div className="d-flex gap-2 justify-content-end">
-                        <Button size="sm" variant="outline-secondary" disabled={busy} onClick={() => saveOne(m.merchantKey, false)}>
-                          Save
-                        </Button>
-                        <Button size="sm" variant="primary" disabled={busy} onClick={() => saveOne(m.merchantKey, true)}>
-                          {busy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                          Save & Apply
-                        </Button>
+            <div className="merchant-table" style={{ height: 540 }}>
+              <div className="merchant-header">
+                <span>Merchant</span>
+                <OverlayTrigger placement="top" overlay={<Tooltip>Total spend (ex VAT)</Tooltip>}><span>Spend</span></OverlayTrigger>
+                <OverlayTrigger placement="top" overlay={<Tooltip>Total transactions</Tooltip>}><span>Tx (Total)</span></OverlayTrigger>
+                <OverlayTrigger placement="top" overlay={<Tooltip>12mo = projected from months/transactions or YTD if present</Tooltip>}><span>Tx (12mo)</span></OverlayTrigger>
+                <OverlayTrigger placement="top" overlay={<Tooltip>6mo = projected from months/transactions</Tooltip>}><span>Tx (6mo)</span></OverlayTrigger>
+                <OverlayTrigger placement="top" overlay={<Tooltip>Category label to apply</Tooltip>}><span>Category</span></OverlayTrigger>
+                <OverlayTrigger placement="top" overlay={<Tooltip>Bucket derived from category</Tooltip>}><span>Bucket</span></OverlayTrigger>
+                <OverlayTrigger placement="top" overlay={<Tooltip>Mark as subscription for override</Tooltip>}><span>Subscription</span></OverlayTrigger>
+                <OverlayTrigger placement="top" overlay={<Tooltip>Flags and save/apply actions</Tooltip>}><span className="text-end">Actions</span></OverlayTrigger>
+              </div>
+              <List
+                height={480}
+                width={bounds.width || 1200}
+                itemCount={filteredRows.length}
+                itemSize={98}
+                itemKey={(idx) => filteredRows[idx].merchantKey}
+              >
+                {({ index, style }) => {
+                  const m = filteredRows[index];
+                  const bucketLabel = m.primaryCategoryKey
+                    ? BUCKET_LABELS[(getCategoryByKey(m.primaryCategoryKey, allCategories)?.bucket || 'optional') as keyof typeof BUCKET_LABELS]
+                    : (m.primaryCategoryType || 'optional');
+                  const tx12 = m.transactions12 || 0;
+                  const tx6 = m.transactions6 || 0;
+                  const totalTx = m.transactions || 0;
+                  return (
+                    <div style={style} className="merchant-row">
+                      <div className="merchant-cell">
+                        <div className="merchant-label text-truncate">{m.merchantName}</div>
+                        <div className="merchant-sub">{m.merchantKey}</div>
+                        <div className="merchant-sub">Last: {m.lastTransactionISO ? new Date(m.lastTransactionISO).toLocaleDateString() : '—'}</div>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
+                      <div className="merchant-cell">
+                        <div className="merchant-money">{formatMoney(m.totalSpend)}</div>
+                      </div>
+                      <div className="merchant-cell">
+                        <div className="merchant-label">{totalTx} tx</div>
+                        <div className="merchant-sub">lifetime</div>
+                      </div>
+                      <div className="merchant-cell">
+                        <div className="merchant-label">{tx12}</div>
+                        <div className="merchant-sub">12mo proj</div>
+                      </div>
+                      <div className="merchant-cell">
+                        <div className="merchant-label">{tx6}</div>
+                        <div className="merchant-sub">6mo proj</div>
+                      </div>
+                      <div className="merchant-cell">
+                        <Form.Select
+                          size="sm"
+                          value={edits[m.merchantKey]?.categoryKey || m.primaryCategoryKey || 'dining_out'}
+                          onChange={(e) => setEdit(m.merchantKey, { categoryKey: e.target.value })}
+                          className="merchant-input"
+                        >
+                          {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
+                            <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
+                              {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+                            </optgroup>
+                          ))}
+                        </Form.Select>
+                        <Form.Control
+                          size="sm"
+                          className="merchant-input mt-1"
+                          value={edits[m.merchantKey]?.label || m.merchantName}
+                          onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })}
+                        />
+                      </div>
+                      <div className="merchant-cell">
+                        <div className="merchant-chip">{bucketLabel}</div>
+                      </div>
+                      <div className="merchant-cell text-center">
+                        <Form.Check
+                          type="checkbox"
+                          checked={edits[m.merchantKey]?.isSubscription ?? m.isSubscription ?? false}
+                          onChange={(e) => setEdit(m.merchantKey, { isSubscription: e.target.checked })}
+                        />
+                      </div>
+                      <div className="merchant-cell">
+                        <div className="d-flex gap-2 justify-content-end">
+                          <Button size="sm" variant="outline-secondary" disabled={busy} onClick={() => saveOne(m.merchantKey, false)}>
+                            Save
+                          </Button>
+                          <Button size="sm" variant="primary" disabled={busy} onClick={() => saveOne(m.merchantKey, true)}>
+                            {busy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                            Save & Apply
+                          </Button>
+                        </div>
+                        <div className="mt-1 d-flex gap-1 flex-wrap">
+                          {m.isRecurring ? <Badge bg="info">Recurring</Badge> : null}
+                          {m.months && m.months >= 3 ? <Badge bg="secondary">{m.months} mo</Badge> : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }}
+              </List>
+            </div>
           )}
         </Card.Body>
       </Card>
@@ -332,3 +540,12 @@ const MerchantMappings: React.FC = () => {
 };
 
 export default MerchantMappings;
+
+// Map the finance bucket to the limited categoryType set the backend expects
+const mapBucketToType = (bucket: string) => {
+  if (bucket === 'mandatory' || bucket === 'debt_repayment' || bucket === 'bank_transfer') return 'mandatory';
+  if (bucket === 'discretionary') return 'optional';
+  if (bucket?.includes('saving') || bucket === 'investment') return 'savings';
+  if (bucket === 'net_salary' || bucket === 'irregular_income') return 'income';
+  return 'optional';
+};

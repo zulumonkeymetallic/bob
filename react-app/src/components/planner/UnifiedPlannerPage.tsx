@@ -361,8 +361,8 @@ const UnifiedPlannerPage: React.FC = () => {
         const fallbackColor = enrichedInstance.sourceType === 'chore'
           ? '#f59e0b'
           : enrichedInstance.sourceType === 'routine'
-          ? '#0ea5e9'
-          : '#38bdf8';
+            ? '#0ea5e9'
+            : '#38bdf8';
 
         const title = instance.title
           || (instance.sourceType === 'chore' ? 'Chore' : instance.sourceType === 'routine' ? 'Routine' : 'Planned work');
@@ -381,14 +381,24 @@ const UnifiedPlannerPage: React.FC = () => {
         } satisfies PlannerCalendarEvent;
       });
 
-    const externalEvents = planner.externalEvents.map((external) => ({
-      id: external.id,
-      title: external.title,
-      start: external.start,
-      end: external.end,
-      type: 'external' as const,
-      external,
-    } satisfies PlannerCalendarEvent));
+    const linkedGcalIds = new Set<string>();
+    planner.instances.forEach((i) => {
+      if (i.external?.gcalEventId) linkedGcalIds.add(i.external.gcalEventId);
+    });
+    planner.blocks.forEach((b) => {
+      if (b.googleEventId) linkedGcalIds.add(b.googleEventId);
+    });
+
+    const externalEvents = planner.externalEvents
+      .filter((external) => !linkedGcalIds.has(external.id))
+      .map((external) => ({
+        id: external.id,
+        title: external.title,
+        start: external.start,
+        end: external.end,
+        type: 'external' as const,
+        external,
+      } satisfies PlannerCalendarEvent));
 
     return [...externalEvents, ...blockEvents, ...instanceEvents];
   }, [planner.blocks, planner.externalEvents, planner.instances, resolveThemeAppearance]);
@@ -548,7 +558,7 @@ const UnifiedPlannerPage: React.FC = () => {
               const syncDay = format(start, 'yyyy-MM-dd');
               const pushDay = httpsCallable(functions, 'syncPlanToGoogleCalendar');
               await pushDay({ day: syncDay });
-            } catch {}
+            } catch { }
           }
         } catch (err) {
           console.warn('Planner: Google sync failed/skipped for block move', err);
@@ -578,7 +588,7 @@ const UnifiedPlannerPage: React.FC = () => {
             const syncDay = format(start, 'yyyy-MM-dd');
             const pushDay = httpsCallable(functions, 'syncPlanToGoogleCalendar');
             await pushDay({ day: syncDay });
-          } catch {}
+          } catch { }
         } catch (err) {
           console.warn('Planner: Google sync failed/skipped for instance move', err);
         }
@@ -614,8 +624,8 @@ const UnifiedPlannerPage: React.FC = () => {
     setComposerSaving(true);
 
     const makeDedupeKey = (title: string, startMs: number, endMs: number) => {
-      const raw = `${currentUser?.uid || ''}:${Math.round(startMs/60000)}:${Math.round(endMs/60000)}:${(title||'').slice(0,24)}`;
-      let h = 0; for (let i=0;i<raw.length;i++) h = (h*33 + raw.charCodeAt(i)) >>> 0;
+      const raw = `${currentUser?.uid || ''}:${Math.round(startMs / 60000)}:${Math.round(endMs / 60000)}:${(title || '').slice(0, 24)}`;
+      let h = 0; for (let i = 0; i < raw.length; i++) h = (h * 33 + raw.charCodeAt(i)) >>> 0;
       return h.toString(36);
     };
 
@@ -812,7 +822,7 @@ const UnifiedPlannerPage: React.FC = () => {
             await updateEv({ eventId: block.googleEventId, start: startIso, end: endIso });
           }
         }
-      } catch {}
+      } catch { }
     } else if (event.type === 'instance') {
       await updateInstanceTiming(event, start, end);
       // Attempt Google sync if linked
@@ -822,7 +832,7 @@ const UnifiedPlannerPage: React.FC = () => {
           const updateEv = httpsCallable(functions, 'updateCalendarEvent');
           await updateEv({ eventId: eid, start: start.toISOString(), end: end.toISOString() });
         }
-      } catch {}
+      } catch { }
     }
   }, [functions, updateBlockTiming, updateInstanceTiming]);
 
@@ -982,8 +992,8 @@ const UnifiedPlannerPage: React.FC = () => {
                     <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))}>
                       + New Block
                     </Button>
-                </div>
-                <DragAndDropCalendar
+                  </div>
+                  <DragAndDropCalendar
                     localizer={localizer}
                     events={events}
                     view={view}
@@ -1003,23 +1013,23 @@ const UnifiedPlannerPage: React.FC = () => {
                     style={{ height: 'calc(100vh - 220px)' }}
                     min={new Date(1970, 1, 1, 5, 0)}
                     max={new Date(1970, 1, 1, 23, 30)}
-                  formats={{
-                    timeGutterFormat: (date) => format(date, 'HH:mm'),
-                    eventTimeRangeFormat: ({ start, end }) => `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`,
-                  }}
-                />
-                {/* Conflict resolution panel */}
-                {isConflicting(activeEvent) && (
-                  <div className="d-flex align-items-center gap-2 p-2 border-top" style={{ background: '#fffbe6' }}>
-                    <span className="text-danger fw-semibold">Resolve conflict:</span>
-                    <Button size="sm" variant="outline-primary" onClick={handleConflictMoveNext}>Move to next free slot</Button>
-                    <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShorten(15)}>Shorten by 15m</Button>
-                    <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShift(15)}>Shift +15m</Button>
-                    <Button size="sm" variant="outline-dark" disabled={!lastActionPatch} onClick={handleUndoLast}>Undo</Button>
-                  </div>
-                )}
-              </div>
-            )}
+                    formats={{
+                      timeGutterFormat: (date) => format(date, 'HH:mm'),
+                      eventTimeRangeFormat: ({ start, end }) => `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`,
+                    }}
+                  />
+                  {/* Conflict resolution panel */}
+                  {isConflicting(activeEvent) && (
+                    <div className="d-flex align-items-center gap-2 p-2 border-top" style={{ background: '#fffbe6' }}>
+                      <span className="text-danger fw-semibold">Resolve conflict:</span>
+                      <Button size="sm" variant="outline-primary" onClick={handleConflictMoveNext}>Move to next free slot</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShorten(15)}>Shorten by 15m</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShift(15)}>Shift +15m</Button>
+                      <Button size="sm" variant="outline-dark" disabled={!lastActionPatch} onClick={handleUndoLast}>Undo</Button>
+                    </div>
+                  )}
+                </div>
+              )}
             </Card.Body>
           </Card>
         </Col>
@@ -1093,7 +1103,7 @@ const UnifiedPlannerPage: React.FC = () => {
                   const r = String((i as any).statusReason || 'unknown');
                   reasonCounts.set(r, (reasonCounts.get(r) || 0) + 1);
                 });
-                const topReasons = Array.from(reasonCounts.entries()).sort((a,b) => b[1]-a[1]).slice(0,3);
+                const topReasons = Array.from(reasonCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3);
                 return (
                   <div>
                     <div className="d-flex justify-content-between mb-2">

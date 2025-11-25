@@ -281,8 +281,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   // Theme colors mapping via CSS variables (no hardcoded hex)
   const hexToRgba = (hex: string, a: number) => {
-    const v = hex.replace('#','');
-    const b = parseInt(v.length === 3 ? v.split('').map(c=>c+c).join('') : v, 16);
+    const v = hex.replace('#', '');
+    const b = parseInt(v.length === 3 ? v.split('').map(c => c + c).join('') : v, 16);
     const r = (b >> 16) & 255, g = (b >> 8) & 255, bl = b & 255;
     return `rgba(${r}, ${g}, ${bl}, ${a})`;
   };
@@ -297,14 +297,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     setIsEditing(false);
 
     if (!currentUser?.uid) return;
-    
+
     // Subscribe to activity stream for this item
     const unsubscribe = ActivityStreamService.subscribeToActivityStream(
       selectedItem.id,
       setActivities,
       currentUser.uid
     );
-    
+
     return unsubscribe;
   }, [selectedItem, currentUser?.uid]);
 
@@ -425,8 +425,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const handleSave = async () => {
     try {
       // Track field changes for activity stream
-      const changes: Array<{field: string, oldValue: any, newValue: any}> = [];
-      
+      const changes: Array<{ field: string, oldValue: any, newValue: any }> = [];
+
       Object.keys(editForm).forEach(key => {
         if (selectedItem && editForm[key] !== selectedItem[key]) {
           changes.push({
@@ -438,11 +438,11 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       });
 
       await updateItem(editForm);
-      
+
       // Log activity for each change
       if (currentUser && selectedItem && selectedType) {
         const referenceNumber = generateReferenceNumber();
-        
+
         for (const change of changes) {
           if (change.field === 'status') {
             await ActivityStreamService.logStatusChange(
@@ -481,7 +481,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
           }
         }
       }
-      
+
       setIsEditing(false);
     } catch (error) {
       console.error('Error updating item:', error);
@@ -509,28 +509,28 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const handleAddNote = async () => {
-    console.log('Adding note...', { 
-      hasNote: !!newNote.trim(), 
-      hasItem: !!selectedItem, 
-      hasType: !!selectedType, 
-      hasUser: !!currentUser 
+    console.log('Adding note...', {
+      hasNote: !!newNote.trim(),
+      hasItem: !!selectedItem,
+      hasType: !!selectedType,
+      hasUser: !!currentUser
     });
-    
+
     if (!newNote.trim()) {
       alert('Please enter a note');
       return;
     }
-    
+
     if (!selectedItem || !selectedType) {
       alert('No item selected');
       return;
     }
-    
+
     if (!currentUser) {
       alert('You must be logged in to add notes');
       return;
     }
-    
+
     try {
       const referenceNumber = generateReferenceNumber();
       console.log('Calling ActivityStreamService.addNote...', {
@@ -541,7 +541,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         userEmail: currentUser.email,
         referenceNumber
       });
-      
+
       await ActivityStreamService.addNote(
         selectedItem.id,
         selectedType,
@@ -551,7 +551,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         'personal', // Set default persona to 'personal'
         referenceNumber
       );
-      
+
       console.log('Note added successfully');
       setNewNote('');
       setShowAddNote(false);
@@ -612,7 +612,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const getThemeName = (themeValue: number): string => {
     const themeNames: { [key: number]: string } = {
       1: 'Health',
-      2: 'Growth', 
+      2: 'Growth',
       3: 'Wealth',
       4: 'Tribe',
       5: 'Home'
@@ -777,8 +777,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 <div style={{ fontSize: '11px', opacity: 0.9, marginBottom: '4px', letterSpacing: '0.5px', color: themeHex }}>
                   REFERENCE
                 </div>
-                <div style={{ 
-                  fontSize: '24px', 
+                <div style={{
+                  fontSize: '24px',
                   fontWeight: '900',
                   fontFamily: 'monospace',
                   letterSpacing: '2px',
@@ -1007,18 +1007,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                       )}
                     </Form.Select>
                   ) : selectedItem.priority ? (
-                    <Badge 
+                    <Badge
                       bg={
                         selectedItem.priority === 1 ? 'danger' :
-                        selectedItem.priority === 2 ? 'warning' : 
-                        'secondary'
+                          selectedItem.priority === 2 ? 'warning' :
+                            'secondary'
                       }
                       style={{ fontSize: '12px', padding: '6px 12px' }}
                     >
-                      {selectedItem.priority === 1 ? 'P1 - High' : 
-                       selectedItem.priority === 2 ? 'P2 - Medium' : 
-                       selectedItem.priority === 3 ? 'P3 - Low' : 
-                       'Unknown'}
+                      {selectedItem.priority === 1 ? 'P1 - High' :
+                        selectedItem.priority === 2 ? 'P2 - Medium' :
+                          selectedItem.priority === 3 ? 'P3 - Low' :
+                            'Unknown'}
                     </Badge>
                   ) : (
                     <span style={{ color: '#9ca3af' }}>Not set</span>
@@ -1032,9 +1032,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <label style={{ fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px', display: 'block' }}>
                     Theme
                   </label>
-                  <Badge 
-                    style={{ 
-                      backgroundColor: themeColor, 
+                  <Badge
+                    style={{
+                      backgroundColor: themeColor,
                       color: themeVars.onAccent as string,
                       fontSize: '12px',
                       padding: '6px 12px'
@@ -1050,7 +1050,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
                   Metadata
                 </h6>
-                
+
                 <div style={{ fontSize: '13px', color: themeVars.muted, lineHeight: '1.6' }}>
                   <div style={{ marginBottom: '8px' }}>
                     <strong>ID:</strong> <code style={{ fontSize: '11px' }}>{selectedItem.id}</code>
@@ -1091,9 +1091,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     {(selectedType === 'task' || selectedType === 'story') && (
                       <div>
                         <label className="small" style={{ display: 'block', marginBottom: 4 }}>Sprint</label>
-                        <Form.Select size="sm" value={quickEdit.sprintId || ''} onChange={(e) => setQuickEdit((q: any) => ({ ...q, sprintId: e.target.value }))}>
+                        <Form.Select
+                          size="sm"
+                          value={quickEdit.sprintId || ''}
+                          onChange={(e) => setQuickEdit((q: any) => ({ ...q, sprintId: e.target.value || null }))}
+                          style={{ minHeight: '31px' }}
+                        >
                           <option value="">None</option>
-                          {sprints.map(s => (<option key={s.id} value={s.id}>{s.name}</option>))}
+                          {sprints.map(s => (
+                            <option key={s.id} value={s.id}>
+                              {s.name || s.ref || `Sprint ${s.id.slice(-4)}`}
+                            </option>
+                          ))}
                         </Form.Select>
                       </div>
                     )}
@@ -1178,18 +1187,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     Note
                   </Button>
                 </div>
-                
-                <div style={{ 
-                  maxHeight: '300px', 
+
+                <div style={{
+                  maxHeight: '300px',
                   overflow: 'auto',
                   backgroundColor: themeVars.card,
                   borderRadius: '6px',
                   padding: '8px'
                 }}>
                   {activities.length === 0 ? (
-                    <div style={{ 
-                      textAlign: 'center', 
-                      color: themeVars.muted, 
+                    <div style={{
+                      textAlign: 'center',
+                      color: themeVars.muted,
                       fontSize: '13px',
                       padding: '20px'
                     }}>
@@ -1198,9 +1207,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   ) : (
                     <ListGroup variant="flush">
                       {activities.map((activity, index) => (
-                        <ListGroup.Item 
+                        <ListGroup.Item
                           key={activity.id || index}
-                          style={{ 
+                          style={{
                             border: 'none',
                             backgroundColor: 'transparent',
                             padding: '8px 0',
@@ -1217,9 +1226,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                                 {activity.description}
                               </div>
                               {activity.noteContent && (
-                                <div style={{ 
-                                  fontSize: '12px', 
-                                  color: themeVars.muted, 
+                                <div style={{
+                                  fontSize: '12px',
+                                  color: themeVars.muted,
                                   fontStyle: 'italic',
                                   marginTop: '4px',
                                   padding: '6px',
@@ -1302,8 +1311,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
           <Button variant="secondary" onClick={() => setShowAddNote(false)}>
             Cancel
           </Button>
-          <Button 
-            variant="primary" 
+          <Button
+            variant="primary"
             onClick={handleAddNote}
             disabled={!newNote.trim()}
           >

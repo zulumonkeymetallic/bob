@@ -59,6 +59,8 @@ function summariseTransactions(transactions) {
       || inferDefaultCategoryLabel(raw)
     );
 
+    if (categoryType === 'bank_transfer') continue;
+
     const absoluteAmount = Math.abs(amount);
     totals[categoryType] = (totals[categoryType] || 0) + absoluteAmount;
 
@@ -80,7 +82,7 @@ function summariseTransactions(transactions) {
     categoryEntry.count += 1;
 
     const isSpend = amount < 0;
-    if (isSpend) {
+    if (isSpend && categoryType !== 'bank_transfer') {
       const merchantName = data.merchant?.name || data.counterparty?.name || data.description || categoryLabel;
       const merchantKey = normaliseMerchantName(merchantName || data.transactionId || data.id || 'merchant');
       if (!merchantTotals.has(merchantKey)) {
