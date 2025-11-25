@@ -178,11 +178,14 @@ function buildBlockDaySlots(block, day, busyByDay) {
   const dayStart = day.setZone(zone).startOf('day');
   const blockIntervals = [];
   for (const window of block.windows) {
-    if (!window.daysOfWeek.includes(dayStart.weekday)) continue;
+    if (!window.daysOfWeek.includes(dayStart.weekday)) {
+      continue;
+    }
     if (window.startDate && DateTime.fromISO(window.startDate, { zone }).startOf('day') > dayStart) continue;
     if (window.endDate && DateTime.fromISO(window.endDate, { zone }).endOf('day') < dayStart) continue;
     const windowStart = dayStart.plus({ minutes: hhmmToMinutes(window.startTime) });
     const windowEnd = dayStart.plus({ minutes: hhmmToMinutes(window.endTime) });
+
     if (windowEnd <= windowStart) continue;
     blockIntervals.push(Interval.fromDateTimes(windowStart, windowEnd));
   }
@@ -419,8 +422,8 @@ async function computeStoryOccurrences(stories, windowStart, windowEnd, userId, 
     if (baseDt < startBoundary || baseDt > endBoundary) continue;
 
     const estimateMinutes = story.estimateMin
-      || (Number.isFinite(Number(story.points)) ? Number(story.points) * 45 : null)
-      || (Number.isFinite(Number(story.estimatedHours)) ? Number(story.estimatedHours) * 60 : null);
+      || (Number.isFinite(Number(story.estimatedHours)) ? Number(story.estimatedHours) * 60 : null)
+      || (Number.isFinite(Number(story.points)) ? Number(story.points) * 45 : null);
     const durationMinutes = clampDurationMinutes(estimateMinutes || 90, { min: 30, max: 360 });
     const priority = Number.isFinite(Number(story.schedulerPriority))
       ? Number(story.schedulerPriority)
@@ -483,9 +486,13 @@ function planOccurrences({
     if (!block.enabled) continue;
     const occurrenceDates = expandRecurrence(block.recurrence, windowStart, windowEnd).map((dt) => dt.startOf('day'));
     const dateSet = new Set(occurrenceDates.map((dt) => dt.toISODate()));
+
     for (const day of planningDays) {
-      if (dateSet.size && !dateSet.has(isoDate(day))) continue;
+      if (dateSet.size && !dateSet.has(isoDate(day))) {
+        continue;
+      }
       const slots = buildBlockDaySlots(block, day.setZone(block.zone), busyByDay);
+
       if (!slots.length) continue;
       const key = `${block.id}__${isoDate(day)}`;
       slotIndex.set(key, {
@@ -545,8 +552,10 @@ function planOccurrences({
     const candidateSlots = [];
     for (const block of candidateBlocks) {
       const slotKey = `${block.id}__${occurrence.dayKey}`;
+
       if (!slotIndex.has(slotKey)) continue;
       const daySlots = slotIndex.get(slotKey);
+
       if (daySlots.capacityRemaining < occurrence.durationMinutes) continue;
       candidateSlots.push({ block, daySlots });
     }
@@ -616,6 +625,7 @@ function planOccurrences({
           sourceId: occurrence.sourceId,
           title: occurrence.title,
           occurrenceDate: occurrence.dayKey,
+          dayKey: occurrence.dayKey, // For sync compatibility
           blockId: block.id,
           priority: occurrence.priority,
           plannedStart: isoDateTime(start),
@@ -647,6 +657,12 @@ function planOccurrences({
           instance.mobileCheckinUrl = mobileCheckinUrl;
           instance.schedulingContext.deepLink = deepLink;
         }
+
+        // DEBUG: Verify dayKey is set
+        if (instance.title && instance.title.includes('Mass Effect')) {
+          console.log('[engine.js] Created Mass Effect instance with dayKey:', instance.dayKey);
+        }
+
         results.push(instance);
         daySlots.capacityRemaining -= occurrence.durationMinutes;
         slot.nextStart = end.plus({ minutes: block.buffers.after + block.buffers.before });

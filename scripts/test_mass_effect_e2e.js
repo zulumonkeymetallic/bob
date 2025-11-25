@@ -65,6 +65,7 @@ async function runEndToEndTest() {
     console.log('   ✅ Mass Effect in plan!');
     console.log('   Time:', DateTime.fromISO(massEffect.plannedStart).toFormat('HH:mm'),
         '-', DateTime.fromISO(massEffect.plannedEnd).toFormat('HH:mm'));
+    console.log('   Full object:', JSON.stringify(massEffect, null, 2));
 
     // Step 5: Save to Firestore
     console.log('\n4️⃣ Saving to Firestore...');
@@ -77,7 +78,7 @@ async function runEndToEndTest() {
 
     plan.planned.forEach(i => {
         const ref = db.collection('scheduled_instances').doc(i.id);
-        batch.set(ref, i);
+        batch.set(ref, { ...i, status: 'planned', dayKey: i.occurrenceDate || i.dayKey });
     });
 
     await batch.commit();
