@@ -124,6 +124,10 @@ function toDayKey(date) {
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}${m}${d}`;
 }
+// Convert yyyy-MM-dd to yyyyMMdd
+function isoDayKeyToDayKey(isoDateStr) {
+  return isoDateStr.replace(/-/g, '');
+}
 function makeAssignmentId({ planId, itemType, itemId }) {
   const raw = `${planId}:${itemType}:${itemId}`;
   let h = 0;
@@ -1061,7 +1065,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
       userId: uid,
       sourceType: unscheduled.sourceType,
       sourceId: unscheduled.sourceId,
-      occurrenceDate: unscheduled.dayKey,
+      occurrenceDate: isoDayKeyToDayKey(unscheduled.dayKey),
     });
     const ref = db.collection('scheduled_instances').doc(id);
     const isExisting = existingIds.has(id);
@@ -1079,7 +1083,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
       sourceType: unscheduled.sourceType,
       sourceId: unscheduled.sourceId,
       title: unscheduled.title || null,
-      occurrenceDate: unscheduled.dayKey,
+      occurrenceDate: isoDayKeyToDayKey(unscheduled.dayKey),
       status: 'unscheduled',
       statusReason: unscheduled.reason,
       durationMinutes: 0,

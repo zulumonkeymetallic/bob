@@ -8,6 +8,8 @@ const MINUTE = 60 * 1000;
 
 const isoDate = (dt) => dt.toISODate();
 const isoDateTime = (dt) => dt.toUTC().toISO();
+// Convert yyyy-MM-dd to yyyyMMdd for firestore queries
+const dayKeyToOccurrenceDate = (dayKey) => dayKey.replace(/-/g, '');
 
 const makeInstanceId = ({ userId, sourceType, sourceId, occurrenceDate }) =>
   createHash('sha1').update(`${userId}:${sourceType}:${sourceId}:${occurrenceDate}`).digest('hex');
@@ -617,15 +619,15 @@ function planOccurrences({
             userId: occurrence.ownerUid,
             sourceType: occurrence.sourceType,
             sourceId: occurrence.sourceId,
-            occurrenceDate: occurrence.dayKey,
+            occurrenceDate: dayKeyToOccurrenceDate(occurrence.dayKey),
           }),
           ownerUid: occurrence.ownerUid,
           userId: occurrence.ownerUid,
           sourceType: occurrence.sourceType,
           sourceId: occurrence.sourceId,
           title: occurrence.title,
-          occurrenceDate: occurrence.dayKey,
-          dayKey: occurrence.dayKey, // For sync compatibility
+          occurrenceDate: dayKeyToOccurrenceDate(occurrence.dayKey), // yyyyMMdd format for UI queries
+          dayKey: occurrence.dayKey, // Keep yyyy-MM-dd for backward compatibility
           blockId: block.id,
           priority: occurrence.priority,
           plannedStart: isoDateTime(start),
@@ -808,7 +810,7 @@ async function planSchedule({
     sourceType: 'story_block',
     sourceId: b.storyId || b.id,
     ownerUid: b.ownerUid,
-    occurrenceDate: isoDate(DateTime.fromMillis(b.start, { zone: DEFAULT_ZONE })),
+    occurrenceDate: dayKeyToOccurrenceDate(isoDate(DateTime.fromMillis(b.start, { zone: DEFAULT_ZONE }))),
     start: b.start,
     end: b.end,
     title: b.title,
