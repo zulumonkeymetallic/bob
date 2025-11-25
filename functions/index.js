@@ -8951,9 +8951,25 @@ async function syncPlanToGoogleForUser(uid, dayStr) {
   const access = await getAccessToken(uid);
   const db = admin.firestore();
 
-  // Load assignments for the day
-  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid', '==', uid).get();
-  const assignments = asSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  // Load scheduled instances for the day (from new scheduler)
+  const instancesSnap = await db.collection('scheduled_instances')
+    .where('ownerUid', '==', uid)
+    .where('occurrenceDate', '==', dayKey)
+    .where('status', '==', 'planned')
+    .get();
+  const assignments = instancesSnap.docs.map(d => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ...data,
+      // Map new field names to old expected names
+      start: data.plannedStart,
+      end: data.plannedEnd,
+      itemType: data.sourceType,
+      itemId: data.sourceId,
+      external: { googleEventId: data.googleEventId || null }
+    };
+  });
   if (assignments.length === 0) return { ok: true, created: 0, updated: 0, parentsCreated: 0 };
 
   // Group by blockId
@@ -9131,14 +9147,14 @@ async function syncPlanToGoogleForUser(uid, dayStr) {
             method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(evBody)
           });
           created++;
-          await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external || {}), googleEventId: createdEv.id } }, { merge: true });
+          await db.collection('scheduled_instances').doc(a.id).update({ googleEventId: createdEv.id });
         }
       } else {
         const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
           method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(evBody)
         });
         created++;
-        await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id).set({ external: { ...(a.external || {}), googleEventId: createdEv.id } }, { merge: true });
+        await db.collection('scheduled_instances').doc(a.id).update({ googleEventId: createdEv.id });
       }
     }
   }
