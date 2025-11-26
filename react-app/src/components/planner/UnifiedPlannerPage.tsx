@@ -918,7 +918,7 @@ const UnifiedPlannerPage: React.FC = () => {
                   <CalendarIcon size={18} />
                 </span>
                 <div>
-                  <div className="fw-semibold">Unified Planner</div>
+                  <div className="fw-semibold">Calendar</div>
                   <small className="text-muted">
                     Drag, drop, and orchestrate your day across Google Calendar, AI routines, and focus blocks.
                   </small>

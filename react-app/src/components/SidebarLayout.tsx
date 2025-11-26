@@ -129,9 +129,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Calendar',
       icon: 'calendar',
       items: [
-        { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
-        { label: 'Theme Rules', path: '/calendar/themes', icon: 'palette' },
-        { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
+        { label: 'Weekly Plan', path: '/calendar/themes', icon: 'palette' },
+        { label: 'Sprint Capacity', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]
     },

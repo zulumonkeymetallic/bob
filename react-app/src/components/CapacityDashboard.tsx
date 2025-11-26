@@ -110,7 +110,7 @@ const CapacityDashboard: React.FC = () => {
     return (
         <div className="p-4">
             <div className="d-flex justify-content-between align-items-center mb-4">
-                <h2>Capacity Planning</h2>
+                <h2>Sprint Capacity</h2>
                 <Form.Select
                     style={{ width: '250px' }}
                     value={selectedSprintId}
