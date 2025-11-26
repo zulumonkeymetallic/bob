@@ -239,6 +239,31 @@ function computeBusyByDay(busyRaw, zone) {
   return busyByDay;
 }
 
+function inferThemeFromItem(item, type) {
+  // 1. Explicit theme (user-selected)
+  if (item.theme != null) return item.theme;
+  if (item.themeId != null) return item.themeId;
+
+  // 2. Chores always get "Chores" theme (ID: 10)
+  if (type === 'chore') return 10;
+
+  // 3. Routines/Habits - keyword matching in title and tags
+  const text = `${item.title || ''} ${(item.tags || []).join(' ')}`.toLowerCase();
+
+  if (/meditate|meditation|mindful|yoga|prayer/.test(text)) return 9;  // Spiritual & Personal Growth
+  if (/exercise|workout|gym|run|fitness|walk|jog|sport/.test(text)) return 1;  // Health & Fitness
+  if (/read|book|study|learn|course|education/.test(text)) return 4;  // Learning & Education
+  if (/sleep|rest|relax|nap|unwind/.test(text)) return 11;  // Rest & Recovery  
+  if (/clean|chore|tidy|laundry|dishes|vacuum/.test(text)) return 10;  // Chores
+  if (/family|kids|children|spouse|partner/.test(text)) return 5;  // Family & Relationships
+  if (/work|career|meeting|project/.test(text)) return 2;  // Career & Professional
+  if (/budget|finance|money|invest/.test(text)) return 3;  // Finance & Wealth
+  if (/hobby|game|fun|play/.test(text)) return 6;  // Hobbies & Interests
+
+  // Default for routines/habits: Spiritual & Personal Growth (habit-building is self-improvement)
+  return 9;
+}
+
 function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd) {
   const occurrences = [];
   for (const chore of chores) {
@@ -261,6 +286,8 @@ function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd
         tags: chore.tags || [],
         dayKey,
         title: chore.title,
+        theme: inferThemeFromItem(chore, 'chore'),
+        goalId: chore.goalId || null,
       });
     }
   }
@@ -284,6 +311,8 @@ function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd
         tags: routine.tags || [],
         dayKey,
         title: routine.title,
+        theme: inferThemeFromItem(routine, 'routine'),
+        goalId: routine.goalId || null,
       });
     }
   }
