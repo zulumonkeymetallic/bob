@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation, useMatch } from 'react-router-dom';
 import { Card, Container, Row, Col, Button, Dropdown, Badge, Spinner } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy, deleteDoc, limit } from 'firebase/firestore';
@@ -20,14 +21,23 @@ interface SprintKanbanPageProps {
   showInlineTasks?: boolean; // show inline tasks panel under board when selecting a story
 }
 
-const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({ 
-  showSidebar = false, 
+const SprintKanbanContent: React.FC<SprintKanbanPageProps> = ({
+  showSidebar = false,
   selectedSprintId: propSelectedSprintId,
   showInlineTasks = true,
 }) => {
+  console.log('[SprintKanbanPage] Component RENDERING', {
+    pathname: window.location.pathname,
+    routerLocation: useLocation().pathname
+  });
+  const location = useLocation();
+  const matchKanban = useMatch('/sprints/kanban');
+  const matchKanbanShort = useMatch('/kanban');
+  const matchSprintKanban = useMatch('/sprint-kanban');
+  const isOnKanbanRoute = matchKanban || matchKanbanShort || matchSprintKanban;
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  
+
   // State
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -39,9 +49,27 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
 
   // Update selected sprint when prop changes
   useEffect(() => {
+    // Safety check: if we're not on a kanban route, don't run this effect logic
+    // This prevents infinite loops if the component is inadvertently mounted on wrong routes
+    const path = window.location.pathname;
+    const isKanban = path.includes('/kanban') || path.includes('/sprint-kanban');
+
+    if (!isKanban && !propSelectedSprintId) {
+      return;
+    }
+
+    console.log('[SprintKanbanPage] useEffect[1] MOUNTED or updated', {
+      propSelectedSprintId,
+      selectedSprintId,
+      pathname: path
+    });
+
     if (propSelectedSprintId && propSelectedSprintId !== selectedSprintId) {
       setSelectedSprintId(propSelectedSprintId);
     }
+    return () => {
+      console.log('[SprintKanbanPage] useEffect[1] CLEANUP - Component UNMOUNTING');
+    };
   }, [propSelectedSprintId, selectedSprintId, setSelectedSprintId]);
 
   // Resolve filter: explicit "All" (empty string) disables filtering entirely
@@ -68,13 +96,14 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
     if (!filterSprintId && !currentSprint) return true;
     return storySprint ? selectedMatchValues.has(storySprint) : false;
   });
-  
+
   const sprintTasks = tasks.filter(task => {
     if (!filterSprintId && !currentSprint) return true;
     return task.sprintId ? selectedMatchValues.has(task.sprintId as any) : false;
   });
 
   useEffect(() => {
+    console.log('[SprintKanbanPage] useEffect[2] Setting up data subscriptions');
     if (!currentUser) return;
 
     const setupSubscriptions = () => {
@@ -97,23 +126,23 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
       // Tasks subscription: use materialized sprint_task_index to avoid full collection reads
       const tasksQuery = currentSprint
         ? query(
-            collection(db, 'sprint_task_index'),
-            where('ownerUid', '==', currentUser.uid),
-            where('persona', '==', currentPersona),
-            where('sprintId', '==', (currentSprint as any).id),
-            where('isOpen', '==', true),
-            orderBy('dueDate', 'asc'),
-            limit(1000)
-          )
+          collection(db, 'sprint_task_index'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          where('sprintId', '==', (currentSprint as any).id),
+          where('isOpen', '==', true),
+          orderBy('dueDate', 'asc'),
+          limit(1000)
+        )
         : query(
-            collection(db, 'sprint_task_index'),
-            where('ownerUid', '==', currentUser.uid),
-            where('persona', '==', currentPersona),
-            where('sprintId', '==', '__none__'),
-            where('isOpen', '==', true),
-            orderBy('dueDate', 'asc'),
-            limit(1000)
-          );
+          collection(db, 'sprint_task_index'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          where('sprintId', '==', '__none__'),
+          where('isOpen', '==', true),
+          orderBy('dueDate', 'asc'),
+          limit(1000)
+        );
 
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
         const tasksData = snapshot.docs.map(docSnap => {
@@ -135,7 +164,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
             ownerUid: currentUser.uid,
             ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
           };
-        
+
           return t as Task;
         });
         setTasks(tasksData);
@@ -160,6 +189,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
       setLoading(false);
 
       return () => {
+        console.log('[SprintKanbanPage] Cleaning up data subscriptions');
         unsubscribeStories();
         unsubscribeTasks();
         unsubscribeGoals();
@@ -234,6 +264,15 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
     );
   }
 
+  // GUARD: Only render if we're actually on a kanban route
+  if (!isOnKanbanRoute) {
+    console.log('[SprintKanbanPage] GUARD: Not on kanban route, returning null', {
+      pathname: location.pathname,
+      isOnKanbanRoute: !!isOnKanbanRoute
+    });
+    return null;
+  }
+
   return (
     <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: '100vh' }}>
       {/* Header */}
@@ -270,8 +309,8 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
               </Button>
 
               <Dropdown>
-                <Dropdown.Toggle 
-                  variant="outline-primary" 
+                <Dropdown.Toggle
+                  variant="outline-primary"
                   style={{ minWidth: '200px', textAlign: 'left' }}
                 >
                   {currentSprint ? (
@@ -460,11 +499,11 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
       {/* Kanban Board */}
       <Row>
         <Col>
-            <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ padding: '24px' }}>
+          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+            <Card.Body style={{ padding: '24px' }}>
               <ModernKanbanBoard
                 sprintDueDateRange={currentSprint ? { start: (currentSprint as any).startDate, end: (currentSprint as any).endDate } : null}
-                statusFilter={[0,1,3]}
+                statusFilter={[0, 1, 3]}
                 onItemSelect={(item, type) => {
                   if (type === 'story') {
                     setSelectedStory(item as Story);
@@ -517,7 +556,7 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
                   {currentSprint ? `No items in ${currentSprint.name}` : 'No items in backlog'}
                 </h5>
                 <p style={{ color: 'var(--muted)', marginBottom: '24px' }}>
-                  {currentSprint 
+                  {currentSprint
                     ? 'Add stories and tasks to this sprint to start planning your work.'
                     : 'Create stories and tasks, then assign them to a sprint when ready.'
                   }
@@ -532,6 +571,19 @@ const SprintKanbanPage: React.FC<SprintKanbanPageProps> = ({
       )}
     </Container>
   );
+};
+
+const SprintKanbanPage: React.FC<SprintKanbanPageProps> = (props) => {
+  const matchKanban = useMatch('/sprints/kanban');
+  const matchKanbanShort = useMatch('/kanban');
+  const matchSprintKanban = useMatch('/sprint-kanban');
+  const isOnKanbanRoute = matchKanban || matchKanbanShort || matchSprintKanban;
+
+  if (!isOnKanbanRoute) {
+    return null;
+  }
+
+  return <SprintKanbanContent {...props} />;
 };
 
 export default SprintKanbanPage;

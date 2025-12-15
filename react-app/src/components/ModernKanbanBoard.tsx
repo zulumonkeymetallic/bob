@@ -37,6 +37,7 @@ import { deriveTaskSprint, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
+import AddStoryModal from './AddStoryModal';
 import { DnDMutationHandler } from '../utils/dndMutations';
 import { themeVars } from '../utils/themeVars';
 import '../styles/KanbanCards.css';
@@ -66,7 +67,7 @@ const DroppableArea: React.FC<{
     <div
       ref={setNodeRef}
       className={`drop-lane${isOver ? ' is-over' : ''}`}
-      style={{ minHeight: '220px', padding: '12px', ...style }}
+      style={{ minHeight: '100px', padding: '8px', ...style }}
     >
       {children}
     </div>
@@ -301,6 +302,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [selectedType, setSelectedType] = useState<'story' | 'task'>('story');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showAddStoryModal, setShowAddStoryModal] = useState(false);
   const [addType, setAddType] = useState<'story' | 'task'>('story');
 
   // DnD state
@@ -365,7 +367,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       window.removeEventListener('resize', recomputeBoardHeight);
       try { if (ro) ro.disconnect(); } catch { }
     };
-  }, [recomputeBoardHeight]);
+  }, []);
 
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
@@ -801,8 +803,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
 
   const handleAdd = (type: 'story' | 'task') => {
     setAddType(type);
-    setAddForm({});
-    setShowAddModal(true);
+    if (type === 'story') {
+      setShowAddStoryModal(true);
+    } else {
+      setAddForm({});
+      setShowAddModal(true);
+    }
   };
 
   const handleSaveEdit = async () => {
@@ -900,8 +906,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   }
 
   return (
-    <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: themeVars.bg }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+    <div style={{ minHeight: '100vh', padding: '12px', backgroundColor: themeVars.bg }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '8px' }}>
         <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text }}>
           Stories Kanban Board
         </h1>
@@ -911,7 +917,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             onClick={() => handleAdd('story')}
             aria-label="Add story"
             title="Add story"
-            style={iconButtonStyle}
+            className="btn-icon-themed"
           >
             <Plus size={16} />
           </Button>
@@ -920,7 +926,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             onClick={() => handleAdd('task')}
             aria-label="Add task"
             title="Add task"
-            style={iconButtonStyle}
+            className="btn-icon-themed"
           >
             <List size={16} />
           </Button>
@@ -929,7 +935,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             onClick={handleOpenPlanningMatrix}
             aria-label="Open planning matrix"
             title="Open planning matrix"
-            style={iconButtonStyle}
+            className="btn-icon-themed"
           >
             <Grid size={16} />
           </Button>
@@ -938,7 +944,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             onClick={toggleFullscreen}
             aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
             title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-            style={iconButtonStyle}
+            className="btn-icon-themed"
           >
             {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
           </Button>
@@ -951,7 +957,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           position: 'relative',
           backgroundColor: themeVars.panel,
           borderRadius: '16px',
-          padding: '16px',
+          padding: '8px',
           boxShadow: '0 12px 24px rgba(15, 23, 42, 0.12)',
         }}
       >
@@ -967,6 +973,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
               zIndex: 1100,
               boxShadow: '0 6px 18px rgba(15, 23, 42, 0.25)',
             }}
+            className="btn-icon-themed"
           >
             <Minimize2 size={14} className="me-1" />
             Exit Fullscreen
@@ -997,7 +1004,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                       <Card.Header style={{
                         backgroundColor: lane.color,
                         color: themeVars.onAccent,
-                        padding: '16px 20px',
+                        padding: '12px 16px',
                         border: 'none',
                         position: 'sticky',
                         top: 0,
@@ -1008,7 +1015,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                         </h5>
                       </Card.Header>
                       <LaneDroppable id={`lane-${lane.status}`}>
-                        <Card.Body style={{ padding: '16px' }}>
+                        <Card.Body style={{ padding: '8px' }}>
                           {/* Stories Section */}
                           <div style={{ marginBottom: '24px' }}>
                             <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
@@ -1093,148 +1100,145 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           </DragOverlay>
         </DndContext>
 
-      </div>
-
-      {/* Edit Modals */}
-      {selectedType === 'story' && (
-        <EditStoryModal
-          show={showEditModal}
-          onHide={() => setShowEditModal(false)}
-          story={selectedItem as Story | null}
-          goals={goals}
-          onStoryUpdated={() => setShowEditModal(false)}
+        {/* Edit Modals */}
+        {selectedType === 'story' && (
+          <EditStoryModal
+            show={showEditModal}
+            onHide={() => setShowEditModal(false)}
+            story={selectedItem as Story | null}
+            goals={goals}
+            onStoryUpdated={() => setShowEditModal(false)}
+          />
+        )}
+        <AddStoryModal
+          show={showAddStoryModal}
+          onClose={() => setShowAddStoryModal(false)}
         />
-      )}
-      {selectedType === 'task' && (
-        <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
+        {selectedType === 'task' && (
+          <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
+            <Modal.Header closeButton>
+              <Modal.Title>Edit Task</Modal.Title>
+            </Modal.Header>
+            <Modal.Body>
+              {selectedItem && (
+                <Form>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Title *</Form.Label>
+                    <Form.Control
+                      type="text"
+                      value={(editForm as any).title || ''}
+                      onChange={(e) => setEditForm({ ...(editForm as any), title: e.target.value })}
+                      required
+                    />
+                  </Form.Group>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Description</Form.Label>
+                    <Form.Control
+                      as="textarea"
+                      rows={3}
+                      value={(editForm as any).description || ''}
+                      onChange={(e) => setEditForm({ ...(editForm as any), description: e.target.value })}
+                    />
+                  </Form.Group>
+                  <Row>
+                    <Col md={4}>
+                      <Form.Group className="mb-3">
+                        <Form.Label>Status</Form.Label>
+                        <Form.Select
+                          value={typeof (editForm as any).status === 'number' ? (editForm as any).status : Number((editForm as any).status) || 0}
+                          onChange={(e) => setEditForm({ ...(editForm as any), status: Number(e.target.value) })}
+                        >
+                          <option value={0}>Backlog</option>
+                          <option value={1}>In Progress</option>
+                          <option value={2}>Done</option>
+                          <option value={3}>Blocked</option>
+                        </Form.Select>
+                      </Form.Group>
+                    </Col>
+                    <Col md={4}>
+                      <Form.Group className="mb-3">
+                        <Form.Label>Due Date</Form.Label>
+                        <Form.Control
+                          type="date"
+                          value={(editForm as any).dueDate ? new Date((editForm as any).dueDate).toISOString().slice(0, 10) : ''}
+                          onChange={(e) => setEditForm({ ...(editForm as any), dueDate: e.target.value ? new Date(e.target.value).getTime() : null })}
+                        />
+                      </Form.Group>
+                    </Col>
+                    <Col md={4}>
+                      <Form.Group className="mb-3">
+                        <Form.Label>Source</Form.Label>
+                        <Form.Control value={(selectedItem as any).source || 'web'} readOnly />
+                      </Form.Group>
+                    </Col>
+                  </Row>
+                </Form>
+              )}
+            </Modal.Body>
+            <Modal.Footer>
+              <Button variant="secondary" onClick={() => setShowEditModal(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={handleSaveEdit}>
+                Save Changes
+              </Button>
+            </Modal.Footer>
+          </Modal>
+        )}
+
+        {/* Add Modal */}
+        <Modal show={showAddModal} onHide={() => setShowAddModal(false)} size="lg">
           <Modal.Header closeButton>
-            <Modal.Title>Edit Task</Modal.Title>
+            <Modal.Title>Add {addType === 'story' ? 'Story' : 'Task'}</Modal.Title>
           </Modal.Header>
           <Modal.Body>
-            {selectedItem && (
-              <Form>
-                <Form.Group className="mb-3">
-                  <Form.Label>Title *</Form.Label>
-                  <Form.Control
-                    type="text"
-                    value={(editForm as any).title || ''}
-                    onChange={(e) => setEditForm({ ...(editForm as any), title: e.target.value })}
-                    required
-                  />
-                </Form.Group>
-                <Form.Group className="mb-3">
-                  <Form.Label>Description</Form.Label>
-                  <Form.Control
-                    as="textarea"
-                    rows={3}
-                    value={(editForm as any).description || ''}
-                    onChange={(e) => setEditForm({ ...(editForm as any), description: e.target.value })}
-                  />
-                </Form.Group>
-                <Row>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Status</Form.Label>
-                      <Form.Select
-                        value={typeof (editForm as any).status === 'number' ? (editForm as any).status : Number((editForm as any).status) || 0}
-                        onChange={(e) => setEditForm({ ...(editForm as any), status: Number(e.target.value) })}
-                      >
-                        <option value={0}>Backlog</option>
-                        <option value={1}>In Progress</option>
-                        <option value={2}>Done</option>
-                        <option value={3}>Blocked</option>
-                      </Form.Select>
-                    </Form.Group>
-                  </Col>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Due Date</Form.Label>
-                      <Form.Control
-                        type="date"
-                        value={(editForm as any).dueDate ? new Date((editForm as any).dueDate).toISOString().slice(0, 10) : ''}
-                        onChange={(e) => setEditForm({ ...(editForm as any), dueDate: e.target.value ? new Date(e.target.value).getTime() : null })}
-                      />
-                    </Form.Group>
-                  </Col>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Source</Form.Label>
-                      <Form.Control value={(selectedItem as any).source || 'web'} readOnly />
-                    </Form.Group>
-                  </Col>
-                </Row>
-              </Form>
-            )}
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Title *</Form.Label>
+                <Form.Control
+                  type="text"
+                  value={addForm.title || ''}
+                  onChange={(e) => setAddForm({ ...addForm, title: e.target.value })}
+                  required
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  value={addForm.description || ''}
+                  onChange={(e) => setAddForm({ ...addForm, description: e.target.value })}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Status</Form.Label>
+                {addType === 'story' ? null : (
+                  <Form.Select
+                    value={addForm.status ?? 0}
+                    onChange={(e) => setAddForm({ ...addForm, status: Number(e.target.value) })}
+                  >
+                    <option value={0}>To Do</option>
+                    <option value={1}>In Progress</option>
+                    <option value={2}>Done</option>
+                  </Form.Select>
+                )}
+              </Form.Group>
+            </Form>
           </Modal.Body>
           <Modal.Footer>
-            <Button variant="secondary" onClick={() => setShowEditModal(false)}>
+            <Button variant="secondary" onClick={() => setShowAddModal(false)}>
               Cancel
             </Button>
-            <Button variant="primary" onClick={handleSaveEdit}>
-              Save Changes
+            <Button variant="primary" onClick={handleSaveAdd}>
+              Add {addType === 'story' ? 'Story' : 'Task'}
             </Button>
           </Modal.Footer>
         </Modal>
-      )}
 
-      {/* Add Modal */}
-      <Modal show={showAddModal} onHide={() => setShowAddModal(false)} size="lg">
-        <Modal.Header closeButton>
-          <Modal.Title>Add {addType === 'story' ? 'Story' : 'Task'}</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <Form>
-            <Form.Group className="mb-3">
-              <Form.Label>Title *</Form.Label>
-              <Form.Control
-                type="text"
-                value={addForm.title || ''}
-                onChange={(e) => setAddForm({ ...addForm, title: e.target.value })}
-                required
-              />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Description</Form.Label>
-              <Form.Control
-                as="textarea"
-                rows={3}
-                value={addForm.description || ''}
-                onChange={(e) => setAddForm({ ...addForm, description: e.target.value })}
-              />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Status</Form.Label>
-              {addType === 'story' ? (
-                <Form.Select
-                  value={addForm.status ?? 0}
-                  onChange={(e) => setAddForm({ ...addForm, status: Number(e.target.value) })}
-                >
-                  <option value={0}>Backlog</option>
-                  <option value={2}>In Progress</option>
-                  <option value={4}>Done</option>
-                </Form.Select>
-              ) : (
-                <Form.Select
-                  value={addForm.status ?? 0}
-                  onChange={(e) => setAddForm({ ...addForm, status: Number(e.target.value) })}
-                >
-                  <option value={0}>To Do</option>
-                  <option value={1}>In Progress</option>
-                  <option value={2}>Done</option>
-                </Form.Select>
-              )}
-            </Form.Group>
-          </Form>
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowAddModal(false)}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={handleSaveAdd}>
-            Add {addType === 'story' ? 'Story' : 'Task'}
-          </Button>
-        </Modal.Footer>
-      </Modal>
+      </div>
+
+
     </div>
   );
 };

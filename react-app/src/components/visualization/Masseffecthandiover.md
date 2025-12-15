@@ -673,4 +673,56 @@ The infrastructure is 95% complete. The bug is very localized - it's in the slot
 
 All code changes have been committed to main branch (commit b5f92e4).
 
-Good luck! 🚀
+Good luck! 🚀[Info] [firebase] BOB_CALL(name, data) available in console (main.ef84f302.js, line 2)
+[Log] 🚀 BOB App loaded - Version: 4.5.0 (main.ef84f302.js, line 2)
+[Log] ✅ Status: Entity audit coverage (main.ef84f302.js, line 2)
+[Log] 🔧 Fixes: Roadmap layout tweaks & toolbar overlap (main.ef84f302.js, line 2)
+[Log] 🎯 Features: Global goals/stories/tasks change auditing (main.ef84f302.js, line 2)
+[Log] 🚀 Architecture: Cache bust via kanban-roadmap-theming-4.5.0 (main.ef84f302.js, line 2)
+[Log] 📅 Build time: 2025-12-04T09:28:33.466Z (main.ef84f302.js, line 2)
+[Log] 🕐 Version Timeout Service initialized (main.ef84f302.js, line 2)
+[Log] ⏱️ Timeout duration: 30 minutes (main.ef84f302.js, line 2)
+[Log] 🔄 Check interval: 5 minutes (main.ef84f302.js, line 2)
+[Log] 📱 Version Timeout Service loaded (main.ef84f302.js, line 2)
+[Warning] [DEPRECATED] Default export is deprecated. Instead use `import { create } from 'zustand'`. (main.ef84f302.js, line 2)
+[Warning] [DEPRECATED] `getStorage`, `serialize` and `deserialize` options are deprecated. Use `storage` option instead. (main.ef84f302.js, line 2)
+[Info] Successfully preconnected to https://fonts.googleapis.com/
+[Info] Successfully preconnected to https://fonts.gstatic.com/
+[Log] 🔐 Setting up auth state listener... (main.ef84f302.js, line 2)
+[Log] 🔐 Current URL: – "https://bob.jc1.tech/goals/roadmap" (main.ef84f302.js, line 2)
+[Log] 🧪 URL Parameters: – Object (main.ef84f302.js, line 2)
+Object
+[Log] 🔐 Initializing Firebase authentication (main.ef84f302.js, line 2)
+[Log] 🔍 Version check: – Object (main.ef84f302.js, line 2)
+Object
+[Log] 🔐 Auth state changed: – "agenticaitestuser@jc1.tech" (main.ef84f302.js, line 2)
+[Log] 🎯 Migration system bypassed - database migration completed (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Transforming goals... – 0 (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Generated Gantt tasks: – 0 (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Subscribing to goals for user: – "agentic-ai-test-user" (main.ef84f302.js, line 2)
+[Log] [SidebarLayout] Location changed: – Object (main.ef84f302.js, line 2)
+Object
+[Info] [Route] changed – Object (main.ef84f302.js, line 2)
+Object
+[Error] [2025-12-04T09:28:34.070Z]  @firebase/firestore: – "Firestore (12.1.0): Uncaught Error in snapshot listener:" – "FirebaseError: [code=permission-denied]: Missing or insufficient permissions."
+	l (main.ef84f302.js:2:208094)
+	error (main.ef84f302.js:2:209603)
+	I (main.ef84f302.js:2:443457)
+	error (main.ef84f302.js:2:672240)
+	onError (main.ef84f302.js:2:648549)
+	du (main.ef84f302.js:2:647950)
+	Bu (main.ef84f302.js:2:661434)
+[Error] [RoadmapV4] Error fetching activity_stream: – FirebaseError: [code=permission-denied]: Missing or insufficient permissions.
+FirebaseError: [code=permission-denied]: Missing or insufficient permissions.
+	(anonymous function) (main.ef84f302.js:2:2845093)
+	(anonymous function) (main.ef84f302.js:2:672351)
+[Log] [RoadmapV4] Stories fetched: – 39 (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Goals fetched: – 26 (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Sprints fetched: – 5 (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Monzo pots fetched: – 0 (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Transforming goals... – 26 (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Generated Gantt tasks: – 32 (main.ef84f302.js, line 2)
+[Log] [RoadmapV4] Sample task: – Object (main.ef84f302.js, line 2)
+Object
+[Log] [RoadmapV4] Sample theme group: – Object (main.ef84f302.js, line 2)
+Object

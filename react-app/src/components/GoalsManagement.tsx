@@ -18,6 +18,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const GoalsManagement: React.FC = () => {
+  console.log('[GoalsManagement] Component RENDERING');
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -35,13 +36,15 @@ const GoalsManagement: React.FC = () => {
   const { themes: globalThemes } = useGlobalThemes();
   const { isCollapsed, toggleCollapse } = useSidebar();
 
+  // Load goals from Firestore
   useEffect(() => {
+    console.log('[GoalsManagement] useEffect MOUNTING - setting up subscriptions');
     if (!currentUser) return;
     const loadGoalsData = async () => {
       if (!currentUser) return;
-      
+
       setLoading(true);
-      
+
       // Load goals data
       const goalsQuery = query(
         collection(db, 'goals'),
@@ -49,7 +52,7 @@ const GoalsManagement: React.FC = () => {
         where('persona', '==', currentPersona),
         orderBy('createdAt', 'desc')
       );
-      
+
       // Subscribe to real-time updates
       const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
         const rawGoals = snapshot.docs.map(doc => {
@@ -60,11 +63,11 @@ const GoalsManagement: React.FC = () => {
             // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
             createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
             updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
-            targetDate: data.targetDate?.toDate 
-              ? data.targetDate.toDate().getTime() 
+            targetDate: data.targetDate?.toDate
+              ? data.targetDate.toDate().getTime()
               : (typeof data.targetDate === 'object' && data.targetDate?.seconds != null
-                  ? (data.targetDate.seconds * 1000 + Math.floor((data.targetDate.nanoseconds || 0) / 1e6))
-                  : data.targetDate)
+                ? (data.targetDate.seconds * 1000 + Math.floor((data.targetDate.nanoseconds || 0) / 1e6))
+                : data.targetDate)
           } as Goal;
           if (typeof (baseGoal as any).orderIndex !== 'number') {
             (baseGoal as any).orderIndex = data.priority ?? data.rank ?? 0;
@@ -88,6 +91,7 @@ const GoalsManagement: React.FC = () => {
       setLoading(false);
 
       return () => {
+        console.log('[GoalsManagement] useEffect CLEANUP - unsubscribing');
         unsubscribeGoals();
       };
     };
@@ -211,8 +215,8 @@ const GoalsManagement: React.FC = () => {
   };
 
   return (
-    <div style={{ 
-      padding: '24px', 
+    <div style={{
+      padding: '24px',
       backgroundColor: 'var(--notion-bg)',
       color: 'var(--notion-text)',
       minHeight: '100vh',
@@ -220,11 +224,11 @@ const GoalsManagement: React.FC = () => {
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
         {/* Header */}
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center', 
-          marginBottom: '24px' 
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '24px'
         }}>
           <div>
             <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
@@ -406,8 +410,8 @@ const GoalsManagement: React.FC = () => {
             </Row>
             <Row style={{ marginTop: '16px' }}>
               <Col>
-                <Button 
-                  variant="outline-secondary" 
+                <Button
+                  variant="outline-secondary"
                   onClick={() => {
                     setFilterStatus('all');
                     setFilterTheme('all');
@@ -424,10 +428,10 @@ const GoalsManagement: React.FC = () => {
 
         {/* Modern Goals Table - Full Width */}
         <Card style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', minHeight: '600px' }}>
-          <Card.Header style={{ 
-            backgroundColor: 'var(--notion-bg)', 
-            borderBottom: '1px solid var(--notion-border)', 
-            padding: '20px 24px' 
+          <Card.Header style={{
+            backgroundColor: 'var(--notion-bg)',
+            borderBottom: '1px solid var(--notion-border)',
+            padding: '20px 24px'
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: 'var(--notion-text)' }}>
               Goals ({orderedFilteredGoals.length})
@@ -435,8 +439,8 @@ const GoalsManagement: React.FC = () => {
           </Card.Header>
           <Card.Body style={{ padding: 0 }}>
             {loading ? (
-              <div style={{ 
-                textAlign: 'center', 
+              <div style={{
+                textAlign: 'center',
                 padding: '60px 20px',
                 display: 'flex',
                 flexDirection: 'column',
@@ -472,22 +476,22 @@ const GoalsManagement: React.FC = () => {
           </Card.Body>
         </Card>
 
-      {/* Shared Edit Goal Modal */}
-      <EditGoalModal
-        goal={editGoal}
-        show={!!editGoal}
-        onClose={() => setEditGoal(null)}
-        currentUserId={currentUser?.uid || ''}
-      />
+        {/* Shared Edit Goal Modal */}
+        <EditGoalModal
+          goal={editGoal}
+          show={!!editGoal}
+          onClose={() => setEditGoal(null)}
+          currentUserId={currentUser?.uid || ''}
+        />
 
-      <ConfirmDialog
-        show={!!confirmDelete}
-        title="Delete Goal?"
-        message={<span>Are you sure you want to delete goal <strong>{confirmDelete?.title}</strong>? This cannot be undone.</span>}
-        confirmText="Delete Goal"
-        onConfirm={performGoalDelete}
-        onCancel={() => setConfirmDelete(null)}
-      />
+        <ConfirmDialog
+          show={!!confirmDelete}
+          title="Delete Goal?"
+          message={<span>Are you sure you want to delete goal <strong>{confirmDelete?.title}</strong>? This cannot be undone.</span>}
+          confirmText="Delete Goal"
+          onConfirm={performGoalDelete}
+          onCancel={() => setConfirmDelete(null)}
+        />
       </div>
     </div>
   );

@@ -41,6 +41,8 @@
 
 .grv3-sprint-selector {
   min-width: 220px;
+  z-index: 500;
+  /* Ensure dropdown appears above other elements */
 }
 
 .grv3-sprint-selector .dropdown-toggle {
@@ -87,7 +89,8 @@
   position: relative;
   height: var(--axis-h);
   background: var(--surface);
-  margin-top: -12px;
+  margin-top: 0;
+  /* Removed gap between toolbar and axis */
 }
 
 .grv3-header-left {
@@ -285,6 +288,8 @@
   min-height: var(--row-h);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  display: flex;
+  flex-direction: row;
 }
 
 .grv3-theme-row-empty {
@@ -299,13 +304,16 @@
   border-radius: 12px;
   pointer-events: none;
   box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.15);
+  z-index: 5;
 }
 
 .grv3-label {
   position: sticky;
   left: 0;
   width: var(--label-col);
-  height: 100%;
+  min-width: var(--label-col);
+  height: auto;
+  min-height: 100%;
   padding: 0 16px;
   background: var(--surface);
   border-right: 1px solid var(--border);
@@ -318,6 +326,7 @@
   gap: 6px;
   text-align: center;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .grv3-label-dot {
@@ -337,10 +346,11 @@
 
 .grv3-track {
   position: relative;
-  margin-left: var(--label-col);
+  /* margin-left removed as we use flex */
   min-height: var(--row-h);
   padding: 0 0 10px;
   background: var(--surface);
+  flex-grow: 1;
 }
 
 .grv3-track-empty {

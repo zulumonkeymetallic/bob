@@ -1,0 +1,144 @@
+.grv5-container {
+    height: calc(100vh - 60px);
+    display: flex;
+    flex-direction: column;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.grv5-header {
+    padding: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+}
+
+.grv5-title-section {
+    display: flex;
+    flex-direction: column;
+}
+
+.grv5-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0;
+}
+
+.grv5-subtitle {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+}
+
+.grv5-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.grv5-filters {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-right: 1rem;
+    border-right: 1px solid var(--border-color);
+    margin-right: 0.5rem;
+}
+
+.grv5-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.grv5-search svg {
+    position: absolute;
+    left: 8px;
+    color: var(--text-tertiary);
+}
+
+.grv5-search input {
+    padding-left: 30px;
+    padding-right: 12px;
+    height: 32px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+}
+
+.grv5-select {
+    height: 32px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    padding: 0 24px 0 8px;
+}
+
+.grv5-gantt-wrapper {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    background-color: var(--bg-primary);
+}
+
+/* Custom Task Styling */
+.grv5-task-content {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    color: white;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.grv5-milestone {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transform: rotate(45deg);
+    /* Diamond shape for milestone usually */
+}
+
+.grv5-milestone svg {
+    transform: rotate(-45deg);
+}
+
+.grv5-sprint-highlight {
+    background-color: rgba(59, 130, 246, 0.05);
+    border-left: 1px solid rgba(59, 130, 246, 0.1);
+    border-right: 1px solid rgba(59, 130, 246, 0.1);
+}
+
+.grv5-today-marker {
+    background-color: #ef4444;
+    width: 2px;
+    z-index: 10;
+}
+
+.grv5-loading,
+.grv5-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    font-size: 1.1rem;
+    color: var(--text-secondary);
+}

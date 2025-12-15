@@ -45,13 +45,13 @@ const SprintsPage: React.FC = () => {
         <Col>
           <div className="d-flex justify-content-between align-items-center mb-3">
             <h2 className="mb-0">Sprint Management</h2>
-            <SprintSelector 
+            <SprintSelector
               selectedSprintId={selectedSprintId}
               onSprintChange={handleSprintChange}
               className="ms-auto"
             />
           </div>
-          
+
           <Tab.Container activeKey={activeTab} onSelect={handleTabSelect}>
             <Nav variant="tabs" className="mb-4">
               <Nav.Item>
@@ -67,16 +67,15 @@ const SprintsPage: React.FC = () => {
 
             <Tab.Content>
               <Tab.Pane eventKey="management">
-                {/* Restore full Sprint Management view */}
-                <SprintManagementView />
+                {activeTab === 'management' && <SprintManagementView />}
               </Tab.Pane>
-              
+
               <Tab.Pane eventKey="kanban">
-                <SprintKanbanPage selectedSprintId={selectedSprintId} />
+                {activeTab === 'kanban' && <SprintKanbanPage selectedSprintId={selectedSprintId} />}
               </Tab.Pane>
-              
+
               <Tab.Pane eventKey="stories">
-                <StoriesManagement />
+                {activeTab === 'stories' && <StoriesManagement />}
               </Tab.Pane>
             </Tab.Content>
           </Tab.Container>

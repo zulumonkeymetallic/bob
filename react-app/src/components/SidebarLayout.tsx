@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
 import VersionDisplay from './VersionDisplay';
 import { useSprint } from '../contexts/SprintContext';
+import { useSidebar } from '../contexts/SidebarContext';
 import SprintSelector from './SprintSelector';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
@@ -48,7 +49,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   };
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance', 'Settings', 'Logs']);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
+  const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
+
+  // Debug: Log location changes
+  useEffect(() => {
+    console.log('[SidebarLayout] Location changed:', { pathname: location.pathname, key: location.key });
+  }, [location]);
 
   const navigationGroups: NavigationGroup[] = [
     {
@@ -73,7 +80,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'target',
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
-        { label: 'Goals Roadmap', path: '/goals/roadmap', icon: 'project-diagram' },
+        { label: 'Goals Roadmap', path: '/goals/roadmap-v6', icon: 'sparkles' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },
@@ -194,10 +201,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       setShowSidebar(false);
 
       // Use setTimeout to ensure navigation happens after any pending state updates
-      setTimeout(() => {
-        navigate(path, { replace: false });
-        console.info('[Sidebar] navigation executed', { to: path, ts: new Date().toISOString() });
-      }, 0);
+      navigate(path, { replace: false });
+      console.info('[Sidebar] navigation executed', { to: path, ts: new Date().toISOString() });
 
     } catch (error) {
       console.error('[Sidebar] navigation failed', { path, error });
@@ -327,10 +332,19 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   {expandedGroups.includes(group.label) && (
                     <div className="ms-2">
                       {group.items.map((item) => (
-                        <Nav.Link
+                        <div
                           key={item.path}
-                          className="px-3 py-2 border-0 text-start"
-                          onClick={() => handleNavigation(item.path)}
+                          className="nav-link px-3 py-2 border-0 text-start"
+                          onClick={() => {
+                            console.log('[Sidebar Desktop] BEFORE navigate()', { path: item.path, currentLocation: window.location.pathname });
+                            // Use setTimeout to ensure navigation happens after current event loop
+                            setTimeout(() => {
+                              navigate(item.path, { replace: true });
+                              console.log('[Sidebar Desktop] AFTER navigate()', { path: item.path, newLocation: window.location.pathname });
+                            }, 0);
+                            setShowSidebar(false);
+                            console.info('[Sidebar] navigation executed', { to: item.path, ts: new Date().toISOString() });
+                          }}
                           style={{
                             cursor: 'pointer',
                             fontSize: '0.9rem',
@@ -352,7 +366,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                         >
                           <i className={`fas fa-${item.icon} me-2`}></i>
                           {item.label}
-                        </Nav.Link>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -527,15 +541,19 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 {expandedGroups.includes(group.label) && (
                   <div className="ms-3">
                     {group.items.map((item) => (
-                      <Nav.Link
+                      <div
                         key={item.path}
-                        className="text-white py-2 border-0"
-                        onClick={() => handleNavigation(item.path)}
-                        style={{ fontSize: '0.9rem' }}
+                        className="nav-link text-white py-2 border-0"
+                        onClick={() => {
+                          navigate(item.path);
+                          setShowSidebar(false);
+                          console.info('[Sidebar] mobile navigation executed', { to: item.path });
+                        }}
+                        style={{ fontSize: '0.9rem', cursor: 'pointer' }}
                       >
                         <i className={`fas fa-${item.icon} me-2`}></i>
                         {item.label}
-                      </Nav.Link>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -599,11 +617,20 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       </button>
 
       {/* Main Content Area */}
-      <div className="flex-grow-1" style={{ paddingTop: window.innerWidth < 992 ? '60px' : '0' }}>
+      <div
+        className="flex-grow-1"
+        style={{
+          paddingTop: window.innerWidth < 992 ? '60px' : '0',
+          marginRight: isRightSidebarVisible && window.innerWidth >= 992 ? (isRightSidebarCollapsed ? '60px' : '400px') : '0',
+          transition: 'margin-right 0.3s ease'
+        }}
+      >
         {/* Desktop top toolbar with global Sprint selector */}
         <div className="d-none d-lg-block" style={{
           borderBottom: '1px solid var(--notion-border)',
-          background: 'var(--notion-bg)'
+          background: 'var(--notion-bg)',
+          position: 'relative',
+          zIndex: 1000
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
             <div className="d-flex justify-content-end align-items-center gap-3">
@@ -618,6 +645,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </Button>
               {/* Metrics first, then selector so metrics appear to the left of the selector */}
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
+              <span className="text-muted small me-2 d-none d-xl-inline">Active Sprint:</span>
               <SprintSelector
                 selectedSprintId={globalSprintId}
                 onSprintChange={setGlobalSprintId}

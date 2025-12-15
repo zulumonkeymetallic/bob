@@ -21,22 +21,22 @@ export interface ActivityEntry {
   userId: string;
   userEmail?: string;
   timestamp: Timestamp;
-  
+
   // For field changes
   fieldName?: string;
   oldValue?: any;
   newValue?: any;
-  
+
   // For notes
   noteContent?: string;
-  
+
   // General description
   description: string;
-  
+
   // Metadata
   persona?: string;
   referenceNumber?: string;
-  
+
   // Source tracking (Human, Function, AI)
   source: ActivitySource;
   sourceDetails?: string;
@@ -77,7 +77,7 @@ export class ActivityStreamService {
     source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Updated ${fieldName} from "${oldValue}" to "${newValue}"`;
-    
+
     await this.addActivity({
       entityId,
       entityType,
@@ -94,7 +94,7 @@ export class ActivityStreamService {
     });
   }
 
-    // Log status change
+  // Log status change
   static async logStatusChange(
     entityId: string,
     entityType: 'goal' | 'story' | 'task',
@@ -107,7 +107,7 @@ export class ActivityStreamService {
     source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Status changed from "${oldStatus}" to "${newStatus}"`;
-    
+
     await this.addActivity({
       entityId,
       entityType,
@@ -137,7 +137,7 @@ export class ActivityStreamService {
     source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Sprint changed from "${oldSprint}" to "${newSprint}"`;
-    
+
     await this.addActivity({
       entityId,
       entityType,
@@ -166,7 +166,7 @@ export class ActivityStreamService {
     source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Added note: ${noteContent.substring(0, 100)}${noteContent.length > 100 ? '...' : ''}`;
-    
+
     await this.addActivity({
       entityId,
       entityType,
@@ -193,7 +193,7 @@ export class ActivityStreamService {
     source: ActivitySource = 'human'
   ): Promise<void> {
     const description = `Created ${entityType}: ${entityTitle}`;
-    
+
     await this.addActivity({
       entityId,
       entityType,
@@ -215,14 +215,15 @@ export class ActivityStreamService {
   ): () => void {
     if (!userId) {
       console.warn('ActivityStreamService.subscribeToActivityStream called without userId, skipping listener', { entityId });
-      return () => {};
+      return () => { };
     }
 
     const q = query(
       collection(db, 'activity_stream'),
       where('ownerUid', '==', userId),
       where('entityId', '==', entityId),
-      orderBy('timestamp', 'desc')
+      orderBy('timestamp', 'desc'),
+      fslimit(50)
     );
 
     return onSnapshot(
@@ -249,7 +250,7 @@ export class ActivityStreamService {
           return true;
         }) as ActivityEntry[];
         // Safety: ensure newest first even if some timestamps resolve later
-        const sorted = activities.sort((a,b) => {
+        const sorted = activities.sort((a, b) => {
           const ta = (a.timestamp as any)?.toMillis ? (a.timestamp as any).toMillis() : 0;
           const tb = (b.timestamp as any)?.toMillis ? (b.timestamp as any).toMillis() : 0;
           return tb - ta;
@@ -333,7 +334,7 @@ export class ActivityStreamService {
   // Utility to format timestamp
   static formatTimestamp(timestamp: Timestamp): string {
     if (!timestamp) return 'Unknown time';
-    
+
     const date = timestamp.toDate();
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
@@ -345,7 +346,7 @@ export class ActivityStreamService {
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    
+
     return date.toLocaleDateString();
   }
 }

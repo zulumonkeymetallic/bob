@@ -315,22 +315,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     return isCollapsed ? '60px' : '400px';
   }, [isCollapsed]);
 
-  // Apply margin to main content when sidebar is visible (no margin on mobile overlay)
-  React.useEffect(() => {
-    const mobile = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 576px)').matches;
-    const sidebarWidth = getSidebarWidth();
 
-    if (isVisible && !mobile) {
-      document.body.style.marginRight = sidebarWidth;
-      document.body.style.transition = 'margin-right 0.3s ease';
-    } else {
-      document.body.style.marginRight = '0px';
-    }
-
-    return () => {
-      document.body.style.marginRight = '0px';
-    };
-  }, [isVisible, isCollapsed, getSidebarWidth]);
 
   // Status options aligned with board lanes (built unconditionally to satisfy hooks rules)
   const statusOptions = React.useMemo(() => {

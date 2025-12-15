@@ -118,10 +118,10 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, []);
 
-  const setSelectedSprintId = (id: string) => {
+  const setSelectedSprintId = React.useCallback((id: string) => {
     setSelectedSprintIdState(id);
     localStorage.setItem('bob_selected_sprint', id);
-  };
+  }, []);
 
   useEffect(() => {
     if (!currentUser?.uid || !currentPersona) {
@@ -143,7 +143,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if ((savedPref === null || savedPref === undefined) && typeof cached.selectedSprintId === 'string') {
             setSelectedSprintId(cached.selectedSprintId);
           }
-        } catch {}
+        } catch { }
       }
       setError(null);
       setLoading(false);
@@ -202,11 +202,11 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return new Date(millis);
     };
 
-    try { performance.mark('sprints_subscribe_start'); } catch {}
+    try { performance.mark('sprints_subscribe_start'); } catch { }
     const unsubscribe = onSnapshot(
       sprintQuery,
       (snapshot) => {
-        try { performance.mark('sprints_first_snapshot'); performance.measure('sprints_attach', 'sprints_subscribe_start', 'sprints_first_snapshot'); } catch {}
+        try { performance.mark('sprints_first_snapshot'); performance.measure('sprints_attach', 'sprints_subscribe_start', 'sprints_first_snapshot'); } catch { }
         const data = snapshot.docs.map((doc) => {
           const raw = doc.data() as any;
           return {
@@ -282,7 +282,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           performance.clearMarks('sprints_subscribe_start');
           performance.clearMarks('sprints_first_snapshot');
           performance.clearMeasures('sprints_attach');
-        } catch {}
+        } catch { }
 
         let nextSelectedId = selectedSprintIdRef.current;
         // Default to active sprint (first in deduped) when there is no saved preference
@@ -381,20 +381,22 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         performance.clearMarks('sprints_render');
       }
-    } catch {}
+    } catch { }
   }, [sprints.length]);
 
+  const contextValue = React.useMemo(() => ({
+    selectedSprintId,
+    setSelectedSprintId,
+    sprints,
+    sprintsById,
+    loading,
+    error,
+  }), [selectedSprintId, setSelectedSprintId, sprints, sprintsById, loading, error]);
+
+  console.log('[SprintProvider] RENDERING');
+
   return (
-    <SprintContext.Provider
-      value={{
-        selectedSprintId,
-        setSelectedSprintId,
-        sprints,
-        sprintsById,
-        loading,
-        error,
-      }}
-    >
+    <SprintContext.Provider value={contextValue}>
       {children}
     </SprintContext.Provider>
   );
@@ -406,4 +408,4 @@ export const useSprint = (): SprintContextValue => {
   return ctx;
 };
 
-export {};
+export { };

@@ -28,11 +28,24 @@ const MILESTONE_THRESHOLD_MS = DAY_MS * 40;
 const AXIS_ROW_HEIGHT = 28;
 const TRACK_VERTICAL_PADDING = 10;
 const AXIS_GAP_PX = 12;
-const HEADER_OVERLAP_PX = 8;
+const HEADER_OVERLAP_PX = 0; // Removed overlap to eliminate gap between toolbar and timeline
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
 
 const pluralize = (word: string, count: number) => (count === 1 ? word : `${word}s`);
+
+function toMillis(val: any): number | undefined {
+  if (val === undefined || val === null) return undefined;
+  if (typeof val === 'number') return val;
+  if (val instanceof Date) return val.getTime();
+  if (typeof val.toDate === 'function') return val.toDate().getTime(); // Firestore Timestamp
+  if (typeof val.toMillis === 'function') return val.toMillis(); // Firestore Timestamp alternative
+  if (typeof val === 'string') {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? undefined : d.getTime();
+  }
+  return undefined;
+}
 
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
@@ -56,6 +69,9 @@ const GoalRoadmapV3: React.FC = () => {
   const [lastNotes, setLastNotes] = useState<Record<string, string>>({});
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
   const [storyDoneCounts, setStoryDoneCounts] = useState<Record<string, number>>({});
+  const [storyPoints, setStoryPoints] = useState<Record<string, number>>({});
+  const [storyDonePoints, setStoryDonePoints] = useState<Record<string, number>>({});
+  const [potBalances, setPotBalances] = useState<Record<string, { balance: number; currency: string }>>({});
   const [storySprintCounts, setStorySprintCounts] = useState<Record<string, number>>({});
   const [storyMeta, setStoryMeta] = useState<Record<string, { goalId?: string; sprintId?: string }>>({});
   const [taskCounts, setTaskCounts] = useState<Record<string, number>>({});
@@ -75,8 +91,8 @@ const GoalRoadmapV3: React.FC = () => {
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     for (const goal of goals) {
-      const startMs = goal.startDate ?? goal.targetDate ?? null;
-      const endMs = goal.endDate ?? goal.targetDate ?? null;
+      const startMs = toMillis(goal.startDate) ?? toMillis(goal.targetDate) ?? null;
+      const endMs = toMillis(goal.endDate) ?? toMillis(goal.targetDate) ?? null;
       if (typeof startMs === 'number' && !Number.isNaN(startMs)) {
         min = Math.min(min, startMs);
       }
@@ -295,8 +311,8 @@ const GoalRoadmapV3: React.FC = () => {
     const mins: number[] = [];
     const maxs: number[] = [];
     goals.forEach(g => {
-      const s = g.startDate ? new Date(g.startDate).getTime() : undefined;
-      const e = g.endDate ? new Date(g.endDate).getTime() : (g.targetDate ? new Date(g.targetDate).getTime() : undefined);
+      const s = toMillis(g.startDate);
+      const e = toMillis(g.endDate) ?? toMillis(g.targetDate);
       if (typeof s === 'number') mins.push(s);
       if (typeof e === 'number') maxs.push(e);
     });
@@ -322,6 +338,8 @@ const GoalRoadmapV3: React.FC = () => {
     const unsub = onSnapshot(q, (snap) => {
       const counts: Record<string, number> = {};
       const doneCounts: Record<string, number> = {};
+      const points: Record<string, number> = {};
+      const donePoints: Record<string, number> = {};
       const sprintCounts: Record<string, number> = {};
       const metaMap: Record<string, { goalId?: string; sprintId?: string }> = {};
       const inSprint = new Set<string>();
@@ -332,7 +350,12 @@ const GoalRoadmapV3: React.FC = () => {
         metaMap[d.id] = { goalId: gid, sprintId: storySprintId };
         if (gid) {
           counts[gid] = (counts[gid] || 0) + 1;
-          if (isStatus(story.status as any, 'done')) doneCounts[gid] = (doneCounts[gid] || 0) + 1;
+          const pts = Number(story.points || 0);
+          points[gid] = (points[gid] || 0) + pts;
+          if (isStatus(story.status as any, 'done')) {
+            doneCounts[gid] = (doneCounts[gid] || 0) + 1;
+            donePoints[gid] = (donePoints[gid] || 0) + pts;
+          }
         }
         if (selectedSprintId && gid && storySprintId === selectedSprintId) {
           sprintCounts[gid] = (sprintCounts[gid] || 0) + 1;
@@ -341,6 +364,8 @@ const GoalRoadmapV3: React.FC = () => {
       }
       setStoryCounts(counts);
       setStoryDoneCounts(doneCounts);
+      setStoryPoints(points);
+      setStoryDonePoints(donePoints);
       setStorySprintCounts(sprintCounts);
       setStoryMeta(metaMap);
       goalsInSprint.current = inSprint;
@@ -415,6 +440,21 @@ const GoalRoadmapV3: React.FC = () => {
 
   // Embedded activity subscriptions removed. Use global sidebar stream.
 
+  // Subscribe to Monzo pots for finance progress
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(q, snap => {
+      const map: Record<string, { balance: number; currency: string }> = {};
+      snap.docs.forEach(d => {
+        const data = d.data();
+        map[d.id] = { balance: Number(data.balance || 0) / 100, currency: data.currency || 'GBP' }; // Monzo stores pence
+      });
+      setPotBalances(map);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
     const today = new Date();
@@ -453,8 +493,8 @@ const GoalRoadmapV3: React.FC = () => {
     if (filterOverlapSelectedSprint && selectedSprintId) {
       const s = sprints.find(x => x.id === selectedSprintId);
       if (s) {
-        const gs = g.startDate ? new Date(g.startDate).getTime() : Date.now();
-        const ge = g.endDate ? new Date(g.endDate).getTime() : gs + 90 * DAY_MS;
+        const gs = toMillis(g.startDate) ?? Date.now();
+        const ge = toMillis(g.endDate) ?? gs + 90 * DAY_MS;
         const ss = new Date(s.startDate).getTime();
         const se = new Date(s.endDate).getTime();
         const overlaps = gs <= se && ge >= ss;
@@ -614,8 +654,8 @@ const GoalRoadmapV3: React.FC = () => {
 
   const startDrag = useCallback((ev: React.PointerEvent, goal: Goal, type: 'move' | 'start' | 'end') => {
     ev.preventDefault();
-    const startDate = goal.startDate ? new Date(goal.startDate) : new Date();
-    const endDate = goal.endDate ? new Date(goal.endDate) : (goal.targetDate ? new Date(goal.targetDate) : new Date(Date.now() + 90 * DAY_MS));
+    const startDate = toMillis(goal.startDate) ? new Date(toMillis(goal.startDate)!) : new Date();
+    const endDate = toMillis(goal.endDate) ? new Date(toMillis(goal.endDate)!) : (toMillis(goal.targetDate) ? new Date(toMillis(goal.targetDate)!) : new Date(Date.now() + 90 * DAY_MS));
 
     if (type === 'move' && (ev.metaKey || ev.altKey)) {
       dragState.current = { id: goal.id, type: 'link', startX: ev.clientX, origStart: startDate, origEnd: endDate, goal };
@@ -652,8 +692,8 @@ const GoalRoadmapV3: React.FC = () => {
 
   // Keyboard nudges for accessibility and precision
   const onKeyNudge = useCallback(async (e: React.KeyboardEvent, g: Goal) => {
-    const start = g.startDate ? new Date(g.startDate) : new Date();
-    const end = g.endDate ? new Date(g.endDate) : new Date(Date.now() + 90 * DAY_MS);
+    const start = toMillis(g.startDate) ? new Date(toMillis(g.startDate)!) : new Date();
+    const end = toMillis(g.endDate) ? new Date(toMillis(g.endDate)!) : new Date(Date.now() + 90 * DAY_MS);
     let ds = 0, de = 0;
     const step = e.shiftKey ? 7 : 1;
     if (e.key === 'ArrowLeft') { ds -= step; de -= step; }
@@ -952,8 +992,8 @@ const GoalRoadmapV3: React.FC = () => {
         const allGoals = goals.filter(g => migrateThemeValue(g.theme) === themeDef.id);
         if (!showEmptyThemes && allGoals.length === 0) return null;
         const timedGoals: TimedGoal[] = allGoals.map(g => {
-          const start = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
-          const end = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now() + 90 * DAY_MS));
+          const start = toMillis(g.startDate) ? new Date(toMillis(g.startDate)!) : (toMillis(g.targetDate) ? new Date(toMillis(g.targetDate)!) : new Date());
+          const end = toMillis(g.endDate) ? new Date(toMillis(g.endDate)!) : (toMillis(g.targetDate) ? new Date(toMillis(g.targetDate)!) : new Date(Date.now() + 90 * DAY_MS));
           start.setHours(0, 0, 0, 0);
           end.setHours(0, 0, 0, 0);
           return { id: g.id, start: start.getTime(), end: end.getTime(), raw: g };
@@ -1003,8 +1043,8 @@ const GoalRoadmapV3: React.FC = () => {
         </div>
         <div className="grv3-track" style={{ width: totalWidth, minHeight: row.totalHeight }}>
           {row.visibleGoals.map((g) => {
-            const startDate = g.startDate ? new Date(g.startDate) : (g.targetDate ? new Date(g.targetDate) : new Date());
-            const endDateRaw = g.endDate ? new Date(g.endDate) : (g.targetDate ? new Date(g.targetDate) : new Date(Date.now() + 90 * DAY_MS));
+            const startDate = toMillis(g.startDate) ? new Date(toMillis(g.startDate)!) : (toMillis(g.targetDate) ? new Date(toMillis(g.targetDate)!) : new Date());
+            const endDateRaw = toMillis(g.endDate) ? new Date(toMillis(g.endDate)!) : (toMillis(g.targetDate) ? new Date(toMillis(g.targetDate)!) : new Date(Date.now() + 90 * DAY_MS));
             const start = new Date(startDate); start.setHours(0, 0, 0, 0);
             const end = new Date(endDateRaw); end.setHours(0, 0, 0, 0);
             if (end < start) end.setTime(start.getTime());
@@ -1065,8 +1105,8 @@ const GoalRoadmapV3: React.FC = () => {
 
             const milestoneLabelWidth = 200;
             const labelWidth = isMilestone ? milestoneLabelWidth : containerWidth;
-            const startLabel = g.startDate ? new Date(g.startDate).toLocaleDateString() : '';
-            const endLabel = g.endDate ? new Date(g.endDate).toLocaleDateString() : '';
+            const startLabel = toMillis(g.startDate) ? new Date(toMillis(g.startDate)!).toLocaleDateString() : '';
+            const endLabel = toMillis(g.endDate) ? new Date(toMillis(g.endDate)!).toLocaleDateString() : '';
             const dateRangeText = [startLabel, endLabel].filter(Boolean).join(' → ');
             const labelTop = barTop;
             const labelClassName = `grv3-bar-label${isMilestone ? ' milestone-label' : ' bar-label'}`;
@@ -1078,6 +1118,21 @@ const GoalRoadmapV3: React.FC = () => {
             const sprintLine = `${sprintStories} ${pluralize('story', sprintStories)} • ${sprintTasksForGoal} ${pluralize('task', sprintTasksForGoal)} in sprint`;
             const totalLine = `${totalStories} ${pluralize('story', totalStories)} • ${totalTasksForGoal} ${pluralize('task', totalTasksForGoal)} total`;
             const pct = totalStories ? Math.round(((storyDoneCounts[g.id] || 0) / totalStories) * 100) : 0;
+
+            // Calculate story points completion %
+            const totalPoints = storyPoints[g.id] || 0;
+            const donePoints = storyDonePoints[g.id] || 0;
+            const pointsPct = totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : 0;
+
+            // Calculate finance/savings progress %
+            let financePct = 0;
+            let hasFinance = false;
+            if (g.potId && potBalances[g.potId] && g.estimatedCost) {
+              const potBalance = potBalances[g.potId].balance;
+              const target = g.estimatedCost;
+              financePct = target > 0 ? Math.round((potBalance / target) * 100) : 0;
+              hasFinance = true;
+            }
 
             const tooltipParts = [
               g.title,
@@ -1176,10 +1231,29 @@ const GoalRoadmapV3: React.FC = () => {
                     </div>
                   )}
                   {!isMilestone && (zoom === 'weeks' || zoom === 'months') && (
-                    <div className="mt-1" style={{ width: '100%' }}>
-                      <div style={{ height: 6, borderRadius: 999, background: isDark ? 'rgba(255,255,255,.25)' : 'rgba(15,23,42,.12)', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: isDark ? 'rgba(255,255,255,.75)' : 'rgba(15,23,42,.6)' }} />
-                      </div>
+                    <div className="mt-1" style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {/* Story points progress bar */}
+                      {totalPoints > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <div style={{ fontSize: 9, fontWeight: 600, minWidth: 60, color: isDark ? 'rgba(255,255,255,.7)' : 'rgba(15,23,42,.7)' }}>
+                            Points: {pointsPct}%
+                          </div>
+                          <div style={{ flex: 1, height: 5, borderRadius: 999, background: isDark ? 'rgba(255,255,255,.18)' : 'rgba(15,23,42,.1)', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pointsPct}%`, background: isDark ? 'rgba(59,130,246,.85)' : 'rgba(59,130,246,.75)' }} />
+                          </div>
+                        </div>
+                      )}
+                      {/* Finance/savings progress bar */}
+                      {hasFinance && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <div style={{ fontSize: 9, fontWeight: 600, minWidth: 60, color: isDark ? 'rgba(255,255,255,.7)' : 'rgba(15,23,42,.7)' }}>
+                            Saved: {financePct}%
+                          </div>
+                          <div style={{ flex: 1, height: 5, borderRadius: 999, background: isDark ? 'rgba(255,255,255,.18)' : 'rgba(15,23,42,.1)', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${Math.min(100, financePct)}%`, background: isDark ? 'rgba(34,197,94,.85)' : 'rgba(34,197,94,.75)' }} />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   {!isMilestone && (zoom === 'weeks' || zoom === 'months') && (lastNotes[g.id] || (goals.find(x => x.id === g.id) as any)?.recentNote) && (
@@ -1266,8 +1340,8 @@ const GoalRoadmapV3: React.FC = () => {
           // Fit all goals into view
           const bounds: number[] = [];
           goals.forEach(g => {
-            const s = g.startDate ? new Date(g.startDate).getTime() : undefined;
-            const e = g.endDate ? new Date(g.endDate).getTime() : (g.targetDate ? new Date(g.targetDate).getTime() : undefined);
+            const s = toMillis(g.startDate);
+            const e = toMillis(g.endDate) ?? toMillis(g.targetDate);
             if (typeof s === 'number') bounds.push(s);
             if (typeof e === 'number') bounds.push(e);
           });
