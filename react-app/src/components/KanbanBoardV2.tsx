@@ -1,0 +1,371 @@
+import React, { useEffect, useState, useMemo } from 'react';
+import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
+import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
+import { Story, Task, Goal, Sprint } from '../types';
+import KanbanColumnV2 from './KanbanColumnV2';
+import KanbanCardV2 from './KanbanCardV2';
+import { themeVars } from '../utils/themeVars';
+import { isStatus } from '../utils/statusHelpers';
+import { useActivityTracking } from '../hooks/useActivityTracking';
+
+interface KanbanBoardV2Props {
+    sprintId?: string | null;
+    themeFilter?: number | null;
+    goalFilter?: string | null;
+    onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
+    onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
+    showDescriptions?: boolean;
+}
+
+const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
+    sprintId,
+    themeFilter,
+    goalFilter,
+    onItemSelect,
+    onEdit,
+    showDescriptions = false
+}) => {
+    const { currentUser } = useAuth();
+    const { currentPersona } = usePersona();
+    const { sprints } = useSprint();
+    const { trackFieldChange } = useActivityTracking();
+
+    const [stories, setStories] = useState<Story[]>([]);
+    const [tasks, setTasks] = useState<Task[]>([]);
+    const [goals, setGoals] = useState<Goal[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    // Data fetching
+    useEffect(() => {
+        if (!currentUser || !currentPersona) return;
+
+        setLoading(true);
+
+        // Goals
+        const goalsQuery = query(
+            collection(db, 'goals'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            orderBy('createdAt', 'desc'),
+            limit(1000)
+        );
+
+        // Stories (respect active sprint filter when provided)
+        const storiesQuery = sprintId
+            ? query(
+                collection(db, 'stories'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                where('sprintId', '==', sprintId),
+                orderBy('createdAt', 'desc'),
+                limit(1000)
+            )
+            : query(
+                collection(db, 'stories'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                orderBy('createdAt', 'desc'),
+                limit(1000)
+            );
+
+        // Tasks (using sprint_task_index)
+        // If sprintId is provided, filter by it. Otherwise fetch all open tasks.
+        let tasksQuery;
+        if (sprintId) {
+            tasksQuery = query(
+                collection(db, 'sprint_task_index'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                where('sprintId', '==', sprintId),
+                where('isOpen', '==', true),
+                orderBy('dueDate', 'asc'),
+                limit(1000)
+            );
+        } else {
+            tasksQuery = query(
+                collection(db, 'sprint_task_index'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                where('isOpen', '==', true),
+                orderBy('dueDate', 'asc'),
+                limit(1000)
+            );
+        }
+
+        const unsubGoals = onSnapshot(goalsQuery, (snap) => {
+            setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
+        });
+
+        const unsubStories = onSnapshot(storiesQuery, (snap) => {
+            setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
+        });
+
+        const unsubTasks = onSnapshot(tasksQuery, (snap) => {
+            setTasks(snap.docs.map(d => {
+                const data = d.data();
+                return {
+                    id: d.id,
+                    ...data,
+                    // Ensure required fields for Task type
+                    ref: data.ref || `TASK-${d.id.slice(-4).toUpperCase()}`,
+                } as Task;
+            }));
+            setLoading(false);
+        });
+
+        return () => {
+            unsubGoals();
+            unsubStories();
+            unsubTasks();
+        };
+    }, [currentUser, currentPersona, sprintId]);
+
+    // Drag and Drop Monitor
+    useEffect(() => {
+        return monitorForElements({
+            onDrop: async ({ source, location }) => {
+                const destination = location.current.dropTargets[0];
+                if (!destination) return;
+
+                const itemId = source.data.id as string;
+                const type = source.data.type as 'story' | 'task';
+                const newStatus = destination.data.status as string;
+                const boardSprintId = sprintId ?? null;
+
+                // Optimistic update could go here, but for now we rely on Firestore listener
+
+                try {
+                    const collectionName = type === 'story' ? 'stories' : 'tasks';
+                    const item = type === 'story' ? stories.find(s => s.id === itemId) : tasks.find(t => t.id === itemId);
+
+                    if (!item) return;
+                    const itemSprintId = (item as any).sprintId ?? null;
+                    // If a sprint is selected, ignore drops for items outside that sprint
+                    if (boardSprintId && itemSprintId && itemSprintId !== boardSprintId) {
+                        return;
+                    }
+
+                    // Map column status to actual status value
+                    let actualStatus: string | number = newStatus;
+
+                    // If the item uses numeric status, map it
+                    if (typeof (item as any).status === 'number') {
+                        if (newStatus === 'backlog') actualStatus = 0;
+                        else if (newStatus === 'in-progress') actualStatus = type === 'story' ? 2 : 1;
+                        else if (newStatus === 'done') actualStatus = type === 'story' ? 4 : 2;
+                    } else {
+                        // String status
+                        actualStatus = newStatus;
+                    }
+
+                    if ((item as any).status === actualStatus) return;
+
+                    const updatePayload: any = {
+                        status: actualStatus,
+                        updatedAt: serverTimestamp()
+                    };
+                    if (boardSprintId) {
+                        updatePayload.sprintId = boardSprintId;
+                    }
+
+                    await updateDoc(doc(db, collectionName, itemId), updatePayload);
+
+                    // Track change
+                    const oldLabel = String((item as any).status ?? '');
+                    const newLabel = String(actualStatus);
+                    await trackFieldChange(itemId, type, 'status', oldLabel, newLabel, (item as any).ref);
+
+                } catch (error) {
+                    console.error('Failed to update item status', error);
+                    alert('Failed to move item');
+                }
+            },
+        });
+    }, [stories, tasks, trackFieldChange, sprintId]);
+
+    // Filtering and Grouping
+    const filteredStories = useMemo(() => {
+        let result = stories;
+        if (sprintId) {
+            result = result.filter(s => (s as any).sprintId === sprintId);
+        }
+        if (goalFilter) {
+            result = result.filter(s => s.goalId === goalFilter);
+        }
+        if (themeFilter) {
+            result = result.filter(s => {
+                if (s.theme === themeFilter) return true;
+                // Fallback to goal lookup if theme not on story
+                const g = goals.find(g => g.id === s.goalId);
+                return g?.theme === themeFilter;
+            });
+        }
+        return result;
+    }, [stories, goals, sprintId, goalFilter, themeFilter]);
+
+    const filteredTasks = useMemo(() => {
+        let result = tasks;
+        // Tasks are already filtered by query if sprintId is present, 
+        // but if sprintId changed rapidly, safety check:
+        if (sprintId) {
+            result = result.filter(t => t.sprintId === sprintId);
+        }
+
+        if (goalFilter) {
+            // Filter tasks by goal. Tasks might have goalId or be linked to a story with goalId.
+            result = result.filter(t => {
+                if ((t as any).goalId === goalFilter) return true;
+                if (t.parentType === 'story' && t.parentId) {
+                    const s = stories.find(s => s.id === t.parentId);
+                    return s?.goalId === goalFilter;
+                }
+                return false;
+            });
+        }
+
+        if (themeFilter) {
+            result = result.filter(t => {
+                if (t.theme === themeFilter) return true;
+                // Check parent story -> goal -> theme
+                if (t.parentType === 'story' && t.parentId) {
+                    const s = stories.find(s => s.id === t.parentId);
+                    if (s?.theme === themeFilter) return true;
+                    const g = goals.find(g => g.id === s?.goalId);
+                    return g?.theme === themeFilter;
+                }
+                // Check direct goal link
+                if ((t as any).goalId) {
+                    const g = goals.find(g => g.id === (t as any).goalId);
+                    return g?.theme === themeFilter;
+                }
+                return false;
+            });
+        }
+        return result;
+    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter]);
+
+    // Helper to determine column for an item
+    const getColumnForStatus = (status: string | number): 'backlog' | 'in-progress' | 'done' => {
+        if (typeof status === 'number') {
+            if (status >= 4) return 'done'; // Story done
+            if (status === 2 || status === 3) return 'in-progress'; // Story active/testing or Task done(2) wait.. task done is 2?
+            // Let's check ModernKanbanBoard logic
+            // Story: 0=backlog, 1=ready, 2=active, 3=testing, 4=done
+            // Task: 0=backlog, 1=active, 2=done, 3=blocked
+
+            // Wait, if I pass a task with status 2 (done), it should go to done.
+            // If I pass a story with status 2 (active), it goes to in-progress.
+
+            // I need to know the type to be precise, but let's try to infer or pass type.
+            // Actually, I process stories and tasks separately below.
+            return 'backlog';
+        }
+
+        const s = String(status).toLowerCase();
+        if (['done', 'complete', 'completed', 'finished'].includes(s)) return 'done';
+        if (['in-progress', 'active', 'doing', 'testing', 'qa', 'review', 'blocked'].includes(s)) return 'in-progress';
+        return 'backlog';
+    };
+
+    const getStoryColumn = (s: Story) => {
+        const status = (s as any).status;
+        if (typeof status === 'number') {
+            if (status >= 4) return 'done';
+            if (status >= 1) return 'in-progress'; // 1=ready, 2=active, 3=testing. 
+            return 'backlog';
+        }
+        return getColumnForStatus(status);
+    };
+
+    const getTaskColumn = (t: Task) => {
+        const status = (t as any).status;
+        if (typeof status === 'number') {
+            if (status === 2) return 'done';
+            if (status === 1 || status === 3) return 'in-progress'; // 1=active, 3=blocked
+            return 'backlog';
+        }
+        return getColumnForStatus(status);
+    };
+
+    const columns = {
+        backlog: {
+            title: 'Backlog',
+            color: themeVars.muted,
+            items: [] as (Story | Task)[]
+        },
+        'in-progress': {
+            title: 'In Progress',
+            color: themeVars.brand,
+            items: [] as (Story | Task)[]
+        },
+        done: {
+            title: 'Done',
+            color: 'var(--green)',
+            items: [] as (Story | Task)[]
+        }
+    };
+
+    filteredStories.forEach(s => {
+        const col = getStoryColumn(s);
+        columns[col].items.push(s);
+    });
+
+    filteredTasks.forEach(t => {
+        const col = getTaskColumn(t);
+        columns[col].items.push(t);
+    });
+
+    if (loading) {
+        return <div>Loading board...</div>;
+    }
+
+    return (
+        <div className="kanban-board-v2" style={{ display: 'flex', gap: '16px', height: '100%', overflowX: 'auto', paddingBottom: '16px' }}>
+            {Object.entries(columns).map(([key, col]) => (
+                <KanbanColumnV2 key={key} status={key} title={col.title} color={col.color as string}>
+                    {col.items.map(item => {
+                        const isStory = 'points' in item || (item as any).storyId === undefined; // Rough check, better to check ID or something
+                        // Actually, my Task type has storyId, Story doesn't (usually). 
+                        // Better: check if it's in the stories array
+                        const type = stories.some(s => s.id === item.id) ? 'story' : 'task';
+
+                        let itemGoal: Goal | undefined;
+                        let parentStory: Story | undefined;
+
+                        if (type === 'story') {
+                            itemGoal = goals.find(g => g.id === (item as any).goalId);
+                        } else {
+                            // Task
+                            parentStory = stories.find(s => s.id === (item as any).parentId);
+                            if (parentStory) {
+                                itemGoal = goals.find(g => g.id === parentStory.goalId);
+                            } else if ((item as any).goalId) {
+                                itemGoal = goals.find(g => g.id === (item as any).goalId);
+                            }
+                        }
+
+                        return (
+                            <KanbanCardV2
+                                key={item.id}
+                                item={item}
+                                type={type}
+                                goal={itemGoal}
+                                story={parentStory}
+                                taskCount={type === 'story' ? tasks.filter(t => t.parentId === item.id).length : 0}
+                                onItemSelect={onItemSelect}
+                                showDescription={showDescriptions}
+                                onEdit={() => onEdit?.(item, type)}
+                            />
+                        );
+                    })}
+                </KanbanColumnV2>
+            ))}
+        </div>
+    );
+};
+
+export default KanbanBoardV2;

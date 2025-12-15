@@ -14,7 +14,6 @@ import ModernTaskTable from './ModernTaskTable';
 import StoriesCardView from './StoriesCardView';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { generateRef } from '../utils/referenceGenerator';
-import CompactSprintMetrics from './CompactSprintMetrics';
 import { themeVars } from '../utils/themeVars';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
@@ -30,15 +29,13 @@ const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [searchParams] = useSearchParams();
-  const { sprints: contextSprints } = useSprint(); // Renamed to avoid conflict
+  const { sprints: contextSprints, selectedSprintId: selectedSprintIdContext } = useSprint(); // Renamed to avoid conflict
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]); // Local state for sprints
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [filterGoal, setFilterGoal] = useState<string>('all');
-  const [filterGoalInput, setFilterGoalInput] = useState<string>('');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
@@ -49,6 +46,7 @@ const StoriesManagement: React.FC = () => {
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
+  const [goalSearch, setGoalSearch] = useState('');
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -173,10 +171,24 @@ const StoriesManagement: React.FC = () => {
     };
   }, [currentUser, loadStoriesData]);
 
+  // Keep local sprints in sync with context
   useEffect(() => {
+    setSprints(contextSprints);
+  }, [contextSprints]);
+
+  // Respect selected sprint from the global selector; fall back to active sprint
+  useEffect(() => {
+    if (selectedSprintIdContext === '') {
+      setActiveSprintId(null);
+      return;
+    }
+    if (selectedSprintIdContext) {
+      setActiveSprintId(selectedSprintIdContext);
+      return;
+    }
     const active = sprints.find((s) => (s.status ?? 0) === 1);
     setActiveSprintId(active?.id ?? null);
-  }, [sprints]);
+  }, [sprints, selectedSprintIdContext]);
 
   // Handler functions for ModernStoriesTable
   const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
@@ -306,12 +318,25 @@ const StoriesManagement: React.FC = () => {
   };
 
   // Apply filters to stories
+  const resolvedSprintId = applyActiveSprintFilter
+    ? (selectedSprintIdContext === '' ? null : (selectedSprintIdContext || activeSprintId))
+    : null;
   const filteredStories = stories.filter(story => {
-    if (applyActiveSprintFilter && activeSprintId && story.sprintId !== activeSprintId) return false;
+    if (applyActiveSprintFilter && resolvedSprintId && story.sprintId !== resolvedSprintId) return false;
     if (filterStatus !== 'all' && !isStatus(story.status, filterStatus)) return false;
-    if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
     if (filterTheme !== 'all' && String(story.theme ?? '') !== filterTheme) return false;
-    if (searchTerm && !story.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    // Match search term against title + goal title
+    const goal = goals.find(g => g.id === story.goalId);
+    const goalText = goal?.title?.toLowerCase() || '';
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      if (!story.title.toLowerCase().includes(term) && !goalText.includes(term)) return false;
+    }
+    // Goal search box
+    if (goalSearch && goalSearch.trim().length > 0) {
+      const term = goalSearch.toLowerCase();
+      if (!goalText.includes(term)) return false;
+    }
     return true;
   });
 
@@ -335,7 +360,6 @@ const StoriesManagement: React.FC = () => {
       <div style={{ maxWidth: '100%', margin: '0' }}>
         <PageHeader
           title="Stories Management"
-          subtitle="Manage user stories and their relationships to goals"
           breadcrumbs={[
             { label: 'Home', href: '/' },
             { label: 'Stories' }
@@ -375,7 +399,7 @@ const StoriesManagement: React.FC = () => {
                 </Button>
               </div>
 
-              <CompactSprintMetrics />
+              {/* Removed duplicate metrics pills to avoid double-render with header */}
               <Button
                 variant="outline-secondary"
                 onClick={() => setShowImportModal(true)}
@@ -489,26 +513,13 @@ const StoriesManagement: React.FC = () => {
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Goal</Form.Label>
                   <Form.Control
-                    list="stories-filter-goals"
-                    value={filterGoal === 'all' ? '' : (goals.find(g => g.id === filterGoal)?.title || filterGoalInput)}
-                    onChange={(e) => {
-                      const typed = e.target.value;
-                      setFilterGoalInput(typed);
-                      if (!typed) {
-                        setFilterGoal('all');
-                        return;
-                      }
-                      const match = goals.find(g => g.title === typed || g.id === typed);
-                      setFilterGoal(match ? match.id : 'all');
-                    }}
+                    type="text"
                     placeholder="Search goals..."
+                    value={goalSearch}
+                    onChange={(e) => setGoalSearch(e.target.value)}
                     style={{ border: `1px solid ${themeVars.border}` }}
                   />
-                  <datalist id="stories-filter-goals">
-                    {goals.map(g => (
-                      <option key={g.id} value={g.title} />
-                    ))}
-                  </datalist>
+                  <Form.Text muted>Filters stories by goal title match.</Form.Text>
                 </Form.Group>
               </Col>
             </Row>
@@ -528,10 +539,9 @@ const StoriesManagement: React.FC = () => {
                   variant="outline-secondary"
                   onClick={() => {
                     setFilterStatus('all');
-                    setFilterGoal('all');
-                    setFilterGoalInput('');
                     setSearchTerm('');
                     setFilterTheme('all');
+                    setGoalSearch('');
                   }}
                   style={{ borderColor: themeVars.border as string }}
                 >

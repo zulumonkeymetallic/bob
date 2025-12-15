@@ -95,3 +95,28 @@ button svg,
     pointer-events: none;
     display: inline-block;
 }
+
+/* Themed Icon Button */
+.btn-icon-themed {
+    width: 38px;
+    height: 38px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    border-radius: 10px;
+    background-color: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    transition: all 0.2s ease;
+}
+
+.btn-icon-themed:hover {
+    background-color: var(--card);
+    color: var(--brand);
+    border-color: var(--brand);
+}
+
+.btn-icon-themed svg {
+    stroke: currentColor;
+}

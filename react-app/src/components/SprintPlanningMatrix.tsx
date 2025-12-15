@@ -1,130 +1,36 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Container, Row, Col, Button, Form, Badge, Dropdown, Alert } from 'react-bootstrap';
+import { dropTargetForElements, monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
-import { 
-  DndContext, 
-  closestCenter, 
-  KeyboardSensor, 
-  PointerSensor, 
-  useSensor, 
-  useSensors, 
-  DragEndEvent,
-  useDroppable
-} from '@dnd-kit/core';
-import { 
-  SortableContext, 
-  verticalListSortingStrategy, 
-  useSortable 
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import { Calendar, Target, Filter, Plus, ArrowUpDown, ArrowRight, GripVertical } from 'lucide-react';
+import { Calendar, Filter, Plus, ArrowUpDown, ArrowRight, Target } from 'lucide-react';
+import KanbanCardV2 from './KanbanCardV2';
+import GLOBAL_THEMES from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import '../styles/KanbanCards.css';
-import { storyStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, goalThemeColor, colorWithAlpha } from '../utils/storyCardFormatting';
-import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
+import { goalThemeColor } from '../utils/storyCardFormatting';
 
-// Sortable Story Card Component
-const SortableStoryCard: React.FC<{
-  story: Story;
-  goal?: Goal;
-}> = ({ story, goal }) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: story.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
-  const refLabel = (() => {
-    const shortRef = (story as any).referenceNumber || story.ref;
-    return shortRef && validateRef(shortRef, 'story')
-      ? shortRef
-      : displayRefForEntity('story', story.id);
-  })();
-
-  const themeColor = goalThemeColor(goal);
-  const statusLabel = storyStatusText((story as any).status);
-  const priorityClass = priorityPillClass(story.priority);
-  const priorityText = formatPriorityLabel(story.priority);
-  const points = story.points ?? 0;
-  const handleColor = themeColor || '#2563eb';
-  const handleStyle: React.CSSProperties = {
-    color: handleColor,
-    borderColor: colorWithAlpha(handleColor, 0.45),
-    backgroundColor: colorWithAlpha(handleColor, 0.12)
-  };
-
-  return (
-    <div ref={setNodeRef} style={style}>
-      <div
-        className={`kanban-card kanban-card--story${isDragging ? ' dragging' : ''}`}
-        style={{ borderLeft: `3px solid ${themeColor}` }}
-      >
-        <button
-          type="button"
-          className="kanban-card__handle"
-          style={handleStyle}
-          {...attributes}
-          {...listeners}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <GripVertical size={16} />
-        </button>
-
-        <div className="kanban-card__content">
-          <div className="kanban-card__header">
-            <span className="kanban-card__ref" style={{ color: themeColor }}>
-              {refLabel}
-            </span>
-          </div>
-
-          <div className="kanban-card__title" title={story.title || 'Untitled story'}>
-            {story.title || 'Untitled story'}
-          </div>
-
-          {story.description && story.description.trim().length > 0 && (
-            <div className="kanban-card__description">
-              {story.description}
-            </div>
-          )}
-
-          <div className="kanban-card__meta">
-            <span className={priorityClass} title={`Priority: ${priorityText}`}>
-              {priorityText}
-            </span>
-            <span className="kanban-card__meta-badge" title="Story points">
-              {points} pts
-            </span>
-            <span className="kanban-card__meta-text" title="Status">
-              {statusLabel}
-            </span>
-          </div>
-
-          <div className="kanban-card__goal">
-            <Target size={12} color={themeColor} />
-            <span title={goal?.title || 'No goal'}>
-              {goal?.title || 'No goal'}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+// Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
+const normalizeSprintId = (value: any): string | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === 'backlog' || trimmed === '__backlog__') return null;
+    if (trimmed.startsWith('placeholder-')) return null;
+    return trimmed;
+  }
+  if (typeof value === 'object') {
+    const refId = (value as any)?.id;
+    if (typeof refId === 'string') return refId;
+  }
+  return String(value);
 };
 
-// Droppable Sprint Column
+// Droppable Sprint Column using pragmatic DnD
 const SprintColumn: React.FC<{
   sprint: Sprint | null;
   stories: Story[];
@@ -132,8 +38,22 @@ const SprintColumn: React.FC<{
   isBacklog?: boolean;
   placeholderLabel?: string;
   droppableId: string;
-}> = ({ sprint, stories, goals, isBacklog = false, placeholderLabel, droppableId }) => {
-  const { setNodeRef, isOver } = useDroppable({ id: droppableId });
+  showDescriptions: boolean;
+}> = ({ sprint, stories, goals, isBacklog = false, placeholderLabel, droppableId, showDescriptions }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [isOver, setIsOver] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    return dropTargetForElements({
+      element: el,
+      getData: () => ({ targetSprintId: sprint ? sprint.id : null, droppableId }),
+      onDragEnter: () => setIsOver(true),
+      onDragLeave: () => setIsOver(false),
+      onDrop: () => setIsOver(false),
+    });
+  }, [sprint, droppableId]);
 
   if (!sprint && !isBacklog) {
     return (
@@ -206,28 +126,27 @@ const SprintColumn: React.FC<{
       </div>
 
       <div
-        ref={setNodeRef}
+        ref={ref}
         className={`drop-lane${isOver ? ' is-over' : ''}`}
         style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, padding: 8, minHeight: 220 }}
       >
-        <SortableContext
-          id={droppableId}
-          items={stories.map(story => story.id)}
-          strategy={verticalListSortingStrategy}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {stories.map(story => {
-              const goal = goals.find(g => g.id === story.goalId);
-              return (
-                <SortableStoryCard
-                  key={story.id}
-                  story={story}
-                  goal={goal}
-                />
-              );
-            })}
-          </div>
-        </SortableContext>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {stories.map(story => {
+            const goal = goals.find(g => g.id === story.goalId);
+            const themeColor = goalThemeColor(goal);
+            return (
+              <KanbanCardV2
+                key={story.id}
+                item={story}
+                type="story"
+                goal={goal}
+                themeColor={themeColor || undefined}
+                taskCount={0}
+                showDescription={showDescriptions}
+              />
+            );
+          })}
+        </div>
 
         {stories.length === 0 && (
           <div className="sprint-column__placeholder">
@@ -255,19 +174,15 @@ const SprintPlanningMatrix: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [showDescriptions, setShowDescriptions] = useState(false);
   
   // Filters
   const [filterGoal, setFilterGoal] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [viewMode, setViewMode] = useState<'all' | 'active'>('active');
-
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor)
-  );
+  const [filterTheme, setFilterTheme] = useState<number | null>(null);
+  const [showCompleted, setShowCompleted] = useState(false);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !currentPersona) return;
 
     const setupSubscriptions = () => {
       // Stories subscription
@@ -278,13 +193,22 @@ const SprintPlanningMatrix: React.FC = () => {
         orderBy('orderIndex', 'asc')
       );
 
-      const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
-        const storiesData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Story[];
-        setStories(storiesData);
-      });
+      const unsubscribeStories = onSnapshot(
+        storiesQuery,
+        (snapshot) => {
+          const storiesData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          })) as Story[];
+          setStories(storiesData);
+          setMoveError(null);
+        },
+        (error) => {
+          console.error('❌ Failed to load stories for planning matrix:', error);
+          setMoveError('Missing or insufficient permissions to load stories. Please confirm ownerUid/persona.');
+          setLoading(false);
+        }
+      );
 
       // Goals subscription
       const goalsQuery = query(
@@ -294,13 +218,20 @@ const SprintPlanningMatrix: React.FC = () => {
         orderBy('createdAt', 'desc')
       );
 
-      const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-        const goalsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Goal[];
-        setGoals(goalsData);
-      });
+      const unsubscribeGoals = onSnapshot(
+        goalsQuery,
+        (snapshot) => {
+          const goalsData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          })) as Goal[];
+          setGoals(goalsData);
+        },
+        (error) => {
+          console.error('❌ Failed to load goals for planning matrix:', error);
+          setMoveError('Missing or insufficient permissions to load goals. Please confirm ownerUid/persona.');
+        }
+      );
 
       setLoading(false);
 
@@ -314,15 +245,21 @@ const SprintPlanningMatrix: React.FC = () => {
   }, [currentUser, currentPersona]);
 
   // Filter stories
-  const filteredStories = stories.filter(story => {
-    if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
-    if (filterStatus !== 'all' && (story.status !== undefined ? story.status : 0).toString() !== filterStatus) return false;
-    return true;
-  });
+  const filteredStories = useMemo(() => {
+    return stories.filter((story) => {
+      if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
+      if (filterTheme) {
+        const goal = goals.find((g) => g.id === story.goalId);
+        const storyTheme = (story as any).theme ?? goal?.theme ?? null;
+        if (storyTheme !== filterTheme) return false;
+      }
+      return true;
+    });
+  }, [stories, goals, filterGoal, filterTheme]);
 
   // Story groups per sprint (including backlog)
   const storiesBySprint = filteredStories.reduce((acc, story) => {
-    const sprintKey = story.sprintId ? String(story.sprintId) : 'backlog';
+    const sprintKey = normalizeSprintId((story as any).sprintId) ?? 'backlog';
     if (!acc[sprintKey]) acc[sprintKey] = [];
     acc[sprintKey].push(story);
     return acc;
@@ -330,93 +267,52 @@ const SprintPlanningMatrix: React.FC = () => {
 
   const backlogStories = storiesBySprint.backlog ?? [];
 
-  // Determine sprint slots (Backlog + next 4 sprints)
-  const sortedSprints = [...sprints].sort((a, b) => {
-    const startA = a.startDate ?? Number.MAX_SAFE_INTEGER;
-    const startB = b.startDate ?? Number.MAX_SAFE_INTEGER;
-    return startA - startB;
-  });
-
-  const activeFiltered = viewMode === 'active'
-    ? sortedSprints.filter((sprint) => {
-        const statusValue = (sprint as any).status;
+  const visibleSprints = useMemo(() => {
+    return [...sprints]
+      .filter((s) => {
+        if (showCompleted) return true;
+        const statusValue = (s as any).status;
         if (typeof statusValue === 'number') return statusValue <= 1;
         const normalized = String(statusValue ?? '').toLowerCase();
         return normalized === '' || normalized.includes('plan') || normalized.includes('active');
       })
-    : sortedSprints;
+      .sort((a, b) => (a.startDate ?? 0) - (b.startDate ?? 0));
+  }, [sprints, showCompleted]);
 
-  const sprintSlots: Array<Sprint | null> = [];
-  for (const sprint of activeFiltered) {
-    if (sprintSlots.length >= 4) break;
-    sprintSlots.push(sprint);
-  }
-  if (sprintSlots.length < 4) {
-    for (const sprint of sortedSprints) {
-      if (sprintSlots.includes(sprint)) continue;
-      sprintSlots.push(sprint);
-      if (sprintSlots.length >= 4) break;
-    }
-  }
-  while (sprintSlots.length < 4) {
-    sprintSlots.push(null);
-  }
+  // Monitor drag/drop using pragmatic DnD
+  useEffect(() => {
+    return monitorForElements({
+      onDrop: async ({ source, location }) => {
+        try {
+          const destination = location.current.dropTargets[0];
+          if (!destination) return;
+          const targetSprintId = (destination.data as any)?.targetSprintId ?? null;
+          const story = source.data.item as Story | undefined;
+          if (!story || !currentUser) return;
 
-  const resolveDropSprint = (overId: any): string | null | undefined => {
-    if (overId == null) return undefined;
-    const targetId = String(overId);
-    if (targetId === 'backlog') return null;
+          const normalizedTarget = normalizeSprintId(targetSprintId);
+          const currentSprintId = normalizeSprintId((story as any).sprintId);
+          if (normalizedTarget === currentSprintId) return;
 
-    const matchingSprint = sprints.find(sprint => sprint.id === targetId);
-    if (matchingSprint) return matchingSprint.id;
+          // Optimistic update
+          setStories((prev) =>
+            prev.map((s) => (s.id === story.id ? { ...s, sprintId: normalizedTarget ?? undefined } : s))
+          );
+          setMoveError(null);
 
-    const matchingStory = stories.find(story => story.id === targetId);
-    if (matchingStory) {
-      return matchingStory.sprintId ? String(matchingStory.sprintId) : null;
-    }
-
-    return undefined;
-  };
-
-  // Handle drag end
-  const applyLocalSprintChange = (storyId: string, sprintId: string | null) => {
-    setStories(prev => prev.map(story => (
-      story.id === storyId
-        ? ({ ...story, sprintId: sprintId ?? undefined })
-        : story
-    )));
-  };
-
-  const handleDragEnd = async (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over) return;
-
-    const storyId = String(active.id);
-    const story = stories.find(s => s.id === storyId);
-    if (!story) return;
-
-    const resolvedTarget = resolveDropSprint(over.id);
-    if (resolvedTarget === undefined) return;
-
-    const targetSprintId = resolvedTarget ?? null;
-    const currentSprintId = story.sprintId ? String(story.sprintId) : null;
-
-    if (currentSprintId === targetSprintId) return;
-
-    applyLocalSprintChange(storyId, targetSprintId);
-    setMoveError(null);
-
-    try {
-      await updateDoc(doc(db, 'stories', storyId), {
-        sprintId: targetSprintId,
-        updatedAt: serverTimestamp()
-      });
-    } catch (error) {
-      console.error('❌ Error moving story:', error);
-      applyLocalSprintChange(storyId, currentSprintId);
-      setMoveError('Failed to move story. Please try again.');
-    }
-  };
+          await updateDoc(doc(db, 'stories', story.id), {
+            sprintId: normalizedTarget ?? null,
+            ownerUid: currentUser.uid,
+            persona: currentPersona,
+            updatedAt: serverTimestamp(),
+          });
+        } catch (error) {
+          console.error('❌ Error moving story:', error);
+          setMoveError('Failed to move story. Please try again.');
+        }
+      },
+    });
+  }, [currentUser, currentPersona]);
 
   if (loading) {
     return (
@@ -445,21 +341,6 @@ const SprintPlanningMatrix: React.FC = () => {
             </div>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <Dropdown>
-                <Dropdown.Toggle variant="outline-secondary" size="sm">
-                  <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
-                  {viewMode === 'active' ? 'Active Sprints' : 'All Sprints'}
-                </Dropdown.Toggle>
-                <Dropdown.Menu>
-                  <Dropdown.Item onClick={() => setViewMode('active')} active={viewMode === 'active'}>
-                    Active Sprints Only
-                  </Dropdown.Item>
-                  <Dropdown.Item onClick={() => setViewMode('all')} active={viewMode === 'all'}>
-                    All Sprints
-                  </Dropdown.Item>
-                </Dropdown.Menu>
-              </Dropdown>
-              
               <Button variant="primary" href="/sprints/new">
                 <Plus size={16} style={{ marginRight: '8px' }} />
                 Create Sprint
@@ -499,20 +380,51 @@ const SprintPlanningMatrix: React.FC = () => {
                   <Form.Group>
                     <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
                       <Filter size={14} style={{ marginRight: '6px' }} />
-                      Filter by Status
+                      Filter by Theme
                     </Form.Label>
                     <Form.Select
-                      value={filterStatus}
-                      onChange={(e) => setFilterStatus(e.target.value)}
+                      value={filterTheme ?? 'all'}
+                      onChange={(e) => {
+                        const val = e.target.value === 'all' ? null : Number(e.target.value);
+                        setFilterTheme(val);
+                      }}
                       size="sm"
                     >
-                      <option value="all">All Status</option>
-                      <option value="0">Backlog</option>
-                      <option value="1">Planned</option>
-                      <option value="2">In Progress</option>
-                      <option value="3">Testing</option>
-                      <option value="4">Done</option>
+                      <option value="all">All Themes</option>
+                      {GLOBAL_THEMES.map(theme => (
+                        <option key={theme.id} value={theme.id}>{theme.label}</option>
+                      ))}
                     </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group>
+                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                      <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
+                      Sprint Visibility
+                    </Form.Label>
+                    <Form.Check
+                      type="switch"
+                      id="toggle-completed-sprints"
+                      label="Show completed sprints"
+                      checked={showCompleted}
+                      onChange={(e) => setShowCompleted(e.target.checked)}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group>
+                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                      <ArrowRight size={14} style={{ marginRight: '6px' }} />
+                      Story details
+                    </Form.Label>
+                    <Form.Check
+                      type="switch"
+                      id="toggle-matrix-descriptions"
+                      label="Show descriptions"
+                      checked={showDescriptions}
+                      onChange={(e) => setShowDescriptions(e.target.checked)}
+                    />
                   </Form.Group>
                 </Col>
                 <Col md={6}>
@@ -522,7 +434,9 @@ const SprintPlanningMatrix: React.FC = () => {
                       size="sm"
                       onClick={() => {
                         setFilterGoal('all');
-                        setFilterStatus('all');
+                        setFilterTheme(null);
+                        setShowCompleted(false);
+                        setShowDescriptions(false);
                       }}
                     >
                       Clear Filters
@@ -546,31 +460,27 @@ const SprintPlanningMatrix: React.FC = () => {
       )}
 
       {/* Sprint Matrix */}
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-      >
-        <div className="sprint-planning-grid">
+      <div className="sprint-planning-grid">
+        <SprintColumn
+          sprint={null}
+          stories={backlogStories}
+          goals={goals}
+          isBacklog={true}
+          droppableId="backlog"
+          showDescriptions={showDescriptions}
+        />
+        {visibleSprints.map((sprint) => (
           <SprintColumn
-            sprint={null}
-            stories={backlogStories}
+            key={sprint.id}
+            sprint={sprint}
+            stories={storiesBySprint[sprint.id] || []}
             goals={goals}
-            isBacklog={true}
-            droppableId="backlog"
+            placeholderLabel={undefined}
+            droppableId={sprint.id}
+            showDescriptions={showDescriptions}
           />
-          {sprintSlots.map((sprint, index) => (
-            <SprintColumn
-              key={sprint ? sprint.id : `placeholder-${index}`}
-              sprint={sprint}
-              stories={sprint ? (storiesBySprint[sprint.id] || []) : []}
-              goals={goals}
-              placeholderLabel={!sprint ? 'Add a sprint to plan upcoming work.' : undefined}
-              droppableId={sprint ? sprint.id : `placeholder-${index}`}
-            />
-          ))}
-        </div>
-      </DndContext>
+        ))}
+      </div>
 
       {/* Instructions */}
       <Row className="mt-4">

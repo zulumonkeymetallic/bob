@@ -64,7 +64,10 @@ import SprintPlannerMatrix from './components/SprintPlannerMatrix';
 import MigrationManager from './components/MigrationManager';
 import GoalVizPage from './components/visualization/GoalVizPage';
 import GoalRoadmapV3 from './components/visualization/GoalRoadmapV3';
-import SprintKanbanPage from './components/SprintKanbanPage';
+import GoalRoadmapV5 from './components/visualization/GoalRoadmapV5';
+import GoalRoadmapV6 from './components/visualization/GoalRoadmapV6';
+
+import SprintKanbanPageV2 from './components/SprintKanbanPageV2';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
@@ -257,7 +260,10 @@ function AppContent() {
             <Route path="/sprints" element={<SprintsPage />} />
             {/* Restore dedicated Management page */}
             <Route path="/sprints/management" element={<SprintManagementView />} />
-            <Route path="/sprints/kanban" element={<SprintKanbanPage />} />
+            <Route path="/sprints/management/burndown" element={<SprintManagementView />} />
+            <Route path="/sprints/kanban" element={<SprintKanbanPageV2 />} />
+
+            <Route path="/sprints/kanban-v2" element={<Navigate to="/sprints/kanban" replace />} />
             <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
             <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
@@ -284,7 +290,10 @@ function AppContent() {
             <Route path="/goals" element={<GoalsManagement />} />
             <Route path="/goals/:id" element={<DeepLinkGoal />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
-            <Route path="/goals/roadmap" element={<GoalRoadmapV3 />} />
+            <Route path="/goals/roadmap" element={<GoalRoadmapV5 />} />
+            <Route path="/goals/roadmap-legacy" element={<GoalRoadmapV3 />} />
+            <Route path="/goals/roadmap-v5" element={<GoalRoadmapV5 />} />
+            <Route path="/goals/roadmap-v6" element={<GoalRoadmapV6 />} />
             {/* Legacy V2 removed; no preview route retained */}
             <Route path="/goals/viz" element={<GoalVizPage />} />
 

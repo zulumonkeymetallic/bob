@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Container, Row, Col, Card, Button, Modal, Form, Table, Badge, ProgressBar, Alert, Dropdown } from 'react-bootstrap';
 import {
   Play,
@@ -28,6 +29,7 @@ import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadg
 import SprintMetricsPanel from '../SprintMetricsPanel';
 import ModernSprintsTable from '../ModernSprintsTable';
 import ModernKanbanBoard from '../ModernKanbanBoard';
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, BarChart, Bar } from 'recharts';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
 // Replaces /kanban route with comprehensive sprint management
@@ -37,6 +39,7 @@ const SprintManagementView = () => {
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
   const { sprints, sprintsById, selectedSprintId, setSelectedSprintId } = useSprint();
+  const location = useLocation();
 
   // State management
   const [stories, setStories] = useState<Story[]>([]);
@@ -46,6 +49,18 @@ const SprintManagementView = () => {
   const [showSprintModal, setShowSprintModal] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'board' | 'table' | 'burndown' | 'retrospective'>('table');
+  const [newSprint, setNewSprint] = useState({
+    name: '',
+    objective: '',
+    startDate: '',
+    endDate: '',
+    notes: '',
+  });
+  const [retrospectiveNotes, setRetrospectiveNotes] = useState({
+    wentWell: '',
+    toImprove: '',
+    actions: '',
+  });
 
   // New task form
   const [newTask, setNewTask] = useState({
@@ -57,6 +72,51 @@ const SprintManagementView = () => {
   });
 
   const selectedSprint: Sprint | null = selectedSprintId ? (sprintsById[selectedSprintId] ?? null) : null;
+  const sprintForCharts: Sprint | null = selectedSprint || sprints[0] || null;
+
+  const sprintStories = sprintForCharts ? stories.filter((s) => s.sprintId === sprintForCharts.id) : [];
+  const sprintPointsTotal = sprintStories.reduce((sum, s) => sum + (s.points || 0), 0);
+  const sprintPointsDone = sprintStories.filter((s) => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+
+  const burndownData = React.useMemo(() => {
+    if (!sprintForCharts) return [];
+    const start = new Date(sprintForCharts.startDate);
+    const end = new Date(sprintForCharts.endDate);
+    const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
+    const now = new Date();
+    const daysElapsed = Math.min(days, Math.max(0, Math.ceil((now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))));
+    const total = sprintPointsTotal || 1;
+    const expectedDaily = total / days;
+    const actualDaily = daysElapsed > 0 ? sprintPointsDone / daysElapsed : 0;
+    const data: Array<{ day: string; expected: number; actual: number }> = [];
+    for (let i = 0; i <= days; i++) {
+      const expectedRemaining = Math.max(0, total - expectedDaily * i);
+      const actualRemaining = Math.max(0, total - actualDaily * i);
+      data.push({
+        day: `Day ${i + 1}`,
+        expected: Number(expectedRemaining.toFixed(1)),
+        actual: Number(actualRemaining.toFixed(1)),
+      });
+    }
+    return data;
+  }, [sprintForCharts, sprintPointsTotal, sprintPointsDone]);
+
+  const velocityData = React.useMemo(() => {
+    const sorted = [...sprints].sort((a, b) => (b.endDate ?? 0) - (a.endDate ?? 0)).slice(0, 5);
+    return sorted.map((s) => {
+      const relatedStories = stories.filter((st) => st.sprintId === s.id);
+      const totalPts = relatedStories.reduce((sum, st) => sum + (st.points || 0), 0);
+      const donePts = relatedStories.filter((st) => st.status === 4).reduce((sum, st) => sum + (st.points || 0), 0);
+      const days = Math.max(1, Math.ceil((Number(s.endDate) - Number(s.startDate)) / (1000 * 60 * 60 * 24)));
+      const velocity = donePts / days;
+      return {
+        name: s.name || s.id,
+        velocity: Number(velocity.toFixed(2)),
+        done: donePts,
+        total: totalPts,
+      };
+    });
+  }, [sprints, stories]);
 
   // Load real data from Firebase
   useEffect(() => {
@@ -132,6 +192,12 @@ const SprintManagementView = () => {
       }
     };
   }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (location.pathname.includes('/sprints/management/burndown')) {
+      setActiveTab('burndown');
+    }
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!sprints.length) return;
@@ -240,6 +306,52 @@ const SprintManagementView = () => {
       setShowAddTask(false);
     } catch (error) {
       console.error('Error adding task:', error);
+    }
+  };
+
+  const handleCreateSprint = async () => {
+    if (!currentUser) return;
+    if (!newSprint.name.trim() || !newSprint.startDate || !newSprint.endDate) {
+      alert('Please provide a name, start date, and end date.');
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'sprints'), {
+        name: newSprint.name.trim(),
+        objective: newSprint.objective.trim(),
+        notes: newSprint.notes.trim(),
+        startDate: new Date(newSprint.startDate).getTime(),
+        endDate: new Date(newSprint.endDate).getTime(),
+        planningDate: new Date(newSprint.startDate).getTime(),
+        retroDate: new Date(newSprint.endDate).getTime(),
+        status: 0,
+        ownerUid: currentUser.uid,
+        persona: currentPersona,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setShowSprintModal(false);
+      setNewSprint({ name: '', objective: '', startDate: '', endDate: '', notes: '' });
+    } catch (error) {
+      console.error('Error creating sprint:', error);
+      alert('Failed to create sprint.');
+    }
+  };
+
+  const handleSaveRetrospective = async () => {
+    if (!currentUser || !selectedSprintId) return;
+    try {
+      await addDoc(collection(db, 'sprint_retros'), {
+        sprintId: selectedSprintId,
+        ownerUid: currentUser.uid,
+        persona: currentPersona,
+        ...retrospectiveNotes,
+        updatedAt: serverTimestamp(),
+      });
+      alert('Retrospective saved.');
+    } catch (error) {
+      console.error('Error saving retrospective:', error);
+      alert('Failed to save retrospective.');
     }
   };
 
@@ -439,11 +551,49 @@ const SprintManagementView = () => {
                 <h5>Sprint Overview</h5>
               </Card.Header>
               <Card.Body>
-                <div className="text-center text-muted py-5">
-                  <Target size={48} className="mb-3" />
-                  <h5>Sprint Overview</h5>
-                  <p>Sprint overview features will be implemented here.</p>
-                </div>
+                <Row>
+                  <Col md={6} className="mb-3">
+                    <h6 className="mb-2">Burndown</h6>
+                    {burndownData.length > 0 ? (
+                      <div style={{ width: '100%', height: 260 }}>
+                        <ResponsiveContainer>
+                          <LineChart data={burndownData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="day" />
+                            <YAxis />
+                            <Tooltip />
+                            <Legend />
+                            <Line type="monotone" dataKey="expected" stroke="#8884d8" name="Expected remaining" />
+                            <Line type="monotone" dataKey="actual" stroke="#82ca9d" name="Actual remaining" />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="text-muted">Select a sprint to see burndown.</div>
+                    )}
+                  </Col>
+                  <Col md={6} className="mb-3">
+                    <h6 className="mb-2">Velocity Trend (pts/day)</h6>
+                    {velocityData.length > 0 ? (
+                      <div style={{ width: '100%', height: 260 }}>
+                        <ResponsiveContainer>
+                          <BarChart data={velocityData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" />
+                            <YAxis />
+                            <Tooltip />
+                            <Legend />
+                            <Bar dataKey="velocity" fill="#2563eb" name="Velocity" />
+                            <Bar dataKey="done" fill="#16a34a" name="Points done" />
+                            <Bar dataKey="total" fill="#9ca3af" name="Total points" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="text-muted">No sprint history yet.</div>
+                    )}
+                  </Col>
+                </Row>
               </Card.Body>
             </Card>
           </Col>
@@ -458,11 +608,48 @@ const SprintManagementView = () => {
                 <h5>Burndown Chart</h5>
               </Card.Header>
               <Card.Body>
-                <div className="text-center text-muted py-5">
-                  <BarChart3 size={48} className="mb-3" />
-                  <h5>Burndown Chart</h5>
-                  <p>Burndown chart visualization will be implemented here.</p>
-                </div>
+                <Row>
+                  <Col md={6} className="mb-3">
+                    {burndownData.length > 0 ? (
+                      <div style={{ width: '100%', height: 320 }}>
+                        <ResponsiveContainer>
+                          <LineChart data={burndownData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="day" />
+                            <YAxis />
+                            <Tooltip />
+                            <Legend />
+                            <Line type="monotone" dataKey="expected" stroke="#8884d8" name="Expected remaining" />
+                            <Line type="monotone" dataKey="actual" stroke="#82ca9d" name="Actual remaining" />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="text-muted text-center py-4">Select a sprint to view burndown.</div>
+                    )}
+                  </Col>
+                  <Col md={6} className="mb-3">
+                    <h6 className="mb-2">Velocity (points/day)</h6>
+                    {velocityData.length > 0 ? (
+                      <div style={{ width: '100%', height: 320 }}>
+                        <ResponsiveContainer>
+                          <BarChart data={velocityData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" />
+                            <YAxis />
+                            <Tooltip />
+                            <Legend />
+                            <Bar dataKey="velocity" fill="#2563eb" name="Velocity" />
+                            <Bar dataKey="done" fill="#16a34a" name="Points done" />
+                            <Bar dataKey="total" fill="#9ca3af" name="Total points" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="text-muted text-center py-4">No sprint history yet.</div>
+                    )}
+                  </Col>
+                </Row>
               </Card.Body>
             </Card>
           </Col>
@@ -477,11 +664,38 @@ const SprintManagementView = () => {
                 <h5>Sprint Retrospective</h5>
               </Card.Header>
               <Card.Body>
-                <div className="text-center text-muted py-5">
-                  <RotateCcw size={48} className="mb-3" />
-                  <h5>Sprint Retrospective</h5>
-                  <p>Retrospective features will be implemented here.</p>
-                </div>
+                <Form>
+                  <Form.Group className="mb-3">
+                    <Form.Label>What went well</Form.Label>
+                    <Form.Control
+                      as="textarea"
+                      rows={3}
+                      value={retrospectiveNotes.wentWell}
+                      onChange={(e) => setRetrospectiveNotes({ ...retrospectiveNotes, wentWell: e.target.value })}
+                    />
+                  </Form.Group>
+                  <Form.Group className="mb-3">
+                    <Form.Label>What to improve</Form.Label>
+                    <Form.Control
+                      as="textarea"
+                      rows={3}
+                      value={retrospectiveNotes.toImprove}
+                      onChange={(e) => setRetrospectiveNotes({ ...retrospectiveNotes, toImprove: e.target.value })}
+                    />
+                  </Form.Group>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Actions</Form.Label>
+                    <Form.Control
+                      as="textarea"
+                      rows={3}
+                      value={retrospectiveNotes.actions}
+                      onChange={(e) => setRetrospectiveNotes({ ...retrospectiveNotes, actions: e.target.value })}
+                    />
+                  </Form.Group>
+                  <Button onClick={handleSaveRetrospective}>
+                    Save Retrospective
+                  </Button>
+                </Form>
               </Card.Body>
             </Card>
           </Col>
@@ -560,23 +774,70 @@ const SprintManagementView = () => {
         </Modal.Footer>
       </Modal>
 
-      {/* Sprint Modal placeholder */}
+      {/* Sprint Modal */}
       <Modal show={showSprintModal} onHide={() => setShowSprintModal(false)}>
         <Modal.Header closeButton>
           <Modal.Title>Create New Sprint</Modal.Title>
         </Modal.Header>
         <Modal.Body>
-          <div className="text-center text-muted py-4">
-            <Calendar size={48} className="mb-3" />
-            <h5>Sprint Creation</h5>
-            <p>Sprint creation form will be implemented here.</p>
-          </div>
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Sprint Name *</Form.Label>
+              <Form.Control
+                type="text"
+                value={newSprint.name}
+                onChange={(e) => setNewSprint({ ...newSprint, name: e.target.value })}
+                placeholder="Sprint 41 (Work in Progress)"
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Objective</Form.Label>
+              <Form.Control
+                type="text"
+                value={newSprint.objective}
+                onChange={(e) => setNewSprint({ ...newSprint, objective: e.target.value })}
+                placeholder="Goal or theme for this sprint"
+              />
+            </Form.Group>
+            <Row>
+              <Col md={6}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Start Date *</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={newSprint.startDate}
+                    onChange={(e) => setNewSprint({ ...newSprint, startDate: e.target.value })}
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={6}>
+                <Form.Group className="mb-3">
+                  <Form.Label>End Date *</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={newSprint.endDate}
+                    onChange={(e) => setNewSprint({ ...newSprint, endDate: e.target.value })}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+            <Form.Group className="mb-3">
+              <Form.Label>Notes</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={2}
+                value={newSprint.notes}
+                onChange={(e) => setNewSprint({ ...newSprint, notes: e.target.value })}
+                placeholder="Any additional context"
+              />
+            </Form.Group>
+          </Form>
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowSprintModal(false)}>
             Cancel
           </Button>
-          <Button variant="primary" disabled>
+          <Button variant="primary" onClick={handleCreateSprint}>
             Create Sprint
           </Button>
         </Modal.Footer>

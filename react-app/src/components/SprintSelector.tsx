@@ -36,6 +36,15 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
     return sprints.find((s) => s.id === effectiveSelectedId);
   }, [sprints, effectiveSelectedId]);
 
+  const now = Date.now();
+  const isSprintComplete = (s: Sprint) => {
+    const ended = typeof s.endDate === 'number' && s.endDate > 0 ? s.endDate < now : false;
+    const statusComplete = isStatus(s.status, 'done') || s.status === 2 || String(s.status).toLowerCase().includes('complete');
+    return statusComplete || ended;
+  };
+  const isSprintActive = (s: Sprint) => isStatus(s.status, 'active') && !isSprintComplete(s);
+  const isSprintPlanned = (s: Sprint) => isStatus(s.status, 'planning') && !isSprintComplete(s);
+
   useEffect(() => {
     if (loading) return;
     if (sprints.length === 0) return;
@@ -98,8 +107,8 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
 
   return (
     <Dropdown className={className}>
-      <Dropdown.Toggle 
-        variant="outline-primary" 
+      <Dropdown.Toggle
+        variant="outline-primary"
         id="sprint-selector"
         className="d-flex align-items-center"
       >
@@ -109,16 +118,22 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         ) : selectedSprint ? (
           <span>
             <strong>{selectedSprint.name}</strong>
-            <small className="ms-2 text-muted">
-              ({selectedSprint.status})
-            </small>
+            {isSprintActive(selectedSprint) && (
+              <span className="badge bg-success ms-2">ACTIVE</span>
+            )}
+            {isSprintPlanned(selectedSprint) && (
+              <span className="badge bg-warning text-dark ms-2">PLANNED</span>
+            )}
+            {isSprintComplete(selectedSprint) && (
+              <span className="badge bg-secondary ms-2">COMPLETE</span>
+            )}
           </span>
         ) : (
           <span>All Sprints</span>
         )}
       </Dropdown.Toggle>
 
-      <Dropdown.Menu align="end" style={{ minWidth: '300px' }}>
+      <Dropdown.Menu align="end" style={{ minWidth: '300px', zIndex: 2000 }}>
         <Dropdown.Header>Available Sprints</Dropdown.Header>
         <Dropdown.Item
           active={effectiveSelectedId === ''}
@@ -132,34 +147,43 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
             No sprints found. Create one in Sprint Dashboard.
           </Dropdown.Item>
         ) : (
-          sprints.map(sprint => (
-            <Dropdown.Item
-              key={sprint.id}
-              active={sprint.id === effectiveSelectedId}
-              onClick={() => handleSprintChange(sprint.id)}
-            >
-              <div>
-                <strong>{sprint.name}</strong>
-                <div className="d-flex justify-content-between align-items-center mt-1">
-                  <small className="text-muted">
-                    {new Date(sprint.startDate).toLocaleDateString()} - 
-                    {new Date(sprint.endDate).toLocaleDateString()}
-                  </small>
-                  <span className={`badge ${
-                    isStatus(sprint.status, 'active') ? 'bg-success' : 
-                    isStatus(sprint.status, 'planning') ? 'bg-warning' : 'bg-secondary'
-                  }`}>
-                    {sprint.status}
-                  </span>
+          sprints
+            .filter((sprint) => {
+              // Hide completed sprints unless currently selected
+              if (isSprintComplete(sprint) && sprint.id !== effectiveSelectedId) return false;
+              return true;
+            })
+            .map(sprint => (
+              <Dropdown.Item
+                key={sprint.id}
+                active={sprint.id === effectiveSelectedId}
+                onClick={() => handleSprintChange(sprint.id)}
+              >
+                <div>
+                  <strong>{sprint.name}</strong>
+                  <div className="d-flex justify-content-between align-items-center mt-1">
+                    <small className="text-muted">
+                      {new Date(sprint.startDate).toLocaleDateString()} -
+                      {new Date(sprint.endDate).toLocaleDateString()}
+                    </small>
+                    <span className={`badge ${
+                      isSprintActive(sprint) ? 'bg-success' :
+                      isSprintPlanned(sprint) ? 'bg-warning' :
+                      isSprintComplete(sprint) ? 'bg-secondary' : 'bg-secondary'
+                    }`}>
+                      {isSprintActive(sprint) ? 'ACTIVE' :
+                        isSprintPlanned(sprint) ? 'PLANNED' :
+                        isSprintComplete(sprint) ? 'COMPLETE' : sprint.status}
+                    </span>
+                  </div>
+                  {sprint.objective && (
+                    <small className="text-muted d-block mt-1">
+                      {sprint.objective.substring(0, 60)}...
+                    </small>
+                  )}
                 </div>
-                {sprint.objective && (
-                  <small className="text-muted d-block mt-1">
-                    {sprint.objective.substring(0, 60)}...
-                  </small>
-                )}
-              </div>
-            </Dropdown.Item>
-          ))
+              </Dropdown.Item>
+            ))
         )}
         <Dropdown.Divider />
         <Dropdown.Item onClick={() => window.location.href = '/sprints/management'}>
