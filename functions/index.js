@@ -9678,6 +9678,7 @@ function traktHeaders(accessToken) {
     'Content-Type': 'application/json',
     'trakt-api-version': '2',
     'trakt-api-key': process.env.TRAKT_CLIENT_ID,
+    'User-Agent': 'BOB/1.0 (bob20250810)',
   };
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   return headers;
@@ -9686,6 +9687,20 @@ function traktHeaders(accessToken) {
 async function getTraktTokenDoc(uid) {
   const snap = await admin.firestore().collection('tokens').doc(`${uid}_trakt`).get();
   return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+async function fetchTraktJson(url, opts = {}) {
+  const merged = { ...opts };
+  merged.headers = { ...(opts.headers || {}), ...traktHeaders(opts.headers?.Authorization ? undefined : null) };
+  const res = await fetch(url, merged);
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error(`Trakt response parse failed (status ${res.status}): ${text.slice(0, 160)}`); }
+  if (!res.ok || data?.error) {
+    const msg = data?.error_description || data?.error || `HTTP ${res.status}`;
+    throw new Error(`Trakt error: ${msg}`);
+  }
+  return data;
 }
 
 async function fetchTraktProfile(accessToken) {
@@ -9978,17 +9993,15 @@ async function recordAiLog(uid, event, status, message, metadata = {}) {
 exports.traktDeviceCodeStart = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
   if (!req?.auth?.uid) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const uid = req.auth.uid;
-  const res = await fetch(`${TRAKT_API_BASE}/oauth/device/code`, {
-    method: 'POST',
-    headers: traktHeaders(),
-    body: JSON.stringify({ client_id: process.env.TRAKT_CLIENT_ID }),
-  });
-  const text = await res.text();
   let data;
-  try { data = JSON.parse(text); } catch (e) { throw new httpsV2.HttpsError('internal', 'Trakt device code parse failed'); }
-  if (!res.ok) {
-    const msg = data?.error || `HTTP ${res.status}`;
-    throw new httpsV2.HttpsError('internal', `Trakt device code failed: ${msg}`);
+  try {
+    data = await fetchTraktJson(`${TRAKT_API_BASE}/oauth/device/code`, {
+      method: 'POST',
+      headers: traktHeaders(),
+      body: JSON.stringify({ client_id: process.env.TRAKT_CLIENT_ID }),
+    });
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', e?.message || 'Trakt device code failed');
   }
   await admin.firestore().collection('trakt_device_codes').doc(uid).set({
     deviceCode: data.device_code,
@@ -10015,23 +10028,22 @@ exports.traktDeviceCodePoll = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID, TRAKT_
   const deviceCode = provided || (stored.exists ? stored.data()?.deviceCode : '');
   if (!deviceCode) throw new httpsV2.HttpsError('invalid-argument', 'deviceCode is required');
 
-  const res = await fetch(`${TRAKT_API_BASE}/oauth/device/token`, {
-    method: 'POST',
-    headers: traktHeaders(),
-    body: JSON.stringify({
-      code: deviceCode,
-      client_id: process.env.TRAKT_CLIENT_ID,
-      client_secret: process.env.TRAKT_CLIENT_SECRET,
-    })
-  });
-  const text = await res.text();
   let data;
-  try { data = JSON.parse(text); } catch (e) { data = { error: text }; }
-  if (!res.ok) {
-    const err = data?.error || `HTTP ${res.status}`;
-    if (err === 'authorization_pending' || err === 'slow_down') return { pending: true, message: err };
-    if (err === 'expired_token') throw new httpsV2.HttpsError('deadline-exceeded', 'Device code expired. Start again.');
-    throw new httpsV2.HttpsError('internal', `Trakt token exchange failed: ${err}`);
+  try {
+    data = await fetchTraktJson(`${TRAKT_API_BASE}/oauth/device/token`, {
+      method: 'POST',
+      headers: traktHeaders(),
+      body: JSON.stringify({
+        code: deviceCode,
+        client_id: process.env.TRAKT_CLIENT_ID,
+        client_secret: process.env.TRAKT_CLIENT_SECRET,
+      })
+    });
+  } catch (e) {
+    const msg = e?.message || '';
+    if (msg.includes('authorization_pending') || msg.includes('slow_down')) return { pending: true, message: msg };
+    if (msg.includes('expired_token')) throw new httpsV2.HttpsError('deadline-exceeded', 'Device code expired. Start again.');
+    throw new httpsV2.HttpsError('internal', msg || 'Trakt token exchange failed');
   }
   const saved = await saveTraktTokens(uid, data);
   await admin.firestore().collection('trakt_device_codes').doc(uid).set({ lastUsedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
