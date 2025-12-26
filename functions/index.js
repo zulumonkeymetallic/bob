@@ -2331,8 +2331,9 @@ exports.stravaOAuthStart = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID], invo
     if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
     const projectId = process.env.GCLOUD_PROJECT;
     const region = "europe-west2";
+    const configuredHost = process.env.STRAVA_REDIRECT_HOST; // optional override, e.g., bob.jc1.tech
     const host = String(req.get('host') || '');
-    const baseHost = host || `${region}-${projectId}.cloudfunctions.net`;
+    const baseHost = configuredHost || host || `${region}-${projectId}.cloudfunctions.net`;
     const redirectUri = `https://${baseHost}/stravaOAuthCallback`;
     const clientId = process.env.STRAVA_CLIENT_ID;
     const state = stateEncode({ uid, nonce });
@@ -2354,8 +2355,9 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
 
     const projectId = process.env.GCLOUD_PROJECT;
     const region = "europe-west2";
+    const configuredHost = process.env.STRAVA_REDIRECT_HOST; // optional override, e.g., bob.jc1.tech
     const host = String(req.get('host') || '');
-    const baseHost = host || `${region}-${projectId}.cloudfunctions.net`;
+    const baseHost = configuredHost || host || `${region}-${projectId}.cloudfunctions.net`;
     const redirectUri = `https://${baseHost}/stravaOAuthCallback`;
 
     const tokenData = await fetchJson("https://www.strava.com/oauth/token", {
