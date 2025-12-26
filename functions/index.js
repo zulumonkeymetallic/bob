@@ -94,6 +94,7 @@ const GOOGLE_AI_STUDIO_API_KEY = defineSecret("GOOGLEAISTUDIOAPIKEY");
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret("GOOGLE_OAUTH_CLIENT_ID");
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret("GOOGLE_OAUTH_CLIENT_SECRET");
 const TRAKT_CLIENT_ID = defineSecret("TRAKT_CLIENT_ID");
+const TRAKT_CLIENT_SECRET = defineSecret("TRAKT_CLIENT_SECRET");
 const STEAM_WEB_API_KEY = defineSecret("STEAM_WEB_API_KEY");
 const N8N_WEBHOOK_SECRET = defineSecret("N8N_WEBHOOK_SECRET");
 const N8N_OUTBOUND_WEBHOOK_URL = defineSecret("N8N_OUTBOUND_WEBHOOK_URL");
@@ -9399,6 +9400,12 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
   const nowDone = isDone(after.status);
   const patch = {};
 
+  // Ensure server-owned, canonical task references are always present
+  const hasRef = typeof after.ref === 'string' && after.ref.trim() !== '';
+  if (!hasRef) {
+    patch.ref = `TK-${String(id).slice(-6).padStart(6, '0').toUpperCase()}`;
+  }
+
   // Track completedAt and TTL deleteAfter on status change
   if (!wasDone && nowDone) {
     const completedAt = after.completedAt || now;
@@ -9664,37 +9671,252 @@ exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
 });
 
 // ===== Trakt and Steam Sync
-async function _syncTrakt(uid) {
-  const db = admin.firestore();
-  const profile = await db.collection('profiles').doc(uid).get();
-  const traktUser = profile.data()?.traktUser;
+const TRAKT_API_BASE = 'https://api.trakt.tv';
 
-  if (!traktUser) {
-    throw new Error("Trakt username not found in profile.");
-  }
-
-  const url = `https://api.trakt.tv/users/${traktUser}/history`;
+function traktHeaders(accessToken) {
   const headers = {
     'Content-Type': 'application/json',
     'trakt-api-version': '2',
     'trakt-api-key': process.env.TRAKT_CLIENT_ID,
   };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  return headers;
+}
 
-  const history = await fetchJson(url, { headers });
+async function getTraktTokenDoc(uid) {
+  const snap = await admin.firestore().collection('tokens').doc(`${uid}_trakt`).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
 
-  const batch = db.batch();
-  for (const item of history) {
-    const docRef = db.collection('trakt').doc(`${uid}_${item.id}`);
-    batch.set(docRef, { ...item, ownerUid: uid }, { merge: true });
+async function fetchTraktProfile(accessToken) {
+  if (!accessToken) return null;
+  try {
+    return await fetchJson(`${TRAKT_API_BASE}/users/me`, { headers: traktHeaders(accessToken) });
+  } catch (e) {
+    console.warn('[trakt] fetch profile failed', e?.message || e);
+    return null;
   }
-  await batch.commit();
+}
+
+async function saveTraktTokens(uid, tokenData, opts = {}) {
+  const db = admin.firestore();
+  const createdAt = tokenData?.created_at || Math.floor(Date.now() / 1000);
+  const expiresIn = tokenData?.expires_in || 0;
+  const expiresAt = tokenData?.expires_at || (createdAt + expiresIn);
+  await db.collection('tokens').doc(`${uid}_trakt`).set({
+    provider: 'trakt',
+    access_token: tokenData?.access_token,
+    refresh_token: tokenData?.refresh_token,
+    scope: tokenData?.scope || null,
+    created_at: createdAt,
+    expires_in: expiresIn,
+    expires_at: expiresAt,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  if (opts?.skipProfileLookup) return {};
+  const profile = await fetchTraktProfile(tokenData?.access_token);
+  const username = profile?.username || profile?.ids?.slug || null;
+  await db.collection('profiles').doc(uid).set({
+    traktUser: username || null,
+    traktConnected: true,
+  }, { merge: true });
+  return { username };
+}
+
+function mapTraktRating(rating) {
+  if (rating == null) return null;
+  const num = Number(rating);
+  if (!Number.isFinite(num)) return null;
+  if (num > 0 && num <= 10) return Math.max(1, Math.min(10, Math.round(num)));
+  return Math.max(1, Math.min(10, Math.round(num * 2)));
+}
+
+async function getTraktAccessToken(uid) {
+  const doc = await getTraktTokenDoc(uid);
+  if (!doc) throw new Error('Trakt not connected for this user. Connect via Settings > Integrations > Trakt.');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  const refreshed = await fetchJson(`${TRAKT_API_BASE}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: doc.refresh_token,
+      client_id: process.env.TRAKT_CLIENT_ID,
+      client_secret: process.env.TRAKT_CLIENT_SECRET,
+    })
+  });
+  const data = {
+    ...refreshed,
+    refresh_token: refreshed?.refresh_token || doc.refresh_token,
+    expires_at: refreshed?.created_at ? refreshed.created_at + refreshed.expires_in : nowSec + 90 * 24 * 60 * 60,
+  };
+  await saveTraktTokens(uid, data, { skipProfileLookup: true });
+  return data.access_token;
+}
+
+function buildTraktShowDocId(uid, show) {
+  const ids = show?.ids || {};
+  const key = ids.trakt || ids.slug || ids.tvdb || ids.tmdb || ids.imdb || show?.id || Math.random().toString(36).slice(2);
+  return `${uid}_show_${key}`;
+}
+
+async function markTraktShowWatched(uid, ids, opts = {}) {
+  const accessToken = await getTraktAccessToken(uid);
+  const headers = traktHeaders(accessToken);
+  const watchedIso = (() => {
+    const raw = opts?.watchedAt || Date.now();
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  })();
+  const payloadIds = {};
+  if (ids?.trakt) payloadIds.trakt = Number(ids.trakt);
+  if (ids?.slug) payloadIds.slug = ids.slug;
+  if (ids?.tmdb) payloadIds.tmdb = ids.tmdb;
+  if (ids?.imdb) payloadIds.imdb = ids.imdb;
+  await fetchJson(`${TRAKT_API_BASE}/sync/history`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ shows: [{ ids: payloadIds, watched_at: watchedIso }] }),
+  });
+  const mappedRating = mapTraktRating(opts?.rating);
+  if (mappedRating) {
+    await fetchJson(`${TRAKT_API_BASE}/sync/ratings`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ shows: [{ ids: payloadIds, rating: mappedRating, rated_at: watchedIso }] }),
+    });
+  }
+  const docId = buildTraktShowDocId(uid, { ids });
+  await admin.firestore().collection('trakt').doc(docId).set({
+    lastWatchedAt: new Date(watchedIso).getTime(),
+    rating: opts?.rating ?? null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    category: 'watchlist',
+    ownerUid: uid,
+  }, { merge: true });
+  return { watchedAt: watchedIso, rating: opts?.rating ?? null };
+}
+
+async function _syncTrakt(uid) {
+  const db = admin.firestore();
+  const startedAt = Date.now();
+  let accessToken = null;
+  let traktUser = null;
+
+  try {
+    accessToken = await getTraktAccessToken(uid);
+  } catch (e) {
+    console.warn('[trakt] no token, falling back to username-only mode', e?.message || e);
+  }
+
+  if (accessToken) {
+    const prof = await fetchTraktProfile(accessToken);
+    traktUser = prof?.username || prof?.ids?.slug || traktUser;
+    if (traktUser) {
+      await db.collection('profiles').doc(uid).set({ traktUser, traktConnected: true }, { merge: true });
+    }
+  }
+  if (!traktUser) {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    traktUser = profileSnap.exists ? profileSnap.data()?.traktUser : null;
+  }
+  if (!traktUser && !accessToken) {
+    throw new Error("Trakt is not connected. Add your device code in Settings > Integrations > Trakt.");
+  }
+
+  const headers = traktHeaders(accessToken);
+  let watchlist = [];
+  let watchedShows = [];
+  let history = [];
+
+  if (accessToken) {
+    try { watchlist = await fetchJson(`${TRAKT_API_BASE}/sync/watchlist/shows`, { headers }); } catch (e) { console.warn('[trakt] watchlist fetch failed', e?.message || e); }
+    try { watchedShows = await fetchJson(`${TRAKT_API_BASE}/sync/watched/shows`, { headers }); } catch (e) { console.warn('[trakt] watched shows fetch failed', e?.message || e); }
+  }
+
+  try {
+    const histUrl = accessToken ? `${TRAKT_API_BASE}/sync/history?limit=50` : `${TRAKT_API_BASE}/users/${traktUser}/history`;
+    history = await fetchJson(histUrl, { headers });
+  } catch (e) {
+    console.warn('[trakt] history fetch failed', e?.message || e);
+    history = [];
+  }
+
+  const watchedMap = new Map();
+  for (const entry of Array.isArray(watchedShows) ? watchedShows : []) {
+    const ids = entry?.show?.ids || {};
+    const key = ids.trakt || ids.slug;
+    if (!key) continue;
+    watchedMap.set(key, {
+      lastWatchedAt: toMillis(entry.last_watched_at) || null,
+      plays: entry.plays || null,
+    });
+  }
+
+  let watchlistCount = 0;
+  if (Array.isArray(watchlist) && watchlist.length) {
+    for (let i = 0; i < watchlist.length; i += 400) {
+      const batch = db.batch();
+      const slice = watchlist.slice(i, i + 400);
+      for (const item of slice) {
+        const show = item?.show || {};
+        const ids = show?.ids || {};
+        const docId = buildTraktShowDocId(uid, show);
+        const watched = watchedMap.get(ids.trakt || ids.slug || null) || {};
+        batch.set(db.collection('trakt').doc(docId), {
+          id: docId,
+          ownerUid: uid,
+          category: 'watchlist',
+          type: 'show',
+          title: show?.title || 'Show',
+          year: show?.year || null,
+          ids,
+          slug: ids.slug || null,
+          traktId: ids.trakt || null,
+          tmdbId: ids.tmdb || null,
+          imdbId: ids.imdb || null,
+          overview: show?.overview || null,
+          runtime: show?.runtime || null,
+          network: show?.network || null,
+          listedAt: toMillis(item?.listed_at) || null,
+          lastWatchedAt: watched.lastWatchedAt || null,
+          plays: watched.plays || null,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      await batch.commit();
+    }
+    watchlistCount = watchlist.length;
+  }
+
+  if (Array.isArray(history) && history.length) {
+    for (let i = 0; i < history.length; i += 400) {
+      const batch = db.batch();
+      const slice = history.slice(i, i + 400);
+      for (const item of slice) {
+        const docRef = db.collection('trakt').doc(`${uid}_hist_${item.id}`);
+        batch.set(docRef, {
+          ...item,
+          ownerUid: uid,
+          category: 'history',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      await batch.commit();
+    }
+  }
 
   await db.collection('profiles').doc(uid).set({
     traktLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
-    traktSyncCount: history.length,
+    traktSyncCount: Array.isArray(history) ? history.length : 0,
+    traktWatchlistSize: watchlistCount,
+    traktConnected: !!accessToken,
   }, { merge: true });
 
-  return { ok: true, written: history.length };
+  return { ok: true, written: Array.isArray(history) ? history.length : 0, watchlist: watchlistCount, durationMs: Date.now() - startedAt };
 }
 
 const LOG_RETENTION_DAYS = 30;
@@ -9753,6 +9975,69 @@ async function recordAiLog(uid, event, status, message, metadata = {}) {
   }
 }
 
+exports.traktDeviceCodeStart = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
+  if (!req?.auth?.uid) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const res = await fetch(`${TRAKT_API_BASE}/oauth/device/code`, {
+    method: 'POST',
+    headers: traktHeaders(),
+    body: JSON.stringify({ client_id: process.env.TRAKT_CLIENT_ID }),
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new httpsV2.HttpsError('internal', 'Trakt device code parse failed'); }
+  if (!res.ok) {
+    const msg = data?.error || `HTTP ${res.status}`;
+    throw new httpsV2.HttpsError('internal', `Trakt device code failed: ${msg}`);
+  }
+  await admin.firestore().collection('trakt_device_codes').doc(uid).set({
+    deviceCode: data.device_code,
+    userCode: data.user_code,
+    verificationUrl: data.verification_url,
+    expiresIn: data.expires_in,
+    interval: data.interval,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return {
+    deviceCode: data.device_code,
+    userCode: data.user_code,
+    verificationUrl: data.verification_url,
+    expiresIn: data.expires_in,
+    interval: data.interval,
+  };
+});
+
+exports.traktDeviceCodePoll = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET] }, async (req) => {
+  if (!req?.auth?.uid) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const provided = String(req?.data?.deviceCode || '').trim();
+  const stored = await admin.firestore().collection('trakt_device_codes').doc(uid).get();
+  const deviceCode = provided || (stored.exists ? stored.data()?.deviceCode : '');
+  if (!deviceCode) throw new httpsV2.HttpsError('invalid-argument', 'deviceCode is required');
+
+  const res = await fetch(`${TRAKT_API_BASE}/oauth/device/token`, {
+    method: 'POST',
+    headers: traktHeaders(),
+    body: JSON.stringify({
+      code: deviceCode,
+      client_id: process.env.TRAKT_CLIENT_ID,
+      client_secret: process.env.TRAKT_CLIENT_SECRET,
+    })
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch (e) { data = { error: text }; }
+  if (!res.ok) {
+    const err = data?.error || `HTTP ${res.status}`;
+    if (err === 'authorization_pending' || err === 'slow_down') return { pending: true, message: err };
+    if (err === 'expired_token') throw new httpsV2.HttpsError('deadline-exceeded', 'Device code expired. Start again.');
+    throw new httpsV2.HttpsError('internal', `Trakt token exchange failed: ${err}`);
+  }
+  const saved = await saveTraktTokens(uid, data);
+  await admin.firestore().collection('trakt_device_codes').doc(uid).set({ lastUsedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { connected: true, username: saved?.username || null };
+});
+
 async function _syncSteam(uid) {
   const db = admin.firestore();
   const profile = await db.collection('profiles').doc(uid).get();
@@ -9800,19 +10085,66 @@ async function _syncSteam(uid) {
   }
 }
 
-exports.syncTrakt = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
+exports.syncTrakt = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const uid = req.auth.uid;
   try {
     const result = await _syncTrakt(uid);
-    await recordIntegrationLog(uid, 'trakt', 'success', 'Trakt history sync completed', {
+    await recordIntegrationLog(uid, 'trakt', 'success', 'Trakt sync completed', {
       imported: result?.written || 0,
+      watchlist: result?.watchlist || 0,
+      durationMs: result?.durationMs || null,
     });
     return result;
   } catch (error) {
     await recordIntegrationLog(uid, 'trakt', 'error', error?.message || 'Trakt sync failed', {});
     if (error instanceof httpsV2.HttpsError) throw error;
     throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Trakt');
+  }
+});
+
+exports.traktMarkWatched = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET] }, async (req) => {
+  if (!req?.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const showIdRaw = req?.data?.showId;
+  const slug = String(req?.data?.slug || '').trim();
+  const ids = {};
+  if (showIdRaw != null && showIdRaw !== '') ids.trakt = Number(showIdRaw);
+  if (slug) ids.slug = slug;
+  if (!ids.trakt && !ids.slug) throw new httpsV2.HttpsError('invalid-argument', 'showId or slug is required');
+  const watchedAt = req?.data?.watchedAt || Date.now();
+  const rating = req?.data?.rating ?? null;
+  try {
+    const result = await markTraktShowWatched(uid, ids, { watchedAt, rating });
+    await recordIntegrationLog(uid, 'trakt', 'success', 'Trakt watch pushed', { watchedAt: result?.watchedAt || null, rating: rating ?? null });
+    return { ok: true, ...result };
+  } catch (error) {
+    await recordIntegrationLog(uid, 'trakt', 'error', error?.message || 'Failed to push Trakt watch', { rating: rating ?? null });
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to update Trakt');
+  }
+});
+
+exports.onStoryTraktStatusSync = functionsV2.firestore.onDocumentUpdated('stories/{storyId}', async (event) => {
+  try {
+    const before = event?.data?.before?.data();
+    const after = event?.data?.after?.data();
+    if (!before || !after) return;
+    if (before.status === after.status) return;
+    const isDone = (v) => v === 4 || String(v).toLowerCase() === 'done' || String(v).toLowerCase() === 'completed' || String(v).toLowerCase() === 'complete';
+    if (!isDone(after.status)) return;
+    const uid = after.ownerUid || after.userId;
+    if (!uid) return;
+    const meta = after.metadata || {};
+    const ids = meta.traktIds || {};
+    const traktId = meta.traktShowId || meta.traktId || ids.trakt || null;
+    const slug = meta.traktSlug || ids.slug || null;
+    if (!traktId && !slug) return;
+    const watchedAt = after.completedAt || after.dueDate || Date.now();
+    const rating = meta.rating ?? meta.traktRating ?? null;
+    await markTraktShowWatched(uid, { trakt: traktId, slug, tmdb: ids.tmdb || meta.tmdbId, imdb: ids.imdb || meta.imdbId }, { watchedAt, rating });
+  } catch (e) {
+    console.error('onStoryTraktStatusSync error', e);
   }
 });
 
@@ -9857,7 +10189,8 @@ async function hardcoverApiBaseFor(uid) {
     const base = String(p.hardcoverApiBase || '').trim();
     if (base) return base.replace(/\/$/, '');
   } catch { }
-  return 'https://api.hardcover.app';
+  // Hardcover API v1 lives under /v1
+  return 'https://api.hardcover.app/v1';
 }
 
 async function getHardcoverToken(uid) {
@@ -9868,7 +10201,7 @@ async function getHardcoverToken(uid) {
   throw new Error('Hardcover API token not configured for this user. Add it in Settings > Integrations > Hardcover.');
 }
 
-async function callHardcoverGraphQL(uid, query, variables) {
+async function callHardcoverGraphQL(uid, query, variables, attempt = 1) {
   const token = await getHardcoverToken(uid);
   const base = await hardcoverApiBaseFor(uid);
   const url = `${base}/graphql`;
@@ -9880,60 +10213,66 @@ async function callHardcoverGraphQL(uid, query, variables) {
     },
     body: JSON.stringify({ query, variables })
   });
-  const json = await res.json();
-  if (!res.ok || json.errors) {
-    const msg = json?.errors?.map((e) => e.message).join('; ') || `HTTP ${res.status}`;
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Hardcover GraphQL parse error (status ${res.status}): ${text.slice(0, 120)}`);
+  }
+  if (json?.error === 'Throttled' && attempt < 4) {
+    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    return callHardcoverGraphQL(uid, query, variables, attempt + 1);
+  }
+  if (!res.ok || json.errors || json.error) {
+    const msg = json?.errors?.map((e) => e.message).join('; ') || json?.error || `HTTP ${res.status}`;
     throw new Error(`Hardcover GraphQL error: ${msg}`);
   }
   return json.data;
 }
 
-async function fetchHardcoverByStatus(uid, status, cursor) {
-  // Try common GraphQL shapes; prefer me -> readingStatuses
+async function fetchHardcoverByStatus(uid, statusSlug, offset) {
   const q = `
-    query BooksByStatus($status: String!, $after: String) {
-      me {
-        readingStatuses(status: $status, first: 100, after: $after) {
-          pageInfo { hasNextPage endCursor }
-          edges {
-            node {
-              id
-              status
-              addedAt
-              book {
-                id
-                title
-                subtitle
-                publishedOn
-                coverEdition { coverUrl }
-                authors { name }
-              }
-            }
-          }
-        }
+    query BooksByStatus($offset: Int, $status: String!) {
+      user_books(limit: 100, offset: $offset, where: { user_book_status: { slug: { _eq: $status } } }) {
+        id
+        date_added
+        updated_at
+        book { id title subtitle }
+        user_book_status { slug status }
+        edition { cached_image }
       }
     }
   `;
-  const data = await callHardcoverGraphQL(uid, q, { status, after: cursor || null });
-  const conn = data?.me?.readingStatuses;
-  if (!conn) return { items: [], next: null };
-  const items = (conn.edges || []).map(e => ({
-    status: e?.node?.status || status,
-    addedAt: e?.node?.addedAt || null,
-    book: e?.node?.book || null,
-  })).filter(x => x.book && x.book.id);
-  const next = conn?.pageInfo?.hasNextPage ? (conn?.pageInfo?.endCursor || null) : null;
-  return { items, next };
+  const data = await callHardcoverGraphQL(uid, q, { status: statusSlug, offset: offset || 0 });
+  const rows = Array.isArray(data?.user_books) ? data.user_books : [];
+  const items = rows.map((row) => {
+    const book = row?.book || null;
+    const edition = row?.edition || {};
+    const cover = edition?.cached_image?.url || null;
+    return {
+      status: row?.user_book_status?.slug || statusSlug,
+      addedAt: row?.date_added || row?.updated_at || null,
+      book: book ? {
+        id: book.id,
+        title: book.title,
+        subtitle: book.subtitle,
+        coverUrl: cover,
+      } : null,
+    };
+  }).filter((x) => x.book && x.book.id);
+  const nextOffset = rows.length === 100 ? (offset || 0) + 100 : null;
+  return { items, next: nextOffset };
 }
 
 async function _syncHardcover(uid) {
   const db = admin.firestore();
   const startedAt = Date.now();
-  const statuses = ['to-read', 'reading', 'read'];
+  const statuses = ['want-to-read', 'currently-reading', 'read', 'paused', 'did-not-finish'];
   let total = 0;
   try {
     for (const status of statuses) {
-      let cursor = null;
+      let cursor = 0;
       do {
         const { items, next } = await fetchHardcoverByStatus(uid, status, cursor);
         cursor = next;
@@ -9943,8 +10282,8 @@ async function _syncHardcover(uid) {
           const b = entry.book;
           const id = `${uid}_${b.id}`;
           const ref = db.collection('hardcover').doc(id);
-          const cover = b?.coverEdition?.coverUrl || null;
-          const authors = Array.isArray(b?.authors) ? b.authors.map(a => a?.name).filter(Boolean) : [];
+          const cover = b?.coverUrl || null;
+          const authors = [];
           const addedAtMs = toMillis(entry.addedAt) || null;
           batch.set(ref, {
             id,
@@ -9961,6 +10300,7 @@ async function _syncHardcover(uid) {
         }
         await batch.commit();
         total += items.length;
+        if (cursor) await new Promise((resolve) => setTimeout(resolve, 200));
       } while (cursor);
     }
 
@@ -9983,14 +10323,44 @@ exports.syncHardcover = httpsV2.onCall(async (req) => {
   return await _syncHardcover(req.auth.uid);
 });
 
-async function hardcoverSetStatus(uid, bookId, status) {
+async function hardcoverSetStatus(uid, bookId, status, opts = {}) {
+  const normalise = (v) => String(v || '').trim().toLowerCase().replace(/[_\\s]+/g, '-');
+  const slug = normalise(status);
+  const STATUS_MAP = {
+    'want-to-read': 1,
+    'to-read': 1,
+    'backlog': 1,
+    'currently-reading': 2,
+    'reading': 2,
+    'in-progress': 2,
+    'read': 3,
+    'done': 3,
+    'completed': 3,
+    'paused': 4,
+    'on-hold': 4,
+    'did-not-finish': 5,
+    'dnf': 5,
+    'ignored': 6,
+  };
+  const statusId = STATUS_MAP[slug];
+  if (!statusId) throw new Error(`Unsupported Hardcover status: ${status}`);
+
   const m = `
-    mutation UpdateStatus($input: UpdateReadingStatusInput!) {
-      updateReadingStatus(input: $input) { ok }
+    mutation UpdateUserBookStatus($bookId: Int!, $statusId: Int!, $lastRead: date, $rating: numeric) {
+      update_user_book(where: { book_id: { _eq: $bookId } }, _set: { status_id: $statusId, last_read_date: $lastRead, rating: $rating }) {
+        affected_rows
+      }
     }
   `;
-  const variables = { input: { bookId: String(bookId), status: String(status) } };
-  await callHardcoverGraphQL(uid, m, variables);
+  const variables = {
+    bookId: Number(bookId),
+    statusId,
+    lastRead: opts.completedDate || null,
+    rating: opts.rating ?? null,
+  };
+  const res = await callHardcoverGraphQL(uid, m, variables);
+  const affected = res?.update_user_book?.affected_rows || 0;
+  if (!affected) throw new Error('No Hardcover rows updated; ensure the book exists in your library');
 }
 
 exports.hardcoverUpdateStatus = httpsV2.onCall(async (req) => {
@@ -9999,8 +10369,18 @@ exports.hardcoverUpdateStatus = httpsV2.onCall(async (req) => {
   const bookId = String(req?.data?.bookId || '').trim();
   const status = String(req?.data?.status || '').trim();
   if (!bookId || !status) throw new httpsV2.HttpsError('invalid-argument', 'bookId and status are required');
+  const bookIdNum = Number(bookId);
+  if (!Number.isFinite(bookIdNum)) throw new httpsV2.HttpsError('invalid-argument', 'bookId must be numeric');
+  const completedAt = req?.data?.completedAt || null;
+  const rating = req?.data?.rating;
+  const completedDate = (() => {
+    if (!completedAt) return null;
+    const d = new Date(completedAt);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().slice(0, 10); // yyyy-mm-dd
+  })();
   try {
-    await hardcoverSetStatus(uid, bookId, status);
+    await hardcoverSetStatus(uid, bookIdNum, status, { completedDate, rating: rating ?? null });
     const db = admin.firestore();
     const ref = db.collection('hardcover').doc(`${uid}_${bookId}`);
     await ref.set({ status, updatedAt: admin.firestore.FieldValue.serverTimestamp(), completedAt: status === 'read' ? Date.now() : null }, { merge: true });
@@ -10025,14 +10405,147 @@ exports.onStoryHardcoverStatusSync = functionsV2.firestore.onDocumentUpdated('st
     const uid = after.ownerUid || after.userId;
     if (!uid) return;
     const bookId = after?.metadata?.hardcoverBookId || after?.hardcoverBookId;
-    if (!bookId) return;
-    await hardcoverSetStatus(uid, String(bookId), 'read');
+    const bookIdNum = Number(bookId);
+    if (!bookId || !Number.isFinite(bookIdNum)) return;
+    const completedDate = (() => {
+      const ts = after?.completedAt || after?.dueDate || Date.now();
+      const d = new Date(ts);
+      return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    })();
+    const rating = after?.metadata?.rating ?? null;
+    await hardcoverSetStatus(uid, bookIdNum, 'read', { completedDate, rating });
     // Also mark the local doc
     const db = admin.firestore();
     await db.collection('hardcover').doc(`${uid}_${bookId}`).set({ status: 'read', completedAt: Date.now(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
   } catch (e) {
     console.error('onStoryHardcoverStatusSync error', e);
   }
+});
+
+// Import a Hardcover list (by slug or URL) into stories linked to a goal
+exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const rawSlug = String(req?.data?.listSlug || req?.data?.list || '').trim();
+  const goalId = String(req?.data?.goalId || '').trim();
+  const priority = Number(req?.data?.priority ?? 1);
+  const persona = String(req?.data?.persona || 'personal');
+  if (!rawSlug) throw new httpsV2.HttpsError('invalid-argument', 'listSlug is required');
+  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
+
+  const db = admin.firestore();
+  const goalDoc = await db.collection('goals').doc(goalId).get();
+  if (!goalDoc.exists || goalDoc.data()?.ownerUid !== uid) {
+    throw new httpsV2.HttpsError('permission-denied', 'Goal not found or not owned by user');
+  }
+
+  const slug = (() => {
+    // Accept full URL like https://hardcover.app/@user/lists/2026
+    try {
+      const m = rawSlug.match(/lists\/([^/?]+)/i);
+      if (m && m[1]) return m[1];
+    } catch { }
+    return rawSlug.replace(/^\//, '');
+  })();
+
+  const fetchListPage = async (offset) => {
+    const q = `
+      query ListBooks($slug: String!, $offset: Int) {
+        lists(where: { slug: { _eq: $slug } }, limit: 1) {
+          id
+          name
+          list_books(order_by: { position: asc }, limit: 100, offset: $offset) {
+            position
+            book { id title subtitle }
+            edition { cached_image }
+          }
+        }
+      }
+    `;
+    const data = await callHardcoverGraphQL(uid, q, { slug, offset });
+    const list = Array.isArray(data?.lists) ? data.lists[0] : null;
+    if (!list) throw new httpsV2.HttpsError('not-found', `Hardcover list not found: ${slug}`);
+    return list;
+  };
+
+  let offset = 0;
+  let created = 0;
+  let skipped = 0;
+  let totalBooks = 0;
+  const now = Date.now();
+
+  while (true) {
+    const list = await fetchListPage(offset);
+    const items = Array.isArray(list.list_books) ? list.list_books : [];
+    if (!items.length) break;
+    for (const item of items) {
+      const b = item?.book;
+      if (!b || !b.id) { skipped += 1; continue; }
+      const bookId = String(b.id);
+      const cover = item?.edition?.cached_image?.url || null;
+      const hcRef = db.collection('hardcover').doc(`${uid}_${bookId}`);
+      const hcSnap = await hcRef.get();
+      const hcData = hcSnap.exists ? hcSnap.data() : null;
+      const alreadyConverted = hcData?.lastConvertedStoryId;
+
+      // Upsert cached Hardcover doc
+      await hcRef.set({
+        id: `${uid}_${bookId}`,
+        ownerUid: uid,
+        hardcoverId: bookId,
+        title: b.title || 'Book',
+        subtitle: b.subtitle || null,
+        authors: hcData?.authors || [],
+        coverImage: cover,
+        status: hcData?.status || 'want-to-read',
+        addedAt: hcData?.addedAt || now,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      if (alreadyConverted) { skipped += 1; continue; }
+
+      const storyRef = db.collection('stories').doc();
+      await storyRef.set(ensureTaskPoints({
+        id: storyRef.id,
+        ownerUid: uid,
+        persona,
+        personaKey: persona,
+        ownerPersona: persona,
+        title: b.title || 'Book',
+        description: `Read ${b.title || 'this book'}${b.subtitle ? ': ' + b.subtitle : ''}. Imported from Hardcover list ${slug}.`,
+        goalId,
+        sprintId: null,
+        status: 0,
+        priority: Number.isFinite(priority) ? priority : 1,
+        points: 3,
+        tags: ['books', 'reading'],
+        orderIndex: now + totalBooks,
+        entry_method: 'import:hardcover-list',
+        source: 'hardcover',
+        metadata: {
+          hardcoverBookId: bookId,
+          hardcoverCover: cover,
+          hardcoverList: slug,
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }), { merge: true });
+
+      await hcRef.set({
+        lastConvertedStoryId: storyRef.id,
+        lastConvertedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      created += 1;
+      totalBooks += 1;
+    }
+    if (items.length < 100) break;
+    offset += 100;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  await recordIntegrationLog(uid, 'hardcover', 'success', `Imported list ${slug}: created ${created}, skipped ${skipped}`, { created, skipped });
+  return { ok: true, created, skipped, listSlug: slug };
 });
 
 // Media Import Controller: Generate Stories + Tasks from connected sources

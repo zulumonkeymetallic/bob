@@ -19,9 +19,10 @@ async function createStory(db, uid, payload) {
     priority: 2,
     points: 1,
     orderIndex: now,
-    entry_method: 'import',
+    entry_method: payload.entry_method || 'import',
     source: payload.source || null,
     externalId: payload.externalId || null,
+    metadata: payload.metadata || null,
     createdAt: now,
     updatedAt: now,
   }), { merge: true });
@@ -69,6 +70,8 @@ async function importFromSteam(uid, options = {}) {
       theme: 'Hobbies & Interests',
       source: 'steam',
       externalId,
+      entry_method: 'import:steam',
+      metadata: { steamAppId: data.appid || externalId, rating: data.rating ?? null },
     });
     await createTask(db, uid, storyId, {
       title: 'Play 30 mins',
@@ -91,21 +94,31 @@ async function importFromTrakt(uid, options = {}) {
   const created = [];
   for (const doc of snap.docs) {
     const data = doc.data() || {};
+    if (data.category && data.category !== 'watchlist') continue;
+    if (data.lastConvertedStoryId) continue;
     const movie = data.movie || null;
     const show = data.show || null;
-    if (!movie && !show) continue;
-    const title = movie?.title || show?.title || 'Trakt Title';
-    const externalId = String(movie?.ids?.slug || show?.ids?.slug || data.id);
+    const ids = show?.ids || movie?.ids || data.ids || {};
+    if (!movie && !show && !Object.keys(ids).length) continue;
+    const title = movie?.title || show?.title || data.title || 'Trakt Title';
+    const externalId = String(ids.slug || ids.trakt || movie?.ids?.slug || show?.ids?.slug || data.id);
     const storyId = await createStory(db, uid, {
       title,
       description: `Imported from Trakt: ${title}`,
       theme: 'Hobbies & Interests',
       source: 'trakt',
       externalId,
+      entry_method: 'import:trakt',
+      metadata: {
+        traktIds: ids,
+        traktShowId: ids.trakt || null,
+        traktSlug: ids.slug || null,
+        rating: data.rating ?? null,
+      },
     });
     await createTask(db, uid, storyId, {
       title: movie ? 'Watch movie' : 'Watch Ep. 1',
-      estimated_duration: movie ? 120 : 45,
+      estimated_duration: movie ? 120 : (data.runtime || 45),
       effort: movie ? 'L' : 'M',
       entry_method: 'import:trakt',
       task_type: 'task',
@@ -113,6 +126,11 @@ async function importFromTrakt(uid, options = {}) {
       source: 'trakt',
       externalId,
     });
+    await db.collection('trakt').doc(doc.id).set({
+      lastConvertedStoryId: storyId,
+      lastConvertedAt: admin.firestore.FieldValue.serverTimestamp(),
+      persona: 'personal',
+    }, { merge: true });
     created.push({ storyId, externalId });
   }
   return { ok: true, created: created.length };

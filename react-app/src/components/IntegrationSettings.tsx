@@ -19,6 +19,8 @@ interface ProfileData {
   autoEnrichStravaHR?: boolean;
   traktUser?: string;
   traktLastSyncAt?: any;
+  traktConnected?: boolean;
+  traktWatchlistSize?: number;
   steamId?: string;
   steamLastSyncAt?: any;
 }
@@ -92,6 +94,9 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [traktMessage, setTraktMessage] = useState<string | null>(null);
   const [traktLoading, setTraktLoading] = useState(false);
   const [traktUserInput, setTraktUserInput] = useState('');
+  const [traktDeviceCode, setTraktDeviceCode] = useState<string | null>(null);
+  const [traktUserCode, setTraktUserCode] = useState<string | null>(null);
+  const [traktVerificationUrl, setTraktVerificationUrl] = useState<string | null>(null);
 
   // Hardcover
   const [hardcoverBooks, setHardcoverBooks] = useState<any[]>([]);
@@ -99,11 +104,16 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [hardcoverLoading, setHardcoverLoading] = useState(false);
   const [hardcoverTokenInput, setHardcoverTokenInput] = useState('');
   const popupTimersRef = useRef<number[]>([]);
+  const traktPollTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
       popupTimersRef.current.forEach((id) => clearInterval(id));
       popupTimersRef.current = [];
+      if (traktPollTimerRef.current) {
+        clearInterval(traktPollTimerRef.current);
+        traktPollTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -114,6 +124,13 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const clearPopupTimer = (timerId: number) => {
     clearInterval(timerId);
     popupTimersRef.current = popupTimersRef.current.filter((id) => id !== timerId);
+  };
+
+  const stopTraktPolling = () => {
+    if (traktPollTimerRef.current) {
+      clearInterval(traktPollTimerRef.current);
+      traktPollTimerRef.current = null;
+    }
   };
 
 
@@ -229,16 +246,17 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     const traktQuery = query(
       collection(db, 'trakt'),
       where('ownerUid', '==', currentUser.uid),
-      limit(5)
+      limit(20)
     );
     const unsubscribeTrakt = onSnapshot(traktQuery, (snap) => {
-      const rows = snap.docs.map((docSnap) => docSnap.data());
-      rows.sort((a, b) => {
+      const rows = snap.docs.map((docSnap) => docSnap.data()) as any[];
+      const historyRows = rows.filter((row: any) => (row.category || 'history') === 'history');
+      historyRows.sort((a, b) => {
         const aDate = a.watched_at ? new Date(a.watched_at).getTime() : 0;
         const bDate = b.watched_at ? new Date(b.watched_at).getTime() : 0;
         return bDate - aDate;
       });
-      setTraktHistory(rows.slice(0, 5));
+      setTraktHistory(historyRows.slice(0, 5));
     });
 
     const hardcoverQuery = query(
@@ -475,6 +493,52 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     }
   };
 
+  const pollTraktDevice = async (codeOverride?: string | null) => {
+    if (!currentUser) return;
+    try {
+      const fn = httpsCallable(functions, 'traktDeviceCodePoll');
+      const res:any = await fn({ deviceCode: codeOverride || traktDeviceCode });
+      const data = res?.data || res;
+      if (data?.connected) {
+        stopTraktPolling();
+        setTraktMessage(`Connected${data.username ? ` as ${data.username}` : ''}.`);
+        setTraktDeviceCode(null);
+        setTraktUserCode(null);
+        setTraktVerificationUrl(null);
+      }
+    } catch (err) {
+      console.error('traktDeviceCodePoll failed', err);
+    }
+  };
+
+  const startTraktDeviceFlow = async () => {
+    if (!currentUser) return;
+    setTraktLoading(true);
+    setTraktMessage(null);
+    stopTraktPolling();
+    try {
+      const fn = httpsCallable(functions, 'traktDeviceCodeStart');
+      const res:any = await fn({});
+      const data = res?.data || res;
+      const code = data?.deviceCode || data?.device_code || null;
+      const userCode = data?.userCode || data?.user_code || null;
+      const verificationUrl = data?.verificationUrl || data?.verification_url || null;
+      setTraktDeviceCode(code);
+      setTraktUserCode(userCode);
+      setTraktVerificationUrl(verificationUrl);
+      if (userCode && verificationUrl) {
+        setTraktMessage(`Enter code ${userCode} at ${verificationUrl}`);
+      }
+      const intervalMs = Math.max(((data?.interval || 5) * 1000), 4000);
+      traktPollTimerRef.current = window.setInterval(() => pollTraktDevice(code), intervalMs);
+    } catch (err:any) {
+      console.error('traktDeviceCodeStart failed', err);
+      setTraktMessage(err?.message || 'Trakt device code failed');
+    } finally {
+      setTraktLoading(false);
+    }
+  };
+
   const syncTrakt = async () => {
     if (!currentUser) return;
     setTraktLoading(true);
@@ -483,7 +547,10 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       const fn = httpsCallable(functions, 'syncTrakt');
       const res = await fn({});
       const data = res.data as any;
-      setTraktMessage(`Imported ${data?.written || 0} history entries`);
+      const parts: string[] = [];
+      if (data?.written !== undefined) parts.push(`${data.written} history`);
+      if (data?.watchlist !== undefined) parts.push(`${data.watchlist} watchlist`);
+      setTraktMessage(parts.length ? `Synced ${parts.join(' / ')}` : 'Trakt sync completed');
     } catch (err: any) {
       console.error('syncTrakt failed', err);
       setTraktMessage(err?.message || 'Trakt sync failed');
@@ -875,10 +942,10 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
             <h4 className="mb-0">Trakt</h4>
-            <small>Auto-refresh daily when username is set</small>
+            <small>Connect via device code to import watchlist + history</small>
           </div>
-          <Badge bg={profile?.traktUser ? 'success' : 'secondary'}>
-            {profile?.traktUser ? 'Configured' : 'Not Configured'}
+          <Badge bg={(profile?.traktConnected || profile?.traktUser) ? 'success' : 'secondary'}>
+            {profile?.traktConnected ? 'Connected' : (profile?.traktUser ? 'Configured' : 'Not Connected')}
           </Badge>
         </Card.Header>
         <Card.Body>
@@ -901,10 +968,47 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
             </Col>
             <Col md={6} className="text-md-end mt-3 mt-md-0">
               <div><strong>Last sync:</strong> {formatTimestamp(traktLastSync)} ({relativeTime(traktLastSync)})</div>
-              <Button variant="primary" className="mt-2" onClick={syncTrakt} disabled={traktLoading || !traktUserInput}>
+              <div><strong>Watchlist:</strong> {profile?.traktWatchlistSize ?? '—'} items</div>
+              <Button variant="primary" className="mt-2" onClick={syncTrakt} disabled={traktLoading || (!traktUserInput && !profile?.traktConnected)}>
                 {traktLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                 Sync Now
               </Button>
+              <div className="mt-2">
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/shows-backlog')}>
+                  Open Shows Backlog
+                </Button>
+              </div>
+            </Col>
+          </Row>
+
+          <Row className="mb-3">
+            <Col md={6}>
+              <Form.Label>Device Code Sign-in</Form.Label>
+              <div className="d-flex flex-column gap-2">
+                <Button
+                  variant="outline-primary"
+                  size="sm"
+                  onClick={startTraktDeviceFlow}
+                  disabled={traktLoading}
+                >
+                  {traktLoading ? 'Generating…' : 'Generate code'}
+                </Button>
+                {traktUserCode ? (
+                  <div className="small">
+                    Code: <code>{traktUserCode}</code><br />
+                    Visit{' '}
+                    <a href={traktVerificationUrl || 'https://trakt.tv/activate'} target="_blank" rel="noreferrer">
+                      {traktVerificationUrl || 'trakt.tv/activate'}
+                    </a>
+                  </div>
+                ) : (
+                  <div className="text-muted small">Use a device code to connect without sharing your password.</div>
+                )}
+              </div>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <div><strong>Status:</strong> {profile?.traktConnected ? 'Connected' : 'Not connected'}</div>
+              <div className="text-muted small">Backlog imports require a connected Trakt session.</div>
             </Col>
           </Row>
 

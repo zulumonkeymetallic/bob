@@ -111,6 +111,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'clipboard-list',
       items: [
         { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
+        { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
         { label: 'Books', path: '/books-backlog', icon: 'book' }
       ]
     },
@@ -236,7 +237,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           }}>
             {/* Brand */}
             <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <img src="/logo192.png" alt="BOB Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+              <img src="/logo-bob.svg" alt="BOB Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h4 className="mb-0" style={{ color: 'var(--notion-text)', fontWeight: '600', fontSize: '1rem', lineHeight: '1.2' }}>blueprint.<br />organize.build</h4>
               </div>
@@ -449,7 +450,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             Menu
           </Button>
           <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem' }}>
-            <img src="/logo.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            <img src="/logo-bob.svg" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
             blueprint.organize.build
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
@@ -477,7 +478,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       >
         <Offcanvas.Header closeButton closeVariant="white">
           <Offcanvas.Title className="d-flex align-items-center gap-2">
-            <img src="/logo.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            <img src="/logo-bob.svg" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
             blueprint.organize.build
           </Offcanvas.Title>
         </Offcanvas.Header>

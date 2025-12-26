@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Button, ButtonGroup, Form, Badge, Row, Col, Table, Modal, Alert } from 'react-bootstrap';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Card, Button, ButtonGroup, Form, Badge, Row, Col, Table, Modal, Alert, Pagination, Spinner } from 'react-bootstrap';
 import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
@@ -46,14 +46,24 @@ const BooksBacklog: React.FC = () => {
   const [savingConversion, setSavingConversion] = useState(false);
   const [addedSince, setAddedSince] = useState<string>('');
   const [msg, setMsg] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importSlug, setImportSlug] = useState('');
+  const [importGoalId, setImportGoalId] = useState('');
+  const [importPriority, setImportPriority] = useState(1);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser) { setBooks([]); setLoading(false); return; }
     const qRef = query(collection(db, 'hardcover'), where('ownerUid', '==', currentUser.uid));
     const unsub = onSnapshot(qRef, (snap) => {
       const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as BookItem[];
       rows.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
       setBooks(rows);
+      setLoading(false);
     });
     return unsub;
   }, [currentUser]);
@@ -86,6 +96,13 @@ const BooksBacklog: React.FC = () => {
     });
   }, [books, search, statusFilter, addedSince]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredBooks.length / pageSize));
+  useEffect(() => { setPage(1); }, [search, statusFilter, addedSince, filteredBooks.length]);
+  const pagedBooks = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredBooks.slice(start, start + pageSize);
+  }, [filteredBooks, page]);
+
   const handleRatingChange = async (book: BookItem, rating: number) => {
     if (!currentUser) return;
     try {
@@ -104,8 +121,12 @@ const BooksBacklog: React.FC = () => {
   const markRead = async (book: BookItem) => {
     if (!currentUser) return;
     try {
+      const defaultDate = new Date().toISOString().slice(0,10);
+      const inputDate = window.prompt('Completed date (yyyy-mm-dd, leave blank for today)', defaultDate) || defaultDate;
+      const completedAt = inputDate ? new Date(inputDate).getTime() : Date.now();
+      const rating = book.rating ?? null;
       const fn = httpsCallable(functions, 'hardcoverUpdateStatus');
-      await fn({ bookId: book.hardcoverId, status: 'read' });
+      await fn({ bookId: book.hardcoverId, status: 'read', completedAt, rating });
       setMsg(`Marked "${book.title}" as read.`);
       setTimeout(() => setMsg(null), 2500);
     } catch (e: any) {
@@ -188,7 +209,7 @@ const BooksBacklog: React.FC = () => {
         </tr>
       </thead>
       <tbody>
-        {filteredBooks.map((b) => {
+        {pagedBooks.map((b) => {
           const converted = !!b.lastConvertedStoryId;
           return (
             <tr key={b.id}>
@@ -227,7 +248,7 @@ const BooksBacklog: React.FC = () => {
 
   const renderCardView = () => (
     <Row xs={1} md={2} lg={3} className="g-3">
-      {filteredBooks.map((b) => {
+      {pagedBooks.map((b) => {
         const converted = !!b.lastConvertedStoryId;
         return (
           <Col key={b.id}>
@@ -283,11 +304,26 @@ const BooksBacklog: React.FC = () => {
             <Button variant={viewMode === 'list' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('list')}>List</Button>
             <Button variant={viewMode === 'card' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('card')}>Cards</Button>
           </ButtonGroup>
+          <Button size="sm" variant="outline-primary" onClick={() => { setShowImportModal(true); setImportMsg(null); }}>Import list</Button>
         </div>
       </Card.Header>
       <Card.Body>
         {msg && <Alert variant="success">{msg}</Alert>}
-        {viewMode === 'list' ? renderListView() : renderCardView()}
+        {importMsg && <Alert variant="info">{importMsg}</Alert>}
+        {loading ? (
+          <div className="d-flex justify-content-center py-4">
+            <Spinner animation="border" role="status" size="sm" />
+          </div>
+        ) : (viewMode === 'list' ? renderListView() : renderCardView())}
+        {filteredBooks.length > pageSize && (
+          <div className="d-flex justify-content-center mt-3">
+            <Pagination>
+              <Pagination.Prev disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))} />
+              <Pagination.Item active>{page}</Pagination.Item>
+              <Pagination.Next disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} />
+            </Pagination>
+          </div>
+        )}
       </Card.Body>
 
       <Modal show={!!selected} onHide={() => setSelected(null)} centered>
@@ -325,9 +361,61 @@ const BooksBacklog: React.FC = () => {
           <Button variant="primary" onClick={handleConvert} disabled={savingConversion}>{savingConversion ? 'Converting…' : 'Convert'}</Button>
         </Modal.Footer>
       </Modal>
+
+      <Modal show={showImportModal} onHide={() => setShowImportModal(false)} centered>
+        <Modal.Header closeButton><Modal.Title>Import Hardcover List</Modal.Title></Modal.Header>
+        <Modal.Body>
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>List URL or slug</Form.Label>
+              <Form.Control value={importSlug} onChange={(e) => setImportSlug(e.target.value)} placeholder="e.g. https://hardcover.app/@user/lists/2026" />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Goal to link</Form.Label>
+              <Form.Select value={importGoalId} onChange={(e) => setImportGoalId(e.target.value)}>
+                <option value="">Select goal…</option>
+                {goals.map(g => (<option key={g.id} value={g.id}>{g.title}</option>))}
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Priority</Form.Label>
+              <Form.Select value={importPriority} onChange={(e) => setImportPriority(Number(e.target.value))}>
+                {[1,2,3,4,5].map((p) => (<option key={p} value={p}>{`P${p}`}</option>))}
+              </Form.Select>
+            </Form.Group>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowImportModal(false)}>Cancel</Button>
+          <Button variant="primary" onClick={async () => {
+            if (!currentUser) return;
+            if (!importGoalId) { window.alert('Select a goal'); return; }
+            const slug = (() => {
+              const raw = importSlug.trim();
+              const m = raw.match(/lists\/([^/?]+)/i);
+              if (m && m[1]) return m[1];
+              return raw.replace(/^\//, '');
+            })();
+            if (!slug) { window.alert('Enter a list slug or URL'); return; }
+            setImporting(true);
+            setImportMsg(null);
+            try {
+              const fn = httpsCallable(functions, 'importHardcoverListToStories');
+              const res:any = await fn({ listSlug: slug, goalId: importGoalId, priority: importPriority, persona: currentPersona });
+              const data = res?.data || res;
+              setImportMsg(`Imported ${data?.created || 0} stories (skipped ${data?.skipped || 0}) from list ${data?.listSlug || slug}.`);
+              setShowImportModal(false);
+            } catch (e:any) {
+              console.error('importHardcoverListToStories failed', e);
+              window.alert(e?.message || 'Import failed');
+            } finally {
+              setImporting(false);
+            }
+          }} disabled={importing}>{importing ? 'Importing…' : 'Import'}</Button>
+        </Modal.Footer>
+      </Modal>
     </Card>
   );
 };
 
 export default BooksBacklog;
-
