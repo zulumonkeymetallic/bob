@@ -10054,6 +10054,58 @@ exports.traktDeviceCodePoll = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID, TRAKT_
   return { connected: true, username: saved?.username || null };
 });
 
+// ===== Trakt OAuth (Browser flow)
+exports.traktOAuthStart = httpsV2.onRequest({ secrets: [TRAKT_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || '');
+    const nonce = String(req.query.nonce || '');
+    if (!uid || !nonce) return res.status(400).send('Missing uid/nonce');
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = 'europe-west2';
+    const host = String(req.get('host') || '');
+    const callbackHost = host.includes('traktoauthstart') ? host.replace('traktoauthstart', 'traktoauthcallback') : `${region}-${projectId}.cloudfunctions.net/traktOAuthCallback`;
+    const redirectUri = callbackHost.startsWith('http') ? callbackHost : `https://${callbackHost}`;
+    const state = stateEncode({ uid, nonce });
+    const authUrl = `https://trakt.tv/oauth/authorize?response_type=code&client_id=${encodeURIComponent(process.env.TRAKT_CLIENT_ID)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
+    return res.redirect(authUrl);
+  } catch (e) {
+    return res.status(500).send('Trakt OAuth start error: ' + (e?.message || e));
+  }
+});
+
+exports.traktOAuthCallback = httpsV2.onRequest({ secrets: [TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || '');
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    const nonce = state.nonce;
+    if (!code || !uid || !nonce) return res.status(400).send('Missing code/state');
+
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = 'europe-west2';
+    const host = String(req.get('host') || '');
+    const callbackHost = host.includes('traktoauthcallback') ? host : `${region}-${projectId}.cloudfunctions.net/traktOAuthCallback`;
+    const redirectUri = callbackHost.startsWith('http') ? callbackHost : `https://${callbackHost}`;
+
+    const tokenData = await fetchTraktJson(`${TRAKT_API_BASE}/oauth/token`, {
+      method: 'POST',
+      headers: traktHeaders(),
+      body: JSON.stringify({
+        code,
+        client_id: process.env.TRAKT_CLIENT_ID,
+        client_secret: process.env.TRAKT_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    await saveTraktTokens(uid, tokenData);
+    return res.status(200).send('<script>window.close();</script> Connected to Trakt. You can close this window.');
+  } catch (e) {
+    return res.status(500).send('Trakt OAuth callback error: ' + (e?.message || e));
+  }
+});
+
 async function _syncSteam(uid) {
   const db = admin.firestore();
   const profile = await db.collection('profiles').doc(uid).get();

@@ -476,6 +476,23 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     }
   };
 
+  const connectTraktBrowser = () => {
+    if (!currentUser) return;
+    const nonce = Math.random().toString(36).slice(2);
+    const region = 'europe-west2';
+    const projectId = firebaseConfig.projectId;
+    const url = `https://${region}-${projectId}.cloudfunctions.net/traktOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+    const popup = window.open(url, 'trakt-oauth', 'width=500,height=700');
+    if (popup) {
+      const timer = window.setInterval(() => {
+        if (popup.closed) {
+          clearPopupTimer(timer);
+        }
+      }, 800);
+      trackPopupTimer(timer);
+    }
+  };
+
   const syncSteam = async () => {
     if (!currentUser) return;
     setSteamLoading(true);
@@ -1009,6 +1026,11 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
             <Col md={6} className="text-md-end mt-3 mt-md-0">
               <div><strong>Status:</strong> {profile?.traktConnected ? 'Connected' : 'Not connected'}</div>
               <div className="text-muted small">Backlog imports require a connected Trakt session.</div>
+              <div className="mt-2">
+                <Button variant="outline-primary" size="sm" onClick={connectTraktBrowser}>
+                  Connect via browser
+                </Button>
+              </div>
             </Col>
           </Row>
 
