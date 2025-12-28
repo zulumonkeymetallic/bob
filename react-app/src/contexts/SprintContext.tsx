@@ -235,7 +235,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const attachEntries = performance.getEntriesByName('sprints_attach');
           const last = attachEntries[attachEntries.length - 1];
           if (last) {
-            logger.debug('perf', 'sprints_attach', { durationMs: Math.round(last.duration), count: deduped.length });
+            logger.debug('perf', 'sprints_attach', { durationMs: Math.round(last.duration), count: data.length });
           }
           performance.clearMarks('sprints_subscribe_start');
           performance.clearMarks('sprints_first_snapshot');
@@ -272,7 +272,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (
           process.env.REACT_APP_SPRINT_DEV_GUARDRAIL === 'true' &&
           !didFallbackCheckRef.current &&
-          deduped.length === 0
+          data.length === 0
         ) {
           didFallbackCheckRef.current = true;
           (async () => {
