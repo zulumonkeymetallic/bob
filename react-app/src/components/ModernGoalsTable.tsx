@@ -140,12 +140,28 @@ const defaultColumns: Column[] = [
     type: 'number'
   },
   {
-    key: 'targetDate',
-    label: 'Target Date',
-    width: '15%',
+    key: 'startDate',
+    label: 'Start Date',
+    width: '12%',
     visible: true,
     editable: true,
     type: 'date'
+  },
+  {
+    key: 'endDate',
+    label: 'End Date',
+    width: '12%',
+    visible: true,
+    editable: true,
+    type: 'date'
+  },
+  {
+    key: 'targetYear',
+    label: 'Target Year',
+    width: '10%',
+    visible: true,
+    editable: true,
+    type: 'number'
   },
 ];
 

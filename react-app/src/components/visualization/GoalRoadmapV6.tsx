@@ -705,9 +705,9 @@ const GoalRoadmapV6: React.FC = () => {
         <span className="grv6-label">Zoom</span>
         <input
           type="range"
-          min={5}
+          min={1}
           max={100}
-          step={5}
+          step={1}
           value={zoomPercent}
           onChange={(e) => {
             const pct = Number(e.target.value);

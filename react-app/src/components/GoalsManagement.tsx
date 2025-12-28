@@ -24,6 +24,7 @@ const GoalsManagement: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
+  const [filterYear, setFilterYear] = useState<string>('current');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('cards');
@@ -200,6 +201,16 @@ const GoalsManagement: React.FC = () => {
     }
     if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
     if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
+    const derivedYear =
+      (goal as any).targetYear ||
+      ((goal as any).endDate ? new Date((goal as any).endDate as any).getFullYear() : undefined) ||
+      ((goal as any).targetDate ? new Date((goal as any).targetDate as any).getFullYear() : undefined);
+    if (filterYear === 'current') {
+      const cy = new Date().getFullYear();
+      if (derivedYear && derivedYear !== cy) return false;
+    } else if (filterYear !== 'all') {
+      if (derivedYear && String(derivedYear) !== filterYear) return false;
+    }
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -213,6 +224,18 @@ const GoalsManagement: React.FC = () => {
     done: orderedFilteredGoals.filter(g => g.status === 2).length, // Complete
     paused: orderedFilteredGoals.filter(g => g.status === 3).length // Blocked
   };
+
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    goals.forEach(g => {
+      const yr =
+        (g as any).targetYear ||
+        ((g as any).endDate ? new Date((g as any).endDate as any).getFullYear() : undefined) ||
+        ((g as any).targetDate ? new Date((g as any).targetDate as any).getFullYear() : undefined);
+      if (yr) years.add(String(yr));
+    });
+    return Array.from(years).sort();
+  }, [goals]);
 
   return (
     <div style={{
@@ -392,6 +415,22 @@ const GoalsManagement: React.FC = () => {
                     <option value="all">All Themes</option>
                     {globalThemes.map(t => (
                       <option key={t.id} value={t.label}>{t.label}</option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={3}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Year</Form.Label>
+                  <Form.Select
+                    value={filterYear}
+                    onChange={(e) => setFilterYear(e.target.value)}
+                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
+                  >
+                    <option value="current">Current Year</option>
+                    <option value="all">All Years</option>
+                    {availableYears.map((y) => (
+                      <option key={y} value={y}>{y}</option>
                     ))}
                   </Form.Select>
                 </Form.Group>
