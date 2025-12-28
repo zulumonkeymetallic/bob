@@ -21,6 +21,7 @@ import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 import { nextDueAt } from '../utils/recurrence';
 import StatCard from './common/StatCard';
 import { colors } from '../utils/colors';
+import SprintMetricsPanel from './SprintMetricsPanel';
 
 interface DashboardStats {
   activeGoals: number;
@@ -88,7 +89,7 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   // Use global sprint selection for consistency across app
-  const { selectedSprintId, setSelectedSprintId } = useSprint();
+  const { selectedSprintId, setSelectedSprintId, sprints, sprintsById } = useSprint();
   const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
@@ -99,6 +100,9 @@ const Dashboard: React.FC = () => {
   const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
   const [weeklySummary, setWeeklySummary] = useState<{ total: number; byType: Record<string, number> } | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [sprintStories, setSprintStories] = useState<Story[]>([]);
+  const [sprintTasks, setSprintTasks] = useState<Task[]>([]);
+  const [sprintGoals, setSprintGoals] = useState<Goal[]>([]);
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -508,6 +512,50 @@ const Dashboard: React.FC = () => {
     navigate('/stories', { state: { themeId } });
   };
 
+  // Sprint-scoped data for metrics panel
+  useEffect(() => {
+    if (!currentUser || !currentPersona || !selectedSprintId) {
+      setSprintStories([]);
+      setSprintTasks([]);
+      setSprintGoals([]);
+      return;
+    }
+
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('sprintId', '==', selectedSprintId)
+    );
+    const tasksQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('sprintId', '==', selectedSprintId)
+    );
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+
+    const unsubStories = onSnapshot(storiesQuery, (snap) => {
+      setSprintStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as Story)));
+    });
+    const unsubTasks = onSnapshot(tasksQuery, (snap) => {
+      setSprintTasks(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as Task)));
+    });
+    const unsubGoals = onSnapshot(goalsQuery, (snap) => {
+      setSprintGoals(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as Goal)));
+    });
+
+    return () => {
+      unsubStories();
+      unsubTasks();
+      unsubGoals();
+    };
+  }, [currentUser, currentPersona, selectedSprintId]);
+
   if (!currentUser) {
     return <div>Please sign in to view your dashboard.</div>;
   }
@@ -538,6 +586,8 @@ const Dashboard: React.FC = () => {
     { label: 'Routines today', value: routinesDueToday.length },
     { label: 'Unscheduled blocks', value: unscheduledToday.length },
   ];
+
+  const selectedSprint = selectedSprintId ? (sprintsById[selectedSprintId] ?? null) : (sprints[0] ?? null);
 
   return (
     <Container fluid className="p-4">
@@ -573,134 +623,69 @@ const Dashboard: React.FC = () => {
           </div>
 
           <Row className="g-3 mb-4">
-            <Col xl={3} md={6}>
-              <StatCard
-                label="Active Goals"
-                value={stats.activeGoals}
-                icon={Target}
-                iconColor={colors.brand.primary}
-                onClick={() => navigate('/goals?filter=active')}
-              />
-              <div className="text-muted small mt-2" style={{ paddingLeft: '24px' }}>
-                {stats.goalsDueSoon} due in next 14 days
-              </div>
-            </Col>
-            <Col xl={3} md={6}>
-              <StatCard
-                label="Active Stories"
-                value={stats.activeStories}
-                icon={BookOpen}
-                iconColor={colors.info.primary}
-                onClick={() => navigate('/stories?filter=active')}
-              />
-              <ProgressBar now={stats.storyCompletion} variant="success" className="mt-2" style={{ height: '6px' }} />
-              <div className="text-muted small mt-1" style={{ paddingLeft: '24px' }}>
-                {stats.storyCompletion}% complete
-              </div>
-            </Col>
-            <Col xl={3} md={6}>
-              <StatCard
-                label="Sprint Progress"
-                value={`${stats.sprintTasksDone}/${stats.sprintTasksTotal}`}
-                icon={TrendingUp}
-                iconColor={colors.success.primary}
-                onClick={() => selectedSprintId && navigate(`/tasks?sprint=${selectedSprintId}`)}
-              />
-              <ProgressBar now={sprintProgress} variant="info" className="mt-2" style={{ height: '6px' }} />
-              <div className="text-muted small mt-1" style={{ paddingLeft: '24px' }}>
-                {hasSelectedSprint
-                  ? `${sprintRemaining} tasks remaining`
-                  : 'Select a sprint to track burndown'}
-              </div>
-            </Col>
-            <Col xl={3} md={6}>
-              <StatCard
-                label="Pending Tasks"
-                value={stats.pendingTasks}
-                icon={ListChecks}
-                iconColor={colors.warning.primary}
-                onClick={() => navigate('/tasks?filter=pending')}
-              />
-              <ul className="list-unstyled mb-0 text-muted small mt-2" style={{ paddingLeft: '24px' }}>
-                <li>Upcoming deadlines: {stats.upcomingDeadlines}</li>
-                <li>Unlinked tasks: {stats.tasksUnlinked}</li>
-              </ul>
+            <Col xl={12}>
+              {selectedSprint ? (
+                <SprintMetricsPanel
+                  sprint={selectedSprint}
+                  stories={sprintStories}
+                  tasks={sprintTasks}
+                  goals={sprintGoals}
+                />
+              ) : (
+                <Card className="shadow-sm border-0">
+                  <Card.Body className="d-flex justify-content-between align-items-center">
+                    <div>
+                      <h5 className="mb-1">Select a sprint to see metrics</h5>
+                      <div className="text-muted">Use the sprint selector above to focus the dashboard.</div>
+                    </div>
+                    <Button variant="primary" onClick={() => navigate('/sprints/management')}>
+                      Manage sprints
+                    </Button>
+                  </Card.Body>
+                </Card>
+              )}
             </Col>
           </Row>
 
           <Row className="g-3 mb-4">
-            <Col xl={4} md={6}>
+            <Col xl={12}>
               <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Daily Priorities</span>
-                  <Button variant="link" size="sm" className="text-decoration-none" onClick={() => navigate('/tasks')}>
-                    Open tasks
+                  <span className="fw-semibold">Today's Plan</span>
+                  <Button variant="link" size="sm" className="text-decoration-none" onClick={handleOpenChecklist}>
+                    Open planner
                   </Button>
                 </Card.Header>
                 <Card.Body>
-                  {priorityBanner ? (
-                    <div className="border rounded p-3 mb-3 bg-light">
-                      <div className="d-flex justify-content-between align-items-start">
-                        <div className="fw-semibold">{priorityBanner.title}</div>
-                        {priorityBanner.bucket && (
-                          <Badge bg="primary" pill>{priorityBanner.bucket}</Badge>
+                  {unscheduledToday.length > 0 && (
+                    <Alert variant="warning" className="py-2">
+                      <div className="fw-semibold mb-1">Scheduling issues</div>
+                      <ul className="mb-0 small">
+                        {unscheduledSummary.map((item) => (
+                          <li key={item.id}>{item.title || item.sourceId}</li>
+                        ))}
+                        {unscheduledToday.length > unscheduledSummary.length && (
+                          <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
                         )}
-                      </div>
-                      {priorityBanner.score ? (
-                        <div className="text-muted small mt-1">AI score {Math.round(priorityBanner.score)}</div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="text-muted">Focus recommendations will appear after reprioritisation runs.</div>
+                      </ul>
+                    </Alert>
                   )}
-
-                  <div className="d-flex justify-content-between align-items-center mb-2">
-                    <div className="text-uppercase text-muted small fw-semibold">Next up</div>
-                    {(() => {
-                      const stamps = upcomingFocus.map((t: any) => Number(t.serverUpdatedAt || t.updatedAt || 0)).filter(Number.isFinite);
-                      const max = stamps.length ? Math.max(...stamps) : null;
-                      return (
-                        <div className="text-muted small">Last recompute {max ? new Date(max).toLocaleTimeString() : '—'}</div>
-                      );
-                    })()}
-                  </div>
-                  {upcomingFocus.length ? (
-                    <ul className="list-unstyled mb-0">
-                      {upcomingFocus.map((task) => {
-                        const due = decodeToDate((task as any).dueDate ?? (task as any).targetDate ?? (task as any).dueDateMs);
-                        const now = new Date();
-                        const sameDay = due ? due.toDateString() === now.toDateString() : false;
-                        const overdue = due ? due.getTime() < now.setHours(0, 0, 0, 0) : false;
-                        const reasons: string[] = [];
-                        if (overdue) reasons.push('Overdue');
-                        else if (sameDay) reasons.push('Due today');
-                        if ((task as any).priority === 1) reasons.push('High priority');
-                        if ((task as any).storyId) reasons.push('Story-linked');
-                        const createdMs = (task as any).createdAt ? new Date((task as any).createdAt).getTime() : null;
-                        if (createdMs) {
-                          const ageDays = Math.floor((Date.now() - createdMs) / 86400000);
-                          if (ageDays >= 14) reasons.push(`${ageDays}d old`);
-                        }
-                        return (
-                          <li key={task.id} className="mb-2">
-                            <div className="fw-semibold d-flex align-items-center gap-2">
-                              <span>{task.title}</span>
-                              {reasons.length > 0 && (
-                                <span title={`Why: ${reasons.join(', ')}`} style={{ cursor: 'help', fontSize: 12, color: 'var(--muted)' }}>Why?</span>
-                              )}
-                            </div>
-                            <div className="text-muted small">{formatDueLabel(task)}{reasons.length ? ` • ${reasons.join(' · ')}` : ''}</div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <div className="text-muted small">No upcoming work detected.</div>
-                  )}
+                  <ChecklistPanel title="" compact />
                 </Card.Body>
               </Card>
             </Col>
-            <Col xl={4} md={6}>
+          </Row>
+
+          <Row className="g-3 mb-4">
+            <Col xl={4}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Header className="fw-semibold">Theme Breakdown</Card.Header>
+                <Card.Body>
+                  <ThemeBreakdown onThemeSelect={handleThemeSelect} />
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col xl={4}>
               <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="fw-semibold">Today's Schedule</Card.Header>
                 <Card.Body>
@@ -726,30 +711,14 @@ const Dashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col xl={4} md={12}>
-              {/* Weekly Summary */}
-              <Card className="h-100 shadow-sm border-0 mb-3">
-                <Card.Header className="fw-semibold">Weekly Summary</Card.Header>
-                <Card.Body>
-                  {weeklySummary ? (
-                    <>
-                      <div className="d-flex justify-content-between mb-2">
-                        <span className="text-muted">Total activities</span>
-                        <span className="fw-semibold">{weeklySummary.total}</span>
-                      </div>
-                      <ul className="list-unstyled small mb-0">
-                        {Object.entries(weeklySummary.byType).sort((a, b) => (b[1] as number) - (a[1] as number)).slice(0, 3).map(([k, v]) => (
-                          <li key={k} className="d-flex justify-content-between"><span>{k}</span><span className="fw-semibold">{v as number}</span></li>
-                        ))}
-                      </ul>
-                    </>
-                  ) : (
-                    <div className="text-muted small">Summary will appear after next weekly run.</div>
-                  )}
-                </Card.Body>
-              </Card>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="fw-semibold">Automation Snapshot</Card.Header>
+            <Col xl={4}>
+              <Card className="shadow-sm border-0 h-100">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <span className="fw-semibold">Automation Snapshot</span>
+                  <Button variant="link" size="sm" className="text-decoration-none p-0" onClick={handleNavigateToTasksToday}>
+                    Go to Tasks
+                  </Button>
+                </Card.Header>
                 <Card.Body>
                   <ul className="list-unstyled mb-3">
                     {automationSnapshot.map((item) => (
@@ -759,78 +728,9 @@ const Dashboard: React.FC = () => {
                       </li>
                     ))}
                   </ul>
-                  <Button variant="outline-primary" size="sm" onClick={handleOpenChecklist}>
-                    View planner checklist
-                  </Button>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-
-          <Row className="g-3 mb-4">
-            <Col xl={8}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="fw-semibold">Today's Checklist</Card.Header>
-                <Card.Body>
-                  {unscheduledToday.length > 0 && (
-                    <Alert variant="warning" className="py-2">
-                      <div className="fw-semibold mb-1">Scheduling issues</div>
-                      <ul className="mb-0 small">
-                        {unscheduledSummary.map((item) => (
-                          <li key={item.id}>{item.title || item.sourceId}</li>
-                        ))}
-                        {unscheduledToday.length > unscheduledSummary.length && (
-                          <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
-                        )}
-                      </ul>
-                    </Alert>
-                  )}
-                  <ChecklistPanel title="" compact />
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col xl={4}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="fw-semibold">Theme Breakdown</Card.Header>
-                <Card.Body>
-                  <ThemeBreakdown onThemeSelect={handleThemeSelect} />
-                </Card.Body>
-              </Card>
-              <Card className="shadow-sm border-0 mt-3">
-                <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Finance Snapshot</span>
-                  <Button variant="link" size="sm" className="text-decoration-none p-0" onClick={() => navigate('/finance')}>
-                    Open Hub
-                  </Button>
-                </Card.Header>
-                <Card.Body>
-                  {monzoSummary?.totals ? (
-                    <div>
-                      <div className="d-flex justify-content-between mb-2">
-                        <span className="text-muted">Mandatory</span>
-                        <span className="fw-semibold">£{monzoSummary.totals.spent?.toFixed(2) || '0.00'}</span>
-                      </div>
-                      <div className="d-flex justify-content-between mb-2">
-                        <span className="text-muted">Income</span>
-                        <span className="fw-semibold text-success">£{monzoSummary.totals.remaining?.toFixed(2) || '0.00'}</span>
-                      </div>
-                      {monzoSummary.categories && monzoSummary.categories.length > 0 && (
-                        <div className="mt-3">
-                          <div className="text-muted small text-uppercase fw-bold mb-1">Top Spend</div>
-                          {monzoSummary.categories.slice(0, 3).map((cat: any, idx: number) => (
-                            <div key={idx} className="d-flex justify-content-between small mb-1">
-                              <span>{cat.name || cat.category}</span>
-                              <span>£{cat.spent?.toFixed(2)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-muted small">
-                      No finance data available. <Button variant="link" className="p-0 align-baseline" onClick={() => navigate('/finance')}>Connect Monzo</Button>
-                    </div>
-                  )}
+                  <div className="text-muted small">
+                    Weekly summary and priorities roll into this view after nightly runs.
+                  </div>
                 </Card.Body>
               </Card>
             </Col>

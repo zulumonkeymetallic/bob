@@ -8,7 +8,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { PremiumCard } from '../common/PremiumCard';
 import ReactECharts from 'echarts-for-react';
 import {
-    TrendingUp, PieChart as PieIcon, Activity,
+    TrendingUp, PieChart as PieIcon,
     Calendar, RefreshCw, Filter, DollarSign,
     ArrowUpRight, ArrowDownRight, CreditCard, Layers
 } from 'lucide-react';
@@ -156,23 +156,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
     });
     const activeKeys = Object.keys(timeSeriesSource || {}).slice(0, 5);
 
-    // Sankey Data
-    const sankeyNodes: { name: string }[] = [{ name: 'Total Spend' }];
-    const sankeyLinks: { source: number; target: number; value: number }[] = [];
-
-    // Sort categories by spend
-    const topCategories = Object.entries(data.spendByCategory || {})
-        .filter(([key]) => key !== 'bank_transfer')
-        .sort((a: any, b: any) => a[1] - b[1]) // Most negative first
-        .slice(0, 15);
-
-    topCategories.forEach(([cat, val]: [string, any]) => {
-        if (val < 0) {
-            sankeyNodes.push({ name: cat });
-            sankeyLinks.push({ source: 0, target: sankeyNodes.length - 1, value: Math.abs(val) / 100 });
-        }
-    });
-
     const bankTransferAmount = (data.spendByBucket?.bank_transfer ?? 0);
     const filteredTotalSpend = Math.abs((data.totalSpend || 0) - bankTransferAmount) / 100;
 
@@ -192,6 +175,23 @@ const FinanceDashboardAdvanced: React.FC = () => {
             smooth: true,
             emphasis: { focus: 'series' }
         })),
+    };
+
+    const bucketOption = {
+        tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
+        legend: { orient: 'horizontal', bottom: 0 },
+        series: [
+            {
+                type: 'pie',
+                radius: ['40%', '70%'],
+                label: { show: false },
+                data: bucketData.map((d: any, idx: number) => ({
+                    value: d.value,
+                    name: d.name,
+                    itemStyle: { color: THEME_COLORS[idx % THEME_COLORS.length] },
+                })),
+            },
+        ],
     };
 
     // Local distribution override from transactions to reflect per-transaction overrides
@@ -228,20 +228,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     name: d.name,
                     itemStyle: { color: THEME_COLORS[idx % THEME_COLORS.length] },
                 })),
-            },
-        ],
-    };
-
-    const sankeyOption = {
-        tooltip: { trigger: 'item', formatter: ({ data }: any) => `${data.name || ''}: £${Math.round((data.value || 0) * 100) / 100}` },
-        series: [
-            {
-                type: 'sankey',
-                emphasis: { focus: 'adjacency' },
-                data: sankeyNodes,
-                links: sankeyLinks.map((l) => ({ ...l, value: Math.round(l.value * 100) / 100 })),
-                lineStyle: { color: 'source', curveness: 0.5, opacity: 0.5 },
-                nodeAlign: 'justify',
             },
         ],
     };
@@ -349,11 +335,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </Col>
             </Row>
 
-            {/* Sankey */}
+            {/* Bucket split */}
             <Row className="mb-4">
                 <Col>
-                    <PremiumCard title="Cash Flow Visualization" icon={Activity} height={400}>
-                        <ReactECharts option={sankeyOption} style={{ height: '100%' }} />
+                    <PremiumCard title="Spend by Bucket" icon={PieIcon} height={340}>
+                        <ReactECharts option={bucketOption} style={{ height: '100%' }} />
                     </PremiumCard>
                 </Col>
             </Row>

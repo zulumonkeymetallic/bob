@@ -6,6 +6,7 @@ import { useAuth } from './AuthContext';
 import { usePersona } from './PersonaContext';
 import type { Sprint } from '../types';
 import logger from '../utils/logger';
+import ChoiceMigration from '../config/migration';
 
 const SPRINT_CACHE_NAMESPACE = 'bob_sprint_cache_v1';
 const SPRINT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes – keeps dev refresh fast without going stale
@@ -43,6 +44,7 @@ function toCachedSprint(sprint: Sprint): CachedSprint {
 function fromCachedSprint(cached: CachedSprint): Sprint {
   return {
     ...cached,
+    status: ChoiceMigration.migrateSprintStatus(cached.status),
     createdAt: cached.createdAt ? new Date(cached.createdAt) : null,
     updatedAt: cached.updatedAt ? new Date(cached.updatedAt) : null,
   };
@@ -212,6 +214,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           return {
             id: doc.id,
             ...raw,
+            status: ChoiceMigration.migrateSprintStatus(raw.status),
             startDate: normalizeTime(raw.startDate) ?? 0,
             endDate: normalizeTime(raw.endDate) ?? 0,
             planningDate: normalizeTime(raw.planningDate) ?? 0,
@@ -222,53 +225,8 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
         setAllSprints(data);
 
-        const now = Date.now();
-        const activeSprint =
-          data.find((s) => (s.status ?? 0) === 1) ||
-          data.find((s) => {
-            if (!s.startDate || !s.endDate) return false;
-            return s.startDate <= now && s.endDate >= now;
-          }) ||
-          null;
-
-        const upcoming = data
-          .filter((s) => s.id !== activeSprint?.id && (s.startDate ?? 0) >= now)
-          .sort((a, b) => (a.startDate ?? 0) - (b.startDate ?? 0))
-          .slice(0, 5);
-
-        let trimmed: Sprint[] = [];
-        if (activeSprint) {
-          trimmed = [activeSprint, ...upcoming];
-        } else {
-          trimmed = upcoming.slice(0, 6);
-        }
-
-        if (trimmed.length < 6) {
-          const fillers = data
-            .filter((s) => !trimmed.some((t) => t.id === s.id))
-            .sort((a, b) => (b.startDate ?? 0) - (a.startDate ?? 0))
-            .slice(0, 6 - trimmed.length);
-          trimmed = [...trimmed, ...fillers];
-        }
-
         const currentSelected = selectedSprintIdRef.current;
-        if (currentSelected) {
-          const selected = data.find((s) => s.id === currentSelected);
-          if (selected && !trimmed.some((s) => s.id === currentSelected)) {
-            trimmed = [selected, ...trimmed];
-          }
-        }
-
-        // Deduplicate while preserving order
-        const seen = new Set<string>();
-        const deduped: Sprint[] = [];
-        for (const sprint of trimmed) {
-          if (seen.has(sprint.id)) continue;
-          seen.add(sprint.id);
-          deduped.push(sprint);
-        }
-
-        setSprints(deduped);
+        setSprints(data);
         setLoading(false);
         setError(null);
 
@@ -289,11 +247,11 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // and the current selection is empty/undefined/null.
         const savedPref = (() => { try { return localStorage.getItem('bob_selected_sprint'); } catch { return null; } })();
         const noSavedPreference = savedPref === null || savedPref === undefined;
-        if ((!nextSelectedId || nextSelectedId === '') && noSavedPreference && deduped.length > 0) {
-          nextSelectedId = deduped[0].id;
+        if ((!nextSelectedId || nextSelectedId === '') && noSavedPreference && data.length > 0) {
+          nextSelectedId = data[0].id;
           setSelectedSprintId(nextSelectedId);
-        } else if (nextSelectedId && !deduped.some((s) => s.id === nextSelectedId)) {
-          const replacement = deduped[0];
+        } else if (nextSelectedId && !data.some((s) => s.id === nextSelectedId)) {
+          const replacement = data[0];
           if (replacement) {
             nextSelectedId = replacement.id;
             setSelectedSprintId(nextSelectedId);
@@ -302,7 +260,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (currentUser?.uid && currentPersona) {
           persistSprintsToCache(currentUser.uid, currentPersona, {
-            sprints: deduped,
+            sprints: data,
             allSprints: data,
             selectedSprintId: nextSelectedId,
           });

@@ -1255,33 +1255,37 @@ const UnifiedPlannerPage: React.FC = () => {
                 )}
                 {activeEvent.type === 'instance' && activeEvent.instance && (
                   <>
-                    <div className="d-flex gap-2 flex-wrap">
-                      <Button
-                        size="sm"
-                        variant="success"
-                        onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'completed')}
-                      >
-                        <CheckCircle size={16} className="me-1" /> Mark done
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline-secondary"
-                        onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'missed')}
-                      >
-                        Skip
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline-primary"
-                        onClick={async () => {
-                          const s = addMinutes(new Date(activeEvent.start), 15);
-                          const e = addMinutes(new Date(activeEvent.end), 15);
-                          await handleEventMove({ event: activeEvent, start: s, end: e });
-                        }}
-                      >
-                        Shift +15m
-                      </Button>
-                    </div>
+                    {['chore', 'routine', 'habit'].includes(
+                      (activeEvent.instance.sourceType || '').toLowerCase(),
+                    ) && (
+                      <div className="d-flex gap-2 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="success"
+                          onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'completed')}
+                        >
+                          <CheckCircle size={16} className="me-1" /> Mark done
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline-secondary"
+                          onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'missed')}
+                        >
+                          Skip
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          onClick={async () => {
+                            const s = addMinutes(new Date(activeEvent.start), 15);
+                            const e = addMinutes(new Date(activeEvent.end), 15);
+                            await handleEventMove({ event: activeEvent, start: s, end: e });
+                          }}
+                        >
+                          Shift +15m
+                        </Button>
+                      </div>
+                    )}
                     {(activeEvent.instance.deepLink || activeEvent.instance.mobileCheckinUrl) && (
                       <div className="d-flex gap-2 flex-wrap">
                         {activeEvent.instance.deepLink && (

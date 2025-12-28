@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
 import { Dropdown } from 'react-bootstrap';
-import { isStatus } from '../utils/statusHelpers';
 import logger from '../utils/logger';
 import { useSprint } from '../contexts/SprintContext';
 import type { Sprint } from '../types';
@@ -39,11 +38,20 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   const now = Date.now();
   const isSprintComplete = (s: Sprint) => {
     const ended = typeof s.endDate === 'number' && s.endDate > 0 ? s.endDate < now : false;
-    const statusComplete = isStatus(s.status, 'done') || s.status === 2 || String(s.status).toLowerCase().includes('complete');
+    const statusComplete = s.status === 2;
     return statusComplete || ended;
   };
-  const isSprintActive = (s: Sprint) => isStatus(s.status, 'active') && !isSprintComplete(s);
-  const isSprintPlanned = (s: Sprint) => isStatus(s.status, 'planning') && !isSprintComplete(s);
+  const isSprintActive = (s: Sprint) => s.status === 1 && !isSprintComplete(s);
+  const isSprintPlanned = (s: Sprint) => s.status === 0 && !isSprintComplete(s);
+  const isSprintCancelled = (s: Sprint) => s.status === 3;
+
+  const getSprintStatusLabel = (s: Sprint) => {
+    if (s.status === 0) return 'PLANNED';
+    if (s.status === 1) return 'ACTIVE';
+    if (s.status === 2) return 'COMPLETE';
+    if (s.status === 3) return 'CANCELLED';
+    return 'UNKNOWN';
+  };
 
   useEffect(() => {
     if (loading) return;
@@ -54,8 +62,8 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
     // Only auto-select when there is no explicit selection AND no saved preference
     if ((effectiveSelectedId !== undefined && effectiveSelectedId !== null && effectiveSelectedId !== '') || !noSavedPreference) return;
 
-    const activeSprint = sprints.find((sprint) => isStatus(sprint.status, 'active'));
-    const plannedSprint = sprints.find((sprint) => isStatus(sprint.status, 'planning'));
+    const activeSprint = sprints.find((sprint) => sprint.status === 1);
+    const plannedSprint = sprints.find((sprint) => sprint.status === 0);
     const fallbackSprint = sprints[0];
     const preferred = activeSprint || plannedSprint || fallbackSprint;
 
@@ -127,6 +135,9 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
             {isSprintComplete(selectedSprint) && (
               <span className="badge bg-secondary ms-2">COMPLETE</span>
             )}
+            {isSprintCancelled(selectedSprint) && (
+              <span className="badge bg-danger ms-2">CANCELLED</span>
+            )}
           </span>
         ) : (
           <span>All Sprints</span>
@@ -169,11 +180,13 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
                     <span className={`badge ${
                       isSprintActive(sprint) ? 'bg-success' :
                       isSprintPlanned(sprint) ? 'bg-warning' :
+                      isSprintCancelled(sprint) ? 'bg-danger' :
                       isSprintComplete(sprint) ? 'bg-secondary' : 'bg-secondary'
                     }`}>
                       {isSprintActive(sprint) ? 'ACTIVE' :
                         isSprintPlanned(sprint) ? 'PLANNED' :
-                        isSprintComplete(sprint) ? 'COMPLETE' : sprint.status}
+                        isSprintCancelled(sprint) ? 'CANCELLED' :
+                        isSprintComplete(sprint) ? 'COMPLETE' : getSprintStatusLabel(sprint)}
                     </span>
                   </div>
                   {sprint.objective && (

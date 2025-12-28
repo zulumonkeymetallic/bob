@@ -10,6 +10,8 @@ import ReactECharts from 'echarts-for-react';
 type FilterWindow = 'month' | 'quarter' | 'year';
 
 const palette = ['#22c55e', '#0ea5e9', '#f97316', '#8b5cf6', '#ef4444', '#14b8a6', '#f59e0b'];
+const formatMoney = (value: number, minimumFractionDigits = 0) =>
+  value.toLocaleString('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits });
 
 const FinanceFlowDiagram: React.FC = () => {
   const { currentUser } = useAuth();
@@ -102,11 +104,11 @@ const FinanceFlowDiagram: React.FC = () => {
       if (bucket === 'bank_transfer' || bucket === 'income' || bucket === 'net_salary' || bucket === 'irregular_income') return;
       const category = (t.categoryKey || t.categoryLabel || 'uncategorised').toLowerCase();
       const merchant = (t.merchantName || 'merchant').toLowerCase();
-      bucketTotals[bucket] = (bucketTotals[bucket] || 0) + Math.abs(amount) / 100;
+      bucketTotals[bucket] = (bucketTotals[bucket] || 0) + Math.abs(amount);
       if (!bucketCategoryTotals[bucket]) bucketCategoryTotals[bucket] = {};
-      bucketCategoryTotals[bucket][category] = (bucketCategoryTotals[bucket][category] || 0) + Math.abs(amount) / 100;
+      bucketCategoryTotals[bucket][category] = (bucketCategoryTotals[bucket][category] || 0) + Math.abs(amount);
       if (!categoryMerchantTotals[category]) categoryMerchantTotals[category] = {};
-      categoryMerchantTotals[category][merchant] = (categoryMerchantTotals[category][merchant] || 0) + Math.abs(amount) / 100;
+      categoryMerchantTotals[category][merchant] = (categoryMerchantTotals[category][merchant] || 0) + Math.abs(amount);
     });
 
     const root = addNode('Total Spend');
@@ -136,7 +138,7 @@ const FinanceFlowDiagram: React.FC = () => {
   const sankeyOption = {
     tooltip: {
       trigger: 'item',
-      formatter: ({ data }: any) => `${data.name || ''}: £${(data.value || 0).toFixed(2)}`,
+      formatter: ({ data }: any) => `${data.name || ''}: ${formatMoney(Math.abs(data.value || 0), 0)}`,
     },
     series: [
       {
@@ -167,10 +169,10 @@ const FinanceFlowDiagram: React.FC = () => {
 
   const spendByBucket = data.spendByBucket || {};
   const bankTransfer = spendByBucket.bank_transfer || 0;
-  const totalSpend = Math.abs((data.totalSpend || 0) - bankTransfer) / 100;
+  const totalSpend = Math.abs((data.totalSpend || 0) - bankTransfer);
   const distributionData = Object.entries(data.spendByCategory || {})
     .filter(([key]) => key !== 'bank_transfer')
-    .map(([key, value]: [string, any]) => ({ name: key, value: Math.abs(value) / 100 }))
+    .map(([key, value]: [string, any]) => ({ name: key, value: Math.abs(value) }))
     .sort((a, b) => b.value - a.value);
 
   const trendPoints = (() => {
@@ -183,7 +185,7 @@ const FinanceFlowDiagram: React.FC = () => {
       Object.entries(ts).forEach(([bucket, arr]: [string, any]) => {
         if (['bank_transfer', 'income', 'net_salary', 'irregular_income'].includes(bucket)) return;
         const found = (arr || []).find((p: any) => p.month === m);
-        row[bucket] = found ? Math.abs(found.amount || 0) / 100 : 0;
+        row[bucket] = found ? Math.abs(found.amount || 0) : 0;
       });
       return row;
     });
@@ -198,7 +200,7 @@ const FinanceFlowDiagram: React.FC = () => {
     legend: { data: trendKeys },
     grid: { left: 45, right: 10, top: 30, bottom: 30 },
     xAxis: { type: 'category', data: trendPoints.map((p) => p.month) },
-    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
+    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatMoney(v, 0) } },
     series: trendKeys.map((key, idx) => ({
       name: key,
       type: 'line',
@@ -210,7 +212,7 @@ const FinanceFlowDiagram: React.FC = () => {
   };
 
   const distributionOption = {
-    tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
+    tooltip: { trigger: 'item', valueFormatter: (v: number) => formatMoney(v, 0) },
     legend: { bottom: 0, type: 'scroll' },
     series: [
       {
@@ -229,8 +231,8 @@ const FinanceFlowDiagram: React.FC = () => {
       {userBadge}
       <div className="d-flex flex-wrap justify-content-between align-items-center mb-4 text-white">
         <div>
-          <h2 className="fw-bold mb-1">Spend Breakdown</h2>
-          <div className="d-flex align-items-center gap-2">
+          <h2 className="fw-bold mb-1 display-6">Cash Flow · Spend Breakdown</h2>
+          <div className="d-flex align-items-center gap-2 fs-6">
             <Calendar size={16} />
             <span>{filter === 'month' ? 'This Month' : filter === 'quarter' ? 'This Quarter' : 'This Year'}</span>
           </div>
@@ -264,25 +266,26 @@ const FinanceFlowDiagram: React.FC = () => {
 
       <Row className="g-4">
         <Col lg={8}>
-          <PremiumCard title="Flow" icon={Activity} height={540} className="bg-dark text-white position-relative">
+          <PremiumCard title="Spend Breakdown (Buckets → Categories → Merchants)" icon={Activity} height={540} className="bg-dark text-white position-relative">
+            <div className="small text-muted mb-2">Sankey of spend direction; hover for amounts.</div>
             <ReactECharts option={sankeyOption} style={{ height: '100%' }} />
           </PremiumCard>
         </Col>
         <Col lg={4}>
           <div className="d-flex flex-column gap-3">
             <PremiumCard title="Total Spend" icon={Activity}>
-              <h2 className="fw-bold mb-0 text-danger">£{totalSpend.toLocaleString('en-GB', { minimumFractionDigits: 2 })}</h2>
+              <h2 className="fw-bold mb-1 text-danger" style={{ fontSize: '2.1rem' }}>{formatMoney(totalSpend, 0)}</h2>
               <div className="mt-2 text-muted small">Includes mandatory, discretionary, savings transfers.</div>
             </PremiumCard>
             <PremiumCard title="Buckets" icon={Activity}>
                 <div className="d-flex flex-column gap-2">
                 <div className="d-flex flex-wrap gap-2">
-                  <Badge bg="danger">Spend £{totalSpend.toFixed(0)}</Badge>
+                  <Badge bg="danger" className="fs-6">{formatMoney(totalSpend, 0)}</Badge>
                 </div>
                 <div className="d-flex flex-wrap gap-2">
                   {Object.entries(spendByBucket || {}).filter(([bucket]) => bucket !== 'bank_transfer').map(([bucket, val], idx) => (
                     <Badge key={bucket} bg="light" text="dark" style={{ border: `1px solid ${palette[idx % palette.length]}` }}>
-                      {bucket}: £{(Math.abs(val as number) / 100).toFixed(0)}
+                      {bucket}: {formatMoney(Math.abs(val as number), 0)}
                     </Badge>
                   ))}
                 </div>

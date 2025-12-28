@@ -6,16 +6,16 @@ const aiUsageLogger = require('./utils/aiUsageLogger');
 
 /**
  * Daily LLM Email Digest Generator for BOB v3.5.7
- * Sends comprehensive daily summary at 06:30 with AI-powered insights
+ * Sends comprehensive daily summary at 06:45 with AI-powered insights
  */
 exports.generateDailyDigest = onSchedule({
-  schedule: '30 6 * * *', // Daily at 06:30
+  schedule: '45 6 * * *', // Daily at 06:45
   timeZone: 'Europe/London',
   memory: '512MiB',
   timeoutSeconds: 300,
   secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')]
 }, async (event) => {
-  console.log('🌅 Starting daily digest generation at 06:30');
+  console.log('🌅 Starting daily digest generation at 06:45');
 
   const aiWrapper = aiUsageLogger.wrapAICall('google-ai-studio', 'gemini-1.5-flash');
 
@@ -41,6 +41,28 @@ exports.generateDailyDigest = onSchedule({
       try {
         // Gather user data
         const userData = await gatherUserData(db, userId, today);
+
+        // Log the LLM input context for observability
+        try {
+          await db.collection('integration_logs').add({
+            integration: 'daily_digest',
+            action: 'llm_input',
+            userId,
+            ownerUid: userId,
+            ts: admin.firestore.FieldValue.serverTimestamp(),
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            date: todayStr,
+            topTasksDueToday: userData.topTasksDueToday.map(t => t.title || t.ref || t.id),
+            todayBlocks: userData.todayBlocks.map(b => b.title || b.category || b.id),
+            counts: {
+              tasksDueToday: userData.tasksDueToday.length,
+              overdueTasks: userData.overdueTasks.length,
+              todayBlocks: userData.todayBlocks.length,
+            }
+          });
+        } catch (logErr) {
+          console.warn('daily_digest log failed', logErr?.message || logErr);
+        }
 
         // Generate AI insights
         const aiInsights = await aiWrapper(async () => {
@@ -205,24 +227,30 @@ async function gatherUserData(db, userId, today) {
     .limit(5)
     .get();
 
+  const calendarBlocksRaw = calendarBlocksSnapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+    startDate: new Date(doc.data().start).toISOString().split('T')[0],
+    startTime: new Date(doc.data().start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+    endTime: new Date(doc.data().end).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  }));
+
+  const todayBlocks = calendarBlocksRaw.filter(block => block.startDate === todayStr);
+
   return {
     tasksDueToday: tasksDueTodaySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     overdueTasks: overdueTasks.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     stories,
     unlinkedStories,
-    calendarBlocks: calendarBlocksSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      startDate: new Date(doc.data().start).toISOString().split('T')[0],
-      startTime: new Date(doc.data().start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-      endTime: new Date(doc.data().end).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-    })),
+    calendarBlocks: calendarBlocksRaw,
+    todayBlocks,
     currentSprint: currentSprintSnapshot.docs[0] ? { id: currentSprintSnapshot.docs[0].id, ...currentSprintSnapshot.docs[0].data() } : null,
     goals: goalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     weather,
     news,
     date: todayStr,
-    dayOfWeek: today.toLocaleDateString('en-US', { weekday: 'long' })
+    dayOfWeek: today.toLocaleDateString('en-US', { weekday: 'long' }),
+    topTasksDueToday: tasksDueTodaySnapshot.docs.slice(0, 3).map(doc => ({ id: doc.id, ...doc.data() }))
   };
 }
 
@@ -230,41 +258,26 @@ async function gatherUserData(db, userId, today) {
  * Generate AI insights using Google AI Studio (Gemini)
  */
 async function generateAIInsights(userData) {
-  const prompt = `You are an executive productivity assistant for "blueprint.organize.build". 
-  Your goal is to craft a personalized, data-driven daily briefing. 
-  
-  **CONTEXT DATA:**
-  
-  **Date:** ${userData.dayOfWeek}, ${userData.date}
-  **Weather:** ${userData.weather ? userData.weather.description : 'Not available'}
-  **Top News:**
-  ${userData.news.map(n => `- ${n.title}`).join('\n')}
-  
-  **Sprint Context:**
-  ${userData.currentSprint ? `Current Sprint: "${userData.currentSprint.title}" (Goal: ${userData.currentSprint.goal || 'None'})` : 'No active sprint.'}
-  
-  **Active Stories (Highest Priority if Started):**
-  ${userData.stories.map(s => `- [${s.isStarted ? 'STARTED' : 'PLANNED'}] ${s.title} (Status: ${s.status})`).join('\n')}
-  
-  **Calendar (Next 7 Days):**
-  ${userData.calendarBlocks.slice(0, 20).map(b => `- [${b.startDate}] ${b.startTime}-${b.endTime}: ${b.title} ${b.conflictStatus === 'requires_review' ? '(CONFLICT)' : ''}`).join('\n')}
-  
-  **Tasks (Due Today: ${userData.tasksDueToday.length}, Overdue: ${userData.overdueTasks.length}):**
-  Overdue: ${userData.overdueTasks.map(t => t.title).join(', ')}
-  Due Today: ${userData.tasksDueToday.map(t => t.title).join(', ')}
-  
-  **INSTRUCTIONS:**
-  1. **Determine the Single Highest Priority**: Look at "Active Stories" (especially if STARTED) and "Overdue Tasks". Pick ONE thing they MUST do. Explain WHY based on the data (e.g. "Because Story X is already started...").
-  2. **Placement Reasoning**: Briefly explain why the schedule is set this way. If there are CONFLICTS, propose a resolution.
-  3. **Craft a Narrative Message**: Do NOT use generic headings like "Time Management". Write a cohesive briefing paragraph.
-  4. **Integrate News/Weather**: Weave the weather or a major news headline into the intro or outro naturally.
-  5. **Tone**: Professional, concise, encouraging, but direct. No fluff.
-  6. **Structure**:
-     - **The Briefing**: A paragraph weaving weather/news and the main focus.
-     - **The Plan**: Bullet points of the specific actions for the priority items.
-     - **Heads Up**: Mention any risks (overdue items, tight calendar, conflicts).
-  
-  Do NOT give generic tips like "Drink water" or "Take breaks". Stick to the user's actual data.`;
+  const prompt = `You are an executive productivity assistant for "blueprint.organize.build". Produce a sharp, specific daily briefing that names the exact tasks/stories and calendar blocks the user should act on today.
+
+  CONTEXT DATA (structured):
+  - Date: ${userData.dayOfWeek}, ${userData.date}
+  - Weather: ${userData.weather ? userData.weather.description : 'Not available'}
+  - Top News: ${userData.news.map(n => `• ${n.title}`).join('\n')}
+  - Current Sprint: ${userData.currentSprint ? `"${userData.currentSprint.title}" (Goal: ${userData.currentSprint.goal || 'None'})` : 'None'}
+  - Active Stories (prefer STARTED): ${userData.stories.map(s => `• [${s.isStarted ? 'STARTED' : 'PLANNED'}] ${s.title} (Status: ${s.status})`).join('\n')}
+  - Top 3 Tasks Due Today (drive priorities): ${userData.topTasksDueToday.map(t => `• ${t.title || t.ref || t.id} (priority ${t.priority ?? 'n/a'}, theme ${t.theme || 'n/a'})`).join('\n') || 'None'}
+  - Tasks Due Today (${userData.tasksDueToday.length}): ${userData.tasksDueToday.map(t => `• ${t.title} (due ${t.dueDateDisplay || 'today'})`).join('\n') || 'None'}
+  - Today’s Calendar Blocks: ${userData.todayBlocks.map(b => `• ${b.startTime}-${b.endTime} ${b.title || b.category || 'Block'} (theme ${b.theme || 'n/a'})`).join('\n') || 'None'}
+  - Overdue Tasks (${userData.overdueTasks.length}): ${userData.overdueTasks.map(t => `• ${t.title} (due ${t.dueDateDisplay || 'overdue'})`).join('\n') || 'None'}
+  - Calendar (next 7 days, first 10): ${userData.calendarBlocks.slice(0, 10).map(b => `• ${b.startDate} ${b.startTime}-${b.endTime}: ${b.title}`).join('\n')}
+
+  OUTPUT REQUIREMENTS (plain text, no JSON):
+  1) Briefing: 2-3 sentences. Name the single highest-priority item (task or story) and why (due date, sprint, started status, or overdue). Weave in weather or one headline naturally.
+  2) Focus list: 3 bullets, in order, naming exact refs/titles for the top 3 items (prefer the Top 3 Tasks Due Today, then started stories, then overdue tasks). Include due date.
+  3) Schedule call-out: Mention how today’s calendar blocks support those priorities (or highlight a gap/conflict to resolve today).
+  4) Heads up: one short risk/warning (overdue, crowded calendar, or missing blocks).
+  Tone: concise, directive, specific. No generic wellness tips.`;
 
   const apiKey = process.env.GOOGLEAISTUDIOAPIKEY;
   if (!apiKey) {

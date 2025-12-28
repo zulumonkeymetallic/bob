@@ -93,14 +93,14 @@ const CapacityDashboard: React.FC = () => {
         ]
     };
 
-    const themeLabels = data ? Object.keys(data.breakdownByTheme) : [];
-    const themeValues = data ? Object.values(data.breakdownByTheme) : [];
+    const themeLabels = data ? Object.keys(data.scheduledByTheme || data.breakdownByTheme || {}) : [];
+    const themeValues = data ? Object.values(data.scheduledByTheme || data.breakdownByTheme || {}) : [];
 
     const themeChartData = {
         labels: themeLabels,
         datasets: [
             {
-                label: 'Hours Allocated',
+                label: 'Scheduled (h)',
                 data: themeValues,
                 backgroundColor: 'rgba(153, 102, 255, 0.5)',
             }
@@ -160,18 +160,27 @@ const CapacityDashboard: React.FC = () => {
                                 </Card.Body>
                             </Card>
                         </Col>
-                        <Col md={3}>
-                            <Card className="text-center h-100">
-                                <Card.Body>
-                                    <h6 className="text-muted">Utilization</h6>
-                                    <h3 className={`text-${utilizationColor(data.utilization)}`}>
-                                        {(data.utilization * 100).toFixed(0)}%
+                <Col md={3}>
+                    <Card className="text-center h-100">
+                        <Card.Body>
+                            <h6 className="text-muted">Utilization</h6>
+                            <h3 className={`text-${utilizationColor(data.utilization)}`}>
+                                {(data.utilization * 100).toFixed(0)}%
                                     </h3>
                                     <ProgressBar
                                         now={data.utilization * 100}
                                         variant={utilizationColor(data.utilization)}
                                         style={{ height: '8px', marginTop: '8px' }}
                                     />
+                                </Card.Body>
+                            </Card>
+                        </Col>
+                        <Col md={3}>
+                            <Card className="text-center h-100">
+                                <Card.Body>
+                                    <h6 className="text-muted">Scheduled Hours</h6>
+                                    <h3>{(data.scheduledHours ?? 0).toFixed(1)} h</h3>
+                                    <small>Calendar blocks in this sprint</small>
                                 </Card.Body>
                             </Card>
                         </Col>
@@ -218,7 +227,7 @@ const CapacityDashboard: React.FC = () => {
                         </Col>
                         <Col md={6}>
                             <Card>
-                                <Card.Header>Allocation by Theme</Card.Header>
+                                <Card.Header>Scheduled Hours by Theme</Card.Header>
                                 <Card.Body>
                                     <Bar options={{ responsive: true }} data={themeChartData} />
                                 </Card.Body>

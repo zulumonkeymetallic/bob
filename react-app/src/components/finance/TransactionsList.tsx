@@ -50,7 +50,7 @@ const TransactionsList: React.FC = () => {
   const [amountMax, setAmountMax] = useState<string>('');
   const [missingOnly, setMissingOnly] = useState<boolean>(false);
   const [categorySelection, setCategorySelection] = useState<Record<string, string>>({});
-  const [pageAnchors, setPageAnchors] = useState<Array<DocumentSnapshot | null>>([null]);
+  const pageAnchorsRef = React.useRef<Array<DocumentSnapshot | null>>([null]);
   const [pageIndex, setPageIndex] = useState(0);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [hasPrevPage, setHasPrevPage] = useState(false);
@@ -59,6 +59,7 @@ const TransactionsList: React.FC = () => {
   const [tableRef, bounds] = useMeasure();
   const [customCategories, setCustomCategories] = useState<FinanceCategory[]>([]);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
 
   const mapDocToRow = useCallback((d: any): TxRow => {
     const data = d.data() as any;
@@ -84,48 +85,47 @@ const TransactionsList: React.FC = () => {
     };
   }, []);
 
-  const loadPage = useCallback(
-    async (targetIndex: number) => {
-      if (!currentUser) return;
-      setLoading(true);
-      setErrorMsg('');
-      try {
-        let qBase: any = query(
+  const loadPage = useCallback(async (targetIndex: number) => {
+    if (!currentUser) return;
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      const anchors = pageAnchorsRef.current;
+      let qBase: any = query(
+        collection(db, 'monzo_transactions'),
+        where('ownerUid', '==', currentUser.uid),
+        orderBy('createdAt', 'desc'),
+        limit(PAGE_SIZE + 1)
+      );
+      const anchor = anchors[targetIndex];
+      if (anchor) {
+        qBase = query(
           collection(db, 'monzo_transactions'),
           where('ownerUid', '==', currentUser.uid),
           orderBy('createdAt', 'desc'),
+          startAfter(anchor),
           limit(PAGE_SIZE + 1)
         );
-        const anchor = pageAnchors[targetIndex];
-        if (anchor) {
-          qBase = query(
-            collection(db, 'monzo_transactions'),
-            where('ownerUid', '==', currentUser.uid),
-            orderBy('createdAt', 'desc'),
-            startAfter(anchor),
-            limit(PAGE_SIZE + 1)
-          );
-        }
-        const snap = await getDocs(qBase);
-        const docs = snap.docs.slice(0, PAGE_SIZE);
-        setRows(docs.map(mapDocToRow));
-        setHasPrevPage(targetIndex > 0);
-        setHasNextPage(snap.docs.length > PAGE_SIZE);
-        const newAnchors = [...pageAnchors];
-        if (docs.length) {
-          newAnchors[targetIndex + 1] = docs[docs.length - 1];
-        }
-        setPageAnchors(newAnchors.slice(0, targetIndex + 2));
-        setPageIndex(targetIndex);
-      } catch (err) {
-        console.error('Failed to load transactions page', err);
-        setErrorMsg((err as any)?.message || 'Failed to load transactions.');
-      } finally {
-        setLoading(false);
       }
-    },
-    [currentUser, mapDocToRow, pageAnchors]
-  );
+      const snap = await getDocs(qBase);
+      const docs = snap.docs.slice(0, PAGE_SIZE);
+      setRows(docs.map(mapDocToRow));
+      setHasPrevPage(targetIndex > 0);
+      setHasNextPage(snap.docs.length > PAGE_SIZE);
+      const newAnchors = [...anchors];
+      if (docs.length) {
+        newAnchors[targetIndex + 1] = docs[docs.length - 1];
+      }
+      pageAnchorsRef.current = newAnchors.slice(0, targetIndex + 2);
+      setPageIndex(targetIndex);
+      setLastLoadedAt(new Date());
+    } catch (err) {
+      console.error('Failed to load transactions page', err);
+      setErrorMsg((err as any)?.message || 'Failed to load transactions.');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUser, mapDocToRow]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -282,7 +282,11 @@ const TransactionsList: React.FC = () => {
   }, [filtered, groupByMerchant]);
 
   const updateTransactionCategory = async (tx: TxRow, categoryKey: string, applyToExisting: boolean) => {
-    if (!currentUser || !categoryKey) return;
+    if (!currentUser) return;
+    if (!categoryKey) {
+      setErrorMsg('Select a category before saving.');
+      return;
+    }
     const cat = allCategories.find((c) => c.key === categoryKey);
     const bucket = cat?.bucket || 'optional';
     setSavingId(tx.id);
@@ -354,11 +358,21 @@ const TransactionsList: React.FC = () => {
         <div className="d-flex flex-wrap justify-content-between align-items-center mb-3">
           <div>
             <h3 className="mb-1">Monzo Transactions</h3>
-            <div className="text-muted">Excel-like view with grouping, filters, pagination (150/page)</div>
+            <div className="text-muted">
+              Excel-like view with grouping, filters, pagination (150/page). Uses the last synced Firestore snapshot — refresh does not trigger a Monzo resync. You can save categories even while a refresh runs.
+            </div>
           </div>
           <div className="d-flex flex-wrap gap-2 align-items-center text-muted small">
             <span className="finance-chip subtle">Virtualized</span>
-            <span className="finance-chip subtle">Live data</span>
+            <span className="finance-chip subtle">{loading ? 'Refreshing snapshot…' : 'Snapshot ready'}</span>
+            {lastLoadedAt ? (
+              <span className="small text-muted">
+                Loaded {lastLoadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            ) : null}
+            <Button size="sm" variant="outline-secondary" disabled={loading} onClick={() => loadPage(pageIndex)}>
+              Refresh snapshot
+            </Button>
           </div>
         </div>
 
@@ -500,12 +514,17 @@ const TransactionsList: React.FC = () => {
         </Card.Body>
       </Card>
 
-      <Card className="finance-table-card shadow-sm border-0">
-        <div className="finance-table-meta d-flex justify-content-between align-items-center">
-          <div className="small text-muted">Showing up to {PAGE_SIZE} rows per page</div>
-          <div className="d-flex align-items-center gap-2">
+        <Card className="finance-table-card shadow-sm border-0">
+          <div className="finance-table-meta d-flex justify-content-between align-items-center">
+            <div className="small text-muted">Showing up to {PAGE_SIZE} rows per page</div>
+          <div className="d-flex align-items-center gap-3">
             {errorMsg && <span className="text-danger small">{errorMsg}</span>}
-            {loading && <div className="small text-muted">Loading live data…</div>}
+            {!loading && lastLoadedAt ? (
+              <span className="small text-muted">
+                Snapshot loaded {lastLoadedAt.toLocaleDateString()} {lastLoadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            ) : null}
+            {loading && <div className="small text-muted">Loading snapshot… (you can still edit rows)</div>}
           </div>
         </div>
         <div className="finance-table-shell">
@@ -547,6 +566,8 @@ const TransactionsList: React.FC = () => {
                     }
                     const tx = item.row;
                     const selectedKey = categorySelection[tx.id] ?? tx.userCategoryKey ?? '';
+                    const effectiveCategory = categorySelection[tx.id] || tx.userCategoryKey || '';
+                    const hasCategory = Boolean(effectiveCategory);
                     const created = tx.createdISO ? new Date(tx.createdISO) : null;
                     const dateLabel = created ? created.toLocaleDateString() : '—';
                     const timeLabel = created ? created.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
@@ -577,11 +598,11 @@ const TransactionsList: React.FC = () => {
                           <div className="finance-subtext">{tx.potName || 'No pot'}</div>
                         </div>
                         <div className="finance-cell">
-                          <div className="finance-chip">
+                          {renderCategoryControl(tx, selectedKey)}
+                          <div className="finance-subtext mt-1">
                             {bucketLabelFromCategory(selectedKey || tx.userCategoryKey, tx.userCategoryType || tx.defaultCategoryType)}
                           </div>
                         </div>
-                        <div className="finance-cell">{renderCategoryControl(tx, selectedKey)}</div>
                         <div className="finance-cell text-end">
                           <div className={amountClass}>{formatMoney(tx.amount)}</div>
                         </div>
@@ -590,11 +611,11 @@ const TransactionsList: React.FC = () => {
                             <Button
                               size="sm"
                               className="finance-btn-save"
-                              disabled={savingId === tx.id}
+                              disabled={savingId === tx.id || !hasCategory}
                               onClick={() =>
                                 updateTransactionCategory(
                                   tx,
-                                  categorySelection[tx.id] || tx.userCategoryKey || tx.defaultCategoryType || '',
+                                  effectiveCategory,
                                   false
                                 )
                               }
@@ -605,11 +626,11 @@ const TransactionsList: React.FC = () => {
                             <Button
                               size="sm"
                               className="finance-btn-apply"
-                              disabled={savingId === tx.id || !(categorySelection[tx.id] || tx.userCategoryKey)}
+                              disabled={savingId === tx.id || !hasCategory}
                               onClick={() =>
                                 updateTransactionCategory(
                                   tx,
-                                  categorySelection[tx.id] || tx.userCategoryKey || '',
+                                  effectiveCategory,
                                   true
                                 )
                               }

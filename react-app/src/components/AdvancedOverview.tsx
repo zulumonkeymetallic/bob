@@ -1,413 +1,526 @@
-import React, { useEffect, useState } from 'react';
-import { Row, Col, ProgressBar, Badge, Tab, Tabs } from 'react-bootstrap';
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, LineChart, Line, AreaChart, Area, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Legend, CartesianGrid } from 'recharts';
-import { Activity, Target, Zap, TrendingUp, DollarSign, Calendar, CheckCircle, Award, Flame, Heart } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Row, Col, ProgressBar, Badge, Tab, Tabs, Alert, Button } from 'react-bootstrap';
+import {
+  PieChart,
+  Pie,
+  Cell,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  LineChart,
+  Line,
+  AreaChart,
+  Area,
+  Legend,
+  CartesianGrid,
+} from 'recharts';
+import { Activity, Target, Zap, TrendingUp, DollarSign, Calendar, CheckCircle, Heart } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { db, functions } from '../firebase';
-import { collection, query, where, getDocs, limit, doc, getDoc } from 'firebase/firestore';
+import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { PremiumCard } from './common/PremiumCard';
 
+const toDate = (value: any): Date | null => {
+  if (!value) return null;
+  if (value.toDate) return value.toDate();
+  if (value.seconds) return new Date(value.seconds * 1000);
+  const dt = new Date(value);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+};
+
+const formatCurrency = (pence: number) =>
+  new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format((pence || 0) / 100);
+
 const AdvancedOverview: React.FC = () => {
-    const { currentUser } = useAuth();
-    const { theme } = useTheme();
-    const isDark = theme === 'dark';
-    const [loading, setLoading] = useState(true);
-    const [key, setKey] = useState('summary');
-    const [stats, setStats] = useState<any>({
-        health: 0, wealth: 0, growth: 0, tribe: 0, home: 0,
-        sprint: { progress: 0, daysLeft: 0, name: '' },
-        tasksCompletedTrend: [],
-        capacity: { free: 0, total: 0 },
-        spendByBucket: [],
-        budget: { total: 0, remaining: 0, discretionaryTotal: 0, discretionaryRemaining: 0 },
-        level: 1, xp: 0, streak: 0,
-        healthTrend: [], wealthTrend: [], capacityBreakdown: []
-    });
+  const { currentUser } = useAuth();
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
 
-    // Dynamic Theme Colors
-    const colors = {
-        bg: isDark ? '#1e1e2f' : '#f4f5f7',
-        text: isDark ? '#ffffff' : '#2c3e50',
-        textMuted: isDark ? '#9a9a9a' : '#6c757d',
-        primary: '#e14eca',
-        secondary: '#00f2c3',
-        warning: '#ff8d72',
-        info: '#1d8cf8',
-        success: '#00f2c3',
-        danger: '#fd5d93',
-        grid: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)',
-        chartColors: ['#e14eca', '#00f2c3', '#1d8cf8', '#ff8d72', '#fd5d93']
-    };
+  const [key, setKey] = useState('summary');
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [summary, setSummary] = useState<any | null>(null);
+  const [finance, setFinance] = useState<any | null>(null);
+  const [capacity, setCapacity] = useState<any | null>(null);
 
-    useEffect(() => {
-        if (!currentUser) return;
-        loadData();
-    }, [currentUser]);
+  const colors = {
+    bg: isDark ? '#1e1e2f' : '#f4f5f7',
+    text: isDark ? '#ffffff' : '#2c3e50',
+    textMuted: isDark ? '#9a9a9a' : '#6c757d',
+    primary: '#e14eca',
+    secondary: '#00f2c3',
+    warning: '#ff8d72',
+    info: '#1d8cf8',
+    success: '#00f2c3',
+    danger: '#fd5d93',
+    grid: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)',
+    chartColors: ['#e14eca', '#00f2c3', '#1d8cf8', '#ff8d72', '#fd5d93', '#a78bfa'],
+  };
 
-    const loadData = async () => {
-        if (!currentUser) return;
-        setLoading(true);
+  const loadData = async () => {
+    if (!currentUser) return;
+    setLoading(true);
+    setError('');
+    try {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+      const previewFn = httpsCallable(functions, 'previewDailySummary');
+      const financeFn = httpsCallable(functions, 'fetchDashboardData');
+
+      const [summaryRes, financeRes] = await Promise.all([
+        previewFn({}),
+        financeFn({ startDate: start.toISOString(), endDate: end.toISOString() }),
+      ]);
+
+      const summaryData = (summaryRes.data as any)?.summary || (summaryRes.data as any)?.result || (summaryRes.data as any);
+      const financeData = (financeRes.data as any)?.data || (financeRes.data as any);
+      setSummary(summaryData);
+      setFinance(financeData);
+
+      if (summaryData?.sprintProgress?.sprintId) {
         try {
-            // ... (Data loading logic remains the same, assuming it works)
-            // 1. Theme Progress
-            const storiesSnap = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid), where('status', '!=', 'done')));
-            const stories = storiesSnap.docs.map(d => d.data());
-            const themeCounts: any = { Health: { total: 0, done: 0 }, Wealth: { total: 0, done: 0 }, Growth: { total: 0, done: 0 }, Tribe: { total: 0, done: 0 }, Home: { total: 0, done: 0 } };
-
-            stories.forEach((s: any) => {
-                const t = s.theme || 'Growth';
-                if (themeCounts[t]) {
-                    themeCounts[t].total++;
-                    if (s.status === 'done') themeCounts[t].done++;
-                }
-            });
-
-            const calc = (t: string) => themeCounts[t].total > 0 ? Math.round((themeCounts[t].done / themeCounts[t].total) * 100) : 0;
-
-            // 2. Sprint Progress
-            const sprintSnap = await getDocs(query(collection(db, 'sprints'), where('ownerUid', '==', currentUser.uid), where('status', '==', 'active'), limit(1)));
-            let sprintData = { progress: 0, daysLeft: 0, name: 'No Active Sprint' };
-            if (!sprintSnap.empty) {
-                const sprint = sprintSnap.docs[0].data();
-                sprintData.name = sprint.name;
-                const end = sprint.endDate?.toDate ? sprint.endDate.toDate() : new Date(sprint.endDate);
-                const now = new Date();
-                const diff = end.getTime() - now.getTime();
-                sprintData.daysLeft = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
-                const tasksSnap = await getDocs(query(collection(db, 'tasks'), where('sprintId', '==', sprintSnap.docs[0].id)));
-                const total = tasksSnap.size;
-                const done = tasksSnap.docs.filter(d => d.data().status === 2 || d.data().status === 'done').length;
-                sprintData.progress = total > 0 ? (done / total) * 100 : 0;
-            }
-
-            // 3. Finance Data
-            const fetchDashboardData = httpsCallable(functions, 'fetchDashboardData');
-            const now = new Date();
-            const start = new Date(now.getFullYear(), now.getMonth(), 1);
-            const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            const financeRes: any = await fetchDashboardData({ startDate: start.toISOString(), endDate: end.toISOString() });
-            const financeData = financeRes.data.data || {};
-
-            const spendByBucket = Object.entries(financeData.spendByBucket || {})
-                .map(([k, v]: [string, any]) => ({ name: k, value: Math.abs(v) / 100 }))
-                .filter(x => x.value > 0);
-
-            const budgetSnap = await getDoc(doc(db, 'budget_settings', currentUser.uid));
-            const budgetSettings = budgetSnap.exists() ? budgetSnap.data() : {};
-            const monthlyIncome = budgetSettings.monthlyIncome || 0;
-            const totalBudget = monthlyIncome * 100;
-            const totalSpend = Math.abs(financeData.totalSpend || 0);
-            const budgetRemaining = Math.max(0, totalBudget - totalSpend);
-            const discretionaryLimit = (budgetSettings.discretionaryLimit || (monthlyIncome * 0.3)) * 100;
-            const discretionarySpend = Math.abs(financeData.totalDiscretionarySpend || 0);
-            const discretionaryRemaining = Math.max(0, discretionaryLimit - discretionarySpend);
-
-            // 4. Mocked Trends & Data
-            const trend = [];
-            const healthTrend = [];
-            const wealthTrend = [];
-            for (let i = 6; i >= 0; i--) {
-                const d = new Date();
-                d.setDate(d.getDate() - i);
-                const day = d.toLocaleDateString('en-US', { weekday: 'short' });
-                trend.push({ day, completed: Math.floor(Math.random() * 8) + 2 });
-                healthTrend.push({ day, workouts: Math.floor(Math.random() * 2), sleep: 6 + Math.random() * 3 });
-                wealthTrend.push({ day, spend: Math.floor(Math.random() * 50) + 10, savings: Math.floor(Math.random() * 20) });
-            }
-
-            setStats({
-                health: calc('Health') || 65,
-                wealth: calc('Wealth') || 45,
-                growth: calc('Growth') || 30,
-                tribe: calc('Tribe') || 80,
-                home: calc('Home') || 50,
-                sprint: sprintData,
-                tasksCompletedTrend: trend,
-                capacity: { free: 12, total: 40 },
-                spendByBucket,
-                budget: {
-                    total: totalBudget,
-                    remaining: budgetRemaining,
-                    discretionaryTotal: discretionaryLimit,
-                    discretionaryRemaining: discretionaryRemaining
-                },
-                level: 5, xp: 2450, streak: 12,
-                healthTrend, wealthTrend,
-                capacityBreakdown: [
-                    { name: 'Work', value: 40 },
-                    { name: 'Sleep', value: 56 },
-                    { name: 'Personal', value: 30 },
-                    { name: 'Chores', value: 10 }
-                ]
-            });
-
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setLoading(false);
+          const capacityFn = httpsCallable(functions, 'calculateSprintCapacity');
+          const capRes = await capacityFn({ sprintId: summaryData.sprintProgress.sprintId });
+          setCapacity(capRes.data);
+        } catch (capErr) {
+          console.warn('capacity fetch failed', capErr);
         }
-    };
+      } else {
+        setCapacity(null);
+      }
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || 'Failed to load overview');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
-    const formatCurrency = (pence: number) => new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(pence / 100);
+  useEffect(() => {
+    if (!currentUser) return;
+    loadData();
+  }, [currentUser]);
 
-    if (loading) return <div className="p-5 text-center" style={{ color: colors.text }}>Loading Command Center...</div>;
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadData();
+  };
 
-    const radarData = [
-        { subject: 'Health', A: stats.health, fullMark: 100 },
-        { subject: 'Wealth', A: stats.wealth, fullMark: 100 },
-        { subject: 'Growth', A: stats.growth, fullMark: 100 },
-        { subject: 'Tribe', A: stats.tribe, fullMark: 100 },
-        { subject: 'Home', A: stats.home, fullMark: 100 },
-    ];
+  const goalCompletion = summary?.goalProgress?.percentComplete ?? 0;
+  const goalsTotal = summary?.goalProgress?.total ?? 0;
+  const goalsDone = summary?.goalProgress?.completed ?? 0;
 
-    return (
-        <div style={{ backgroundColor: colors.bg, minHeight: '100vh', padding: '2rem', transition: 'background-color 0.3s' }}>
-            <div className="d-flex justify-content-between align-items-center mb-4">
-                <div>
-                    <h2 className="fw-bold mb-0" style={{ color: colors.text }}>Command Center</h2>
-                    <p className="text-muted mb-0">Welcome back, {currentUser?.displayName}</p>
-                </div>
-                <div className="d-flex gap-3">
-                    <Badge bg="primary" className="d-flex align-items-center gap-2 px-3 py-2">
-                        <Award size={16} /> Level {stats.level}
-                    </Badge>
-                    <Badge bg="warning" text="dark" className="d-flex align-items-center gap-2 px-3 py-2">
-                        <Flame size={16} /> {stats.streak} Day Streak
-                    </Badge>
-                </div>
-            </div>
+  const sprintPercent = summary?.sprintProgress?.percentComplete ?? 0;
+  const sprintName = summary?.sprintProgress?.sprintName || 'No active sprint';
+  const sprintCompleted = summary?.sprintProgress?.completedStories ?? 0;
+  const sprintTotal = summary?.sprintProgress?.totalStories ?? 0;
+  const sprintDaysLeft = useMemo(() => {
+    const end = summary?.sprintProgress?.endDate;
+    const endDate = end ? toDate(end) : null;
+    if (!endDate) return null;
+    return Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+  }, [summary]);
 
-            <Tabs
-                id="command-center-tabs"
-                activeKey={key}
-                onSelect={(k) => setKey(k || 'summary')}
-                className="mb-4 custom-tabs"
-                style={{ borderBottomColor: colors.grid }}
-            >
-                {/* SUMMARY TAB */}
-                <Tab eventKey="summary" title="Summary">
-                    <Row className="g-4 mb-4">
-                        <Col md={3}>
-                            <PremiumCard title="Sprint Status" icon={Zap}>
-                                <h3 className="fw-bold mb-1" style={{ color: colors.warning }}>{stats.sprint.daysLeft} Days</h3>
-                                <small className="text-muted d-block mb-2">Remaining in {stats.sprint.name}</small>
-                                <ProgressBar now={stats.sprint.progress} variant="warning" style={{ height: '6px', backgroundColor: colors.grid }} />
-                            </PremiumCard>
-                        </Col>
-                        <Col md={3}>
-                            <PremiumCard title="Budget Remaining" icon={DollarSign}>
-                                <h3 className="fw-bold mb-1" style={{ color: colors.success }}>{formatCurrency(stats.budget.remaining)}</h3>
-                                <small className="text-muted d-block mb-2">of {formatCurrency(stats.budget.total)}</small>
-                                <ProgressBar now={(stats.budget.remaining / stats.budget.total) * 100} variant="success" style={{ height: '6px', backgroundColor: colors.grid }} />
-                            </PremiumCard>
-                        </Col>
-                        <Col md={3}>
-                            <PremiumCard title="Discretionary" icon={DollarSign}>
-                                <h3 className="fw-bold mb-1" style={{ color: colors.info }}>{formatCurrency(stats.budget.discretionaryRemaining)}</h3>
-                                <small className="text-muted d-block mb-2">Safe to spend</small>
-                                <ProgressBar now={(stats.budget.discretionaryRemaining / stats.budget.discretionaryTotal) * 100} variant="info" style={{ height: '6px', backgroundColor: colors.grid }} />
-                            </PremiumCard>
-                        </Col>
-                        <Col md={3}>
-                            <PremiumCard title="Productivity" icon={CheckCircle}>
-                                <h3 className="fw-bold mb-1" style={{ color: colors.primary }}>High</h3>
-                                <small className="text-muted d-block mb-2">Trend is up</small>
-                                <div style={{ height: 40 }}>
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={stats.tasksCompletedTrend}>
-                                            <Bar dataKey="completed" fill={colors.primary} radius={[2, 2, 0, 0]} />
-                                        </BarChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </PremiumCard>
-                        </Col>
-                    </Row>
+  const capacitySummary = {
+    total: capacity?.totalCapacityHours ?? 0,
+    allocated: capacity?.allocatedHours ?? 0,
+    free: capacity?.freeCapacityHours ?? 0,
+    utilization: capacity?.utilization ? Math.min(150, Math.round(capacity.utilization * 100)) : 0,
+    scheduled: capacity?.scheduledHours ?? 0,
+  };
 
-                    <Row className="g-4">
-                        <Col md={6}>
-                                    <PremiumCard title="Life Balance" icon={Activity} height={300}>
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <RadarChart cx="50%" cy="50%" outerRadius="80%" data={radarData}>
-                                                <PolarGrid stroke={colors.grid} />
-                                                {/* @ts-ignore recharts typing */}
-                                                <PolarAngleAxis dataKey="subject" tick={{ fill: colors.textMuted }} />
-                                                {/* @ts-ignore recharts typing */}
-                                                <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                                                <Radar name="Balance" dataKey="A" stroke={colors.primary} fill={colors.primary} fillOpacity={0.5} />
-                                                <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
-                                            </RadarChart>
-                                        </ResponsiveContainer>
-                                    </PremiumCard>
-                        </Col>
-                        <Col md={6}>
-                            <PremiumCard title="Weekly Focus" icon={TrendingUp} height={300}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={stats.tasksCompletedTrend}>
-                                        <defs>
-                                            <linearGradient id="colorPv" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor={colors.info} stopOpacity={0.8} />
-                                                <stop offset="95%" stopColor={colors.info} stopOpacity={0} />
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
-                                        <XAxis dataKey="day" stroke={colors.textMuted} />
-                                        <YAxis stroke={colors.textMuted} />
-                                        <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
-                                        <Area type="monotone" dataKey="completed" stroke={colors.info} fillOpacity={1} fill="url(#colorPv)" />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </PremiumCard>
-                        </Col>
-                    </Row>
-                </Tab>
+  const spendByBucketData = useMemo(() => {
+    return Object.entries(finance?.spendByBucket || {})
+      .filter(([key]) => key !== 'bank_transfer' && key !== 'unknown')
+      .map(([key, value]) => ({ name: key, value: Math.abs(value as number) / 100 }))
+      .sort((a, b) => b.value - a.value);
+  }, [finance]);
 
-                {/* HEALTH TAB */}
-                <Tab eventKey="health" title="Health">
-                    <Row className="g-4">
-                        <Col md={8}>
-                            <PremiumCard title="Activity & Sleep Trend" icon={Heart} height={300}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={stats.healthTrend}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
-                                        <XAxis dataKey="day" stroke={colors.textMuted} />
-                                        <YAxis yAxisId="left" stroke={colors.textMuted} />
-                                        <YAxis yAxisId="right" orientation="right" stroke={colors.textMuted} />
-                                        <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
-                                        <Legend />
-                                        <Bar yAxisId="left" dataKey="workouts" name="Workouts" fill={colors.danger} radius={[4, 4, 0, 0]} />
-                                        <Line yAxisId="right" type="monotone" dataKey="sleep" name="Sleep (hrs)" stroke={colors.info} strokeWidth={2} />
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            </PremiumCard>
-                        </Col>
-                        <Col md={4}>
-                            <PremiumCard title="Health Goals" icon={Target}>
-                                <div className="d-flex flex-column gap-3">
-                                    <div>
-                                        <div className="d-flex justify-content-between mb-1">
-                                            <small>Run 5k</small>
-                                            <small>80%</small>
-                                        </div>
-                                        <ProgressBar now={80} variant="danger" style={{ height: '6px', backgroundColor: colors.grid }} />
-                                    </div>
-                                    <div>
-                                        <div className="d-flex justify-content-between mb-1">
-                                            <small>Drink Water</small>
-                                            <small>40%</small>
-                                        </div>
-                                        <ProgressBar now={40} variant="info" style={{ height: '6px', backgroundColor: colors.grid }} />
-                                    </div>
-                                </div>
-                            </PremiumCard>
-                        </Col>
-                    </Row>
-                </Tab>
+  const burnDownData = useMemo(() => {
+    return (finance?.burnDown || []).map((d: any) => ({
+      day: d.day,
+      ideal: (d.ideal || 0) / 100,
+      actual: d.actual != null ? (d.actual / 100) : null,
+    }));
+  }, [finance]);
 
-                {/* WEALTH TAB */}
-                <Tab eventKey="wealth" title="Wealth">
-                    <Row className="g-4">
-                        <Col md={6}>
-                            <PremiumCard title="Spend Breakdown" icon={DollarSign} height={300}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <PieChart>
-                                        <Pie
-                                            data={stats.spendByBucket}
-                                            innerRadius={60}
-                                            outerRadius={80}
-                                            paddingAngle={5}
-                                            dataKey="value"
-                                            stroke="none"
-                                        >
-                                            {stats.spendByBucket.map((entry: any, index: number) => (
-                                                <Cell key={`cell-${index}`} fill={colors.chartColors[index % colors.chartColors.length]} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip formatter={(val: number) => formatCurrency(val * 100)} contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
-                                        <Legend />
-                                    </PieChart>
-                                </ResponsiveContainer>
-                            </PremiumCard>
-                        </Col>
-                        <Col md={6}>
-                            <PremiumCard title="Daily Spend vs Savings" icon={TrendingUp} height={300}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={stats.wealthTrend}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
-                                        <XAxis dataKey="day" stroke={colors.textMuted} />
-                                        <YAxis stroke={colors.textMuted} />
-                                        <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
-                                        <Legend />
-                                        <Bar dataKey="spend" name="Spend" fill={colors.warning} stackId="a" />
-                                        <Bar dataKey="savings" name="Savings" fill={colors.success} stackId="a" />
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            </PremiumCard>
-                        </Col>
-                    </Row>
-                </Tab>
+  const goalTitleLookup = useMemo(() => {
+    const map = new Map<string, string>();
+    (summary?.goalProgress?.goals || []).forEach((g: any) => {
+      if (g.id) map.set(g.id, g.title || g.goalTitle || g.id);
+    });
+    return map;
+  }, [summary]);
 
-                {/* PROGRESS TAB */}
-                <Tab eventKey="progress" title="Progress">
-                    <Row className="g-4">
-                        <Col md={12}>
-                            <PremiumCard title="Sprint Velocity" icon={Zap} height={300}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={stats.tasksCompletedTrend}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
-                                        <XAxis dataKey="day" stroke={colors.textMuted} />
-                                        <YAxis stroke={colors.textMuted} />
-                                        <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
-                                        <Area type="monotone" dataKey="completed" stroke={colors.primary} fill={colors.primary} fillOpacity={0.3} />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </PremiumCard>
-                        </Col>
-                    </Row>
-                </Tab>
+  const goalBreakdown = useMemo(() => {
+    const entries = Object.entries(capacity?.breakdownByGoal || {});
+    return entries
+      .map(([goalId, values]: [string, any]) => ({
+        name: goalTitleLookup.get(goalId) || goalId || 'Goal',
+        allocated: Number(values?.allocated || 0),
+        utilized: Number(values?.utilized || 0),
+      }))
+      .sort((a, b) => b.allocated - a.allocated)
+      .slice(0, 6);
+  }, [capacity, goalTitleLookup]);
 
-                {/* CAPACITY TAB */}
-                <Tab eventKey="capacity" title="Capacity">
-                    <Row className="g-4">
-                        <Col md={6}>
-                            <PremiumCard title="Time Distribution" icon={Calendar} height={300}>
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <PieChart>
-                                        <Pie
-                                            data={stats.capacityBreakdown}
-                                            cx="50%"
-                                            cy="50%"
-                                            outerRadius={80}
-                                            fill="#8884d8"
-                                            dataKey="value"
-                                            label
-                                            stroke="none"
-                                        >
-                                            {stats.capacityBreakdown.map((entry: any, index: number) => (
-                                                <Cell key={`cell-${index}`} fill={colors.chartColors[index % colors.chartColors.length]} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
-                                        <Legend />
-                                    </PieChart>
-                                </ResponsiveContainer>
-                            </PremiumCard>
-                        </Col>
-                        <Col md={6}>
-                            <PremiumCard title="Free Capacity" icon={CheckCircle}>
-                                <div className="text-center py-5">
-                                    <h1 className="display-1 fw-bold" style={{ color: colors.success }}>{stats.capacity.free}h</h1>
-                                    <p className="text-muted">Free hours this week</p>
-                                    <ProgressBar now={(stats.capacity.free / stats.capacity.total) * 100} variant="success" style={{ height: '10px', backgroundColor: colors.grid }} />
-                                </div>
-                            </PremiumCard>
-                        </Col>
-                    </Row>
-                </Tab>
-            </Tabs>
+  const themeBreakdown = useMemo(() => {
+    const entries = Object.entries(capacity?.scheduledByTheme || capacity?.breakdownByTheme || {});
+    return entries
+      .map(([theme, hours]: [string, any]) => ({ theme, hours: Number(hours || 0) }))
+      .sort((a, b) => b.hours - a.hours)
+      .slice(0, 6);
+  }, [capacity]);
+
+  const hrvTrend = useMemo(() => {
+    const hrv = summary?.fitness?.hrv;
+    if (!hrv) return [];
+    const points = [];
+    if (hrv.last30Avg) points.push({ label: '30d avg', value: hrv.last30Avg });
+    if (hrv.last7Avg) points.push({ label: '7d avg', value: hrv.last7Avg });
+    if (hrv.trendPct != null) points.push({ label: 'Trend', value: hrv.trendPct });
+    return points;
+  }, [summary]);
+
+  const categoryTrend = useMemo(() => {
+    if (!finance?.timeSeriesByCategory) return [];
+    const totals = Object.entries(finance?.spendByCategory || {});
+    const topKeys = totals
+      .sort((a, b) => Math.abs((b[1] as number)) - Math.abs((a[1] as number)))
+      .slice(0, 4)
+      .map(([key]) => key);
+    const monthSet = new Set<string>();
+    topKeys.forEach((k) => {
+      (finance.timeSeriesByCategory?.[k] || []).forEach((row: any) => monthSet.add(row.month));
+    });
+    const months = Array.from(monthSet).sort();
+    return months.map((month) => {
+      const row: any = { month };
+      topKeys.forEach((k) => {
+        const entry = (finance.timeSeriesByCategory?.[k] || []).find((r: any) => r.month === month);
+        row[k] = entry ? Math.abs(entry.amount || 0) / 100 : 0;
+      });
+      return row;
+    });
+  }, [finance]);
+
+  const financeAlerts = summary?.financeAlerts || [];
+  const monzoUpdated = summary?.monzo?.updatedAt ? toDate(summary.monzo.updatedAt) : null;
+  const discretionarySpend = finance?.totalDiscretionarySpend ? Math.abs(finance.totalDiscretionarySpend) / 100 : null;
+  const subscriptionSpend = finance?.totalSubscriptionSpend ? Math.abs(finance.totalSubscriptionSpend) / 100 : null;
+  const totalSpend = Math.abs(finance?.totalSpend || 0) / 100;
+  const fitnessScore = summary?.fitness?.fitnessScore || null;
+  const lastWorkout = summary?.fitness?.lastWorkout || null;
+
+  if (!currentUser) return <Alert variant="warning" className="m-3">Sign in to view the overview.</Alert>;
+  if (loading && !summary) return <div className="p-5 text-center" style={{ color: colors.text }}>Loading Command Center...</div>;
+
+  return (
+    <div style={{ backgroundColor: colors.bg, minHeight: '100vh', padding: '2rem', transition: 'background-color 0.3s' }}>
+      <div className="d-flex justify-content-between align-items-center mb-4">
+        <div>
+          <h2 className="fw-bold mb-0" style={{ color: colors.text }}>Command Center</h2>
+          <p className="text-muted mb-0">
+            Snapshot powered by Firestore + Functions. Monzo last updated: {monzoUpdated ? monzoUpdated.toLocaleString() : 'unknown'}.
+          </p>
         </div>
-    );
+        <div className="d-flex gap-2 align-items-center">
+          <Badge bg="secondary" className="d-flex align-items-center gap-2 px-3 py-2">
+            <CheckCircle size={16} /> Goals {Math.round(goalCompletion)}%
+          </Badge>
+          <Badge bg="info" text="dark" className="d-flex align-items-center gap-2 px-3 py-2">
+            <Activity size={16} /> Capacity {capacitySummary.utilization}%
+          </Badge>
+          <Button size="sm" variant="outline-secondary" onClick={handleRefresh} disabled={loading || refreshing}>
+            {refreshing ? 'Refreshing…' : 'Refresh data'}
+          </Button>
+        </div>
+      </div>
+
+      {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
+
+      <Tabs
+        id="command-center-tabs"
+        activeKey={key}
+        onSelect={(k) => setKey(k || 'summary')}
+        className="mb-4 custom-tabs"
+        style={{ borderBottomColor: colors.grid }}
+      >
+        <Tab eventKey="summary" title="Summary">
+          <Row className="g-4 mb-4">
+            <Col md={3}>
+              <PremiumCard title="Sprint Status" icon={Zap}>
+                <h3 className="fw-bold mb-1" style={{ color: colors.warning }}>{Math.round(sprintPercent)}%</h3>
+                <small className="text-muted d-block mb-2">
+                  {sprintName} • {sprintCompleted}/{sprintTotal} stories{typeof sprintDaysLeft === 'number' ? ` • ${sprintDaysLeft} days left` : ''}
+                </small>
+                <ProgressBar now={sprintPercent} variant="warning" style={{ height: '6px', backgroundColor: colors.grid }} />
+              </PremiumCard>
+            </Col>
+            <Col md={3}>
+              <PremiumCard title="Capacity" icon={Calendar}>
+                <h3 className="fw-bold mb-1" style={{ color: colors.success }}>{capacitySummary.free.toFixed(1)}h free</h3>
+                <small className="text-muted d-block mb-1">Allocated {capacitySummary.allocated.toFixed(1)}h / {capacitySummary.total.toFixed(1)}h</small>
+                <small className="text-muted d-block mb-2">Scheduled {capacitySummary.scheduled.toFixed(1)}h this sprint</small>
+                <ProgressBar now={capacitySummary.utilization} variant="success" style={{ height: '6px', backgroundColor: colors.grid }} />
+              </PremiumCard>
+            </Col>
+            <Col md={3}>
+              <PremiumCard title="Budget Burn" icon={DollarSign}>
+                <h3 className="fw-bold mb-1" style={{ color: colors.info }}>{formatCurrency(totalSpend)}</h3>
+                <small className="text-muted d-block mb-2">
+                  Discretionary {discretionarySpend ? formatCurrency(discretionarySpend * 100) : '—'} • Subscriptions {subscriptionSpend ? formatCurrency(subscriptionSpend * 100) : '—'}
+                </small>
+                <ProgressBar now={Math.min(100, totalSpend ? (discretionarySpend ? (discretionarySpend / totalSpend) * 100 : 0) : 0)} variant="info" style={{ height: '6px', backgroundColor: colors.grid }} />
+              </PremiumCard>
+            </Col>
+            <Col md={3}>
+              <PremiumCard title="Goals" icon={Target}>
+                <h3 className="fw-bold mb-1" style={{ color: colors.primary }}>{goalsDone}/{goalsTotal || '—'}</h3>
+                <small className="text-muted d-block mb-2">Completion {Math.round(goalCompletion)}%</small>
+                <ProgressBar now={goalCompletion} variant="primary" style={{ height: '6px', backgroundColor: colors.grid }} />
+              </PremiumCard>
+            </Col>
+          </Row>
+
+          <Row className="g-4 mb-4">
+            <Col md={6}>
+              <PremiumCard title="Spend by Bucket" icon={DollarSign} height={320}>
+                {spendByBucketData.length === 0 ? (
+                  <div className="text-muted small">No spend data in this window.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={spendByBucketData} dataKey="value" nameKey="name" innerRadius={60} outerRadius={90} paddingAngle={4}>
+                        {spendByBucketData.map((entry, idx) => (
+                          <Cell key={entry.name} fill={colors.chartColors[idx % colors.chartColors.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(val: number) => formatCurrency(val * 100)} contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+              </PremiumCard>
+            </Col>
+            <Col md={6}>
+              <PremiumCard title="Budget Burn-down" icon={TrendingUp} height={320}>
+                {burnDownData.length === 0 ? (
+                  <div className="text-muted small">No burn-down for this month.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={burnDownData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="day" stroke={colors.textMuted} />
+                      <YAxis stroke={colors.textMuted} tickFormatter={(v) => `£${v}`} />
+                      <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Legend />
+                      <Line type="monotone" dataKey="ideal" name="Ideal" stroke={colors.textMuted} strokeDasharray="5 5" />
+                      <Line type="monotone" dataKey="actual" name="Actual" stroke={colors.primary} strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </PremiumCard>
+            </Col>
+          </Row>
+
+          <Row className="g-4">
+            <Col md={6}>
+              <PremiumCard title="Capacity Allocation" icon={Calendar} height={320}>
+                {goalBreakdown.length === 0 ? (
+                  <div className="text-muted small">No capacity data yet.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={goalBreakdown} margin={{ left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="name" stroke={colors.textMuted} tick={{ fontSize: 12 }} />
+                      <YAxis stroke={colors.textMuted} />
+                      <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Legend />
+                      <Bar dataKey="allocated" name="Allocated (h)" fill={colors.info} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="utilized" name="Utilised (h)" fill={colors.success} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </PremiumCard>
+            </Col>
+            <Col md={6}>
+              <PremiumCard title="Recovery & HRV" icon={Heart} height={320}>
+                {hrvTrend.length === 0 ? (
+                  <div className="text-muted small">Connect a fitness source to see HRV.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={hrvTrend}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="label" stroke={colors.textMuted} />
+                      <YAxis stroke={colors.textMuted} />
+                      <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Line type="monotone" dataKey="value" stroke={colors.danger} strokeWidth={2} dot />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+                <div className="mt-3 small text-muted">
+                  {fitnessScore ? <>Fitness score {fitnessScore}. </> : null}
+                  {lastWorkout ? <>Last session: {lastWorkout.title || lastWorkout.name || 'Workout'} ({lastWorkout.provider || '—'})</> : null}
+                </div>
+              </PremiumCard>
+            </Col>
+          </Row>
+
+          {financeAlerts.length > 0 && (
+            <Alert variant="warning" className="mt-4 mb-0">
+              <strong>Finance alerts:</strong> {financeAlerts.join('; ')}
+            </Alert>
+          )}
+        </Tab>
+
+        <Tab eventKey="wealth" title="Wealth">
+          <Row className="g-4 mb-4">
+            <Col md={6}>
+              <PremiumCard title="Category Momentum" icon={TrendingUp} height={340}>
+                {categoryTrend.length === 0 ? (
+                  <div className="text-muted small">No classified spend trend yet.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={categoryTrend} stackOffset="expand">
+                      <defs>
+                        <linearGradient id="wealthA" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor={colors.primary} stopOpacity={0.8} />
+                          <stop offset="95%" stopColor={colors.primary} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="month" stroke={colors.textMuted} />
+                      <YAxis stroke={colors.textMuted} tickFormatter={(v) => `£${v}`} />
+                      <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Legend />
+                      {Object.keys(categoryTrend[0] || {}).filter((k) => k !== 'month').map((key, idx) => (
+                        <Area
+                          key={key}
+                          type="monotone"
+                          dataKey={key}
+                          stackId="1"
+                          stroke={colors.chartColors[idx % colors.chartColors.length]}
+                          fill={colors.chartColors[idx % colors.chartColors.length]}
+                          fillOpacity={0.35}
+                        />
+                      ))}
+                    </AreaChart>
+                  </ResponsiveContainer>
+                )}
+              </PremiumCard>
+            </Col>
+            <Col md={6}>
+              <PremiumCard title="Top Buckets" icon={DollarSign} height={340}>
+                {spendByBucketData.length === 0 ? (
+                  <div className="text-muted small">No spend buckets available.</div>
+                ) : (
+                  <ul className="list-unstyled mb-0 small">
+                    {spendByBucketData.slice(0, 6).map((bucket, idx) => (
+                      <li key={bucket.name} className="d-flex justify-content-between align-items-center py-1">
+                        <span className="d-flex align-items-center gap-2">
+                          <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 4, backgroundColor: colors.chartColors[idx % colors.chartColors.length] }} />
+                          {bucket.name}
+                        </span>
+                        <span className="fw-semibold">{formatCurrency(bucket.value * 100)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </PremiumCard>
+            </Col>
+          </Row>
+        </Tab>
+
+        <Tab eventKey="capacity" title="Capacity">
+          <Row className="g-4 mb-4">
+            <Col md={6}>
+              <PremiumCard title="Goal Allocation" icon={Target} height={360}>
+                {goalBreakdown.length === 0 ? (
+                  <div className="text-muted small">No capacity by goal yet.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={goalBreakdown}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="name" stroke={colors.textMuted} tick={{ fontSize: 12 }} />
+                      <YAxis stroke={colors.textMuted} />
+                      <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Legend />
+                      <Bar dataKey="allocated" name="Allocated (h)" fill={colors.info} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="utilized" name="Utilised (h)" fill={colors.success} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </PremiumCard>
+            </Col>
+            <Col md={6}>
+              <PremiumCard title="Theme Distribution" icon={Activity} height={360}>
+                {themeBreakdown.length === 0 ? (
+                  <div className="text-muted small">No themed hours yet.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={themeBreakdown}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="theme" stroke={colors.textMuted} tick={{ fontSize: 12 }} />
+                      <YAxis stroke={colors.textMuted} />
+                      <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Bar dataKey="hours" name="Hours" fill={colors.primary} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </PremiumCard>
+            </Col>
+          </Row>
+        </Tab>
+
+        <Tab eventKey="health" title="Health">
+          <Row className="g-4 mb-4">
+            <Col md={6}>
+              <PremiumCard title="HRV & Recovery" icon={Heart} height={340}>
+                {hrvTrend.length === 0 ? (
+                  <div className="text-muted small">Connect fitness data to populate HRV.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={hrvTrend}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="label" stroke={colors.textMuted} />
+                      <YAxis stroke={colors.textMuted} />
+                      <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Line type="monotone" dataKey="value" stroke={colors.danger} strokeWidth={2} dot />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </PremiumCard>
+            </Col>
+            <Col md={6}>
+              <PremiumCard title="Latest Session" icon={CheckCircle} height={340}>
+                {lastWorkout ? (
+                  <div className="small">
+                    <div className="fw-semibold mb-1">{lastWorkout.title || lastWorkout.name || 'Workout'}</div>
+                    <div className="text-muted mb-2">{lastWorkout.provider || '—'} · {lastWorkout.startDate || lastWorkout.startTime || ''}</div>
+                    <div className="d-flex flex-wrap gap-2">
+                      {lastWorkout.distance_m ? <Badge bg="secondary">Distance {(lastWorkout.distance_m / 1000).toFixed(1)} km</Badge> : null}
+                      {lastWorkout.duration_s ? <Badge bg="secondary">Duration {(lastWorkout.duration_s / 60).toFixed(0)} min</Badge> : null}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-muted small">No workouts logged yet.</div>
+                )}
+              </PremiumCard>
+            </Col>
+          </Row>
+        </Tab>
+      </Tabs>
+    </div>
+  );
 };
 
 export default AdvancedOverview;

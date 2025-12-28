@@ -15,7 +15,8 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { httpsCallable } from 'firebase/functions';
-import { functions, firebaseConfig } from '../../firebase';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { db, functions, firebaseConfig } from '../../firebase';
 import { ActivityStreamService, ActivityEntry } from '../../services/ActivityStreamService';
 
 // BOB v3.5.2 - Calendar Integration
@@ -98,6 +99,7 @@ const CalendarIntegrationView: React.FC = () => {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [gcalConnected, setGcalConnected] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [chainStatus, setChainStatus] = useState<'idle'|'running'|'ok'|'error'>('idle');
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewType, setViewType] = useState<'day' | 'week' | 'month'>('week');
   const [auditEntries, setAuditEntries] = useState<ActivityEntry[]>([]);
@@ -123,18 +125,40 @@ const CalendarIntegrationView: React.FC = () => {
     }
   }, []);
 
+  useEffect(() => {
+    if (!currentUser) return;
+    const userRef = doc(db, 'users', currentUser.uid);
+    const unsub = onSnapshot(userRef, (snap) => {
+      if (!snap.exists()) return;
+      const data: any = snap.data();
+      setGcalConnected(Boolean(data?.googleCalendarTokens));
+    });
+    return () => { try { unsub(); } catch {} };
+  }, [currentUser]);
+
+  useEffect(() => {
+    setConfig((prev) => ({ ...prev, googleCalendarEnabled: gcalConnected }));
+  }, [gcalConnected]);
+
   const refreshCalendarStatus = async () => {
     if (!currentUser) return;
+    let connected = gcalConnected;
     try {
       const statusFn = httpsCallable(functions, 'calendarStatus');
       const res: any = await statusFn({});
-      const connected = !!res?.data?.connected;
-      setGcalConnected(connected);
-      setConfig(prev => ({ ...prev, googleCalendarEnabled: connected }));
+      connected = !!res?.data?.connected;
     } catch (e) {
       // Non-fatal if status isn't available
       console.warn('calendarStatus failed', e);
     }
+    if (!connected) {
+      try {
+        const snap = await getDoc(doc(db, 'users', currentUser.uid));
+        connected = snap.exists() && !!(snap.data() as any)?.googleCalendarTokens;
+      } catch { /* ignore */ }
+    }
+    setGcalConnected(connected);
+    setConfig(prev => ({ ...prev, googleCalendarEnabled: connected }));
   };
 
   const getOauthStartUrl = () => {
@@ -277,16 +301,36 @@ const CalendarIntegrationView: React.FC = () => {
   
   const syncCalendars = async () => {
     if (!currentUser) return;
+    if (!gcalConnected) {
+      setSyncStatus('idle');
+      alert('Connect Google Calendar before syncing.');
+      return;
+    }
     setSyncStatus('syncing');
     try {
-      const syncFn = httpsCallable(functions, 'syncCalendarAndTasks');
-      await syncFn({ direction: 'both' });
+      const syncFn = httpsCallable(functions, 'syncCalendarNow');
+      await syncFn({});
       await loadUpcomingFromGoogle();
       setLastSyncTime(new Date());
       setSyncStatus('success');
     } catch (error) {
       console.error('❌ Calendar sync failed:', error);
       setSyncStatus('error');
+    }
+  };
+
+  const runNightlyChain = async () => {
+    if (!currentUser) return;
+    setChainStatus('running');
+    try {
+      const fn = httpsCallable(functions, 'runNightlyChainNow');
+      await fn({});
+      setChainStatus('ok');
+      setTimeout(() => setChainStatus('idle'), 3000);
+    } catch (err) {
+      console.error('runNightlyChainNow failed', err);
+      setChainStatus('error');
+      setTimeout(() => setChainStatus('idle'), 4000);
     }
   };
 
@@ -322,9 +366,8 @@ const CalendarIntegrationView: React.FC = () => {
         reminderMinutes: undefined,
       }));
       setEvents(prev => {
-        const byId = new Map(prev.map(e => [e.id, e] as const));
-        for (const m of mapped) byId.set(m.id, m);
-        return Array.from(byId.values());
+        // Replace events with latest pull to avoid stale dummy data
+        return mapped;
       });
     } catch (e) {
       console.warn('listUpcomingEvents failed', e);
@@ -435,10 +478,18 @@ const CalendarIntegrationView: React.FC = () => {
                 variant="outline-secondary" 
                 size="sm"
                 onClick={syncCalendars}
-                disabled={syncStatus === 'syncing'}
+                disabled={syncStatus === 'syncing' || !gcalConnected}
               >
                 <RefreshCw size={16} className={syncStatus === 'syncing' ? 'spinning' : ''} />
-                {syncStatus === 'syncing' ? 'Syncing...' : 'Sync'}
+                {syncStatus === 'syncing' ? 'Syncing...' : 'Sync now'}
+              </Button>
+              <Button
+                variant="outline-primary"
+                size="sm"
+                onClick={runNightlyChain}
+                disabled={chainStatus === 'running'}
+              >
+                {chainStatus === 'running' ? 'Running nightly…' : 'Run nightly chain'}
               </Button>
               <Button 
                 variant="outline-secondary" 
@@ -467,7 +518,14 @@ const CalendarIntegrationView: React.FC = () => {
           )}
         </Col>
       </Row>
-      
+
+      {!gcalConnected && (
+        <Alert variant="warning" className="mb-3">
+          <AlertCircle size={16} className="me-2" />
+          Google Calendar is not connected. Connect to enable push/pull sync.
+        </Alert>
+      )}
+
       {/* Sync Status Alert */}
       {syncStatus === 'error' && (
         <Alert variant="danger" className="mb-3">

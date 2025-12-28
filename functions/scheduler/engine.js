@@ -743,6 +743,7 @@ async function planSchedule({
   windowEnd,
   busy,
   themeAllocations = [], // User-defined theme time blocks
+  includeChores = false, // Phase 1: keep chores/routines out of scheduling window
 }) {
   const solverRunId = createHash('md5')
     .update(`${userId}:${Date.now()}:${Math.random()}`)
@@ -885,7 +886,7 @@ async function planSchedule({
   const busyByDay = computeBusyByDay(busy, DEFAULT_ZONE);
   const storyOccurrences = await computeStoryOccurrences(stories, windowStart, windowEnd, userId, db);
   const occurrences = [
-    ...computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd),
+    ...(includeChores ? computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd) : []),
     ...computeTaskOccurrences(tasks, windowStart, windowEnd, userId),
     ...storyOccurrences,
   ];

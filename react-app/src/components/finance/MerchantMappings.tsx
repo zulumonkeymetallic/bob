@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, Col, Form, Row, Spinner, Table, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Col, Form, Row, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { FixedSizeList as List } from 'react-window';
 import useMeasure from 'react-use-measure';
 import { useAuth } from '../../contexts/AuthContext';
@@ -31,18 +31,16 @@ const MerchantMappings: React.FC = () => {
   const [edits, setEdits] = useState<Record<string, { categoryKey: string; label: string; isSubscription?: boolean }>>({});
   const [status, setStatus] = useState<string>('');
   const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [subKey, setSubKey] = useState('');
   const [subDecision, setSubDecision] = useState<'keep' | 'reduce' | 'cancel'>('keep');
   const [subNote, setSubNote] = useState('');
   const [search, setSearch] = useState('');
-  const [missingOnly, setMissingOnly] = useState(false);
-  const [sortByMerchant, setSortByMerchant] = useState(true);
-  const [sortMode, setSortMode] = useState<'merchant' | 'spend_desc'>('merchant');
-  const [pendingSort, setPendingSort] = useState<'amount_desc' | 'alpha'>('amount_desc');
+  const [missingOnly, setMissingOnly] = useState(true);
+  const [sortMode, setSortMode] = useState<'merchant' | 'spend_desc' | 'transactions_desc'>('transactions_desc');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [tableRef, bounds] = useMeasure();
   const [pots, setPots] = useState<Record<string, { name: string }>>({});
+  const [txSample, setTxSample] = useState<any[]>([]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -59,8 +57,21 @@ const MerchantMappings: React.FC = () => {
       });
       setPots(map);
     });
-    setLoading(false);
-    return () => { unsub(); unsubPots(); };
+    // Lightweight fallback sample of transactions so UI isn't empty if summary hasn't been built yet
+    const txQ = query(collection(db, 'monzo_transactions'), where('ownerUid', '==', currentUser.uid));
+    const unsubTx = onSnapshot(txQ, (snap) => {
+      const rows: any[] = [];
+      snap.docs.slice(0, 500).forEach((d) => {
+        const data = d.data() as any;
+        rows.push({
+          merchantKey: data.merchantKey || data.merchantId || data.merchant || data.merchant_normalized || data.description,
+          merchantName: data.merchant || data.merchantName || data.description,
+          amount: typeof data.amount === 'number' ? data.amount : Number(data.amount || 0),
+        });
+      });
+      setTxSample(rows);
+    });
+    return () => { unsub(); unsubPots(); unsubTx(); };
   }, [currentUser]);
 
   useEffect(() => {
@@ -96,8 +107,27 @@ const MerchantMappings: React.FC = () => {
     if (Array.isArray((summary as any)?.allMerchants)) {
       return (summary as any).allMerchants as MerchantRow[];
     }
-    return list;
-  }, [summary]);
+    if (list && list.length) return list;
+    if (txSample.length) {
+      const agg = new Map<string, { spend: number; count: number; name: string }>();
+      txSample.forEach((t) => {
+        const key = (t.merchantKey || t.merchantName || 'unknown').toString();
+        if (!agg.has(key)) agg.set(key, { spend: 0, count: 0, name: t.merchantName || key });
+        const entry = agg.get(key)!;
+        entry.count += 1;
+        entry.spend += Math.abs(t.amount || 0);
+      });
+      return Array.from(agg.entries()).map(([merchantKey, val]) => ({
+        merchantKey,
+        merchantName: val.name,
+        totalSpend: val.spend,
+        transactions: val.count,
+        primaryCategoryType: '',
+        primaryCategoryKey: '',
+      }));
+    }
+    return [];
+  }, [summary, txSample]);
 
   const filteredRows = useMemo(() => {
     let list = rows;
@@ -117,20 +147,23 @@ const MerchantMappings: React.FC = () => {
       return { ...r, transactions12: tx12 || tx, transactions6: tx6 || tx };
     });
 
-    let sorted = decorated;
+    const sorted = [...decorated];
     if (sortMode === 'merchant') {
-      sorted = [...decorated].sort((a, b) => {
+      sorted.sort((a, b) => {
         const cmp = (a.merchantName || '').localeCompare(b.merchantName || '');
         return sortDir === 'asc' ? cmp : -cmp;
       });
     } else if (sortMode === 'spend_desc') {
-      sorted = [...decorated].sort((a, b) => (b.totalSpend || 0) - (a.totalSpend || 0));
+      sorted.sort((a, b) => (b.totalSpend || 0) - (a.totalSpend || 0));
+    } else if (sortMode === 'transactions_desc') {
+      sorted.sort((a, b) => {
+        const txA = a.transactions12 || a.transactions || 0;
+        const txB = b.transactions12 || b.transactions || 0;
+        return txB - txA;
+      });
     }
     return sorted;
   }, [rows, search, missingOnly, sortMode, sortDir]);
-
-  const pending = (summary?.pendingClassification || []) as Array<any>;
-  const recurring = (summary?.recurringMerchants || []) as MerchantRow[];
 
   const setEdit = (merchantKey: string, patch: Partial<{ categoryKey: string; label: string; isSubscription: boolean }>) => {
     setEdits((prev) => ({
@@ -294,113 +327,28 @@ const MerchantMappings: React.FC = () => {
 
       <Card className="mb-3">
         <Card.Body>
-          <div className="d-flex flex-wrap gap-2 align-items-center">
-            <Form.Control
-              size="sm"
-              placeholder="Search merchant"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={{ maxWidth: 220 }}
-            />
+          <div className="d-flex flex-wrap gap-3 align-items-center">
+            <div>
+              <div className="small text-muted mb-1">Search</div>
+              <Form.Control
+                size="sm"
+                placeholder="Search merchant"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ maxWidth: 240 }}
+              />
+            </div>
             <Form.Check
               type="switch"
               id="missing-only"
-              label="Missing category only"
+              label="Show uncategorised first"
               checked={missingOnly}
               onChange={(e) => setMissingOnly(e.target.checked)}
             />
-            <Form.Check
-              type="switch"
-              id="sort-merchant"
-              label="Sort by merchant"
-              checked={sortByMerchant}
-              onChange={(e) => setSortByMerchant(e.target.checked)}
-            />
+            <div className="small text-muted">Default view: uncategorised merchants by tx volume.</div>
           </div>
         </Card.Body>
       </Card>
-
-      {pending?.length > 0 && (
-        <Card className="mb-3">
-          <Card.Header>
-            <div className="d-flex justify-content-between align-items-center">
-              <strong>Uncategorised Suggestions</strong>
-              <div className="d-flex align-items-center gap-2">
-                <span className="small text-muted">Sort</span>
-                <Form.Select
-                  size="sm"
-                  value={pendingSort}
-                  onChange={(e) => setPendingSort(e.target.value as 'amount_desc' | 'alpha')}
-                >
-                  <option value="amount_desc">By amount (high → low)</option>
-                  <option value="alpha">By description A→Z</option>
-                </Form.Select>
-              </div>
-            </div>
-          </Card.Header>
-          <Card.Body>
-            <div className="small text-muted mb-2">Quickly create mappings for frequent uncategorised merchants.</div>
-            <div style={{ height: 360, width: '100%' }}>
-              <List
-                height={360}
-                width={bounds.width || 1100}
-                itemCount={(pending || []).length}
-                itemSize={84}
-                itemKey={(idx) => (pending[idx]?.transactionId || idx)}
-              >
-                {({ index, style }) => {
-                  const sorted = (pending || []).slice().sort((a, b) => {
-                    if (pendingSort === 'amount_desc') return (b.amount || 0) - (a.amount || 0);
-                    return (a.merchantName || a.description || '').localeCompare(b.merchantName || b.description || '');
-                  });
-                  const p = sorted[index];
-                  const merchantKey = (p.merchantName || p.description || '').toLowerCase();
-                  const potLabel = (() => {
-                    const pid = p.metadata?.pot_id || p.metadata?.destination_pot_id || p.metadata?.source_pot_id;
-                    if (pid && pots[pid]) return pots[pid].name;
-                    if (p.description && p.description.startsWith('pot_')) return p.description.replace(/^pot_/, '');
-                    return undefined;
-                  })();
-                  const defaultKey = edits[merchantKey]?.categoryKey || 'uncategorized';
-                  const defaultLabel = edits[merchantKey]?.label || potLabel || p.merchantName || p.description || '';
-                  return (
-                    <div style={{ ...style, padding: '8px 12px', borderBottom: '1px solid #f1f3f5' }}>
-                      <Row className="align-items-center gy-2">
-                        <Col md={3}>
-                          <div className="fw-semibold text-truncate">{potLabel || p.merchantName || p.description}</div>
-                          <div className="small text-muted">{p.transactionId}</div>
-                        </Col>
-                        <Col md={2} className="text-end">
-                          <div className="fw-semibold">{formatMoney(p.amount || 0)}</div>
-                        </Col>
-                        <Col md={2}>
-                          <Form.Select size="sm" value={defaultKey} onChange={(e) => setEdit(merchantKey, { categoryKey: e.target.value })}>
-                            {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
-                              <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
-                                {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
-                              </optgroup>
-                            ))}
-                          </Form.Select>
-                        </Col>
-                        <Col md={3}>
-                          <Form.Control
-                            size="sm"
-                            value={defaultLabel}
-                            onChange={(e) => setEdit(merchantKey, { label: e.target.value })}
-                          />
-                        </Col>
-                        <Col md={2} className="text-end">
-                          <Button size="sm" onClick={() => saveOne(merchantKey, true)} disabled={busy}>Save & Apply</Button>
-                        </Col>
-                      </Row>
-                    </div>
-                  );
-                }}
-              </List>
-            </div>
-          </Card.Body>
-        </Card>
-      )}
 
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
@@ -412,9 +360,10 @@ const MerchantMappings: React.FC = () => {
             <Form.Select
               size="sm"
               value={sortMode}
-              onChange={(e) => setSortMode(e.target.value as 'merchant' | 'spend_desc')}
+              onChange={(e) => setSortMode(e.target.value as 'merchant' | 'spend_desc' | 'transactions_desc')}
             >
               <option value="merchant">Sort by merchant A→Z</option>
+              <option value="transactions_desc">Sort by tx count (high → low)</option>
               <option value="spend_desc">Sort by total spend (high → low)</option>
             </Form.Select>
             {sortMode === 'merchant' && (

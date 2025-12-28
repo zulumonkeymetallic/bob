@@ -28,6 +28,8 @@ const {
   ensureFirestore,
   resolveTimezone,
 } = require('./lib/reporting');
+// Nightly orchestration helpers (auto-pointing, conversion, priority, calendar)
+const nightlyOrchestration = require('./nightlyOrchestration');
 const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
 const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('./services/mediaImportController');
 const { aggregateTransactions } = require('./finance/dashboard');
@@ -60,7 +62,9 @@ try {
     exports.syncCalendarBlock = calendarSync.syncCalendarBlock;
     exports.onCalendarBlockWrite = calendarSync.onCalendarBlockWrite;
     exports.syncFromGoogleCalendar = calendarSync.syncFromGoogleCalendar;
+    exports.syncCalendarNow = calendarSync.syncCalendarNow;
     exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
+    exports.syncCalendarTestInsert = calendarSync.syncCalendarTestInsert;
   }
 } catch (e) {
   console.warn('[init] calendarSync not loaded', e?.message || e);
@@ -84,6 +88,22 @@ try {
 } catch (e) {
   console.warn('[init] aiPlanning not loaded', e?.message || e);
 }
+
+// New orchestration exports (sizing, conversions, priority scoring, calendar planner)
+try {
+  if (nightlyOrchestration) {
+    exports.runAutoPointing = nightlyOrchestration.runAutoPointing;
+    exports.runAutoConversions = nightlyOrchestration.runAutoConversions;
+    exports.runPriorityScoring = nightlyOrchestration.runPriorityScoring;
+    exports.runCalendarPlanner = nightlyOrchestration.runCalendarPlanner;
+    exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
+  }
+} catch (e) {
+  console.warn('[init] nightlyOrchestration not loaded', e?.message || e);
+}
+
+// Calendar diagnostics
+// (already exported above with calendarSync bundle)
 
 functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
 admin.initializeApp();
@@ -8203,8 +8223,19 @@ async function getAccessToken(uid) {
 // ===== Calendar callables
 exports.calendarStatus = httpsV2.onCall(async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
-  const doc = await admin.firestore().collection("tokens").doc(req.auth.uid).get();
-  return { connected: doc.exists && !!doc.data().refresh_token };
+  const uid = req.auth.uid;
+  const [legacyDoc, userDoc] = await Promise.all([
+    admin.firestore().collection("tokens").doc(uid).get().catch(() => null),
+    admin.firestore().collection("users").doc(uid).get().catch(() => null),
+  ]);
+  const legacy = legacyDoc && legacyDoc.exists ? legacyDoc.data() : {};
+  const user = userDoc && userDoc.exists ? userDoc.data() : {};
+  const connected = !!(user.googleCalendarTokens || legacy.refresh_token);
+  return {
+    connected,
+    hasUserTokens: !!user.googleCalendarTokens,
+    hasLegacyTokens: !!legacy.refresh_token,
+  };
 });
 
 // Callable: disconnect Google Calendar by removing stored refresh token
@@ -10952,6 +10983,14 @@ exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
   const now = Date.now();
   let deleted = 0;
   const writer = db.bulkWriter();
+  const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
+  const doneStatuses = [2, 3, 4, 'done', 'completed', 'complete', 'closed', 'archived'];
+  const isDone = (status) => {
+    if (status === undefined || status === null) return false;
+    if (typeof status === 'number') return doneStatuses.includes(status);
+    const norm = String(status).toLowerCase();
+    return doneStatuses.includes(norm);
+  };
   try {
     // Primary: deleteAfter reached
     const snap1 = await db.collection('tasks')
@@ -10963,17 +11002,32 @@ exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
       writer.delete(d.ref); deleted++;
     }
     if (deleted < limit) {
-      // Fallback: completedAt older than TTL but no deleteAfter
-      const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
       const remain = limit - deleted;
+      // Backfill/delete completed tasks missing deleteAfter (covers string statuses)
       const snap2 = await db.collection('tasks')
         .where('ownerUid', '==', uid)
-        .where('status', '==', 2)
-        .where('completedAt', '<=', cutoff)
-        .limit(remain)
+        .where('status', 'in', doneStatuses)
+        .limit(Math.min(500, remain * 2 || 200))
         .get();
+
       for (const d of snap2.docs) {
-        writer.delete(d.ref); deleted++;
+        const data = d.data() || {};
+        const deleteAfterMs = toMillis(data.deleteAfter);
+        const completedAtMs = toMillis(data.completedAt);
+        if (deleteAfterMs && deleteAfterMs <= now) {
+          writer.delete(d.ref); deleted++;
+          if (deleted >= limit) break;
+          continue;
+        }
+        if (!isDone(data.status)) continue;
+        if (!completedAtMs) continue;
+        const plannedDelete = completedAtMs + TASK_TTL_DAYS * MS_IN_DAY;
+        if (plannedDelete <= now) {
+          writer.delete(d.ref); deleted++;
+          if (deleted >= limit) break;
+        } else if (!deleteAfterMs) {
+          writer.update(d.ref, { deleteAfter: plannedDelete });
+        }
       }
     }
     await writer.close();
@@ -10988,6 +11042,13 @@ exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *'
   const db = ensureFirestore();
   const now = Date.now();
   const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
+  const doneStatuses = [2, 3, 4, 'done', 'completed', 'complete', 'closed', 'archived'];
+  const isDone = (status) => {
+    if (status === undefined || status === null) return false;
+    if (typeof status === 'number') return doneStatuses.includes(status);
+    const norm = String(status).toLowerCase();
+    return doneStatuses.includes(norm);
+  };
   const usersSnap = await db.collection('profiles').get();
   for (const u of usersSnap.docs) {
     const uid = u.id;
@@ -11002,11 +11063,25 @@ exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *'
 
       const snap2 = await db.collection('tasks')
         .where('ownerUid', '==', uid)
-        .where('status', '==', 2)
-        .where('completedAt', '<=', cutoff)
-        .limit(500)
+        .where('status', 'in', doneStatuses)
+        .limit(800)
         .get();
-      for (const d of snap2.docs) writer.delete(d.ref);
+      for (const d of snap2.docs) {
+        const data = d.data() || {};
+        const deleteAfterMs = toMillis(data.deleteAfter);
+        const completedAtMs = toMillis(data.completedAt);
+        if (deleteAfterMs && deleteAfterMs <= now) {
+          writer.delete(d.ref);
+          continue;
+        }
+        if (!isDone(data.status) || !completedAtMs) continue;
+        const plannedDelete = completedAtMs + TASK_TTL_DAYS * MS_IN_DAY;
+        if (plannedDelete <= now) {
+          writer.delete(d.ref);
+        } else if (!deleteAfterMs) {
+          writer.update(d.ref, { deleteAfter: plannedDelete });
+        }
+      }
     } catch (e) {
       console.warn('[cleanupOldTasksNightly]', uid, e?.message || e);
     } finally {
@@ -11351,8 +11426,8 @@ exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_A
   }
 });
 
-const DAILY_SUMMARY_TARGET_MINUTES = 6 * 60;
-const DATA_QUALITY_TARGET_MINUTES = 19 * 60;
+const DAILY_SUMMARY_TARGET_MINUTES = 5 * 60; // 05:00 local
+const DATA_QUALITY_TARGET_MINUTES = 5 * 60; // 05:00 local
 const DISPATCH_WINDOW_MINUTES = 10;
 
 function shouldTriggerWindow(nowLocal, targetMinutes, alreadySentDayIso) {

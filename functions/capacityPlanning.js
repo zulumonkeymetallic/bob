@@ -168,6 +168,42 @@ async function calculateCapacityInternal(db, userId, sprintId) {
             breakdownByTheme[theme] += storyHours;
         }
 
+        // Map storyId -> goalId/theme for scheduled block rollups
+        const storyGoalMap = {};
+        const storyThemeMap = {};
+        storiesSnap.docs.forEach((d) => {
+            const st = d.data() || {};
+            storyGoalMap[d.id] = st.goalId || null;
+            storyThemeMap[d.id] = st.theme || null;
+        });
+
+        // Scheduled hours from calendar blocks in sprint window
+        const blocksSnap = await db.collection('calendar_blocks')
+            .where('ownerUid', '==', userId)
+            .where('start', '>=', startDate.getTime())
+            .where('start', '<=', endDate.getTime())
+            .get()
+            .catch(() => ({ docs: [] }));
+
+        let scheduledHours = 0;
+        const scheduledByGoal = {};
+        const scheduledByTheme = {};
+
+        blocksSnap.docs.forEach((doc) => {
+            const b = doc.data() || {};
+            if (!b.start || !b.end) return;
+            const isChoreLike = ['chore', 'routine', 'habit'].includes(String(b.entityType || '').toLowerCase());
+            if (b.source === 'gcal' || isChoreLike) return; // external busy/routines are not sprint capacity
+            const isWorkItem = b.storyId || b.taskId;
+            if (!isWorkItem) return;
+            const hours = (b.end - b.start) / (1000 * 60 * 60);
+            scheduledHours += hours;
+            const goalId = b.goalId || (b.storyId ? storyGoalMap[b.storyId] : null) || 'Unlinked';
+            const theme = b.theme || (b.storyId ? storyThemeMap[b.storyId] : 'Uncategorized') || 'Uncategorized';
+            scheduledByGoal[goalId] = (scheduledByGoal[goalId] || 0) + hours;
+            scheduledByTheme[theme] = (scheduledByTheme[theme] || 0) + hours;
+        });
+
         return {
             sprintId,
             totalCapacityHours,
@@ -178,7 +214,10 @@ async function calculateCapacityInternal(db, userId, sprintId) {
             utilization: totalCapacityHours > 0 ? (allocatedHours / totalCapacityHours) : 0,
             progressPercent: allocatedHours > 0 ? (completedHours / allocatedHours) : 0,
             breakdownByGoal,
-            breakdownByTheme
+            breakdownByTheme,
+            scheduledHours,
+            scheduledByGoal,
+            scheduledByTheme
         };
     } catch (error) {
         console.error('Error in calculateCapacityInternal:', error);

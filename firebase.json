@@ -69,6 +69,20 @@
         }
       },
       {
+        "source": "/stravaOAuthStart",
+        "function": {
+          "functionId": "stravaOAuthStart",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/stravaOAuthCallback",
+        "function": {
+          "functionId": "stravaOAuthCallback",
+          "region": "europe-west2"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
