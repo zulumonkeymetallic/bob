@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp, writeBatch, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Goal, Story } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
@@ -129,10 +129,80 @@ const GoalsManagement: React.FC = () => {
   // Handler functions for ModernGoalsTable
   const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
     try {
-      await updateDoc(doc(db, 'goals', goalId), {
+      const goal = goals.find((g) => g.id === goalId);
+      const updatesToApply: Record<string, any> = {
         ...updates,
         updatedAt: serverTimestamp()
-      });
+      };
+
+      const maybeTargetYear =
+        (updates as any).endDate ? new Date((updates as any).endDate as any).getFullYear()
+        : (updates as any).targetDate ? new Date((updates as any).targetDate as any).getFullYear()
+        : undefined;
+      if (maybeTargetYear) {
+        updatesToApply.targetYear = maybeTargetYear;
+      }
+
+      const startChanged =
+        updates.startDate !== undefined &&
+        goal?.startDate !== (updates.startDate as any);
+
+      if (startChanged && currentUser) {
+        const newStart =
+          typeof updates.startDate === 'number'
+            ? updates.startDate
+            : new Date(updates.startDate as any).getTime();
+
+        if (Number.isFinite(newStart) && sprints.length > 0) {
+          const nearest = sprints.reduce(
+            (acc, sprint) => {
+              const distance = Math.abs(sprint.startDate - newStart);
+              if (distance < acc.distance) {
+                return { distance, sprint };
+              }
+              return acc;
+            },
+            { distance: Number.POSITIVE_INFINITY, sprint: sprints[0] }
+          ).sprint;
+
+          const storiesSnap = await getDocs(
+            query(
+              collection(db, 'stories'),
+              where('goalId', '==', goalId),
+              where('ownerUid', '==', currentUser.uid),
+              where('persona', '==', currentPersona)
+            )
+          );
+
+          const storyDocs = storiesSnap.docs || [];
+          const storiesToMove = storyDocs.filter(
+            (d) => (d.data() as any).sprintId !== nearest.id
+          );
+
+          if (storiesToMove.length > 0) {
+            const names = storiesToMove
+              .map((d) => (d.data() as any).title || d.id)
+              .slice(0, 3)
+              .join(', ');
+            const confirmed = window.confirm(
+              `Move ${storiesToMove.length} stories for "${goal?.title || goalId}" to sprint "${nearest.name}"?` +
+              (names ? `\nExamples: ${names}${storiesToMove.length > 3 ? '…' : ''}` : '')
+            );
+            if (confirmed) {
+              const batch = writeBatch(db);
+              storiesToMove.forEach((d) => {
+                batch.update(d.ref, {
+                  sprintId: nearest.id,
+                  updatedAt: serverTimestamp(),
+                });
+              });
+              await batch.commit();
+            }
+          }
+        }
+      }
+
+      await updateDoc(doc(db, 'goals', goalId), updatesToApply);
     } catch (error) {
       console.error('Error updating goal:', error);
     }

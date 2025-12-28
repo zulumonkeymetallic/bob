@@ -29,6 +29,7 @@ import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { Sprint, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, getStatusName } from '../utils/statusHelpers';
@@ -66,6 +67,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
   onSprintChange
 }) => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { sprints, loading } = useSprint();
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -80,6 +82,8 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     endDate: '',
     status: '0'
   });
+  const [sortKey, setSortKey] = useState<'startDate' | 'endDate' | 'name'>('startDate');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   // Load stories for metrics
   useEffect(() => {
@@ -135,6 +139,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
         objective: formData.objective.trim(),
         startDate: startDateMs,
         endDate: endDateMs,
+        persona: currentPersona || 'personal',
         status: Number.isFinite(statusNumber) ? statusNumber : 0,
         ref: generateRef('sprint', existingRefs),
         ownerUid: currentUser.uid,
@@ -251,6 +256,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     const completedPoints = sprintStories
       .filter(story => story.status === 4)
       .reduce((sum, story) => sum + (story.points || 0), 0);
+    const goalCount = Array.from(new Set(sprintStories.map(st => (st as any).goalId).filter(Boolean))).length;
 
     return {
       totalStories: sprintStories.length,
@@ -259,6 +265,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       completedTasks,
       totalPoints,
       completedPoints,
+      goalCount,
       progress: sprintStories.length > 0 ? Math.round((completedStories / sprintStories.length) * 100) : 0
     };
   };
@@ -270,6 +277,26 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       case 'completed': return 'primary';
       case 'cancelled': return 'danger';
       default: return 'secondary';
+    }
+  };
+
+  const sortedSprints = React.useMemo(() => {
+    const list = [...sprints];
+    list.sort((a, b) => {
+      const aVal = (a as any)[sortKey] ?? 0;
+      const bVal = (b as any)[sortKey] ?? 0;
+      if (aVal === bVal) return 0;
+      return sortDir === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal < bVal ? 1 : -1);
+    });
+    return list;
+  }, [sprints, sortKey, sortDir]);
+
+  const toggleSort = (key: 'startDate' | 'endDate' | 'name') => {
+    if (sortKey === key) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
     }
   };
 
@@ -292,6 +319,23 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       };
     }
   };
+
+  const renderSortLabel = (label: string, key: 'startDate' | 'endDate' | 'name') => (
+    <button
+      type="button"
+      className="btn btn-link p-0 text-decoration-none"
+      onClick={() => toggleSort(key)}
+    >
+      {label}{' '}
+      {sortKey === key ? (
+        <small>{sortDir === 'asc' ? '↑' : '↓'}</small>
+      ) : (
+        <small className="text-muted">⇅</small>
+      )}
+    </button>
+  );
+
+  const formatDate = (value: number) => new Date(value).toLocaleDateString();
 
   if (loading) {
     return <div className="text-center p-4">Loading sprints...</div>;
@@ -322,10 +366,12 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
             <Table responsive hover className="mb-0">
               <thead className="table-light">
                 <tr>
-                  <th>Sprint</th>
+                  <th>{renderSortLabel('Sprint', 'name')}</th>
                   <th>Status</th>
-                  <th>Timeline</th>
+                  <th>{renderSortLabel('Start', 'startDate')}</th>
+                  <th>{renderSortLabel('End', 'endDate')}</th>
                   <th>Progress</th>
+                  <th>Goals</th>
                   <th>Stories</th>
                   <th>Tasks</th>
                   <th>Points</th>
@@ -333,7 +379,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {sprints.map((sprint) => {
+                {sortedSprints.map((sprint) => {
                   const metrics = getSprintMetrics(sprint);
                   const daysInfo = getDaysInfo(sprint);
                   const isSelected = selectedSprintId === sprint.id;
@@ -394,9 +440,16 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                             <Clock size={12} className="me-1" />
                             {daysInfo.text}
                           </Badge>
-                          <small className="text-muted">
-                            {new Date(sprint.startDate).toLocaleDateString()} - {new Date(sprint.endDate).toLocaleDateString()}
-                          </small>
+                          <small className="text-muted">{formatDate(sprint.startDate)}</small>
+                        </div>
+                      </td>
+                      <td>
+                        <div>
+                          <Badge bg="light" text="dark" className="d-block mb-1">
+                            <Clock size={12} className="me-1" />
+                            Ends
+                          </Badge>
+                          <small className="text-muted">{formatDate(sprint.endDate)}</small>
                         </div>
                       </td>
                       <td>
@@ -411,6 +464,16 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                             />
                           </div>
                         </div>
+                      </td>
+                      <td>
+                        <OverlayTrigger
+                          placement="top"
+                          overlay={<Tooltip>{metrics.goalCount} goal(s) linked via stories</Tooltip>}
+                        >
+                          <Badge bg="outline-secondary">
+                            {metrics.goalCount}
+                          </Badge>
+                        </OverlayTrigger>
                       </td>
                       <td>
                         <OverlayTrigger
