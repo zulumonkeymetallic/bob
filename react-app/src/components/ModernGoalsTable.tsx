@@ -93,7 +93,7 @@ const defaultColumns: Column[] = [
     key: 'description',
     label: 'Description',
     width: '35%',
-    visible: true,
+    visible: false,
     editable: true,
     type: 'text'
   },
@@ -134,15 +134,15 @@ const defaultColumns: Column[] = [
   {
     key: 'progress',
     label: 'Progress',
-    width: '15%',
-    visible: true,
+    width: '8%',
+    visible: false,
     editable: false,
     type: 'number'
   },
   {
     key: 'startDate',
     label: 'Start Date',
-    width: '12%',
+    width: '14%',
     visible: true,
     editable: true,
     type: 'date'
@@ -150,7 +150,7 @@ const defaultColumns: Column[] = [
   {
     key: 'endDate',
     label: 'End Date',
-    width: '12%',
+    width: '14%',
     visible: true,
     editable: true,
     type: 'date'
