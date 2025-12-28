@@ -109,7 +109,7 @@ const defaultColumns: Column[] = [
   {
     key: 'status',
     label: 'Status',
-    width: '15%',
+    width: '10%',
     visible: true,
     editable: true,
     type: 'select',
@@ -118,7 +118,7 @@ const defaultColumns: Column[] = [
   {
     key: 'storiesCount',
     label: 'Stories',
-    width: '10%',
+    width: '8%',
     visible: true,
     editable: false,
     type: 'text'
@@ -126,7 +126,7 @@ const defaultColumns: Column[] = [
   {
     key: 'sprintStoriesCount',
     label: 'In Sprint',
-    width: '10%',
+    width: '8%',
     visible: true,
     editable: false,
     type: 'text'
@@ -388,10 +388,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
       return formatDateValue(value);
     }
     if (key === 'storiesCount') {
-      return `${storyCounts[goal.id] || 0} stories`;
+      return `${storyCounts[goal.id] || 0}`;
     }
     if (key === 'sprintStoriesCount') {
-      return `${sprintStoryCounts[goal.id] || 0} in sprint`;
+      return `${sprintStoryCounts[goal.id] || 0}`;
     }
     if (key === 'progress') {
       const data = storyPointsData[goal.id];
@@ -1127,7 +1127,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   };
 
   const renderHeaderLabel = (column: Column) => {
-    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear';
+    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear' || column.key === 'storiesCount' || column.key === 'sprintStoriesCount';
     if (!sortable) return column.label;
     const isActive = sortConfig.key === column.key;
     return (
@@ -1294,7 +1294,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                 borderBottom: `1px solid ${themeVars.border}`,
                 position: 'sticky',
                 top: 0,
-                zIndex: 5
+                zIndex: 6
               }}>
                 <tr>
                   <th style={{
@@ -1307,32 +1307,41 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     letterSpacing: '0.05em',
                     borderRight: `1px solid ${themeVars.border}`,
                     width: '48px',
+                    position: 'sticky',
+                    top: 0,
+                    backgroundColor: themeVars.card as string,
+                    zIndex: 6
                   }}>
                     Order
                   </th>
                   {columns.filter(col => col.visible).map(column => {
-                    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear';
+                    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear' || column.key === 'storiesCount' || column.key === 'sprintStoriesCount';
                     return (
-                    <th
-                      key={column.key}
-                      style={{
-                        padding: '12px 8px',
-                        textAlign: 'left',
-                        fontSize: '12px',
-                        fontWeight: '500',
-                        color: themeVars.muted as string,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.05em',
-                        borderRight: `1px solid ${themeVars.border}`,
-                        width: column.width,
-                        cursor: sortable ? 'pointer' : 'default',
-                        userSelect: sortable ? 'none' : 'auto'
-                      }}
-                      onClick={sortable ? () => handleSort(column.key as any) : undefined}
-                    >
-                      {renderHeaderLabel(column)}
-                    </th>
-                  )})}
+                      <th
+                        key={column.key}
+                        style={{
+                          padding: '12px 8px',
+                          textAlign: 'left',
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          color: themeVars.muted as string,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.05em',
+                          borderRight: `1px solid ${themeVars.border}`,
+                          width: column.width,
+                          cursor: sortable ? 'pointer' : 'default',
+                          userSelect: sortable ? 'none' : 'auto',
+                          position: 'sticky',
+                          top: 0,
+                          backgroundColor: themeVars.card as string,
+                          zIndex: 5
+                        }}
+                        onClick={sortable ? () => handleSort(column.key as any) : undefined}
+                      >
+                        {renderHeaderLabel(column)}
+                      </th>
+                    );
+                  })}
                   <th style={{
                     padding: '12px 8px',
                     textAlign: 'center',
