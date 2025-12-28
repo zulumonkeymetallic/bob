@@ -102,6 +102,35 @@ try {
   console.warn('[init] nightlyOrchestration not loaded', e?.message || e);
 }
 
+// Nightly goal maintenance: ensure targetYear matches end/target date
+const updateGoalTargetYears = async () => {
+  const db = admin.firestore();
+  const goalsSnap = await db.collection('goals').get();
+  let updates = 0;
+  for (const doc of goalsSnap.docs) {
+    const data = doc.data() || {};
+    const end = data.endDate || data.targetDate;
+    if (!end) continue;
+    const dt = new Date(end);
+    if (Number.isNaN(dt.getTime())) continue;
+    const yr = dt.getFullYear();
+    if (data.targetYear === yr) continue;
+    await doc.ref.set({ targetYear: yr, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    updates += 1;
+  }
+  console.log('[goalTargetYear] updated', updates, 'goals');
+  return { updated: updates };
+};
+
+exports.updateGoalTargetYears = schedulerV2.schedule('0 3 * * *').onRun(async () => {
+  try {
+    return await updateGoalTargetYears();
+  } catch (e) {
+    console.error('[goalTargetYear] failed', e?.message || e);
+    return null;
+  }
+});
+
 // Calendar diagnostics
 // (already exported above with calendarSync bundle)
 
