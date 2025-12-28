@@ -122,7 +122,7 @@ const updateGoalTargetYears = async () => {
   return { updated: updates };
 };
 
-exports.updateGoalTargetYears = schedulerV2.schedule('0 3 * * *').onRun(async () => {
+exports.updateGoalTargetYears = schedulerV2.onSchedule('0 3 * * *', async () => {
   try {
     return await updateGoalTargetYears();
   } catch (e) {
