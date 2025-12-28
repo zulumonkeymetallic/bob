@@ -1397,7 +1397,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             }}>
               <thead style={{ 
                 backgroundColor: 'var(--card)', 
-                borderBottom: '1px solid var(--line)' 
+                borderBottom: '1px solid var(--line)',
+                position: 'sticky',
+                top: 0,
+                zIndex: 5
               }}>
                 <tr>
                   <th style={{

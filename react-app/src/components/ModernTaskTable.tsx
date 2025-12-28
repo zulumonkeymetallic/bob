@@ -638,6 +638,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     filters: false,
     display: false,
   });
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({
+    key: 'sortOrder',
+    direction: 'asc'
+  });
 
   // Edit modal state
   const [showEditModal, setShowEditModal] = useState(false);
@@ -760,6 +764,45 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     };
   });
 
+  const handleSort = (key: string) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const renderHeaderLabel = (column: Column) => {
+    const isActive = sortConfig.key === column.key;
+    return (
+      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        {column.label}
+        <span style={{ fontSize: '10px' }}>
+          {isActive ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '⇅'}
+        </span>
+      </span>
+    );
+  };
+
+  const sortedRows = React.useMemo(() => {
+    const dir = sortConfig.direction === 'asc' ? 1 : -1;
+    const list = [...tableRows];
+    list.sort((a, b) => {
+      const valA = (a as any)[sortConfig.key];
+      const valB = (b as any)[sortConfig.key];
+      const numA = typeof valA === 'number' ? valA : (valA ? Number(valA) : null);
+      const numB = typeof valB === 'number' ? valB : (valB ? Number(valB) : null);
+      if (numA !== null && numB !== null && !Number.isNaN(numA) && !Number.isNaN(numB)) {
+        if (numA === numB) return 0;
+        return numA > numB ? dir : -dir;
+      }
+      const aStr = (valA ?? '').toString().toLowerCase();
+      const bStr = (valB ?? '').toString().toLowerCase();
+      if (aStr === bStr) return 0;
+      return aStr > bStr ? dir : -dir;
+    });
+    return list;
+  }, [sortConfig, tableRows]);
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
@@ -771,8 +814,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     });
 
     if (over && active.id !== over.id) {
-      const oldIndex = tableRows.findIndex(item => item.id === active.id);
-      const newIndex = tableRows.findIndex(item => item.id === over.id);
+      const oldIndex = sortedRows.findIndex(item => item.id === active.id);
+      const newIndex = sortedRows.findIndex(item => item.id === over.id);
 
       console.log('🎯 ModernTaskTable: Task reorder operation', {
         action: 'task_reorder',
@@ -781,7 +824,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         newPosition: newIndex + 1,
         oldIndex,
         newIndex,
-        totalTasks: tableRows.length,
+        totalTasks: sortedRows.length,
         timestamp: new Date().toISOString()
       });
 
@@ -978,7 +1021,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
               }}>
                 <thead style={{
                   backgroundColor: themeVars.card as string,
-                  borderBottom: `1px solid ${themeVars.border}`
+                  borderBottom: `1px solid ${themeVars.border}`,
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 5
                 }}>
                   <tr>
                     <th style={{
@@ -1007,9 +1053,12 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                           letterSpacing: '0.05em',
                           borderRight: `1px solid ${themeVars.border}`,
                           width: column.width,
+                          cursor: 'pointer',
+                          userSelect: 'none'
                         }}
+                        onClick={() => handleSort(column.key)}
                       >
-                        {column.label}
+                        {renderHeaderLabel(column)}
                       </th>
                     ))}
                     <th style={{
@@ -1028,10 +1077,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 </thead>
                 <tbody>
                   <SortableContext
-                    items={tableRows.map(row => row.id)}
+                    items={sortedRows.map(row => row.id)}
                     strategy={verticalListSortingStrategy}
                   >
-                    {tableRows.map((task, index) => (
+                    {sortedRows.map((task, index) => (
                       <SortableRow
                         key={task.id}
                         task={task}

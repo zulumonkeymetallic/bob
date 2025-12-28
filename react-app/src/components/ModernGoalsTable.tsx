@@ -853,6 +853,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const [sprintStoryCounts, setSprintStoryCounts] = useState<Record<string, number>>({});
   const [storyPointsData, setStoryPointsData] = useState<Record<string, { total: number; completed: number; progress: number }>>({});
   const { selectedSprintId } = useSprint();
+  const [sortConfig, setSortConfig] = useState<{ key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear'; direction: 'asc' | 'desc' }>({
+    key: 'startDate',
+    direction: 'asc'
+  });
 
   // Load user-defined global themes
   useEffect(() => {
@@ -1115,6 +1119,58 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     sortOrder: goal.orderIndex ?? index,
   }));
 
+  const handleSort = (key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear') => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const renderHeaderLabel = (column: Column) => {
+    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear';
+    if (!sortable) return column.label;
+    const isActive = sortConfig.key === column.key;
+    return (
+      <button
+        type="button"
+        onClick={() => handleSort(column.key as any)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          color: 'inherit',
+          cursor: 'pointer',
+        }}
+      >
+        {column.label}
+        <span style={{ fontSize: '10px' }}>
+          {isActive ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '⇅'}
+        </span>
+      </button>
+    );
+  };
+
+  const sortedRows = useMemo(() => {
+    const { key, direction } = sortConfig;
+    const list = [...tableRows];
+    const directionFactor = direction === 'asc' ? 1 : -1;
+    list.sort((a, b) => {
+      const valA = key === 'orderIndex' ? (a as any).sortOrder ?? 0 : (a as any)[key] ?? null;
+      const valB = key === 'orderIndex' ? (b as any).sortOrder ?? 0 : (b as any)[key] ?? null;
+      const numA = typeof valA === 'number' ? valA : (valA ? Number(valA) : null);
+      const numB = typeof valB === 'number' ? valB : (valB ? Number(valB) : null);
+      if (numA === null && numB === null) return 0;
+      if (numA === null) return 1;
+      if (numB === null) return -1;
+      if (numA === numB) return 0;
+      return numA > numB ? directionFactor : -directionFactor;
+    });
+    return list;
+  }, [sortConfig, tableRows]);
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
@@ -1129,7 +1185,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       return;
     }
 
-    const newIndex = tableRows.findIndex(item => item.id === over.id);
+    const newIndex = sortedRows.findIndex(item => item.id === over.id);
     if (newIndex >= 0) {
       await onGoalPriorityChange(active.id as string, newIndex + 1);
     }
@@ -1235,7 +1291,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
             }}>
               <thead style={{
                 backgroundColor: themeVars.card as string,
-                borderBottom: `1px solid ${themeVars.border}`
+                borderBottom: `1px solid ${themeVars.border}`,
+                position: 'sticky',
+                top: 0,
+                zIndex: 5
               }}>
                 <tr>
                   <th style={{
@@ -1251,7 +1310,9 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                   }}>
                     Order
                   </th>
-                  {columns.filter(col => col.visible).map(column => (
+                  {columns.filter(col => col.visible).map(column => {
+                    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear';
+                    return (
                     <th
                       key={column.key}
                       style={{
@@ -1264,11 +1325,14 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                         letterSpacing: '0.05em',
                         borderRight: `1px solid ${themeVars.border}`,
                         width: column.width,
+                        cursor: sortable ? 'pointer' : 'default',
+                        userSelect: sortable ? 'none' : 'auto'
                       }}
+                      onClick={sortable ? () => handleSort(column.key as any) : undefined}
                     >
-                      {column.label}
+                      {renderHeaderLabel(column)}
                     </th>
-                  ))}
+                  )})}
                   <th style={{
                     padding: '12px 8px',
                     textAlign: 'center',
@@ -1285,10 +1349,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
               </thead>
               <tbody>
                 <SortableContext
-                  items={tableRows.map(row => row.id)}
+                  items={sortedRows.map(row => row.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  {tableRows.map((goal, index) => (
+                  {sortedRows.map((goal, index) => (
                     <SortableRow
                       key={goal.id}
                       goal={goal}
