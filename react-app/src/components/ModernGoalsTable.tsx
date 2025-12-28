@@ -225,6 +225,29 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const { showSidebar } = useSidebar();
   const [generating, setGenerating] = useState<boolean>(false);
 
+  const formatDateValue = (val: any): string => {
+    if (!val) return '';
+    if (typeof val === 'number') {
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+    }
+    if (typeof val === 'object') {
+      if (typeof (val as any).toDate === 'function') {
+        const d = (val as any).toDate();
+        return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+      }
+      if (typeof (val as any).seconds === 'number') {
+        const d = new Date((val as any).seconds * 1000 + Math.floor(((val as any).nanoseconds || 0) / 1e6));
+        return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+      }
+    }
+    if (typeof val === 'string') {
+      const d = new Date(val);
+      return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+    }
+    return '';
+  };
+
   // Note: Removed view tracking to focus activity stream on meaningful changes only
 
   const style = {
@@ -243,7 +266,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
       additionalData: { field: key, originalValue: value }
     });
     setEditingCell(key);
-    setEditValue(value || '');
+    const preparedValue =
+      defaultColumns.find(c => c.key === key)?.type === 'date'
+        ? formatDateValue(value)
+        : (value || '');
+    setEditValue(preparedValue);
   };
 
   const handleEditClick = () => {
@@ -297,10 +324,25 @@ const SortableRow: React.FC<SortableRowProps> = ({
         }
         console.log(`🎯 Theme conversion (dynamic): "${editValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
       }
+      if (defaultColumns.find(c => c.key === key)?.type === 'date') {
+        const d = new Date(String(editValue));
+        if (!isNaN(d.getTime())) {
+          valueToSave = d.getTime();
+        }
+      }
+      if (key === 'targetYear') {
+        valueToSave = Number(editValue);
+      }
 
       // Only proceed if the value actually changed
       if (oldValue !== valueToSave) {
         const updates: Partial<Goal> = { [key]: valueToSave };
+        if (key === 'endDate' || key === 'targetDate') {
+          const d = new Date(String(editValue));
+          if (!isNaN(d.getTime())) {
+            updates.targetYear = d.getFullYear();
+          }
+        }
         console.log(`🎯 Goal update for ${goal.id}:`, updates);
 
         await onGoalUpdate(goal.id, updates);
@@ -342,8 +384,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
-    if (key === 'targetDate' && typeof value === 'number') {
-      return new Date(value).toLocaleDateString();
+    if (key === 'startDate' || key === 'endDate' || key === 'targetDate') {
+      return formatDateValue(value);
     }
     if (key === 'storiesCount') {
       return `${storyCounts[goal.id] || 0} stories`;
