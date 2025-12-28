@@ -1032,9 +1032,9 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       entityId: goal.id,
       entityType: 'goal',
       entityTitle: goal.title,
-      additionalData: { action: 'open_sidebar', source: 'goals_table' }
+      additionalData: { action: 'row_click', source: 'goals_table' }
     });
-    showSidebar(goal, 'goal');
+    // Row click no longer auto-opens activity stream; use activity icon instead.
   };
 
   // Story management handlers

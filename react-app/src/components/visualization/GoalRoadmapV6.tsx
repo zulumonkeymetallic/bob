@@ -364,21 +364,21 @@ const GoalRoadmapV6: React.FC = () => {
     const monthNarrow = (d: Date) => d.toLocaleString('default', { month: 'narrow' });
     const monthShort = (d: Date) => d.toLocaleString('default', { month: 'short' });
 
-    if (zoomPercent <= 15) {
+    if (zoomPercent <= 18) {
       // years + quarters only for ultra-zoomed out views
       return [
         { unit: 'year', step: 1, format: 'yyyy' },
         { unit: 'quarter', step: 1, format: quarterFormatter }
       ];
     }
-    if (zoomPercent <= 65) {
+    if (zoomPercent <= 60) {
       // quarters primary
       return [
         { unit: 'year', step: 1, format: 'yyyy' },
         { unit: 'quarter', step: 1, format: quarterFormatter }
       ];
     }
-    if (zoomPercent <= 90) {
+    if (zoomPercent <= 88) {
       // months
       return [
         { unit: 'year', step: 1, format: 'yyyy' },
@@ -469,9 +469,9 @@ const GoalRoadmapV6: React.FC = () => {
     const startDate = min ? new Date(Math.min(min.getTime(), today.getTime())) : today;
     const longHorizonDays =
       zoomPercent <= 10 ? 365 * 5 :
-      zoomPercent <= 15 ? 365 * 3 :
-      zoomPercent <= 65 ? 365 * 2 :
-      zoomPercent <= 90 ? 365 * 1.25 :
+      zoomPercent <= 18 ? 365 * 3 :
+      zoomPercent <= 60 ? 365 * 2 :
+      zoomPercent <= 88 ? 365 * 1.25 :
       140;
     const endDate = max ? new Date(max.getTime() + longHorizonDays * DAY_MS) : new Date(today.getTime() + longHorizonDays * DAY_MS);
     return { tasks: list, chartStart: startDate, chartEnd: endDate };
@@ -491,18 +491,18 @@ const GoalRoadmapV6: React.FC = () => {
   const levelToPercent = useCallback((level: typeof zoomLevel) => {
     switch (level) {
       case 'year': return 5;
-      case 'quarter': return 50;
-      case 'month': return 75;
+      case 'quarter': return 45;
+      case 'month': return 72;
       case 'week':
       default:
-        return 95;
+        return 92;
     }
   }, []);
 
   const percentToLevel = useCallback((pct: number): typeof zoomLevel => {
     if (pct <= 10) return 'year';
-    if (pct <= 65) return 'quarter';
-    if (pct <= 90) return 'month';
+    if (pct <= 60) return 'quarter';
+    if (pct <= 88) return 'month';
     return 'week';
   }, []);
 
