@@ -1,8 +1,13 @@
 const admin = require('firebase-admin');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret } = require('firebase-functions/params');
+const httpsV2 = require('firebase-functions/v2/https');
 const { sendEmail } = require('./lib/email');
 const aiUsageLogger = require('./utils/aiUsageLogger');
+
+// Centralize Gemini model selection so we can switch to newer models (e.g., gemini-2.5-flash-lite)
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const DAILY_DIGEST_ENABLED = process.env.DAILY_DIGEST_ENABLED === 'true';
 
 /**
  * Daily LLM Email Digest Generator for BOB v3.5.7
@@ -16,8 +21,12 @@ exports.generateDailyDigest = onSchedule({
   secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')]
 }, async (event) => {
   console.log('🌅 Starting daily digest generation at 06:45');
+  if (!DAILY_DIGEST_ENABLED) {
+    console.log('⏭️ Daily digest disabled (Daily Summary already in place); skipping send.');
+    return null;
+  }
 
-  const aiWrapper = aiUsageLogger.wrapAICall('google-ai-studio', 'gemini-1.5-flash');
+  const aiWrapper = aiUsageLogger.wrapAICall('google-ai-studio', DEFAULT_GEMINI_MODEL);
 
   try {
     const db = admin.firestore();
@@ -36,93 +45,7 @@ exports.generateDailyDigest = onSchedule({
         continue;
       }
 
-      console.log(`📧 Generating digest for user: ${userProfile.email || userId}`);
-
-      try {
-        // Gather user data
-        const userData = await gatherUserData(db, userId, today);
-
-        // Log the LLM input context for observability
-        try {
-          await db.collection('integration_logs').add({
-            integration: 'daily_digest',
-            action: 'llm_input',
-            userId,
-            ownerUid: userId,
-            ts: admin.firestore.FieldValue.serverTimestamp(),
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            date: todayStr,
-            topTasksDueToday: userData.topTasksDueToday.map(t => t.title || t.ref || t.id),
-            todayBlocks: userData.todayBlocks.map(b => b.title || b.category || b.id),
-            counts: {
-              tasksDueToday: userData.tasksDueToday.length,
-              overdueTasks: userData.overdueTasks.length,
-              todayBlocks: userData.todayBlocks.length,
-            }
-          });
-        } catch (logErr) {
-          console.warn('daily_digest log failed', logErr?.message || logErr);
-        }
-
-        // Generate AI insights
-        const aiInsights = await aiWrapper(async () => {
-          return await generateAIInsights(userData);
-        }, {
-          functionName: 'generateDailyDigest',
-          userId: userId,
-          purpose: 'daily_digest_generation',
-          metadata: {
-            todayStr,
-            tasksCount: userData.tasksDueToday.length,
-            storiesCount: userData.focusStories.length
-          }
-        });
-
-        // Create digest content
-        const digestContent = await createDigestHTML(userData, aiInsights);
-
-        // NEW: Write AI Priority back to Firestore
-        await updateAIPriority(db, userId, aiInsights.choices[0]?.message?.content, userData.tasksDueToday);
-
-        // Save digest to database
-        const digestDoc = {
-          userId,
-          date: todayStr,
-          content: digestContent,
-          aiInsights: aiInsights.choices[0]?.message?.content || '',
-          metrics: {
-            tasksDueToday: userData.tasksDueToday.length,
-            focusStories: userData.focusStories.length,
-            calendarBlocks: userData.calendarBlocks.length,
-            overdueTasks: userData.overdueTasks.length
-          },
-          generatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          emailSent: false
-        };
-
-        await db.collection('daily_digests').add(digestDoc);
-
-        // Send email (if email service is configured)
-        if (userProfile.email && userProfile.emailDigestEnabled !== false) {
-          await sendDigestEmail(userProfile.email, digestContent, userData);
-
-          // Update digest as sent
-          await db.collection('daily_digests')
-            .where('userId', '==', userId)
-            .where('date', '==', todayStr)
-            .get()
-            .then(snapshot => {
-              snapshot.docs.forEach(doc => {
-                doc.ref.update({ emailSent: true, emailSentAt: admin.firestore.FieldValue.serverTimestamp() });
-              });
-            });
-        }
-
-        console.log(`✅ Digest generated successfully for user ${userId}`);
-
-      } catch (userError) {
-        console.error(`❌ Error generating digest for user ${userId}:`, userError);
-      }
+      await processDigestForUser({ db, userId, userProfile, today, todayStr, aiWrapper });
     }
 
     console.log('🎉 Daily digest generation completed');
@@ -132,6 +55,163 @@ exports.generateDailyDigest = onSchedule({
     throw error;
   }
 });
+
+// Manual trigger (per-user) to generate a digest on demand
+exports.runDailyDigestNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')] }, async (req) => {
+  if (!DAILY_DIGEST_ENABLED) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Daily digest email is disabled in favor of the Daily Summary.');
+  }
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  }
+  const db = admin.firestore();
+  const userDoc = await db.collection('profiles').doc(uid).get();
+  if (!userDoc.exists) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Profile not found');
+  }
+  const userProfile = userDoc.data();
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+  const aiWrapper = aiUsageLogger.wrapAICall('google-ai-studio', DEFAULT_GEMINI_MODEL);
+  try {
+    const result = await processDigestForUser({ db, userId: uid, userProfile, today, todayStr, aiWrapper });
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('runDailyDigestNow failed', e);
+    throw new httpsV2.HttpsError('internal', e?.message || 'Digest failed');
+  }
+});
+
+async function logIntegration(uid, status, message, metadata = {}) {
+  try {
+    const db = admin.firestore();
+    await db.collection('integration_logs').add({
+      integration: 'daily_digest',
+      status,
+      message,
+      metadata,
+      ownerUid: uid,
+      userId: uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      ts: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    console.warn('integration log failed', e?.message || e);
+  }
+}
+
+async function processDigestForUser({ db, userId, userProfile, today, todayStr, aiWrapper }) {
+  if (!DAILY_DIGEST_ENABLED) {
+    await logIntegration(userId, 'skipped', 'daily digest disabled', { date: todayStr });
+    return { skipped: true };
+  }
+  console.log(`📧 Generating digest for user: ${userProfile.email || userId}`);
+  await logIntegration(userId, 'start', 'daily digest start', { date: todayStr });
+  try {
+    // Gather user data
+    const userData = await gatherUserData(db, userId, today, userProfile);
+    // Defensive normalization to avoid undefined collections causing digest failure
+    const norm = (v) => Array.isArray(v) ? v : [];
+    userData.tasksDueToday = norm(userData.tasksDueToday);
+    userData.tasksDueTodaySorted = norm(userData.tasksDueTodaySorted);
+    userData.overdueTasks = norm(userData.overdueTasks);
+    userData.stories = norm(userData.stories);
+    userData.unlinkedStories = norm(userData.unlinkedStories);
+    userData.calendarBlocks = norm(userData.calendarBlocks);
+    userData.todayBlocks = norm(userData.todayBlocks);
+    userData.news = norm(userData.news);
+    userData.focusStories = Array.isArray(userData.focusStories) ? userData.focusStories : norm(userData.stories);
+
+    // Log the LLM input context for observability
+    try {
+      await db.collection('integration_logs').add({
+        integration: 'daily_digest',
+        action: 'llm_input',
+        userId,
+        ownerUid: userId,
+        ts: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        date: todayStr,
+        topTasksDueToday: userData.topTasksDueToday.map(t => t.title || t.ref || t.id),
+        todayBlocks: userData.todayBlocks.map(b => b.title || b.category || b.id),
+        counts: {
+          tasksDueToday: userData.tasksDueToday.length,
+          overdueTasks: userData.overdueTasks.length,
+          todayBlocks: userData.todayBlocks.length,
+        }
+      });
+    } catch (logErr) {
+      console.warn('daily_digest log failed', logErr?.message || logErr);
+    }
+
+    // Generate AI insights
+    let aiInsights;
+    try {
+      aiInsights = await aiWrapper(async () => {
+        return await generateAIInsights(userData);
+      }, {
+        functionName: 'generateDailyDigest',
+        userId: userId,
+        purpose: 'daily_digest_generation',
+        metadata: {
+          todayStr,
+          tasksCount: userData.tasksDueToday.length,
+          storiesCount: userData.focusStories.length
+        }
+      });
+    } catch (aiErr) {
+      console.error('AI digest generation failed', aiErr);
+      await logIntegration(userId, 'warn', 'ai digest generation failed', { message: aiErr?.message || String(aiErr) });
+      aiInsights = { choices: [{ message: { content: 'AI summary unavailable today.' } }] };
+    }
+
+    // Create digest content
+    const digestContent = await createDigestHTML(userData, aiInsights);
+
+    // Write AI Priority back to Firestore
+    await updateAIPriority(db, userId, aiInsights.choices[0]?.message?.content, userData.tasksDueToday);
+
+    // Save digest to database
+    const digestDoc = {
+      userId,
+      date: todayStr,
+      content: digestContent,
+      aiInsights: aiInsights.choices[0]?.message?.content || '',
+      news: userData.news || [],
+      weather: userData.weather || null,
+      metrics: {
+        tasksDueToday: userData.tasksDueToday.length,
+        focusStories: userData.focusStories.length,
+        calendarBlocks: userData.calendarBlocks.length,
+        overdueTasks: userData.overdueTasks.length
+      },
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      emailSent: false
+    };
+
+    const digestRef = await db.collection('daily_digests').add(digestDoc);
+
+    // Send email (if email service is configured)
+    if (userProfile.email && userProfile.emailDigestEnabled !== false) {
+      try {
+        await sendDigestEmail(userProfile.email, digestContent, userData);
+        await digestRef.update({ emailSent: true, emailSentAt: admin.firestore.FieldValue.serverTimestamp() });
+      } catch (emailErr) {
+        console.warn('digest email send failed', emailErr?.message || emailErr);
+        await logIntegration(userId, 'warn', 'digest email failed', { message: emailErr?.message || String(emailErr) });
+      }
+    }
+
+    console.log(`✅ Digest generated successfully for user ${userId}`);
+    await logIntegration(userId, 'success', 'daily digest success', { date: todayStr, digestId: digestRef.id });
+    return { digestId: digestRef.id };
+  } catch (userError) {
+    console.error(`❌ Error generating digest for user ${userId}:`, userError);
+    await logIntegration(userId, 'error', userError?.message || 'digest failed', { date: todayStr });
+    throw userError;
+  }
+}
 
 /**
  * Gather comprehensive user data for digest
@@ -144,15 +224,23 @@ const { fetchWeather, fetchNews } = require('./services/newsWeather');
 /**
  * Gather comprehensive user data for digest
  */
-async function gatherUserData(db, userId, today) {
+async function gatherUserData(db, userId, today, userProfile = {}) {
   const todayStr = today.toISOString().split('T')[0];
   const nextWeek = new Date(today);
   nextWeek.setDate(today.getDate() + 7);
   const nextWeekStr = nextWeek.toISOString().split('T')[0];
 
+  // Resolve location (fallback London -> Belfast if profile hints, else London)
+  const profileLocation = (userProfile.location || userProfile.city || userProfile.timezone || '').toString().toLowerCase();
+  let loc = { lat: 51.5074, lon: -0.1278, label: 'London, UK' };
+  if (profileLocation.includes('belfast')) loc = { lat: 54.5973, lon: -5.9301, label: 'Belfast, UK' };
+  if (userProfile.lat && userProfile.lon) {
+    loc = { lat: Number(userProfile.lat), lon: Number(userProfile.lon), label: userProfile.location || loc.label };
+  }
+
   // Parallel fetch for external data
   const [weather, news] = await Promise.all([
-    fetchWeather(), // Defaults to London for now
+    fetchWeather(loc.lat, loc.lon),
     fetchNews(5)
   ]);
 
@@ -161,27 +249,40 @@ async function gatherUserData(db, userId, today) {
     .where('ownerUid', '==', userId)
     .where('dueDate', '>=', new Date(todayStr))
     .where('dueDate', '<', new Date(today.getTime() + 24 * 60 * 60 * 1000))
-    .where('status', '!=', 'done')
-    .orderBy('status')
-    .orderBy('priority', 'desc')
-    .limit(20)
+    .orderBy('dueDate')
+    .limit(50)
     .get();
 
   // Get overdue tasks
   const overdueTasks = await db.collection('tasks')
     .where('ownerUid', '==', userId)
     .where('dueDate', '<', new Date(todayStr))
-    .where('status', '!=', 'done')
     .orderBy('dueDate')
-    .limit(10)
+    .limit(20)
     .get();
+
+  // Materialize and sort tasks due today by AI score (fallback priority/due)
+  const tasksDueTodayDocs = tasksDueTodaySnapshot.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .filter(t => String(t.status || '').toLowerCase() !== 'done' && t.status !== 4);
+  const tasksDueTodaySorted = [...tasksDueTodayDocs].sort((a, b) => {
+    const aScore = Number(a.aiCriticalityScore ?? -1);
+    const bScore = Number(b.aiCriticalityScore ?? -1);
+    if (Number.isFinite(aScore) && Number.isFinite(bScore) && aScore !== bScore) return bScore - aScore;
+    const aPr = Number(a.priority ?? 0);
+    const bPr = Number(b.priority ?? 0);
+    if (aPr !== bPr) return bPr - aPr;
+    const aDue = a.dueDate ? new Date(a.dueDate).getTime() : 0;
+    const bDue = b.dueDate ? new Date(b.dueDate).getTime() : 0;
+    return aDue - bDue;
+  });
 
   // Get active stories (started or planned)
   const activeStoriesSnapshot = await db.collection('stories')
     .where('ownerUid', '==', userId)
-    .where('status', 'in', ['active', 'in-progress', 'planned'])
+    .where('persona', '==', 'personal')
     .orderBy('updatedAt', 'desc')
-    .limit(10)
+    .limit(25)
     .get();
 
   const stories = activeStoriesSnapshot.docs.map(doc => {
@@ -189,19 +290,21 @@ async function gatherUserData(db, userId, today) {
     return {
       id: doc.id,
       ...d,
-      isStarted: ['active', 'in-progress'].includes(d.status)
+      isStarted: ['active', 'in-progress', 1, 2].includes(d.status)
     };
-  });
+  }).filter(s => ['active', 'in-progress', 'planned', 1, 2, 0].includes(s.status));
 
   // Get unlinked stories (Converted Large Tasks)
   const unlinkedStoriesSnapshot = await db.collection('stories')
     .where('ownerUid', '==', userId)
+    .where('persona', '==', 'personal')
     .where('unlinked', '==', true)
-    .where('status', '!=', 'done')
-    .limit(5)
+    .limit(10)
     .get();
 
-  const unlinkedStories = unlinkedStoriesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  const unlinkedStories = unlinkedStoriesSnapshot.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .filter(s => String(s.status || '').toLowerCase() !== 'done' && s.status !== 4);
 
   // Get 7-day calendar blocks (Rolling Window)
   // Note: We fetch 'calendar_blocks' which are the instances.
@@ -238,7 +341,8 @@ async function gatherUserData(db, userId, today) {
   const todayBlocks = calendarBlocksRaw.filter(block => block.startDate === todayStr);
 
   return {
-    tasksDueToday: tasksDueTodaySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+    tasksDueToday: tasksDueTodayDocs,
+    tasksDueTodaySorted,
     overdueTasks: overdueTasks.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     stories,
     unlinkedStories,
@@ -248,9 +352,10 @@ async function gatherUserData(db, userId, today) {
     goals: goalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
     weather,
     news,
+    locationLabel: loc.label,
     date: todayStr,
     dayOfWeek: today.toLocaleDateString('en-US', { weekday: 'long' }),
-    topTasksDueToday: tasksDueTodaySnapshot.docs.slice(0, 3).map(doc => ({ id: doc.id, ...doc.data() }))
+    topTasksDueToday: tasksDueTodaySorted.slice(0, 3)
   };
 }
 
@@ -262,19 +367,20 @@ async function generateAIInsights(userData) {
 
   CONTEXT DATA (structured):
   - Date: ${userData.dayOfWeek}, ${userData.date}
+  - Location: ${userData.locationLabel || 'Unknown'}
   - Weather: ${userData.weather ? userData.weather.description : 'Not available'}
   - Top News: ${userData.news.map(n => `• ${n.title}`).join('\n')}
   - Current Sprint: ${userData.currentSprint ? `"${userData.currentSprint.title}" (Goal: ${userData.currentSprint.goal || 'None'})` : 'None'}
   - Active Stories (prefer STARTED): ${userData.stories.map(s => `• [${s.isStarted ? 'STARTED' : 'PLANNED'}] ${s.title} (Status: ${s.status})`).join('\n')}
-  - Top 3 Tasks Due Today (drive priorities): ${userData.topTasksDueToday.map(t => `• ${t.title || t.ref || t.id} (priority ${t.priority ?? 'n/a'}, theme ${t.theme || 'n/a'})`).join('\n') || 'None'}
-  - Tasks Due Today (${userData.tasksDueToday.length}): ${userData.tasksDueToday.map(t => `• ${t.title} (due ${t.dueDateDisplay || 'today'})`).join('\n') || 'None'}
+  - Top 3 Tasks Due Today (prefer highest AI score): ${userData.topTasksDueToday.map(t => `• ${t.title || t.ref || t.id} (AI score ${t.aiCriticalityScore ?? 'n/a'}${t.aiPriorityBucket ? ' bucket '+t.aiPriorityBucket : ''}${t.aiCriticalityReason ? ' reason: '+t.aiCriticalityReason : ''}, priority ${t.priority ?? 'n/a'}, due ${t.dueDateDisplay || 'today'}, theme ${t.theme || 'n/a'})`).join('\n') || 'None'}
+  - Tasks Due Today (${userData.tasksDueToday.length}): ${(userData.tasksDueTodaySorted || userData.tasksDueToday).map(t => `• ${t.title} (AI score ${t.aiCriticalityScore ?? 'n/a'}${t.aiCriticalityReason ? ' reason: '+t.aiCriticalityReason : ''}, due ${t.dueDateDisplay || 'today'})`).join('\n') || 'None'}
   - Today’s Calendar Blocks: ${userData.todayBlocks.map(b => `• ${b.startTime}-${b.endTime} ${b.title || b.category || 'Block'} (theme ${b.theme || 'n/a'})`).join('\n') || 'None'}
   - Overdue Tasks (${userData.overdueTasks.length}): ${userData.overdueTasks.map(t => `• ${t.title} (due ${t.dueDateDisplay || 'overdue'})`).join('\n') || 'None'}
   - Calendar (next 7 days, first 10): ${userData.calendarBlocks.slice(0, 10).map(b => `• ${b.startDate} ${b.startTime}-${b.endTime}: ${b.title}`).join('\n')}
 
   OUTPUT REQUIREMENTS (plain text, no JSON):
-  1) Briefing: 2-3 sentences. Name the single highest-priority item (task or story) and why (due date, sprint, started status, or overdue). Weave in weather or one headline naturally.
-  2) Focus list: 3 bullets, in order, naming exact refs/titles for the top 3 items (prefer the Top 3 Tasks Due Today, then started stories, then overdue tasks). Include due date.
+  1) Briefing: 2-3 sentences. Name the single highest-priority item (task or story) and why (due date, sprint, started status, or overdue). If an AI score is present, use it to justify the pick. Weave in weather or one headline naturally.
+  2) Focus list: 3 bullets, in order, naming exact refs/titles for the top 3 items (prefer highest AI score from Top 3 Tasks Due Today, then started stories, then overdue tasks). Include due date and AI score when present.
   3) Schedule call-out: Mention how today’s calendar blocks support those priorities (or highlight a gap/conflict to resolve today).
   4) Heads up: one short risk/warning (overdue, crowded calendar, or missing blocks).
   Tone: concise, directive, specific. No generic wellness tips.`;
@@ -283,7 +389,7 @@ async function generateAIInsights(userData) {
   if (!apiKey) {
     return { choices: [{ message: { content: 'Gemini key not configured.' } }] };
   }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(DEFAULT_GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
     contents: [
       { role: 'user', parts: [{ text: 'You are an expert executive assistant. Be precise and data-driven.' }] },
@@ -457,7 +563,7 @@ async function createDigestHTML(userData, aiInsights) {
  * Send digest email (placeholder - integrate with your email service)
  */
 async function sendDigestEmail(email, htmlContent, userData) {
-  if (!email) return;
+  if (!email || !DAILY_DIGEST_ENABLED) return;
   await sendEmail({
     to: email,
     subject: `Daily Briefing: ${userData.dayOfWeek}, ${userData.date}`,

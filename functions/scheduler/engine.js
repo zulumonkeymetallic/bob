@@ -60,7 +60,7 @@ function normaliseBlock(block) {
     ...block,
     recurrence: block.recurrence || { rrule: 'FREQ=DAILY', timezone: zone },
     windows: Array.isArray(block.windows) && block.windows.length ? block.windows : [
-      { daysOfWeek: [1, 2, 3, 4, 5, 6, 7], startTime: '08:00', endTime: '18:00' },
+      { daysOfWeek: [1, 2, 3, 4, 5, 6, 7], startTime: '06:00', endTime: '22:00' },
     ],
     buffers: block.buffers || { before: 0, after: 0 },
     minDurationMinutes: block.minDurationMinutes || 5,
@@ -149,15 +149,19 @@ function hhmmToMinutes(hhmm) {
 }
 
 function buildDeepLink(occurrence) {
+  const ref = occurrence?.sourceRef || occurrence?.storyRef || null;
+  const rawId = ref || occurrence?.sourceId || null;
+  if (!occurrence?.sourceType || !rawId) return null;
+  const safeId = encodeURIComponent(String(rawId));
   switch (occurrence.sourceType) {
     case 'story':
-      return `/stories/${occurrence.sourceId}`;
+      return `/stories/${safeId}`;
     case 'task':
-      return `/tasks/${occurrence.sourceId}`;
+      return `/tasks/${safeId}`;
     case 'chore':
-      return `/chores/${occurrence.sourceId}`;
+      return `/chores/${safeId}`;
     case 'routine':
-      return `/routines/${occurrence.sourceId}`;
+      return `/routines/${safeId}`;
     default:
       return null;
   }
@@ -860,6 +864,32 @@ async function planSchedule({
     .get();
   const routines = routinesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
+  // Treat habits as routines for scheduling
+  let habits = [];
+  try {
+    const habitsSnap = await db
+      .collection('habits')
+      .where('ownerUid', '==', userId)
+      .get();
+    habits = habitsSnap.docs.map((doc) => {
+      const data = doc.data() || {};
+      return {
+        id: doc.id,
+        ownerUid: userId,
+        title: data.title || data.name || 'Habit',
+        recurrence: data.recurrence || { rrule: 'FREQ=DAILY', timezone: DEFAULT_ZONE },
+        durationMinutes: data.durationMinutes || data.estimateMinutes || 30,
+        priority: data.priority || 3,
+        tags: data.tags || [],
+        goalId: data.goalId || null,
+        theme: data.theme || data.themeId || null,
+      };
+    });
+  } catch (e) {
+    console.warn('[scheduler] failed to load habits', e?.message || e);
+  }
+  const routinesAndHabits = [...routines, ...habits];
+
   const existingSnap = await db
     .collection('scheduled_instances')
     .where('ownerUid', '==', userId)
@@ -886,7 +916,7 @@ async function planSchedule({
   const busyByDay = computeBusyByDay(busy, DEFAULT_ZONE);
   const storyOccurrences = await computeStoryOccurrences(stories, windowStart, windowEnd, userId, db);
   const occurrences = [
-    ...(includeChores ? computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd) : []),
+    ...(includeChores ? computeChoreRoutineOccurrences(chores, routinesAndHabits, windowStart, windowEnd) : []),
     ...computeTaskOccurrences(tasks, windowStart, windowEnd, userId),
     ...storyOccurrences,
   ];

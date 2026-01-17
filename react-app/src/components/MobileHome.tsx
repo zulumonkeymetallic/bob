@@ -20,6 +20,7 @@ const MobileHome: React.FC = () => {
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [summary, setSummary] = useState<any | null>(null);
+  const [prioritySource, setPrioritySource] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [noteModal, setNoteModal] = useState<{ type: 'task'|'story'|'goal'; id: string; show: boolean } | null>(null);
   const [noteText, setNoteText] = useState('');
@@ -44,7 +45,14 @@ const MobileHome: React.FC = () => {
     );
     const unsub = onSnapshot(q, (snap) => {
       const doc0 = snap.docs[0]?.data() as any;
-      setSummary(doc0?.summary || null);
+      const sum = doc0?.summary || null;
+      setSummary(sum);
+      if (sum?.aiFocus) {
+        const mode = sum.aiFocus.mode === 'fallback' ? 'Heuristic focus (AI unavailable)' : `Model: ${sum.aiFocus.model || 'AI'}`;
+        setPrioritySource(mode);
+      } else {
+        setPrioritySource(null);
+      }
     });
     return () => unsub();
   }, [currentUser?.uid]);
@@ -172,7 +180,7 @@ const MobileHome: React.FC = () => {
         </Form.Select>
       </div>
 
-      {/* AI Daily Summary */}
+      {/* AI Daily Summary + Focus */}
       {summary && (
         <Card className="mb-3" style={{ background: '#f3f4ff' }}>
           <Card.Body>
@@ -184,6 +192,46 @@ const MobileHome: React.FC = () => {
             )}
             {summary.dailyBriefing?.checklist && (
               <div className="text-muted" style={{ fontSize: 13 }}>{summary.dailyBriefing.checklist}</div>
+            )}
+            {!summary.dailyBriefing && summary.dailyBrief && (
+              <>
+                {Array.isArray(summary.dailyBrief.lines) && summary.dailyBrief.lines.length > 0 && (
+                  <ul className="mb-2 small">
+                    {summary.dailyBrief.lines.slice(0, 4).map((line: string, idx: number) => (
+                      <li key={idx}>{line}</li>
+                    ))}
+                  </ul>
+                )}
+                {summary.dailyBrief.weather?.summary && (
+                  <div className="text-muted small mb-1">
+                    Weather: {summary.dailyBrief.weather.summary}
+                    {summary.dailyBrief.weather.temp ? ` (${summary.dailyBrief.weather.temp})` : ''}
+                  </div>
+                )}
+                {Array.isArray(summary.dailyBrief.news) && summary.dailyBrief.news.length > 0 && (
+                  <div className="mt-2">
+                    <div className="fw-semibold" style={{ fontSize: 14 }}>News</div>
+                    <ul className="mb-0 small">
+                      {summary.dailyBrief.news.slice(0, 3).map((item: string, idx: number) => (
+                        <li key={idx}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            )}
+            {Array.isArray(summary?.aiFocus?.items) && summary.aiFocus.items.length > 0 && (
+              <div className="mt-2">
+                <div className="fw-semibold" style={{ fontSize: 14 }}>AI focus</div>
+                {prioritySource && <div className="text-muted small mb-1">Source: {prioritySource}</div>}
+                <ul className="mb-0 small">
+                  {summary.aiFocus.items.slice(0, 3).map((it: any, idx: number) => (
+                    <li key={idx}>
+                      {[it.ref, it.title || it.summary].filter(Boolean).join(' — ') || 'Focus'}{it.rationale || it.nextStep ? ` — ${it.rationale || it.nextStep}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </Card.Body>
         </Card>

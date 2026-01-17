@@ -35,7 +35,7 @@ const MerchantMappings: React.FC = () => {
   const [subDecision, setSubDecision] = useState<'keep' | 'reduce' | 'cancel'>('keep');
   const [subNote, setSubNote] = useState('');
   const [search, setSearch] = useState('');
-  const [missingOnly, setMissingOnly] = useState(true);
+  const [missingOnly, setMissingOnly] = useState(false);
   const [sortMode, setSortMode] = useState<'merchant' | 'spend_desc' | 'transactions_desc'>('transactions_desc');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [tableRef, bounds] = useMeasure();
@@ -164,6 +164,13 @@ const MerchantMappings: React.FC = () => {
     }
     return sorted;
   }, [rows, search, missingOnly, sortMode, sortDir]);
+
+  // Prevent an empty grid when filters hide everything
+  useEffect(() => {
+    if (rows.length > 0 && filteredRows.length === 0 && missingOnly) {
+      setMissingOnly(false);
+    }
+  }, [rows.length, filteredRows.length, missingOnly]);
 
   const setEdit = (merchantKey: string, patch: Partial<{ categoryKey: string; label: string; isSubscription: boolean }>) => {
     setEdits((prev) => ({
@@ -341,11 +348,11 @@ const MerchantMappings: React.FC = () => {
             <Form.Check
               type="switch"
               id="missing-only"
-              label="Show uncategorised first"
+              label="Only show uncategorised"
               checked={missingOnly}
               onChange={(e) => setMissingOnly(e.target.checked)}
             />
-            <div className="small text-muted">Default view: uncategorised merchants by tx volume.</div>
+            <div className="small text-muted">Default view: all merchants, toggle to narrow to uncategorised.</div>
           </div>
         </Card.Body>
       </Card>
@@ -381,6 +388,15 @@ const MerchantMappings: React.FC = () => {
         <Card.Body className="p-0">
           {rows.length === 0 ? (
             <Alert variant="light" className="mb-0">Sync Monzo to populate merchant list.</Alert>
+          ) : filteredRows.length === 0 ? (
+            <Alert variant="warning" className="mb-0 d-flex justify-content-between align-items-center">
+              <span>No merchants match your filters. Showing everything instead.</span>
+              <div className="d-flex gap-2">
+                <Button size="sm" variant="outline-secondary" onClick={() => { setSearch(''); setMissingOnly(false); }}>
+                  Clear filters
+                </Button>
+              </div>
+            </Alert>
           ) : (
             <div className="merchant-table" style={{ height: 540 }}>
               <div className="merchant-header">

@@ -3,6 +3,7 @@ import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, 
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { Story, Sprint, Task, Goal } from '../types';
 import { Container, Row, Col, Card, Dropdown, Button } from 'react-bootstrap';
 import ModernTaskTable from './ModernTaskTable';
@@ -13,6 +14,7 @@ import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
 const CurrentSprintKanban: React.FC = () => {
     const { currentUser } = useAuth();
     const { sprints } = useSprint();
+    const { currentPersona } = usePersona();
     const [stories, setStories] = useState<Story[]>([]);
     const [tasks, setTasks] = useState<Task[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
@@ -52,7 +54,7 @@ const CurrentSprintKanban: React.FC = () => {
     }, [currentUser, sprints]);
 
     useEffect(() => {
-        if (!currentUser || !activeSprint) {
+        if (!currentUser || !activeSprint || !currentPersona) {
             setStories([]);
             setTasks([]);
             setLoading(false);
@@ -60,29 +62,42 @@ const CurrentSprintKanban: React.FC = () => {
         };
 
         setLoading(true);
-        const storiesQuery = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid), where('sprintId', '==', activeSprint.id));
+        const storiesQuery = query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          where('sprintId', '==', activeSprint.id),
+          orderBy('createdAt', 'desc')
+        );
         const unsubscribeStories = onSnapshot(storiesQuery, snapshot => {
-            const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
-            setStories(storiesData);
+          const storiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Story));
+          setStories(storiesData);
 
-            const tasksQuery = query(
-              collection(db, 'sprint_task_index'),
-              where('ownerUid', '==', currentUser.uid),
-              where('sprintId', '==', activeSprint.id),
-              where('isOpen', '==', true),
-              orderBy('dueDate', 'asc')
-            );
-            const unsubscribeTasks = onSnapshot(tasksQuery, taskSnapshot => {
-                const tasksData = taskSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)) as Task[];
-                setTasks(tasksData);
-                setLoading(false);
-            });
+          const tasksQuery = query(
+            collection(db, 'sprint_task_index'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            where('sprintId', '==', activeSprint.id),
+            where('isOpen', '==', true),
+            orderBy('dueDate', 'asc')
+          );
+          const unsubscribeTasks = onSnapshot(tasksQuery, taskSnapshot => {
+            const tasksData = taskSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)) as Task[];
+            setTasks(tasksData);
+            setLoading(false);
+          }, (err) => {
+            console.error('[kanban] sprint_task_index listener error', err?.message || err);
+            setLoading(false);
+          });
 
-            return () => unsubscribeTasks();
+          return () => unsubscribeTasks();
+        }, (err) => {
+          console.error('[kanban] stories listener error', err?.message || err);
+          setLoading(false);
         });
 
         return () => unsubscribeStories();
-    }, [currentUser, activeSprint]);
+    }, [currentUser, currentPersona, activeSprint]);
 
     // Load latest activity for visible stories
     useEffect(() => {

@@ -230,7 +230,7 @@ const BooksBacklog: React.FC = () => {
               <td>
                 <div className="d-flex gap-2">
                   <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)}>Convert to Story</Button>
-                  {converted && <Button size="sm" variant="outline-secondary" href={`/stories?storyId=${b.lastConvertedStoryId}`}>View story</Button>}
+                  {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${b.lastConvertedStoryId}`}>View story</Button>}
                   {String(b.status || '').toLowerCase() !== 'read' && (
                     <Button size="sm" variant="outline-success" onClick={() => markRead(b)}>Mark Read</Button>
                   )}

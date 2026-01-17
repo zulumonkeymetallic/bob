@@ -78,47 +78,55 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
 
     if (data.isMilestone) {
         return (
-            <div
-                className="grv5-milestone"
-                style={{
-                    backgroundColor: data.themeColor || '#3b82f6',
-                }}
-                title={data.text}
-            >
-                <Star size={14} fill="white" strokeWidth={1.5} color="white" />
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }} title={data.text}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: isDark ? '#e5e7eb' : '#111827', textAlign: 'center', maxWidth: 200, lineHeight: 1.3 }}>
+                    {data.text}
+                </div>
+                <div
+                    className="grv5-milestone"
+                    style={{
+                        backgroundColor: data.themeColor || '#3b82f6',
+                    }}
+                >
+                    <Star size={14} fill="white" strokeWidth={1.5} color="white" />
+                </div>
             </div>
         );
     }
 
-    // Goal Bar with Metrics
+    // Goal Bar with Metrics + always-visible label above to avoid truncation
     const pct = Math.round(data.progress ?? 0);
     return (
-        <div
-            className="grv5-task-content"
-            style={{
-                background: `linear-gradient(to bottom right, ${data.themeColor || '#3b82f6'}, ${data.themeColor ? data.themeColor + 'dd' : '#2563eb'})`,
-                border: '1px solid rgba(255,255,255,0.2)',
-                display: 'flex',
-                justifyContent: 'space-between',
-                padding: '0 8px'
-            }}
-            title={`${data.text} (${pct}%)`}
-        >
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{data.text}</span>
-            {(data.hasFinance || data.pointsPct !== undefined) && (
-                <div style={{ display: 'flex', gap: '6px', fontSize: '10px', opacity: 0.9 }}>
-                    {data.pointsPct !== undefined && (
-                        <span className="badge bg-dark bg-opacity-25" style={{ fontWeight: 500 }}>
-                            SP {data.pointsPct}%
-                        </span>
-                    )}
-                    {data.hasFinance && (
-                        <span className="badge bg-dark bg-opacity-25" style={{ fontWeight: 500 }}>
-                            ${data.financePct}%
-                        </span>
-                    )}
-                </div>
-            )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} title={`${data.text} (${pct}%)`}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: isDark ? '#e5e7eb' : '#111827', lineHeight: 1.3, textAlign: 'left', maxWidth: 240 }}>
+                {data.text}
+            </div>
+            <div
+                className="grv5-task-content"
+                style={{
+                    background: `linear-gradient(to bottom right, ${data.themeColor || '#3b82f6'}, ${data.themeColor ? data.themeColor + 'dd' : '#2563eb'})`,
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    padding: '0 8px'
+                }}
+            >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{data.text}</span>
+                {(data.hasFinance || data.pointsPct !== undefined) && (
+                    <div style={{ display: 'flex', gap: '6px', fontSize: '10px', opacity: 0.9 }}>
+                        {data.pointsPct !== undefined && (
+                            <span className="badge bg-dark bg-opacity-25" style={{ fontWeight: 500 }}>
+                                SP {data.pointsPct}%
+                            </span>
+                        )}
+                        {data.hasFinance && (
+                            <span className="badge bg-dark bg-opacity-25" style={{ fontWeight: 500 }}>
+                                ${data.financePct}%
+                            </span>
+                        )}
+                    </div>
+                )}
+            </div>
         </div>
     );
 };
@@ -233,15 +241,38 @@ const GoalRoadmapV5: React.FC = () => {
     // Derived State
     const themeOptions = useMemo(() => (globalThemes || []).map(t => ({ id: t.id, name: t.name || t.label || `Theme ${t.id}`, color: t.color })), [globalThemes]);
 
+    const [yearFilter, setYearFilter] = useState<number[]>([]);
+
+    const availableYears = useMemo(() => {
+        const set = new Set<number>();
+        goals.forEach((g) => {
+            const derivedYear =
+                (g as any).targetYear ||
+                (g.endDate ? new Date(Number(g.endDate)).getFullYear() : undefined) ||
+                (g.startDate ? new Date(Number(g.startDate)).getFullYear() : undefined) ||
+                (g.targetDate ? new Date(Number(g.targetDate)).getFullYear() : undefined);
+            if (derivedYear) set.add(Number(derivedYear));
+        });
+        return Array.from(set).sort();
+    }, [goals]);
+
     const filteredGoals = useMemo(() => {
         const term = search.trim().toLowerCase();
         return goals.filter(g => {
             const tId = migrateThemeValue(g.theme);
             if (themeFilter !== 'all' && tId !== themeFilter) return false;
             if (term && !(g.title || '').toLowerCase().includes(term)) return false;
+            if (yearFilter.length) {
+                const derivedYear =
+                    (g as any).targetYear ||
+                    (g.endDate ? new Date(Number(g.endDate)).getFullYear() : undefined) ||
+                    (g.startDate ? new Date(Number(g.startDate)).getFullYear() : undefined) ||
+                    (g.targetDate ? new Date(Number(g.targetDate)).getFullYear() : undefined);
+                if (!derivedYear || !yearFilter.includes(Number(derivedYear))) return false;
+            }
             return true;
         });
-    }, [goals, search, themeFilter]);
+    }, [goals, search, themeFilter, yearFilter]);
 
     // Transform to Gantt Tasks
     const { ganttTasks, chartStart, chartEnd } = useMemo(() => {
@@ -285,7 +316,8 @@ const GoalRoadmapV5: React.FC = () => {
             }
 
             const duration = Math.max(1, Math.round((end.getTime() - start.getTime()) / DAY_MS));
-            const isMilestone = duration < 14;
+            // Treat compact trips/goals as milestones; always milestone for Travel (theme 7)
+            const isMilestone = duration <= 30 || tId === 7;
             const themeDef = globalThemes.find(t => t.id === tId);
 
             list.push({
@@ -384,12 +416,11 @@ const GoalRoadmapV5: React.FC = () => {
     }, []);
 
     // Zoom
-    const [zoomLevel, setZoomLevel] = useState<'year' | 'month' | 'week' | 'quarter'>('month');
+    const [zoomLevel, setZoomLevel] = useState<'year' | 'month' | 'quarter'>('quarter');
     const scales = useMemo(() => {
         switch (zoomLevel) {
             case 'year': return [{ unit: 'year', step: 1, format: 'yyyy' }];
             case 'month': return [{ unit: 'year', step: 1, format: 'yyyy' }, { unit: 'month', step: 1, format: 'MMM' }];
-            case 'week': return [{ unit: 'month', step: 1, format: 'MMM yyyy' }, { unit: 'week', step: 1, format: 'w' }];
             case 'quarter': return [{ unit: 'year', step: 1, format: 'yyyy' }, { unit: 'quarter', step: 1, format: (d: Date) => `Q${Math.floor(d.getMonth() / 3) + 1}` }];
             default: return [{ unit: 'month', step: 1, format: 'MMM' }];
         }
@@ -454,9 +485,27 @@ const GoalRoadmapV5: React.FC = () => {
                             <option value="all">All Themes</option>
                             {themeOptions.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                         </select>
+                        <div className="grv5-multiselect">
+                            <label style={{ fontSize: 12, fontWeight: 600, marginRight: 6 }}>Years</label>
+                            <select
+                                multiple
+                                value={yearFilter.map(String)}
+                                onChange={(e) => {
+                                    const selected = Array.from(e.target.selectedOptions).map(o => Number(o.value));
+                                    setYearFilter(selected);
+                                }}
+                                style={{ minWidth: 140 }}
+                                className="grv5-select"
+                            >
+                                {availableYears.map(y => (
+                                    <option key={y} value={y}>{y}</option>
+                                ))}
+                            </select>
+                            <small className="text-muted ms-2">(empty = all)</small>
+                        </div>
                     </div>
                     <div className="btn-group">
-                        {['year', 'quarter', 'month', 'week'].map((z) => (
+                        {['year', 'quarter', 'month'].map((z) => (
                             <button key={z} className={`btn btn-sm ${zoomLevel === z ? 'btn-primary' : 'btn-outline-secondary'}`} onClick={() => setZoomLevel(z as any)}>
                                 {z.charAt(0).toUpperCase() + z.slice(1)}
                             </button>

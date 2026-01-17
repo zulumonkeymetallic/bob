@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer } from 'react-bootstrap';
 import { db } from '../firebase';
-import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, orderBy, limit, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { Goal } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
@@ -33,7 +33,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     kpis: [] as Array<{ name: string; target: number; unit: string }>,
     parentGoalId: '',
     linkedPotId: '',
-    tags: [] as string[]
+    tags: [] as string[],
+    autoCreatePot: false
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
@@ -51,6 +52,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [parentSearch, setParentSearch] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const [recentActivity, setRecentActivity] = useState<Array<{ id: string; description?: string; activityType?: string; createdAt?: any }>>([]);
+  const [monzoConnected, setMonzoConnected] = useState(false);
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -137,7 +139,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           kpis: goal.kpis || [],
           parentGoalId: goal.parentGoalId || '',
           linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
-          tags: (goal as any).tags || []
+          tags: (goal as any).tags || [],
+          autoCreatePot: !!(goal as any).autoCreatePot
         });
         const current = migrateThemeValue(goal.theme);
         const themeObj = themes.find(t => t.id === current);
@@ -160,7 +163,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           kpis: [],
           parentGoalId: '',
           linkedPotId: '',
-          tags: []
+          tags: [],
+          autoCreatePot: false
         });
         setThemeInput('');
         setParentSearch('');
@@ -174,11 +178,29 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       try {
         const q = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUserId));
         const snap = await getDocs(q);
-        const list = snap.docs.map(d => ({ id: (d.data() as any).potId || d.id, name: (d.data() as any).name || 'Pot' }));
+        const list = snap.docs
+          .map(d => ({ id: (d.data() as any).potId || d.id, name: (d.data() as any).name || 'Pot', deleted: (d.data() as any).deleted, closed: (d.data() as any).closed }))
+          .filter(p => !p.deleted && !p.closed)
+          .map(p => ({ id: p.id, name: p.name }));
         setMonzoPots(list);
       } catch { }
     };
     if (show && currentUserId) loadPots();
+  }, [show, currentUserId]);
+
+  // Check Monzo connection status to decide if pot auto-create can run
+  useEffect(() => {
+    const loadMonzoStatus = async () => {
+      if (!show || !currentUserId) return;
+      try {
+        const snap = await getDoc(doc(db, 'integration_status', `monzo_${currentUserId}`));
+        const data = snap.data() as any;
+        setMonzoConnected(!!data?.connected);
+      } catch {
+        setMonzoConnected(false);
+      }
+    };
+    loadMonzoStatus();
   }, [show, currentUserId]);
 
   // Load recent activity for this goal when modal is open
@@ -250,7 +272,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         estimatedCost: formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost),
         parentGoalId: formData.parentGoalId ? formData.parentGoalId : null,
         updatedAt: serverTimestamp(),
-        tags: formData.tags
+        tags: formData.tags,
+        autoCreatePot: formData.autoCreatePot
       };
 
       // Read optional cost metadata and pot mapping from form elements
@@ -266,11 +289,45 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       goalData.linkedPotId = formData.linkedPotId || null;
       // Backwards compatibility
       goalData.potId = formData.linkedPotId || null;
+      const estimatedCostValue = formData.estimatedCost ? Number(formData.estimatedCost) : null;
+
+      const maybeCreateVirtualPot = async (goalId: string | null): Promise<string | null> => {
+        if (!goalId) return null;
+        if (!formData.autoCreatePot) return null;
+        if (!estimatedCostValue || Number.isNaN(estimatedCostValue)) return null;
+        if (formData.linkedPotId) return null;
+        if (!monzoConnected) {
+          setToastMsg('Connect Monzo to auto-create a pot.');
+          return null;
+        }
+        const potDocId = `${currentUserId}_goal_${goalId}`;
+        await setDoc(doc(db, 'monzo_pots', potDocId), {
+          ownerUid: currentUserId,
+          potId: potDocId,
+          name: `${goalId} -- ${formData.title || 'Goal pot'}`,
+          balance: 0,
+          currency: 'GBP',
+          goalAmount: Math.round(estimatedCostValue * 100),
+          goalCurrency: 'GBP',
+          virtual: true,
+          goalLinkedId: goalId,
+          deleted: false,
+          closed: false,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+        return potDocId;
+      };
+
+      let goalIdForPot: string | null = goal?.id || null;
 
       if (goal) {
         // UPDATE existing goal
         console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
         await updateDoc(doc(db, 'goals', goal.id), goalData);
+        const createdPotId = await maybeCreateVirtualPot(goal.id);
+        if (createdPotId) {
+          await updateDoc(doc(db, 'goals', goal.id), { linkedPotId: createdPotId, potId: createdPotId });
+        }
         setSubmitResult(`✅ Goal updated successfully!`);
         setToastMsg('Goal updated');
       } else {
@@ -284,9 +341,15 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         // Adding a safe fallback or update later.
 
         await import('firebase/firestore').then(async ({ addDoc, collection }) => {
-          await addDoc(collection(db, 'goals'), goalData);
+          const ref = await addDoc(collection(db, 'goals'), goalData);
+          goalIdForPot = ref.id;
         });
 
+        const createdPotId = await maybeCreateVirtualPot(goalIdForPot);
+        if (createdPotId && goalIdForPot) {
+          await updateDoc(doc(db, 'goals', goalIdForPot), { linkedPotId: createdPotId, potId: createdPotId });
+          setFormData(prev => ({ ...prev, linkedPotId: createdPotId }));
+        }
         setSubmitResult(`✅ Goal created successfully!`);
         setToastMsg('Goal created');
       }
@@ -396,6 +459,13 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
             </Form.Select>
             <Form.Text className="text-muted">If set, analytics will use this pot rather than name matching.</Form.Text>
           </Form.Group>
+          <Form.Check
+            className="mb-3"
+            type="checkbox"
+            label="Auto-create a Monzo pot for this goal (target = estimated cost)"
+            checked={formData.autoCreatePot}
+            onChange={(e) => setFormData({ ...formData, autoCreatePot: e.target.checked })}
+          />
 
           <Form.Group className="mb-3">
             <Form.Label>Description</Form.Label>

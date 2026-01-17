@@ -28,7 +28,7 @@ import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
 import SprintMetricsPanel from '../SprintMetricsPanel';
 import ModernSprintsTable from '../ModernSprintsTable';
-import ModernKanbanBoard from '../ModernKanbanBoard';
+import SprintKanbanPageV2 from '../SprintKanbanPageV2';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, BarChart, Bar } from 'recharts';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
@@ -533,11 +533,11 @@ const SprintManagementView = () => {
         </Row>
       )}
 
-      {/* Sprint Board Tab - Replaced with ModernKanbanBoard */}
-      {activeTab === 'board' && selectedSprint && (
+      {/* Sprint Board Tab - now mirrors the dedicated Kanban page */}
+      {activeTab === 'board' && (
         <Row>
           <Col>
-            <ModernKanbanBoard />
+            <SprintKanbanPageV2 />
           </Col>
         </Row>
       )}

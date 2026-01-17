@@ -30,7 +30,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     description: '',
     goalId: goalId || '', // Pre-select goal if provided
     sprintId: '',
-    priority: 'P2',
+    priority: 2,
     points: 3,
     tags: [] as string[]
   });
@@ -136,7 +136,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       formData: formData,
       timestamp: new Date().toISOString()
     });
-    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3, tags: [] });
+    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, tags: [] });
     setSubmitResult(null);
     onClose();
   };
@@ -231,7 +231,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       });
 
       setSubmitResult(`✅ Story created successfully! (${ref})`);
-      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 'P2', points: 3, tags: [] });
+      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, tags: [] });
 
       // Auto-close after success
       setTimeout(() => {
@@ -354,11 +354,12 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             <Form.Label>Priority</Form.Label>
             <Form.Select
               value={formData.priority}
-              onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
+              onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value, 10) })}
             >
-              <option value="P1">P1 - Critical</option>
-              <option value="P2">P2 - High</option>
-              <option value="P3">P3 - Normal</option>
+              <option value={4}>Critical</option>
+              <option value={1}>High</option>
+              <option value={2}>Medium</option>
+              <option value={3}>Low</option>
             </Form.Select>
           </Form.Group>
 

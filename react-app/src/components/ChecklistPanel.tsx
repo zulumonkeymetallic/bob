@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, getDocs, query, where, doc, updateDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, query, where, doc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { startOfDay, endOfDay, formatDistanceToNow, format } from 'date-fns';
@@ -31,7 +31,7 @@ interface ChecklistItem {
   title: string;
   start?: number;
   end?: number;
-  source: 'scheduled' | 'unscheduled' | 'task' | 'chore' | 'habit' | 'routine';
+  source: 'scheduled' | 'unscheduled' | 'task' | 'chore' | 'habit' | 'routine' | 'calendar_block';
   raw?: any;
   status?: string;
   subtitle?: string;
@@ -88,7 +88,7 @@ interface RoutineStatRow {
   tracker?: any;
 }
 
-const ACTIONABLE_SOURCES = new Set(['scheduled', 'unscheduled', 'task', 'chore', 'habit', 'routine']);
+const ACTIONABLE_SOURCES = new Set(['scheduled', 'unscheduled', 'task', 'chore', 'habit', 'routine', 'calendar_block']);
 
 const toChecklistKey = (item: ChecklistItem): string | null => {
   if (!item) return null;
@@ -107,6 +107,10 @@ const toChecklistKey = (item: ChecklistItem): string | null => {
   if (item.source === 'habit') {
     const id = item.raw?.id || item.id.replace(/^habit-/, '');
     return id ? `habit:${id}` : null;
+  }
+  if (item.source === 'calendar_block') {
+    const id = item.raw?.id || item.id.replace(/^calendar-block-/, '');
+    return id ? `calendar_block:${id}` : null;
   }
   if (item.source === 'scheduled' || item.source === 'unscheduled') {
     return item.id ? `${item.source}:${item.id}` : null;
@@ -158,8 +162,15 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
       setLoadingLoose(true);
       try {
         const list: ChecklistItem[] = [];
-    const start = startOfDay(new Date(todayIso)).getTime();
-    const end = endOfDay(new Date(todayIso)).getTime();
+        const taskIds = new Set<string>();
+        const start = startOfDay(new Date(todayIso)).getTime();
+        const end = endOfDay(new Date(todayIso)).getTime();
+        const isTaskDone = (status: any) => {
+          if (status === undefined || status === null) return false;
+          if (typeof status === 'number') return status >= 2;
+          const norm = String(status).toLowerCase();
+          return norm === 'done' || norm === 'completed' || norm === 'complete';
+        };
 
         const tasksRef = collection(db, 'tasks');
         const tq = query(
@@ -172,7 +183,31 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         ts.forEach((d) => {
           const t = d.data() as any;
           list.push({ id: `task-${d.id}`, title: t.title, start: t.dueDate, end: t.dueDate, source: 'task', raw: { id: d.id, ...t } });
+          taskIds.add(d.id);
         });
+
+        const prioritySnap = await getDocs(query(
+          tasksRef,
+          where('ownerUid', '==', currentUser.uid),
+          where('aiFlaggedTop', '==', true),
+        )).catch(() => null);
+        if (prioritySnap) {
+          prioritySnap.forEach((d) => {
+            const t = d.data() as any;
+            if (taskIds.has(d.id)) return;
+            if (isTaskDone(t.status)) return;
+            list.push({
+              id: `task-${d.id}`,
+              title: t.title || 'Priority task',
+              start: t.dueDate || null,
+              end: t.dueDate || null,
+              source: 'task',
+              raw: { id: d.id, ...t },
+              subtitle: 'AI priority',
+            });
+            taskIds.add(d.id);
+          });
+        }
 
         const choresRef = collection(db, 'chores');
         const cq = query(choresRef, where('ownerUid', '==', currentUser.uid));
@@ -207,6 +242,34 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
           if (h.frequency === 'daily') {
             list.push({ id: `habit-${hDoc.id}`, title: h.name, source: 'habit', raw: { id: hDoc.id, ...h } });
           }
+        }
+
+        const blocksSnap = await getDocs(query(
+          collection(db, 'calendar_blocks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('start', '>=', start),
+          where('start', '<=', end),
+        )).catch(() => null);
+        if (blocksSnap) {
+          blocksSnap.forEach((docSnap) => {
+            const block = docSnap.data() as any;
+            const category = String(block.category || '').toLowerCase();
+            const status = String(block.status || '').toLowerCase();
+            const source = String(block.source || block.entry_method || '').toLowerCase();
+            const isChoreBlock = category.includes('chore');
+            if (!isChoreBlock) return;
+            if (['completed', 'done', 'complete'].includes(status)) return;
+            if (source === 'gcal' || source === 'google_calendar') return;
+            list.push({
+              id: `calendar-block-${docSnap.id}`,
+              title: block.title || 'Chore block',
+              start: block.start || null,
+              end: block.end || null,
+              source: 'calendar_block',
+              raw: { id: docSnap.id, ...block },
+              subtitle: 'Planner block',
+            });
+          });
         }
 
         setLooseItems(list);
@@ -456,14 +519,27 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
 
   const markDone = async (item: ChecklistItem) => {
     try {
+      const uid = currentUser?.uid;
+      if (!uid) throw new Error('Not signed in');
       if (item.source === 'scheduled' || item.source === 'unscheduled') {
         const ref = doc(db, `scheduled_instances/${item.id}`);
-        await updateDoc(ref, { status: 'completed', statusUpdatedAt: Date.now(), updatedAt: Date.now() });
+        await setDoc(ref, {
+          status: 'completed',
+          statusUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          ownerUid: uid,
+        }, { merge: true });
         setScheduled(prev => prev.filter(inst => inst.id !== item.id));
         return;
       } else if (item.source === 'task') {
         const id = item.raw?.id || item.id.replace('task-', '');
-        await updateDoc(doc(db, 'tasks', id), { status: 2, updatedAt: Date.now() });
+        if (!id) throw new Error('Missing task id');
+        await setDoc(doc(db, 'tasks', id), {
+          status: 2,
+          updatedAt: serverTimestamp(),
+          syncState: 'dirty',
+          ownerUid: uid,
+        }, { merge: true });
         setLooseItems(prev => prev.filter(i => i.id !== item.id));
         return;
       } else if (item.source === 'chore') {
@@ -474,17 +550,36 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
       } else if (item.source === 'habit') {
         const h = item.raw || {};
         const entryId = todayKey;
-        await updateDoc(doc(db, `habits/${h.id}/habitEntries/${entryId}`), { isCompleted: true, updatedAt: Date.now() }).catch(async () => {
-          await setDoc(doc(db, `habits/${h.id}/habitEntries/${entryId}`), {
-            id: entryId, habitId: h.id, date: new Date().setHours(0,0,0,0), value: 1, isCompleted: true, createdAt: Date.now(), updatedAt: Date.now()
-          });
-        });
+        const habitId = h.id || item.id.replace('habit-', '');
+        if (!habitId) throw new Error('Missing habit id');
+        const entryRef = doc(db, `habits/${habitId}/habitEntries/${entryId}`);
+        await setDoc(entryRef, {
+          id: entryId,
+          habitId,
+          date: new Date().setHours(0,0,0,0),
+          value: 1,
+          isCompleted: true,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          ownerUid: uid,
+        }, { merge: true });
         setLooseItems(prev => prev.filter(i => i.id !== item.id));
         return;
       } else if (item.source === 'routine') {
         const routine = item.raw || {};
         const id = routine.id || item.id.replace('routine-', '');
         await handleCompleteRoutine(id);
+        return;
+      } else if (item.source === 'calendar_block') {
+        const blockId = item.raw?.id || item.id.replace('calendar-block-', '');
+        if (!blockId) throw new Error('Missing block id');
+        await setDoc(doc(db, 'calendar_blocks', blockId), {
+          status: 'completed',
+          completedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          ownerUid: uid,
+        }, { merge: true });
+        setLooseItems(prev => prev.filter(i => i.id !== item.id));
         return;
       }
     } catch (e) {
@@ -506,6 +601,8 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         return 'Chore';
       case 'routine':
         return 'Routine';
+      case 'calendar_block':
+        return 'Planner block';
       default:
         return 'Habit';
     }
@@ -538,6 +635,23 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
             rel="noopener noreferrer"
           >
             Check-in
+          </a>,
+        );
+      }
+    }
+    if (item.source === 'calendar_block' && item.raw) {
+      const block = item.raw as any;
+      const link = block.deepLink || block.linkUrl || null;
+      if (link) {
+        actions.push(
+          <a
+            key="open"
+            className="btn btn-sm btn-outline-secondary"
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View
           </a>,
         );
       }

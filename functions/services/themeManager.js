@@ -3,7 +3,7 @@
 
 const admin = require('firebase-admin');
 
-// Default 12 core themes fallback
+// Default themes fallback
 const DEFAULT_THEMES = [
   { id: 'General', order: 0, colorId: '1' },
   { id: 'Health & Fitness', order: 1, colorId: '10' },
@@ -18,6 +18,9 @@ const DEFAULT_THEMES = [
   { id: 'Chores', order: 10, colorId: '8' },
   { id: 'Routine', order: 11, colorId: '8' },
   { id: 'Dev Tasks', order: 12, colorId: '7' },
+  { id: 'Work (Main Gig)', order: 13, colorId: '7' },
+  { id: 'Sleep', order: 14, colorId: '9' },
+  { id: 'Random', order: 15, colorId: '8' },
 ];
 
 async function loadThemesForUser(uid) {
@@ -60,4 +63,3 @@ module.exports = {
   mapThemeLabelToId,
   getGoogleColorForThemeId,
 };
-

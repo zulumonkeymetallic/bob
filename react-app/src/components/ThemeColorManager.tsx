@@ -37,6 +37,14 @@ const ThemeColorManager: React.FC = () => {
     needsMigration: false
   });
 
+  const mergeThemes = (saved?: GlobalTheme[] | null): GlobalTheme[] => {
+    if (!Array.isArray(saved) || saved.length === 0) return GLOBAL_THEMES;
+    const savedById = new Map(saved.map((t) => [t.id, t]));
+    const merged = GLOBAL_THEMES.map((t) => savedById.get(t.id) || t);
+    const extras = saved.filter((t) => !GLOBAL_THEMES.find((d) => d.id === t.id));
+    return extras.length ? [...merged, ...extras] : merged;
+  };
+
   // Load global theme settings from Firebase
   useEffect(() => {
     const loadGlobalThemes = async () => {
@@ -48,7 +56,7 @@ const ThemeColorManager: React.FC = () => {
         
         if (docSnap.exists()) {
           const data = docSnap.data() as GlobalThemeSettings;
-          setGlobalThemes(data.themes || GLOBAL_THEMES);
+          setGlobalThemes(mergeThemes(data.themes));
         }
         
         // Check migration status
@@ -132,7 +140,11 @@ const ThemeColorManager: React.FC = () => {
               'Wealth': 3,
               'Tribe': 4,
               'Home': 5,
-              'General': 0
+              'General': 0,
+              'Work (Main Gig)': 12,
+              'Work': 12,
+              'Sleep': 13,
+              'Random': 14
             };
             
             const newThemeId = themeMapping[data.theme] || 0;
@@ -177,7 +189,10 @@ const ThemeColorManager: React.FC = () => {
           growth: 'growth',
           wealth: 'wealth',
           tribe: 'tribe',
-          home: 'home'
+          home: 'home',
+          work: 'work',
+          sleep: 'sleep',
+          random: 'random'
         };
         const applied: Record<string, string> = {};
         globalThemes.forEach(t => {

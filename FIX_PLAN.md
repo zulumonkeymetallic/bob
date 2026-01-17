@@ -3,7 +3,7 @@
 ## Current Gaps (as observed)
 - Google Calendar sync not happening: target user doc lacks `googleCalendarTokens`; integration UI may show “connected” incorrectly. No `googleEventId` on blocks.
 - Only 1 story block in next 7 days; many routine/habit blocks consume window, few high-score stories qualify, and planner only avoids `calendar_blocks`, not live Google busy time. No task blocks for long tasks.
-- Theme windows ignore user theme blocks (`/calendar/themes`). Wealth/Growth previously inside work hours; hobby block showed “General” due to numeric theme ids.
+- Theme windows ignore user theme blocks (`/calendar/planner`). Wealth/Growth previously inside work hours; hobby block showed “General” due to numeric theme ids.
 - Activity evidence missing: no recent `auto_point`, `task_to_story_conversion`, or LLM pointing entries surfaced.
 - Chores/routines/habits: not visible on UI for user; no nightly insertion into tasks/blocks; no gamification metrics; not excluded from top-3 task cap.
 - Capacity: scheduled hours from `calendar_blocks` not rolled into capacity view; dashboard doesn’t show capacity metrics or finance/wealth spend visuals.
@@ -27,9 +27,9 @@
 - Ensure event description enrichment remains (story/goal/sprint deep links).
 
 ### B) Planner Enhancements (stories + long tasks)
-- Intake user theme blocks (`/calendar/themes`) as preferred windows before default slots.
+- Intake user theme blocks (`/calendar/planner`) as preferred windows before default slots.
 - Time windows:
-  - Growth: weekday 07–09, 17–19.
+  - Growth: weekday 07–0Buy the materials for terrariums and get one created9, 17–19.
   - Wealth/Finance: weekday 18–21; weekend 09–12 and 13–17.
   - Hobbies: evenings; Gaming/TV: Fri/Sat evenings.
 - Create blocks for tasks with points>4 or est>4h, using same placement logic as stories; include ref in title, deep link, rationale.

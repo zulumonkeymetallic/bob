@@ -35,7 +35,12 @@ export class ChoiceMigration {
       'growth': 2,
       'wealth': 3,
       'tribe': 4,
-      'home': 5
+      'home': 5,
+      'work': 12,
+      'work (main gig)': 12,
+      'main gig': 12,
+      'sleep': 13,
+      'random': 14
     };
     
     return mapping[stringValue] ?? 1; // Default to 'Health'

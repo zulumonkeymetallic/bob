@@ -225,27 +225,33 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const { showSidebar } = useSidebar();
   const [generating, setGenerating] = useState<boolean>(false);
 
-  const formatDateValue = (val: any): string => {
-    if (!val) return '';
-    if (typeof val === 'number') {
-      const d = new Date(val);
-      return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
-    }
-    if (typeof val === 'object') {
-      if (typeof (val as any).toDate === 'function') {
-        const d = (val as any).toDate();
-        return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+  const formatDateForInput = (val: any): string => {
+    if (!val && val !== 0) return '';
+    const millis = (() => {
+      if (typeof val === 'number') return val;
+      if (typeof val === 'string') {
+        const parsed = Date.parse(val);
+        return Number.isNaN(parsed) ? null : parsed;
       }
-      if (typeof (val as any).seconds === 'number') {
-        const d = new Date((val as any).seconds * 1000 + Math.floor(((val as any).nanoseconds || 0) / 1e6));
-        return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+      if (typeof val === 'object') {
+        if (typeof (val as any).toDate === 'function') return (val as any).toDate().getTime();
+        if (typeof (val as any).seconds === 'number') return (val as any).seconds * 1000 + Math.floor(((val as any).nanoseconds || 0) / 1e6);
       }
-    }
-    if (typeof val === 'string') {
-      const d = new Date(val);
-      return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
-    }
-    return '';
+      return null;
+    })();
+    if (millis === null) return '';
+    const d = new Date(millis);
+    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+  };
+
+  const formatDateForDisplay = (val: any): string => {
+    const iso = formatDateForInput(val);
+    if (!iso) return '';
+    const d = new Date(iso);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = String(d.getFullYear()).slice(-2);
+    return `${day}/${month}/${year}`;
   };
 
   // Note: Removed view tracking to focus activity stream on meaningful changes only
@@ -266,9 +272,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
       additionalData: { field: key, originalValue: value }
     });
     setEditingCell(key);
+    const col = columns.find(c => c.key === key) || defaultColumns.find(c => c.key === key);
     const preparedValue =
-      defaultColumns.find(c => c.key === key)?.type === 'date'
-        ? formatDateValue(value)
+      col?.type === 'date'
+        ? formatDateForInput(value)
         : (value || '');
     setEditValue(preparedValue);
   };
@@ -385,7 +392,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const formatValue = (key: string, value: any): string => {
     if (key === 'startDate' || key === 'endDate' || key === 'targetDate') {
-      return formatDateValue(value);
+      return formatDateForDisplay(value);
     }
     if (key === 'storiesCount') {
       return `${storyCounts[goal.id] || 0}`;

@@ -134,12 +134,13 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
         {stories.map(story => {
           const parentGoal = getGoalForStory(story.goalId);
           const themeColor = getThemeColorForStory(story);
+          const aiScore = Number((story as any).aiCriticalityScore ?? NaN);
           
           return (
             <Col md={6} lg={4} key={story.id} className="mb-4">
               <Card 
                 style={{ 
-                  minHeight: '380px',
+                  minHeight: '320px',
                   cursor: 'pointer',
                   border: selectedStoryId === story.id ? `2px solid ${themeColor}` : '1px solid var(--line)',
                   transition: 'all 0.2s ease-in-out',
@@ -168,7 +169,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                   }} 
                 />
 
-                <Card.Body style={{ padding: '20px' }}>
+                <Card.Body style={{ padding: '16px' }}>
                   {/* Header */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -219,6 +220,16 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         >
                           P{story.priority}
                         </Badge>
+                        {Number.isFinite(aiScore) && (
+                          <Badge
+                            bg="light"
+                            text="dark"
+                            style={{ fontSize: '11px' }}
+                            title={(story as any).aiCriticalityReason || 'AI priority'}
+                          >
+                            AI {Math.round(aiScore)}/100
+                          </Badge>
+                        )}
                       </div>
                     </div>
                     
@@ -230,7 +241,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       >
                         <ChevronDown size={16} />
                       </Dropdown.Toggle>
-                      <Dropdown.Menu>
+                      <Dropdown.Menu style={{ zIndex: 2000 }} popperConfig={{ strategy: 'fixed' }}>
                         <Dropdown.Item 
                           onClick={() => onEditStory(story)}
                         >
@@ -368,26 +379,13 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                     </div>
                   )}
 
-                  {/* Story Details */}
-                  <div style={{ marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px', fontSize: '14px', color: '#6b7280' }}>
+                  {/* Story Details (condensed) */}
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px', fontSize: '14px', color: '#6b7280' }}>
                       <Hash size={14} style={{ marginRight: '8px' }} />
                       <span style={{ fontWeight: '500', marginRight: '8px' }}>Points:</span>
                       <span>{story.points}</span>
                     </div>
-                    {story.description && (
-                      <div style={{ 
-                        fontSize: '13px',
-                        color: '#6b7280',
-                        lineHeight: '1.4',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden'
-                      }}>
-                        {story.description}
-                      </div>
-                    )}
                   </div>
 
                   {/* Footer */}

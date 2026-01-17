@@ -209,9 +209,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   value={editedStory.priority}
                   onChange={(e) => handleInputChange('priority', parseInt(e.target.value))}
                 >
-                  <option value={1}>P1 - High</option>
-                  <option value={2}>P2 - Medium</option>
-                  <option value={3}>P3 - Low</option>
+                  <option value={4}>Critical</option>
+                  <option value={1}>High</option>
+                  <option value={2}>Medium</option>
+                  <option value={3}>Low</option>
                 </Form.Select>
               </Form.Group>
             </Col>

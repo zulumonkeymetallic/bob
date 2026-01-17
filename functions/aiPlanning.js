@@ -277,14 +277,14 @@ async function enrichStory(ref, story) {
   Analyze the following User Story and generate:
   1. A set of clear, testable Acceptance Criteria (AC).
   2. A list of sub-tasks required to complete the story.
-  3. A theme classification (Growth, Health, Wealth, Tribe, Home, Work).
+  3. A theme classification (General, Health & Fitness, Career & Professional, Finance & Wealth, Learning & Education, Family & Relationships, Hobbies & Interests, Travel & Adventure, Home & Living, Spiritual & Personal Growth, Chores, Rest & Recovery, Work (Main Gig), Sleep, Random).
   4. An estimation of complexity points (1, 2, 3, 5, 8).
   
   Return ONLY valid JSON in this format:
   {
     "acceptanceCriteria": ["AC1", "AC2"],
     "tasks": [{"title": "Task 1", "estimateMin": 30}, ...],
-    "theme": "Work",
+    "theme": "Work (Main Gig)",
     "points": 3
   }`;
 

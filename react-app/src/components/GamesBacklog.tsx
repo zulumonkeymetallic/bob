@@ -234,7 +234,7 @@ const GamesBacklog: React.FC = () => {
               <td>
                 <div className="d-flex gap-2">
                   <Button size="sm" variant="outline-primary" onClick={() => openConvertModal(game)}>Convert to Story</Button>
-                  {converted && <Button size="sm" variant="outline-secondary" href={`/stories?storyId=${game.lastConvertedStoryId}`}>View story</Button>}
+                  {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${game.lastConvertedStoryId}`}>View story</Button>}
                 </div>
               </td>
             </tr>

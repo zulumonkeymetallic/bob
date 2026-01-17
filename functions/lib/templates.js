@@ -23,6 +23,16 @@ const formatDurationFromSeconds = (seconds) => {
   return `${Math.round(totalSeconds / 60)} min`;
 };
 
+const formatCurrency = (value, currency = 'GBP') => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  const rounded = num.toFixed(2);
+  if (currency === 'GBP') return `£${rounded}`;
+  if (currency === 'USD') return `$${rounded}`;
+  if (currency === 'EUR') return `€${rounded}`;
+  return `${currency} ${rounded}`;
+};
+
 const renderTaskHierarchyRows = (hierarchy) => {
   const rows = [];
   hierarchy.forEach((themeNode) => {
@@ -103,19 +113,38 @@ const renderCalendarBlocks = (blocks) => {
 
 const renderPriorities = (priorities, blocks) => {
   const items = priorities.length
-    ? priorities
-        .map((item) => `
-          <li>
-            <a href="${escape(item.deepLink)}" style="color:#2563eb; font-weight:600;">${escape(item.ref)}</a>
-            <span style="color:#4b5563;"> – ${escape(item.title)}</span>
-            ${item.dueDateDisplay ? `<div style="font-size:12px;color:#6b7280;">Due ${escape(item.dueDateDisplay)}</div>` : ''}
+    ? priorities.slice(0, 3)
+        .map((item) => {
+          const typeLabel = item.type === 'story' ? 'Story' : 'Task';
+          const ref = item.ref || item.title || typeLabel;
+          const link = item.deepLink
+            ? `<a href="${escape(item.deepLink)}" style="color:#2563eb;font-weight:700;">${escape(ref)}</a>`
+            : `<span style="font-weight:700;color:#111827;">${escape(ref)}</span>`;
+          const scoreBits = [];
+          const scoreRounded = Number.isFinite(Number(item.score)) ? Math.round(Number(item.score)) : null;
+          const priorityRounded = Number.isFinite(Number(item.priorityScore)) ? Math.round(Number(item.priorityScore)) : null;
+          const urgencyRounded = Number.isFinite(Number(item.urgencyScore)) ? Math.round(Number(item.urgencyScore)) : null;
+          if (scoreRounded != null) scoreBits.push(`Score ${scoreRounded}`);
+          if (priorityRounded != null) scoreBits.push(`Priority ${priorityRounded}`);
+          if (urgencyRounded != null) scoreBits.push(`Urgency ${urgencyRounded}`);
+          const score = scoreBits.length
+            ? `<span style="margin-left:6px;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#4338ca;font-size:12px;">${scoreBits.join(' · ')}</span>`
+            : '';
+          const due = item.dueDateDisplay ? `<span style="color:#6b7280;font-size:12px;"> · Due ${escape(item.dueDateDisplay)}</span>` : '';
+          return `
+          <li style="margin-bottom:10px;line-height:1.5;">
+            <span style="display:inline-block;margin-right:8px;padding:2px 8px;border-radius:999px;background:#ecfeff;color:#0ea5e9;font-size:12px;">${escape(typeLabel)}</span>
+            ${link}
+            <span style="color:#4b5563;"> — ${escape(item.title || '')}</span>
+            ${score}${due}
           </li>
-        `)
+          `;
+        })
         .join('\n')
     : '<li>Nothing critical – consider backlog grooming.</li>';
 
   return `
-    <ol style="padding-left:20px;">${items}</ol>
+    <ol style="padding-left:20px;margin:0 0 8px;">${items}</ol>
     <h4 style="margin-top:16px;">Today\'s calendar blocks</h4>
     <ul style="padding-left:20px;">${renderCalendarBlocks(blocks)}</ul>
   `;
@@ -137,9 +166,10 @@ const renderAiFocus = (focus) => {
       const bucketChip = item.bucket
         ? `<span style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#4338ca;font-size:12px;">${escape(item.bucket)}</span>`
         : '';
+      const label = [item.ref, item.title].filter(Boolean).join(' — ');
       const link = item.deepLink
-        ? `<a href="${escape(item.deepLink)}" style="color:#2563eb;font-weight:600;">${escape(item.ref)}</a>`
-        : `<span style="font-weight:600;color:#111827;">${escape(item.ref)}</span>`;
+        ? `<a href="${escape(item.deepLink)}" style="color:#2563eb;font-weight:600;">${escape(label)}</a>`
+        : `<span style="font-weight:600;color:#111827;">${escape(label)}</span>`;
       const confidence = Number.isFinite(item.confidence) ? Math.round(item.confidence * 100) : null;
       return `
         <li style="margin-bottom:14px;">
@@ -250,6 +280,119 @@ const renderSchedule = (blocks) => {
     })
     .join('\n');
   return `<ul style="padding-left:20px;">${items}</ul>`;
+};
+
+const renderKpiSummary = (kpis) => {
+  if (!kpis) return '<p style="color:#6b7280;">No KPI metrics available.</p>';
+  const cards = [];
+  if (kpis.sprint) {
+    const progress = kpis.sprint.percentComplete != null ? `${kpis.sprint.percentComplete}%` : 'n/a';
+    const daysLeft = kpis.sprint.daysRemaining != null ? `${kpis.sprint.daysRemaining} days left` : 'Days remaining n/a';
+    const status = kpis.sprint.status ? kpis.sprint.status : 'Status n/a';
+    const bar = kpis.sprint.percentComplete != null
+      ? `<div style="height:6px;border-radius:999px;background:#e5e7eb;overflow:hidden;"><div style="width:${Math.min(kpis.sprint.percentComplete, 100)}%;background:#2563eb;height:6px;"></div></div>`
+      : '';
+    cards.push(`
+      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+        <div style="font-size:12px;color:#6b7280;">Sprint</div>
+        <div style="font-weight:700;color:#111827;margin:4px 0;">${escape(kpis.sprint.name || 'Active sprint')}</div>
+        <div style="font-size:13px;color:#374151;">${escape(progress)} · ${escape(daysLeft)}</div>
+        <div style="font-size:12px;color:${kpis.sprint.status === 'Behind' ? '#b91c1c' : '#059669'};margin-top:4px;">${escape(status)}</div>
+        ${bar}
+      </div>
+    `);
+  }
+  if (kpis.fitness) {
+    cards.push(`
+      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+        <div style="font-size:12px;color:#6b7280;">Fitness score</div>
+        <div style="font-weight:700;color:#111827;margin:6px 0;">${escape(String(kpis.fitness.score))}</div>
+        <div style="font-size:12px;color:#6b7280;">From last 90 days</div>
+      </div>
+    `);
+  }
+  if (kpis.budget) {
+    const remaining = formatCurrency(kpis.budget.remaining, kpis.budget.currency) || 'n/a';
+    const total = formatCurrency(kpis.budget.totalBudget, kpis.budget.currency) || 'n/a';
+    const used = kpis.budget.utilisation != null ? `${kpis.budget.utilisation}% used` : 'Utilisation n/a';
+    const bar = kpis.budget.utilisation != null
+      ? `<div style="height:6px;border-radius:999px;background:#e5e7eb;overflow:hidden;"><div style="width:${Math.min(kpis.budget.utilisation, 100)}%;background:#f59e0b;height:6px;"></div></div>`
+      : '';
+    cards.push(`
+      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;">
+        <div style="font-size:12px;color:#6b7280;">Budget remaining</div>
+        <div style="font-weight:700;color:#111827;margin:6px 0;">${escape(remaining)}</div>
+        <div style="font-size:12px;color:#6b7280;">${escape(used)} · ${escape(total)} total</div>
+        ${bar}
+      </div>
+    `);
+  }
+  if (!cards.length) return '<p style="color:#6b7280;">No KPI metrics available.</p>';
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">${cards.join('')}</div>`;
+};
+
+const renderPriorityNarrative = (narrative) => {
+  if (!narrative) {
+    return '<p style="color:#6b7280;">No prioritization narrative yet. Run the nightly chain to generate.</p>';
+  }
+  const summary = narrative.summary ? `<p style="margin:0 0 12px;">${escape(narrative.summary)}</p>` : '';
+  const ask = narrative.ask ? `<p style="margin:0;font-weight:600;">Ask: ${escape(narrative.ask)}</p>` : '';
+  const attribution = `<p style="margin-top:12px;font-size:12px;color:#9ca3af;">${narrative.mode === 'fallback' ? 'Heuristic prioritization.' : `Generated by ${escape(narrative.model || 'AI')}`} ${narrative.generatedAt ? `· ${escape(narrative.generatedAt)}` : ''}</p>`;
+  return `${summary}${ask}${attribution}`;
+};
+
+const renderActiveWorklist = (items, narrative) => {
+  if (!Array.isArray(items) || !items.length) {
+    return '<p style="color:#6b7280;">No active sprint items to display.</p>';
+  }
+  const modelHint = items.find((item) => item.aiTextModel)?.aiTextModel || null;
+  const modelLabel = modelHint || narrative?.model || null;
+  const note = modelLabel
+    ? `<p style="margin:0 0 8px;font-size:12px;color:#6b7280;">AI priority scores include text analysis (${escape(modelLabel)}).</p>`
+    : '';
+  const rows = items
+    .slice(0, 12)
+    .map((item) => {
+      const ref = item.ref || item.title || 'Item';
+      const link = item.deepLink
+        ? `<a href="${escape(item.deepLink)}" style="color:#2563eb;">${escape(ref)}</a>`
+        : escape(ref);
+      const score = item.aiScore != null ? Math.round(Number(item.aiScore)) : '—';
+      const model = item.aiTextModel || modelLabel;
+      const scoreLabel = model ? `${score} (${escape(model)})` : String(score);
+      const reason = item.aiReason ? escape(item.aiReason) : 'Active sprint priority.';
+      return `
+        <tr>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${link}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(item.title || '')}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(item.type || '')}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(item.theme || '')}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${scoreLabel}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${reason}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(item.dueDisplay || '')}</td>
+        </tr>
+      `;
+    })
+    .join('\n');
+  return `
+    ${note}
+    <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:#f3f4f6;text-align:left;">
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Ref</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Title</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Type</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Theme</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Score</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Reason</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Due</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  `;
 };
 
 const renderMonzo = (monzo) => {
@@ -579,107 +722,29 @@ const renderDailySummaryEmail = (data) => {
       </header>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Today\'s briefing</h2>
-        ${renderDailyBriefing(data.dailyBriefing)}
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Key Metrics</h2>
+        ${renderKpiSummary(data.kpis)}
       </section>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">AI focus for today</h2>
-        ${renderAiFocus(data.aiFocus)}
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Daily Brief</h2>
+        ${renderBriefing(data.dailyBrief)}
       </section>
 
-      ${data.maintenance ? `
-        <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-          <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Automation Snapshot</h2>
-          ${renderMaintenanceSummary(data.maintenance)}
-        </section>
-      ` : ''}
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Active Sprint Prioritization</h2>
+        ${renderPriorityNarrative(data.priorityNarrative || data.aiFocus)}
+      </section>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Today's Schedule</h2>
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Active Sprint Worklist</h2>
+        ${renderActiveWorklist(data.activeWorkItems || [], data.priorityNarrative || data.aiFocus)}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Today\'s Schedule</h2>
         ${renderSchedule(data.calendarBlocks || [])}
       </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Checklist</h2>
-        ${renderChecklist(data.dailyChecklist)}
-        <p style="margin-top:8px;font-size:12px;color:#6b7280;">Mark items off in the dashboard or iOS Reminders to keep everything in sync.</p>
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Finance Snapshot</h2>
-        ${renderMonzo(data.monzo)}
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Tasks due today</h2>
-        <table role="presentation" style="width:100%;border-collapse:collapse;font-size:14px;">
-          <thead>
-            <tr style="background:#f3f4f6;text-align:left;">
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Theme</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Goal</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Story</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Ref</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Task</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Due</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Status</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Latest comment</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${renderTaskHierarchyRows(data.hierarchy || [])}
-          </tbody>
-        </table>
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Stories to start</h2>
-        <table role="presentation" style="width:100%;border-collapse:collapse;font-size:14px;">
-          <thead>
-            <tr style="background:#f3f4f6;text-align:left;">
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Ref</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Story</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Goal</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Sprint due</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Status</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Latest comment</th>
-              <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Acceptance criteria</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${renderStoriesToStart(data.storiesToStart || [])}
-          </tbody>
-        </table>
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Priorities</h2>
-        ${renderPriorities(data.priorities || [], data.calendarBlocks || [])}
-      </section>
-
-      ${renderSchedulerChanges(data.schedulerChanges)}
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Briefing & Weather</h2>
-        ${renderBriefing(data.aiBriefing)}
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">World summary</h2>
-        ${renderWorldSummary(data.worldSummary)}
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Fitness</h2>
-        ${renderFitness(data.fitness)}
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Progress scoreboard</h2>
-        ${renderProgressSummary(data.goalProgress, data.sprintProgress, data.budgetProgress)}
-      </section>
-
-      ${renderSprintBacklog(data.sprintProgress?.pendingStories)}
 
       <footer style="margin-top:24px;text-align:center;color:#6b7280;font-size:12px;">
         <p>Generated at ${escape(data.metadata.generatedAt || '')} (${escape(data.metadata.timezone || '')}).</p>
@@ -697,7 +762,7 @@ const renderDataQualityEmail = ({ profile, snapshot }) => {
       .map((item) => {
         const ref = item.ref || item.storyRef || item.taskRef || item.id;
         const title = item.title || item.description || item.message || ref;
-        const link = item.deepLink || (ref ? `/story/${ref}` : null);
+        const link = item.deepLink || null;
         return `<li>${link ? `<a href="${escape(link)}" style="color:#38bdf8;">${escape(ref)}</a>` : escape(ref || '')} – ${escape(title || '')}</li>`;
       })
       .join('\n');

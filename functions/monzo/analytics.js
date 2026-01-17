@@ -9,11 +9,21 @@ const {
 } = require('./shared');
 
 const THEME_NAME_MAP = {
-  1: 'Health',
-  2: 'Growth',
+  0: 'General',
+  1: 'Health & Fitness',
+  2: 'Career & Professional',
   3: 'Finance & Wealth',
-  4: 'Tribe',
-  5: 'Home',
+  4: 'Learning & Education',
+  5: 'Family & Relationships',
+  6: 'Hobbies & Interests',
+  7: 'Travel & Adventure',
+  8: 'Home & Living',
+  9: 'Spiritual & Personal Growth',
+  10: 'Chores',
+  11: 'Rest & Recovery',
+  12: 'Work (Main Gig)',
+  13: 'Sleep',
+  14: 'Random',
 };
 
 function parseAmount(data) {
@@ -227,6 +237,9 @@ function buildGoalAlignment(pots, goals, avgMonthlySavings = 0) {
 
   const goalSummaries = [];
   const themeTotals = {};
+  let totalShortfall = 0;
+  let totalMonthlyRequired = 0;
+  let goalsWithTargets = 0;
 
   goals.forEach((snap) => {
     const goal = snap.data ? snap.data() : snap;
@@ -259,6 +272,32 @@ function buildGoalAlignment(pots, goals, avgMonthlySavings = 0) {
     const shortfall = estimatedCost ? Math.max(estimatedCost - potBalance, 0) : 0;
     const fundedPercent = estimatedCost ? Math.min((potBalance / estimatedCost) * 100, 100) : null;
 
+    // Funding cadence based on goal target date if available
+    const targetDateMs = Number(goal.endDate || goal.targetDate || goal.targetTime || 0) || null;
+    const nowMs = Date.now();
+    let monthsToTarget = null;
+    if (targetDateMs && targetDateMs > nowMs) {
+      const diffMs = targetDateMs - nowMs;
+      monthsToTarget = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24 * 30)));
+      goalsWithTargets += 1;
+    }
+
+    let monthlyRequired = null;
+    if (shortfall > 0) {
+      if (monthsToTarget) {
+        monthlyRequired = shortfall / monthsToTarget;
+      } else if (avgMonthlySavings > 0) {
+        // Fallback: assume a 6-month horizon or use savings cadence if available
+        const assumedMonths = 6;
+        monthlyRequired = shortfall / assumedMonths;
+      }
+    }
+
+    totalShortfall += shortfall;
+    if (monthlyRequired) {
+      totalMonthlyRequired += monthlyRequired;
+    }
+
     // Calculate time to save based on shortfall and average monthly savings
     let monthsToSave = null;
     if (shortfall > 0 && avgMonthlySavings > 0) {
@@ -278,6 +317,8 @@ function buildGoalAlignment(pots, goals, avgMonthlySavings = 0) {
       fundedPercent,
       shortfall,
       monthsToSave,
+      monthsToTarget,
+      monthlyRequired,
     });
 
     if (!themeTotals[themeId]) {
@@ -304,7 +345,14 @@ function buildGoalAlignment(pots, goals, avgMonthlySavings = 0) {
       : null,
   }));
 
-  return { goalSummaries, themes: themeArray };
+  const goalFundingPlan = {
+    goalsWithTargets,
+    totalShortfall,
+    monthlyRequired: totalMonthlyRequired,
+    avgMonthlySavings,
+  };
+
+  return { goalSummaries, themes: themeArray, goalFundingPlan };
 }
 
 async function computeMonzoAnalytics(uidOrDb, maybeUid) {
@@ -364,6 +412,11 @@ async function computeMonzoAnalytics(uidOrDb, maybeUid) {
     currency: budgetCurrency,
     netCashflow: aggregation.netCashflow,
     themeProgress: alignment.themes,
+    budgetRecommendations: {
+      savingsFromGoals: alignment.goalFundingPlan?.monthlyRequired || 0,
+      shortfall: alignment.goalFundingPlan?.totalShortfall || 0,
+      goalsWithTargets: alignment.goalFundingPlan?.goalsWithTargets || 0,
+    },
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
@@ -373,6 +426,7 @@ async function computeMonzoAnalytics(uidOrDb, maybeUid) {
     ownerUid: uid,
     goals: alignment.goalSummaries,
     themes: alignment.themes,
+    goalFundingPlan: alignment.goalFundingPlan,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 

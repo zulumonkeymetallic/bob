@@ -48,7 +48,11 @@ import {
   addDoc,
   collection,
   doc,
+  onSnapshot,
+  query,
+  serverTimestamp,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 import type { CalendarBlock } from '../../types';
 import type { ScheduledInstanceModel } from '../../domain/scheduler/repository';
@@ -58,6 +62,9 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
 import { pushDiagnosticLog } from '../../hooks/useDiagnosticsLog';
+import { usePersona } from '../../contexts/PersonaContext';
+import type { Task } from '../../types';
+import { getBadgeVariant, getStatusName } from '../../utils/statusHelpers';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -76,6 +83,7 @@ const FALLBACK_THEME_COLORS: Record<string, string> = {
   Wealth: '#eab308',
   Tribe: '#8b5cf6',
   Home: '#f97316',
+  'Work Shift': '#0f172a',
 };
 
 interface PlannerCalendarEvent {
@@ -92,6 +100,14 @@ interface PlannerCalendarEvent {
   external?: ExternalCalendarEvent;
 }
 
+type ThemeOption = {
+  id: string | number;
+  value: string;
+  label: string;
+  color: string;
+  textColor: string;
+};
+
 interface BlockFormState {
   id?: string;
   title: string;
@@ -103,18 +119,26 @@ interface BlockFormState {
   end: string;
   syncToGoogle: boolean;
   subTheme: string;
+  storyId?: string;
+  taskId?: string;
+  aiScore?: number | null;
+  aiReason?: string | null;
 }
 
 const DEFAULT_BLOCK_FORM: BlockFormState = {
-  title: 'Focus Block',
-  theme: 'Health',
-  category: 'Fitness',
+  title: 'Calendar entry',
+  theme: 'General',
+  category: 'Wellbeing',
   flexibility: 'soft',
   rationale: '',
   start: '',
   end: '',
   syncToGoogle: false,
   subTheme: '',
+  storyId: undefined,
+  taskId: undefined,
+  aiScore: null,
+  aiReason: null,
 };
 
 type ViewType = 'day' | 'week' | 'month';
@@ -192,27 +216,32 @@ const UnifiedPlannerPage: React.FC = () => {
 
   const themeOptions = useMemo(
     () => {
-      if (globalThemes.length === 0) {
-        return Object.entries(FALLBACK_THEME_COLORS).map(([value, color]) => ({
-          id: value,
-          value,
-          label: value,
-          color,
-          textColor: '#ffffff',
-        }));
-      }
+      const isWorkShift = (value?: string | null) => String(value || '').trim().toLowerCase() === 'work shift';
+      const baseOptions: ThemeOption[] = globalThemes.length === 0
+        ? Object.entries(FALLBACK_THEME_COLORS)
+          .filter(([value]) => !isWorkShift(value))
+          .map(([value, color]) => ({
+            id: value,
+            value,
+            label: value,
+            color,
+            textColor: '#ffffff',
+          }))
+        : globalThemes
+          .filter((theme) => !isWorkShift(theme.name) && !isWorkShift(theme.label))
+          .map((theme) => {
+            const legacyName = legacyThemeNameById.get(theme.id);
+            const value = legacyName || theme.name || String(theme.id);
+            return {
+              id: theme.id,
+              value,
+              label: theme.label || theme.name || value,
+              color: theme.color || FALLBACK_THEME_COLORS[legacyName || theme.name] || '#0ea5e9',
+              textColor: theme.textColor || '#ffffff',
+            };
+          });
 
-      return globalThemes.map((theme) => {
-        const legacyName = legacyThemeNameById.get(theme.id);
-        const value = legacyName || theme.name || String(theme.id);
-        return {
-          id: theme.id,
-          value,
-          label: theme.label || theme.name || value,
-          color: theme.color || FALLBACK_THEME_COLORS[legacyName || theme.name] || '#0ea5e9',
-          textColor: theme.textColor || '#ffffff',
-        };
-      });
+      return baseOptions;
     },
     [globalThemes, legacyThemeNameById],
   );
@@ -276,8 +305,11 @@ const UnifiedPlannerPage: React.FC = () => {
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'danger' | 'info'; message: string } | null>(null);
   const [activeEvent, setActiveEvent] = useState<PlannerCalendarEvent | null>(null);
   const [planning, setPlanning] = useState(false);
+  const [replanLoading, setReplanLoading] = useState(false);
   const [rebalanceLoading, setRebalanceLoading] = useState(false);
   const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
+  const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
 
   useEffect(() => {
     setBlockForm((prev) => {
@@ -291,6 +323,7 @@ const UnifiedPlannerPage: React.FC = () => {
   const planner = useUnifiedPlannerData(range);
   const location = useLocation();
   const navigate = useNavigate();
+  const { currentPersona } = usePersona();
 
   useEffect(() => {
     const state = ((location as unknown) as { state?: { focus?: string } | null }).state ?? null;
@@ -306,7 +339,13 @@ const UnifiedPlannerPage: React.FC = () => {
   }, [location, navigate]);
 
   const events: PlannerCalendarEvent[] = useMemo(() => {
-    const blockEvents = planner.blocks.map((block) => {
+    const displayBlocks = planner.blocks.filter((block) => {
+      const source = String((block as any).source || '').toLowerCase();
+      const entryMethod = String((block as any).entry_method || '').toLowerCase();
+      return source !== 'gcal' && entryMethod !== 'google_calendar';
+    });
+
+    const blockEvents = displayBlocks.map((block) => {
       const start = new Date(block.start);
       const end = new Date(block.end);
       const title = (block as any).title || `${block.category} • ${block.theme}`;
@@ -385,7 +424,7 @@ const UnifiedPlannerPage: React.FC = () => {
     planner.instances.forEach((i) => {
       if (i.external?.gcalEventId) linkedGcalIds.add(i.external.gcalEventId);
     });
-    planner.blocks.forEach((b) => {
+    displayBlocks.forEach((b) => {
       if (b.googleEventId) linkedGcalIds.add(b.googleEventId);
     });
 
@@ -418,6 +457,69 @@ const UnifiedPlannerPage: React.FC = () => {
     () => planner.instances.filter((instance) => instance.status === 'unscheduled'),
     [planner.instances],
   );
+
+  const getTaskDueMs = useCallback((task: Task): number | null => {
+    const raw: any = (task as any).dueDateMs ?? (task as any).dueDate ?? (task as any).due;
+    if (!raw) return null;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+      const parsed = new Date(raw).getTime();
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (raw.seconds) return raw.seconds * 1000;
+    return null;
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setTasksDueToday([]);
+      setTasksLoading(false);
+      return;
+    }
+
+    setTasksLoading(true);
+    const q = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const todayStart = startOfDay(new Date()).getTime();
+        const todayEnd = endOfDay(new Date()).getTime();
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
+          .filter((task) => !task.deleted)
+          .filter((task) => {
+            const due = getTaskDueMs(task);
+            if (!due) return false;
+            return due >= todayStart && due <= todayEnd;
+          })
+          .filter((task) => (task.status ?? 0) !== 2);
+
+        rows.sort((a, b) => {
+          const aDue = getTaskDueMs(a) || 0;
+          const bDue = getTaskDueMs(b) || 0;
+          if (aDue !== bDue) return aDue - bDue;
+          const aScore = Number((a as any).aiCriticalityScore || 0);
+          const bScore = Number((b as any).aiCriticalityScore || 0);
+          return bScore - aScore;
+        });
+
+        setTasksDueToday(rows);
+        setTasksLoading(false);
+      },
+      (err) => {
+        console.error('Failed to load tasks due today', err);
+        setTasksDueToday([]);
+        setTasksLoading(false);
+      },
+    );
+
+    return () => unsubscribe();
+  }, [currentPersona, currentUser, getTaskDueMs]);
 
   const topChores = useMemo(() => planner.chores.slice(0, 5), [planner.chores]);
   const topRoutines = useMemo(() => planner.routines.slice(0, 5), [planner.routines]);
@@ -458,17 +560,23 @@ const UnifiedPlannerPage: React.FC = () => {
     const mergedTheme = resolveThemeAppearance(block.theme)
       ? block.theme
       : blockDefaultTheme;
+    const aiScore = (block as any).aiScore ?? (block as any).aiCriticalityScore ?? null;
+    const aiReason = (block as any).aiReason || (block as any).aiCriticalityReason || null;
     setBlockForm({
       id: block.id,
       title: (block as any).title || `${block.category} • ${block.theme}`,
       theme: mergedTheme as CalendarBlock['theme'],
-      category: block.category,
+      category: block.category || DEFAULT_BLOCK_FORM.category,
       flexibility: block.flexibility,
       rationale: block.rationale || '',
       start: toInputValue(new Date(block.start)),
       end: toInputValue(new Date(block.end)),
       syncToGoogle: Boolean((block as any).syncToGoogle),
       subTheme: block.subTheme || '',
+      storyId: (block as any).storyId,
+      taskId: (block as any).taskId,
+      aiScore,
+      aiReason,
     });
     setComposerOpen(true);
   }, [blockDefaultTheme, resolveThemeAppearance]);
@@ -499,10 +607,10 @@ const UnifiedPlannerPage: React.FC = () => {
           end: end.getTime(),
           updatedAt: Date.now(),
         });
-        setFeedback({ variant: 'success', message: 'Block updated successfully.' });
+        setFeedback({ variant: 'success', message: 'Calendar entry updated successfully.' });
       } catch (err) {
         console.error('Failed to update block timing', err);
-        setFeedback({ variant: 'danger', message: 'Could not update block timing. Please try again.' });
+        setFeedback({ variant: 'danger', message: 'Could not update calendar entry timing. Please try again.' });
       }
     },
     [],
@@ -547,7 +655,7 @@ const UnifiedPlannerPage: React.FC = () => {
               await updateEv({ eventId: block.googleEventId, start: startIso, end: endIso });
             } else {
               const createEv = httpsCallable(functions, 'createCalendarEvent');
-              const res: any = await createEv({ summary: block.title || 'Focus Block', start: startIso, end: endIso });
+              const res: any = await createEv({ summary: block.title || 'Calendar entry', start: startIso, end: endIso });
               const evId = res?.data?.event?.id;
               if (evId && block.id) {
                 await updateDoc(doc(db, 'calendar_blocks', block.id), { googleEventId: evId, updatedAt: Date.now() });
@@ -612,7 +720,7 @@ const UnifiedPlannerPage: React.FC = () => {
     const end = new Date(blockForm.end);
 
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      setFeedback({ variant: 'danger', message: 'Please provide valid dates for the block.' });
+      setFeedback({ variant: 'danger', message: 'Please provide valid dates for the calendar entry.' });
       return;
     }
 
@@ -660,7 +768,7 @@ const UnifiedPlannerPage: React.FC = () => {
       if (blockForm.id) {
         const ref = doc(db, 'calendar_blocks', blockForm.id);
         await updateDoc(ref, payload);
-        setFeedback({ variant: 'success', message: 'Block updated successfully.' });
+        setFeedback({ variant: 'success', message: 'Calendar entry updated successfully.' });
       } else {
         const ref = collection(db, 'calendar_blocks');
         const now = Date.now();
@@ -668,19 +776,19 @@ const UnifiedPlannerPage: React.FC = () => {
           ...payload,
           createdAt: now,
         });
-        setFeedback({ variant: 'success', message: 'New block created.' });
+        setFeedback({ variant: 'success', message: 'New calendar entry created.' });
       }
       resetComposer();
     } catch (err) {
-      console.error('Failed to save block', err);
+      console.error('Failed to save calendar entry', err);
       pushDiagnosticLog({
         channel: 'ai-planner',
         level: 'error',
         timestamp: Date.now(),
-        message: 'Failed to save focus block configuration.',
+        message: 'Failed to save calendar entry configuration.',
         details: err instanceof Error ? err.message : String(err),
       });
-      setFeedback({ variant: 'danger', message: 'Unable to save the block. Please try again.' });
+      setFeedback({ variant: 'danger', message: 'Unable to save the calendar entry. Please try again.' });
     } finally {
       setComposerSaving(false);
     }
@@ -702,6 +810,20 @@ const UnifiedPlannerPage: React.FC = () => {
     },
     [],
   );
+
+  const handleTaskCompletionToggle = useCallback(async (task: Task, done: boolean) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, {
+        status: done ? 2 : 0,
+        completedAt: done ? serverTimestamp() : null,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error('Failed to update task status', err);
+      setFeedback({ variant: 'danger', message: 'Could not update task status.' });
+    }
+  }, []);
 
   const handleAutoPlan = useCallback(async () => {
     setPlanning(true);
@@ -734,6 +856,34 @@ const UnifiedPlannerPage: React.FC = () => {
       setPlanning(false);
     }
   }, [planner, range.start]);
+
+  const handleReplanCalendar = useCallback(async () => {
+    setReplanLoading(true);
+    try {
+      const callable = httpsCallable(functions, 'replanCalendarNow');
+      const response = await callable({ days: 7 });
+      const payload = response.data as { rescheduled?: number; blocked?: number };
+      const rescheduled = payload?.rescheduled || 0;
+      const blocked = payload?.blocked || 0;
+      if (rescheduled || blocked) {
+        setFeedback({ variant: 'success', message: `Replan complete: ${rescheduled} moved${blocked ? `, ${blocked} blocked` : ''}.` });
+      } else {
+        setFeedback({ variant: 'info', message: 'Replan complete. No entries needed moving.' });
+      }
+    } catch (err) {
+      console.error('Calendar replan failed', err);
+      pushDiagnosticLog({
+        channel: 'ai-planner',
+        level: 'error',
+        timestamp: Date.now(),
+        message: 'Failed to trigger calendar replan.',
+        details: err instanceof Error ? err.message : String(err),
+      });
+      setFeedback({ variant: 'danger', message: 'Replan failed. Please retry in a moment.' });
+    } finally {
+      setReplanLoading(false);
+    }
+  }, []);
 
   const eventStyleGetter = useCallback((event: PlannerCalendarEvent) => {
     const overlaps = (a: PlannerCalendarEvent, b: PlannerCalendarEvent) => {
@@ -920,7 +1070,7 @@ const UnifiedPlannerPage: React.FC = () => {
                 <div>
                   <div className="fw-semibold">Calendar</div>
                   <small className="text-muted">
-                    Drag, drop, and orchestrate your day across Google Calendar, AI routines, and focus blocks.
+                    Drag, drop, and orchestrate your day across Google Calendar, AI routines, and calendar entries.
                   </small>
                 </div>
               </div>
@@ -932,6 +1082,19 @@ const UnifiedPlannerPage: React.FC = () => {
                   disabled={planner.loading}
                 >
                   <RefreshCw size={16} className="me-1" /> Sync Google
+                </Button>
+                <Button
+                  variant="outline-primary"
+                  size="sm"
+                  onClick={handleReplanCalendar}
+                  disabled={planner.loading || replanLoading}
+                >
+                  {replanLoading ? (
+                    <Spinner size="sm" animation="border" className="me-2" />
+                  ) : (
+                    <Clock size={16} className="me-1" />
+                  )}
+                  Replan around calendar
                 </Button>
                 <Button
                   variant="primary"
@@ -990,7 +1153,7 @@ const UnifiedPlannerPage: React.FC = () => {
                       </ButtonGroup>
                     </div>
                     <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))}>
-                      + New Block
+                      + New Entry
                     </Button>
                   </div>
                   <DragAndDropCalendar
@@ -1089,6 +1252,57 @@ const UnifiedPlannerPage: React.FC = () => {
           </Card>
 
           <Card className="shadow-sm border-0 mb-4">
+            <Card.Header className="d-flex align-items-center justify-content-between">
+              <div className="fw-semibold d-flex align-items-center gap-2">
+                <Clock size={16} /> Tasks due today
+              </div>
+              <Badge bg={tasksDueToday.length > 0 ? 'info' : 'secondary'} pill>
+                {tasksDueToday.length}
+              </Badge>
+            </Card.Header>
+            <Card.Body className="p-3 d-flex flex-column gap-2">
+              {tasksLoading ? (
+                <div className="d-flex align-items-center gap-2 text-muted">
+                  <Spinner size="sm" animation="border" /> Loading tasks…
+                </div>
+              ) : tasksDueToday.length === 0 ? (
+                <div className="text-muted small">No tasks due today.</div>
+              ) : (
+                tasksDueToday.map((task) => {
+                  const dueMs = getTaskDueMs(task);
+                  const aiScore = (task as any).aiCriticalityScore;
+                  return (
+                    <div key={task.id} className="border rounded p-2">
+                      <div className="d-flex justify-content-between align-items-start gap-2">
+                        <div>
+                          <div className="fw-semibold">{task.title}</div>
+                          {dueMs && (
+                            <div className="text-muted small d-flex align-items-center gap-1">
+                              <Clock size={12} /> {format(new Date(dueMs), 'HH:mm')}
+                            </div>
+                          )}
+                        </div>
+                        <Form.Check
+                          type="checkbox"
+                          checked={(task.status ?? 0) === 2}
+                          onChange={(e) => handleTaskCompletionToggle(task, e.target.checked)}
+                          aria-label="Mark task complete"
+                        />
+                      </div>
+                      <div className="d-flex align-items-center justify-content-between mt-2">
+                        <Badge bg={getBadgeVariant(task.status || 0)}>{getStatusName(task.status || 0)}</Badge>
+                        <span className="text-muted small">
+                          AI score {aiScore != null ? Math.round(aiScore) : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </Card.Body>
+          </Card>
+
+          <Card className="shadow-sm border-0 mb-4">
             <Card.Header className="fw-semibold">Planner Audit</Card.Header>
             <Card.Body className="p-3">
               {(() => {
@@ -1145,7 +1359,7 @@ const UnifiedPlannerPage: React.FC = () => {
                       const policyLabel = item.schedulingContext?.policyMode
                         ? humanizePolicyMode(item.schedulingContext.policyMode)
                         : null;
-                      const reasonLabel = item.statusReason || 'Waiting for block';
+                      const reasonLabel = item.statusReason || 'Waiting for calendar entry';
                       return (
                         <li key={item.id} className="border rounded p-2 mb-2">
                           <div className="d-flex justify-content-between align-items-start gap-2">
@@ -1368,10 +1582,19 @@ const UnifiedPlannerPage: React.FC = () => {
 
       <Modal show={composerOpen} onHide={resetComposer} centered>
         <Modal.Header closeButton>
-          <Modal.Title>{blockForm.id ? 'Edit focus block' : 'New focus block'}</Modal.Title>
+          <Modal.Title>{blockForm.id ? 'Edit calendar entry' : 'New calendar entry'}</Modal.Title>
         </Modal.Header>
         <Modal.Body>
           <Form className="d-flex flex-column gap-3">
+            {(blockForm.aiScore != null || blockForm.aiReason) && (
+              <div className="d-flex align-items-center gap-2">
+                <strong>AI priority:</strong>
+                <span className="badge bg-info text-dark">
+                  {blockForm.aiScore != null ? Math.round(blockForm.aiScore) : '—'}
+                </span>
+                {blockForm.aiReason && <span className="text-muted small">{blockForm.aiReason}</span>}
+              </div>
+            )}
             <Form.Group>
               <Form.Label>Title</Form.Label>
               <Form.Control
@@ -1400,7 +1623,14 @@ const UnifiedPlannerPage: React.FC = () => {
                   <Form.Label>Category</Form.Label>
                   <Form.Select
                     value={blockForm.category}
-                    onChange={(event) => setBlockForm((prev) => ({ ...prev, category: event.target.value as CalendarBlock['category'] }))}
+                    onChange={(event) => {
+                      const nextCategory = event.target.value as CalendarBlock['category'];
+                      setBlockForm((prev) => ({
+                        ...prev,
+                        category: nextCategory,
+                        subTheme: nextCategory === 'Fitness' ? prev.subTheme : '',
+                      }));
+                    }}
                   >
                     <option value="Fitness">Fitness</option>
                     <option value="Wellbeing">Wellbeing</option>
@@ -1454,11 +1684,19 @@ const UnifiedPlannerPage: React.FC = () => {
           </Form>
         </Modal.Body>
         <Modal.Footer>
+          {blockForm.storyId && (
+            <Button
+              variant="outline-info"
+              onClick={() => window.open(`/stories/${blockForm.storyId}`, '_blank')}
+            >
+              Open story
+            </Button>
+          )}
           <Button variant="outline-secondary" onClick={resetComposer}>
             Cancel
           </Button>
           <Button variant="primary" onClick={handleComposerSubmit} disabled={composerSaving}>
-            {composerSaving ? <Spinner size="sm" animation="border" /> : 'Save block'}
+            {composerSaving ? <Spinner size="sm" animation="border" /> : 'Save entry'}
           </Button>
         </Modal.Footer>
       </Modal>

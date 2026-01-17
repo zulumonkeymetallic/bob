@@ -102,7 +102,7 @@ const AssistantChatModal: React.FC<AssistantChatModalProps> = ({ show, onHide })
     if (t === 'plan_today') return planToday();
     if (t === 'open_approvals') return navigate('/planning/approvals');
     if (t === 'create_task') return createTask(String(a?.title || 'Next step'), Number(a?.estimateMin || 30));
-    if (t === 'open_goal' && a?.goalId) return navigate(`/goals/roadmap?goalId=${a.goalId}`);
+    if (t === 'open_goal' && a?.goalId) return navigate(`/goals/${a.goalId}`);
   };
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar, Collapse } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import { Target, BookOpen, TrendingUp, ListChecks } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -22,6 +22,7 @@ import { nextDueAt } from '../utils/recurrence';
 import StatCard from './common/StatCard';
 import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 interface DashboardStats {
   activeGoals: number;
@@ -103,6 +104,11 @@ const Dashboard: React.FC = () => {
   const [sprintStories, setSprintStories] = useState<Story[]>([]);
   const [sprintTasks, setSprintTasks] = useState<Task[]>([]);
   const [sprintGoals, setSprintGoals] = useState<Goal[]>([]);
+  const [goalsList, setGoalsList] = useState<Goal[]>([]);
+  const [dailySummaryLines, setDailySummaryLines] = useState<string[]>([]);
+  const [dailySummarySource, setDailySummarySource] = useState<string | null>(null);
+  const [prioritySource, setPrioritySource] = useState<string | null>(null);
+  const [metricsCollapsed, setMetricsCollapsed] = useState<boolean>(true);
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -120,6 +126,104 @@ const Dashboard: React.FC = () => {
     }
     return null;
   }, []);
+
+  const loadDailySummary = useCallback(async () => {
+    if (!currentUser) return;
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    setDailySummarySource(null);
+    setPrioritySource(null);
+    try {
+      // Prefer daily_summaries (structured); fallback to daily_digests AI text
+      const summarySnap = await getDocs(query(
+        collection(db, 'daily_summaries'),
+        where('ownerUid', '==', currentUser.uid),
+        orderBy('generatedAt', 'desc'),
+        limit(1)
+      ));
+      let lines: string[] = [];
+      if (!summarySnap.empty) {
+        const docData: any = summarySnap.docs[0].data();
+        const summary = docData?.summary || {};
+        const metaDay = summary?.metadata?.dayIso;
+        const modelName = summary?.aiFocus?.model || summary?.metadata?.model || 'Gemini';
+        if (!metaDay || metaDay === todayStr) {
+            const briefSource = summary?.dailyBrief?.source;
+            const summarySource = `Daily summary (${modelName})`;
+            setDailySummarySource(briefSource ? `${summarySource} · ${briefSource}` : summarySource);
+            const focusSource = summary?.aiFocus?.mode === 'fallback'
+              ? 'Heuristic focus (AI unavailable)'
+              : `Model: ${modelName}`;
+            setPrioritySource(focusSource);
+            const briefing = summary?.dailyBriefing || null;
+            const dailyBrief = summary?.dailyBrief || null;
+            if (briefing?.headline) lines.push(briefing.headline);
+            if (briefing?.body) lines.push(briefing.body);
+            if (briefing?.checklist) lines.push(briefing.checklist);
+            if (lines.length === 0 && dailyBrief) {
+              if (Array.isArray(dailyBrief.lines)) {
+                lines.push(...dailyBrief.lines.filter(Boolean));
+              }
+              if (dailyBrief.weather?.summary) {
+                const temp = dailyBrief.weather?.temp ? ` (${dailyBrief.weather.temp})` : '';
+                lines.push(`Weather: ${dailyBrief.weather.summary}${temp}`);
+              }
+              if (Array.isArray(dailyBrief.news)) {
+                dailyBrief.news.filter(Boolean).slice(0, 3).forEach((item: string) => {
+                  lines.push(`News: ${item}`);
+                });
+              }
+            }
+            const aiItems: any[] = Array.isArray(summary?.aiFocus?.items) ? summary.aiFocus.items : [];
+            aiItems.slice(0, 3).forEach((item) => {
+            const label = [item.ref, item.title || item.summary].filter(Boolean).join(' — ') || (item.ref || '');
+            lines.push(`Focus: ${label} — ${item.rationale || item.summary || item.title || ''}`.trim());
+            });
+        }
+      }
+
+      if (lines.length === 0) {
+        const digestSnap = await getDocs(query(
+          collection(db, 'daily_digests'),
+          where('userId', '==', currentUser.uid),
+          orderBy('generatedAt', 'desc'),
+          limit(1)
+        ));
+        if (!digestSnap.empty) {
+          const docData: any = digestSnap.docs[0].data();
+          if (!docData.date || docData.date === todayStr) {
+            setDailySummarySource('AI digest fallback');
+            setPrioritySource('Heuristic focus (digest fallback)');
+            const raw = docData.aiInsights || docData.content || '';
+            lines = String(raw)
+              .replace(/<[^>]+>/g, '')
+              .split(/\n|•/g)
+              .map((l: string) => l.trim())
+              .filter((l: string) => l.length > 0)
+              .slice(0, 5);
+          }
+        }
+      }
+
+      setDailySummaryLines(lines);
+    } catch (e) {
+      setDailySummaryLines([]);
+    }
+  }, [currentUser]);
+
+  const themeFor = (value: any) => {
+    const idNum = Number(value);
+    return GLOBAL_THEMES.find(t => t.id === idNum || t.label === value || t.name === value);
+  };
+
+  const hexToRgba = (hex: string, alpha = 0.12) => {
+    const clean = hex.replace('#', '');
+    const full = clean.length === 3 ? clean.split('').map(c => c + c).join('') : clean;
+    const num = parseInt(full, 16);
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    return `rgba(${r},${g},${b},${alpha})`;
+  };
   const dailyBrief = () => {
     const parts: string[] = [];
     if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
@@ -194,6 +298,7 @@ const Dashboard: React.FC = () => {
           dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
         } as Goal;
       });
+      setGoalsList(goalData);
       const activeGoals = goalData.filter(goal => !isStatus(goal.status, 'Complete')).length;
       const now = new Date();
       const soon = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
@@ -260,6 +365,7 @@ const Dashboard: React.FC = () => {
           countTasksDueToday(),
           loadRemindersDueToday(),
           loadChecklistDueToday(),
+          loadDailySummary(),
           loadMonzoSummary()
         ]);
       } catch (error) {
@@ -508,6 +614,14 @@ const Dashboard: React.FC = () => {
     navigate('/calendar', { state: { focus: 'checklist' } });
   };
 
+  const handleOpenBlock = (blockId?: string | null) => {
+    if (!blockId) {
+      navigate('/calendar');
+      return;
+    }
+    navigate('/calendar', { state: { focus: 'checklist', focusBlockId: blockId } });
+  };
+
   const handleThemeSelect = (themeId: string) => {
     navigate('/stories', { state: { themeId } });
   };
@@ -622,28 +736,45 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          <Row className="g-3 mb-4">
+          <Row className="g-3 mb-3">
             <Col xl={12}>
-              {selectedSprint ? (
-                <SprintMetricsPanel
-                  sprint={selectedSprint}
-                  stories={sprintStories}
-                  tasks={sprintTasks}
-                  goals={sprintGoals}
-                />
-              ) : (
-                <Card className="shadow-sm border-0">
-                  <Card.Body className="d-flex justify-content-between align-items-center">
-                    <div>
-                      <h5 className="mb-1">Select a sprint to see metrics</h5>
-                      <div className="text-muted">Use the sprint selector above to focus the dashboard.</div>
-                    </div>
-                    <Button variant="primary" onClick={() => navigate('/sprints/management')}>
-                      Manage sprints
-                    </Button>
-                  </Card.Body>
-                </Card>
-              )}
+              <Card className="shadow-sm border-0">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <div className="fw-semibold">Sprint Metrics</div>
+                  <Button
+                    size="sm"
+                    variant="link"
+                    className="text-decoration-none"
+                    onClick={() => setMetricsCollapsed((prev) => !prev)}
+                  >
+                    {metricsCollapsed ? 'Expand' : 'Collapse'}
+                  </Button>
+                </Card.Header>
+                <Collapse in={!metricsCollapsed}>
+                  <div>
+                    <Card.Body>
+                      {selectedSprint ? (
+                        <SprintMetricsPanel
+                          sprint={selectedSprint}
+                          stories={sprintStories}
+                          tasks={sprintTasks}
+                          goals={sprintGoals}
+                        />
+                      ) : (
+                        <div className="d-flex justify-content-between align-items-center">
+                          <div>
+                            <h6 className="mb-1">Select a sprint to see metrics</h6>
+                            <div className="text-muted">Use the sprint selector above to focus the dashboard.</div>
+                          </div>
+                          <Button variant="primary" onClick={() => navigate('/sprints/management')}>
+                            Manage sprints
+                          </Button>
+                        </div>
+                      )}
+                    </Card.Body>
+                  </div>
+                </Collapse>
+              </Card>
             </Col>
           </Row>
 
@@ -651,12 +782,25 @@ const Dashboard: React.FC = () => {
             <Col xl={12}>
               <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Today's Plan</span>
+                  <span className="fw-semibold">Today’s Plan</span>
                   <Button variant="link" size="sm" className="text-decoration-none" onClick={handleOpenChecklist}>
                     Open planner
                   </Button>
                 </Card.Header>
                 <Card.Body>
+                  {dailySummaryLines.length > 0 && (
+                    <div className="mb-3">
+                      <div className="fw-semibold mb-1">Daily Summary</div>
+                      {dailySummarySource && (
+                        <div className="text-muted small mb-1">Source: {dailySummarySource}</div>
+                      )}
+                      <ul className="mb-0 small">
+                        {dailySummaryLines.map((line, idx) => (
+                          <li key={idx}>{line}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   {unscheduledToday.length > 0 && (
                     <Alert variant="warning" className="py-2">
                       <div className="fw-semibold mb-1">Scheduling issues</div>
@@ -671,66 +815,101 @@ const Dashboard: React.FC = () => {
                     </Alert>
                   )}
                   <ChecklistPanel title="" compact />
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-
-          <Row className="g-3 mb-4">
-            <Col xl={4}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="fw-semibold">Theme Breakdown</Card.Header>
-                <Card.Body>
-                  <ThemeBreakdown onThemeSelect={handleThemeSelect} />
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col xl={4}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="fw-semibold">Today's Schedule</Card.Header>
-                <Card.Body>
-                  {todayBlocks.length === 0 ? (
-                    <div className="text-muted">No blocks scheduled today.</div>
-                  ) : (
-                    <Table size="sm" className="mb-0">
-                      <tbody>
-                        {todayBlocks.map((block) => (
-                          <tr key={block.id}>
-                            <td style={{ width: '35%' }}>
-                              {new Date(block.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </td>
-                            <td>{block.category || block.title || 'Block'}</td>
-                            <td className="text-end">
-                              <Badge bg="secondary">{block.theme || 'General'}</Badge>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </Table>
+                  {prioritySource && (
+                    <div className="text-muted small mb-3">Prioritization source: {prioritySource}</div>
                   )}
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col xl={4}>
-              <Card className="shadow-sm border-0 h-100">
-                <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Automation Snapshot</span>
-                  <Button variant="link" size="sm" className="text-decoration-none p-0" onClick={handleNavigateToTasksToday}>
-                    Go to Tasks
-                  </Button>
-                </Card.Header>
-                <Card.Body>
-                  <ul className="list-unstyled mb-3">
-                    {automationSnapshot.map((item) => (
-                      <li key={item.label} className="d-flex justify-content-between align-items-center py-1">
-                        <span className="text-muted">{item.label}</span>
-                        <span className="fw-semibold">{item.value}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="text-muted small">
-                    Weekly summary and priorities roll into this view after nightly runs.
-                  </div>
+                  <Row className="mt-3 g-3">
+                    <Col lg={8}>
+                      <div className="fw-semibold mb-2">Calendar (Today)</div>
+                      {todayBlocks.length === 0 ? (
+                        <div className="text-muted">No blocks scheduled today.</div>
+                      ) : (
+                        <Table size="sm" className="mb-0">
+                          <tbody>
+                            {todayBlocks
+                              .slice()
+                              .sort((a, b) => (a.start || 0) - (b.start || 0))
+                              .map((block) => {
+                                const goal = block.goalId ? goalsList.find(g => g.id === block.goalId) : undefined;
+                                const theme = themeFor(goal?.theme ?? block.theme);
+                                const badge = theme?.label || goal?.title || block.theme || 'General';
+                                const color = theme?.color || '#6c757d';
+                                return (
+                                  <tr key={block.id} style={{ background: hexToRgba(color, 0.12) }}>
+                                    <td style={{ width: '32%' }}>
+                                      {new Date(block.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} –{' '}
+                                      {new Date(block.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </td>
+                                    <td>
+                                      <div className="d-flex align-items-center gap-2 flex-wrap">
+                                        <div>
+                                          <div className="fw-semibold">{block.title || block.category || 'Block'}</div>
+                                          {block.linkedTaskRef && <div className="text-muted small">Task: {block.linkedTaskRef}</div>}
+                                          {block.linkedStoryRef && <div className="text-muted small">Story: {block.linkedStoryRef}</div>}
+                                        </div>
+                                        <Button
+                                          size="sm"
+                                          variant="outline-primary"
+                                          onClick={() => handleOpenBlock(block.id)}
+                                        >
+                                          View
+                                        </Button>
+                                      </div>
+                                    </td>
+                                    <td className="text-end">
+                                      <Badge bg="secondary" style={{ backgroundColor: color }}>{badge}</Badge>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                          </tbody>
+                        </Table>
+                      )}
+                    </Col>
+                    <Col lg={4}>
+                      <div className="fw-semibold mb-2">Now / Next / Later</div>
+                      {(() => {
+                        const sorted = todayBlocks.slice().sort((a, b) => (a.start || 0) - (b.start || 0));
+                        const nowMs = Date.now();
+                        const nowBlock = sorted.find(b => b.start <= nowMs && nowMs < b.end);
+                        const nextBlock = sorted.find(b => b.start > nowMs);
+                        const later = sorted.filter(b => b.start > (nextBlock ? nextBlock.start : nowMs)).slice(0, 3);
+                        const renderBlock = (label: string, block: any) => {
+                          if (!block) return <div className="mb-2 text-muted small">{label}: none</div>;
+                          const goal = block.goalId ? goalsList.find(g => g.id === block.goalId) : undefined;
+                          const theme = themeFor(goal?.theme ?? block.theme);
+                          const color = theme?.color || '#6c757d';
+                          return (
+                            <div className="mb-2 p-2 rounded" style={{ background: hexToRgba(color, 0.12), borderLeft: `3px solid ${color}` }}>
+                              <div className="text-muted small">{label}</div>
+                              <div className="fw-semibold">{block.title || block.category || 'Block'}</div>
+                              <div className="small">
+                                {new Date(block.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – {new Date(block.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            </div>
+                          );
+                        };
+                        return (
+                          <>
+                            {renderBlock('Now', nowBlock)}
+                            {renderBlock('Next', nextBlock)}
+                            <div className="text-muted small">Later:</div>
+                            {later.length === 0 ? (
+                              <div className="text-muted small">No later blocks</div>
+                            ) : (
+                              <ul className="small mb-0">
+                                {later.map((b) => (
+                                  <li key={b.id}>
+                                    {b.title || b.category || 'Block'} ({new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </Col>
+                  </Row>
                 </Card.Body>
               </Card>
             </Col>
@@ -805,6 +984,32 @@ const Dashboard: React.FC = () => {
                     <Button size="sm" variant="outline-primary" onClick={handleOpenChecklist}>
                       Open daily checklist
                     </Button>
+                  </div>
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
+
+          <Row className="g-3 mt-3">
+            <Col xl={12}>
+              <Card className="shadow-sm border-0">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <span className="fw-semibold">Automation Snapshot</span>
+                  <Button variant="link" size="sm" className="text-decoration-none p-0" onClick={handleNavigateToTasksToday}>
+                    Go to Tasks
+                  </Button>
+                </Card.Header>
+                <Card.Body>
+                  <ul className="list-unstyled mb-3">
+                    {automationSnapshot.map((item) => (
+                      <li key={item.label} className="d-flex justify-content-between align-items-center py-1">
+                        <span className="text-muted">{item.label}</span>
+                        <span className="fw-semibold">{item.value}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="text-muted small">
+                    Weekly summary and priorities roll into this view after nightly runs.
                   </div>
                 </Card.Body>
               </Card>

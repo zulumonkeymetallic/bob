@@ -108,12 +108,22 @@ const WorkoutsDashboard: React.FC = () => {
   }, [workouts, providerFilter]);
 
   const monthly = useMemo(() => {
-    const map = new Map<string, { distKm: number; runs: number; parkrunMedianSec: number | null; parkrunTimes: number[]; }>();
+    const map = new Map<string, {
+      distKm: number;
+      runs: number;
+      parkrunMedianSec: number | null;
+      parkrunTimes: number[];
+      z1Min: number;
+      z2Min: number;
+      z3Min: number;
+      z4Min: number;
+      z5Min: number;
+    }>();
     for (const w of filtered) {
       const ms = w.startDate || Date.parse(w.utcStartDate || '') || 0;
       const d = new Date(ms);
       const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
-      const cur = map.get(key) || { distKm: 0, runs: 0, parkrunMedianSec: null, parkrunTimes: [] };
+      const cur = map.get(key) || { distKm: 0, runs: 0, parkrunMedianSec: null, parkrunTimes: [], z1Min: 0, z2Min: 0, z3Min: 0, z4Min: 0, z5Min: 0 };
       const distKm = (w.distance_m || 0)/1000;
       cur.distKm += distKm;
       cur.runs += 1;
@@ -121,12 +131,29 @@ const WorkoutsDashboard: React.FC = () => {
         const t = w.elapsedTime_s ?? w.movingTime_s;
         if (t) cur.parkrunTimes.push(t);
       }
+      if (w.hrZones) {
+        cur.z1Min += (w.hrZones.z1Time_s || 0) / 60;
+        cur.z2Min += (w.hrZones.z2Time_s || 0) / 60;
+        cur.z3Min += (w.hrZones.z3Time_s || 0) / 60;
+        cur.z4Min += (w.hrZones.z4Time_s || 0) / 60;
+        cur.z5Min += (w.hrZones.z5Time_s || 0) / 60;
+      }
       map.set(key, cur);
     }
     const arr = Array.from(map.entries()).map(([month, v]) => {
       const times = v.parkrunTimes.sort((a,b)=>a-b);
       const med = times.length ? times[Math.floor(times.length/2)] : null;
-      return { month, distKm: Number(v.distKm.toFixed(1)), runs: v.runs, parkrunMedianSec: med };
+      return {
+        month,
+        distKm: Number(v.distKm.toFixed(1)),
+        runs: v.runs,
+        parkrunMedianSec: med,
+        z1Min: Number(v.z1Min.toFixed(1)),
+        z2Min: Number(v.z2Min.toFixed(1)),
+        z3Min: Number(v.z3Min.toFixed(1)),
+        z4Min: Number(v.z4Min.toFixed(1)),
+        z5Min: Number(v.z5Min.toFixed(1)),
+      };
     }).sort((a,b)=> a.month.localeCompare(b.month));
     return arr;
   }, [filtered]);
@@ -137,16 +164,56 @@ const WorkoutsDashboard: React.FC = () => {
       {
         label: 'Monthly Distance (km)',
         data: monthly.map(m => m.distKm),
-        yAxisID: 'y',
+        yAxisID: 'yDistance',
         borderColor: '#3b82f6',
         backgroundColor: 'rgba(59,130,246,0.2)'
       },
       {
         label: 'Parkrun 5k Median (min)',
         data: monthly.map(m => m.parkrunMedianSec ? (m.parkrunMedianSec/60) : null),
-        yAxisID: 'y1',
+        yAxisID: 'yParkrun',
         borderColor: '#10b981',
         backgroundColor: 'rgba(16,185,129,0.2)'
+      },
+      {
+        type: 'bar' as const,
+        label: 'Zone 1 (min)',
+        data: monthly.map(m => m.z1Min),
+        yAxisID: 'yZones',
+        backgroundColor: 'rgba(107,114,128,0.6)',
+        stack: 'zones',
+      },
+      {
+        type: 'bar' as const,
+        label: 'Zone 2 (min)',
+        data: monthly.map(m => m.z2Min),
+        yAxisID: 'yZones',
+        backgroundColor: 'rgba(96,165,250,0.7)',
+        stack: 'zones',
+      },
+      {
+        type: 'bar' as const,
+        label: 'Zone 3 (min)',
+        data: monthly.map(m => m.z3Min),
+        yAxisID: 'yZones',
+        backgroundColor: 'rgba(74,222,128,0.8)',
+        stack: 'zones',
+      },
+      {
+        type: 'bar' as const,
+        label: 'Zone 4 (min)',
+        data: monthly.map(m => m.z4Min),
+        yAxisID: 'yZones',
+        backgroundColor: 'rgba(251,191,36,0.85)',
+        stack: 'zones',
+      },
+      {
+        type: 'bar' as const,
+        label: 'Zone 5 (min)',
+        data: monthly.map(m => m.z5Min),
+        yAxisID: 'yZones',
+        backgroundColor: 'rgba(248,113,113,0.9)',
+        stack: 'zones',
       }
     ]
   }), [monthly]);
@@ -157,8 +224,9 @@ const WorkoutsDashboard: React.FC = () => {
     stacked: false,
     plugins: { legend: { position: 'top' } },
     scales: {
-      y: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Distance (km)' } },
-      y1: { type: 'linear', display: true, position: 'right', title: { display: true, text: '5k Median (min)' }, grid: { drawOnChartArea: false } }
+      yDistance: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Distance (km)' } },
+      yParkrun: { type: 'linear', display: true, position: 'right', title: { display: true, text: '5k Median (min)' }, grid: { drawOnChartArea: false } },
+      yZones: { type: 'linear', display: true, position: 'right', title: { display: true, text: 'HR Zone Time (min)' }, stacked: true, grid: { drawOnChartArea: false } }
     }
   };
 
@@ -268,7 +336,7 @@ const WorkoutsDashboard: React.FC = () => {
 
       <Card className="mb-3">
         <Card.Body>
-          <Line data={chartData} options={chartOptions} />
+          <Line data={chartData as any} options={chartOptions as any} />
         </Card.Body>
       </Card>
 

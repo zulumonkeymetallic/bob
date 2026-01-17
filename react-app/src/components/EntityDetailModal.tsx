@@ -178,8 +178,13 @@ const EntityDetailModal: React.FC<Props> = ({ show, type, item, onHide, initialT
   // Subscribe to activity stream for this entity
   useEffect(() => {
     if (!activeItem) { setActivities([]); return; }
-    return ActivityStreamService.subscribeToActivityStream(activeItem.id, setActivities, currentUser?.uid);
-  }, [activeItem?.id, currentUser?.uid]);
+    return ActivityStreamService.subscribeToActivityStreamAny(
+      activeItem.id,
+      type as 'task' | 'story' | 'goal',
+      setActivities,
+      currentUser?.uid
+    );
+  }, [activeItem?.id, currentUser?.uid, type]);
 
   // If requested, scroll to activity on open
   useEffect(() => {

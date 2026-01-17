@@ -118,7 +118,7 @@ async function run() {
 
         console.log('\n✅ Migration complete!');
         console.log('\nNext steps:');
-        console.log('  1. Create theme blocks in /calendar/themes (e.g., "Chores" Monday 9-10 AM)');
+        console.log('  1. Create theme blocks in /calendar/planner (e.g., "Chores" Monday 9-10 AM)');
         console.log('  2. Run "Auto Plan with AI" to schedule chores/routines into theme blocks');
         console.log('  3. Check calendar to see chores/routines in their theme-colored blocks');
 

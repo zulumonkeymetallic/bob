@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Card, Badge, Button, Dropdown, Modal, Alert, Toast, ToastContainer } from 'react-bootstrap';
+import { Card, Badge, Button, Dropdown, Modal, Alert, Toast, ToastContainer, Form } from 'react-bootstrap';
 import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -55,6 +55,23 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [generatingForGoal, setGeneratingForGoal] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [toastVariant, setToastVariant] = useState<'success' | 'danger' | 'info'>('success');
+  const [showDescriptions, setShowDescriptions] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('bob_goals_show_descriptions');
+      if (stored === null || stored === undefined) return true;
+      return stored === 'true';
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bob_goals_show_descriptions', String(showDescriptions));
+    } catch {
+      // noop: localStorage may be unavailable in some environments
+    }
+  }, [showDescriptions]);
 
   const themePalette = useMemo(() => (themes && themes.length ? themes : GLOBAL_THEMES), [themes]);
   const themeMap = useMemo(() => {
@@ -408,6 +425,16 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           </Toast.Body>
         </Toast>
       </ToastContainer>
+      <div className="d-flex justify-content-end align-items-center mb-2">
+        <Form.Check
+          type="switch"
+          id="toggle-goal-descriptions"
+          label="Show goal descriptions"
+          checked={showDescriptions}
+          onChange={(e) => setShowDescriptions(e.target.checked)}
+          className="text-muted"
+        />
+      </div>
       <div className={gridClassName}>
         {sortedGoals.map((goal) => {
           const themeDef = resolveTheme(goal.theme);
@@ -434,6 +461,33 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const progressPercent = totalStories && totalStories > 0
             ? Math.max(0, Math.min(100, Math.round(((doneStories ?? 0) / totalStories) * 100)))
             : 0;
+          const shouldShowDescription = showDescriptions && !!goal.description;
+          const latestActivityLabel = latestActivity
+            ? latestActivity.activityType === 'note_added'
+              ? 'Latest Comment'
+              : latestActivity.activityType === 'status_changed'
+              ? 'Latest Status'
+              : latestActivity.activityType === 'updated' && latestActivity.fieldName
+              ? 'Latest Update'
+              : latestActivity.activityType === 'created'
+              ? 'Goal created'
+              : 'Latest Activity'
+            : '';
+          const latestActivityText = latestActivity
+            ? latestActivity.activityType === 'note_added'
+              ? `"${latestActivity.noteContent}"`
+              : latestActivity.activityType === 'status_changed'
+              ? `Status changed to: ${ChoiceHelper.getLabel('goal', 'status', parseInt(latestActivity.newValue) || latestActivity.newValue)}`
+              : latestActivity.activityType === 'updated' && latestActivity.fieldName
+              ? `${latestActivity.fieldName} changed to: ${latestActivity.newValue}`
+              : latestActivity.activityType === 'created'
+              ? 'Goal created'
+              : latestActivity.description || 'Activity logged'
+            : '';
+          const latestActivityTimestamp = latestActivity?.timestamp
+            ? ActivityStreamService.formatTimestamp(latestActivity.timestamp)
+            : '';
+          const latestActivityUser = latestActivity?.userEmail ? latestActivity.userEmail.split('@')[0] : '';
           const activityButton = (
             <Button
               variant={showDetailed ? 'outline-light' : 'outline-primary'}
@@ -519,40 +573,11 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical'
-                    }}>
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical'
+                  }}>
                       {goal.title}
                     </h5>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <Badge
-                          style={{
-                            backgroundColor: themeColor,
-                            color: themeTextColor,
-                            fontSize: badgeFontSize
-                          }}
-                        >
-                          {themeDef.label}
-                        </Badge>
-                      <Badge 
-                        style={{ 
-                          backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || 'var(--muted)',
-                          color: 'var(--on-accent)',
-                          fontSize: badgeFontSize
-                        }}
-                      >
-                        {getStatusName(goal.status)}
-                      </Badge>
-                      {(() => {
-                        const potId = (goal as any).linkedPotId || (goal as any).potId;
-                        const potInfo = potId ? pots[potId] : undefined;
-                        return potInfo ? (
-                          <Badge bg="light" text="dark" className="border">
-                            {potInfo.name}
-                          </Badge>
-                        ) : null;
-                      })()}
-                    </div>
                   </div>
                   
                   <Dropdown onClick={(e) => e.stopPropagation()}>
@@ -563,7 +588,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     >
                       <ChevronDown size={16} />
                     </Dropdown.Toggle>
-                    <Dropdown.Menu>
+                    <Dropdown.Menu style={{ zIndex: 2000 }} popperConfig={{ strategy: 'fixed' }}>
                       <Dropdown.Item 
                         onClick={() => setShowEditModal(goal)}
                       >
@@ -636,6 +661,69 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   </Dropdown>
                 </div>
 
+                {(shouldShowDescription || latestActivity) && (
+                  <div
+                    style={{
+                      marginBottom: showDetailed ? '12px' : '10px',
+                      padding: showDetailed ? '12px' : '10px',
+                      backgroundColor: withAlpha(themeColor, showDetailed ? 0.18 : 0.12),
+                      border: `1px solid ${withAlpha(themeColor, showDetailed ? 0.35 : 0.28)}`,
+                      borderRadius: showDetailed ? '12px' : '10px',
+                      color: textColor,
+                    }}
+                  >
+                    {shouldShowDescription && (
+                      <p
+                        className="goals-card-description"
+                        style={{
+                          margin: latestActivity ? '0 0 8px 0' : 0,
+                          color: mutedTextColor,
+                          fontSize: '14px',
+                          lineHeight: '1.5',
+                          display: '-webkit-box',
+                          WebkitLineClamp: showDetailed ? 4 : 3,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden'
+                        }}
+                      >
+                        {goal.description}
+                      </p>
+                    )}
+                    {latestActivity && (
+                      <div>
+                        <div style={{ 
+                          fontSize: '11px', 
+                          fontWeight: '700', 
+                          color: textColor, 
+                          marginBottom: '4px',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.5px'
+                        }}>
+                          {latestActivityLabel}
+                        </div>
+                        <div style={{ 
+                          fontSize: '12px', 
+                          color: textColor, 
+                          fontStyle: 'italic',
+                          lineHeight: '1.4'
+                        }}>
+                          {latestActivityText}
+                        </div>
+                        {(latestActivityTimestamp || latestActivityUser) && (
+                          <div style={{ 
+                            fontSize: '10px', 
+                            color: mutedTextColor, 
+                            marginTop: '6px'
+                          }}>
+                            {latestActivityTimestamp}
+                            {latestActivityUser && ` • ${latestActivityUser}`}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {!showDetailed && (
                   <div className="goals-card-quick-stats">
                     <div className="goals-card-progress">
@@ -673,77 +761,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       )}
                     </div>
                     {/* Removed Priority and This Week per request */}
-                  </div>
-                )}
-
-                {/* Description */}
-                {showDetailed && goal.description && (
-                  <p
-                    className="goals-card-description"
-                    style={{
-                      margin: '0 0 16px 0',
-                      color: mutedTextColor,
-                      fontSize: '14px',
-                      lineHeight: '1.5',
-                      display: '-webkit-box',
-                      WebkitLineClamp: 3,
-                      WebkitBoxOrient: 'vertical',
-                      overflow: 'hidden'
-                    }}
-                  >
-                    {goal.description}
-                  </p>
-                )}
-
-                {/* Latest Status/Comment */}
-                {showDetailed && latestActivity && (
-                  <div style={{ 
-                    marginBottom: '16px',
-                    padding: '12px',
-                    backgroundColor: withAlpha(themeColor, 0.16),
-                    border: `1px solid ${withAlpha(themeColor, 0.35)}`,
-                    borderRadius: '10px'
-                  }}>
-                    <div style={{ 
-                      fontSize: '11px', 
-                      fontWeight: '600', 
-                      color: textColor, 
-                      marginBottom: '6px',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.5px'
-                    }}>
-                      {latestActivity.activityType === 'note_added' 
-                        ? 'Latest Comment'
-                        : latestActivity.activityType === 'status_changed'
-                        ? 'Latest Status'
-                        : latestActivity.activityType === 'updated'
-                        ? 'Latest Update'
-                        : 'Latest Activity'}
-                    </div>
-                    <div style={{ 
-                      fontSize: '12px', 
-                      color: textColor, 
-                      fontStyle: 'italic',
-                      lineHeight: '1.4'
-                    }}>
-                      {latestActivity.activityType === 'note_added'
-                        ? `"${latestActivity.noteContent}"`
-                        : latestActivity.activityType === 'status_changed'
-                        ? `Status changed to: ${ChoiceHelper.getLabel('goal', 'status', parseInt(latestActivity.newValue) || latestActivity.newValue)}`
-                        : latestActivity.activityType === 'updated' && latestActivity.fieldName
-                        ? `${latestActivity.fieldName} changed to: ${latestActivity.newValue}`
-                        : latestActivity.activityType === 'created'
-                        ? 'Goal created'
-                        : latestActivity.description || 'Activity logged'}
-                    </div>
-                    <div style={{ 
-                      fontSize: '10px', 
-                      color: mutedTextColor, 
-                      marginTop: '6px'
-                    }}>
-                      {latestActivity.timestamp ? ActivityStreamService.formatTimestamp(latestActivity.timestamp) : null}
-                      {latestActivity.userEmail && ` • ${latestActivity.userEmail.split('@')[0]}`}
-                    </div>
                   </div>
                 )}
 
@@ -832,30 +849,63 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     paddingTop: showDetailed ? '16px' : '8px',
                     borderTop: showDetailed ? `1px solid ${withAlpha(themeColor, 0.25)}` : `1px solid ${withAlpha('var(--on-accent)', 0.18)}`,
                     fontSize: '12px',
-                    color: mutedTextColor
+                    color: mutedTextColor,
+                    gap: '12px',
+                    flexWrap: 'wrap'
                   }}
                 >
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <Calendar size={12} style={{ marginRight: '4px' }} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <Badge
+                        style={{
+                          backgroundColor: themeColor,
+                          color: themeTextColor,
+                          fontSize: badgeFontSize
+                        }}
+                      >
+                        {themeDef.label}
+                      </Badge>
+                      <Badge 
+                        style={{ 
+                          backgroundColor: statusColors[getStatusName(goal.status) as keyof typeof statusColors] || 'var(--muted)',
+                          color: 'var(--on-accent)',
+                          fontSize: badgeFontSize
+                        }}
+                      >
+                        {getStatusName(goal.status)}
+                      </Badge>
                       {(() => {
-                        const d = toDate(goal.createdAt);
-                        return (
-                          <span>Created: {d ? formatDate(d) : '—'}</span>
-                        );
+                        const potId = (goal as any).linkedPotId || (goal as any).potId;
+                        const potInfo = potId ? pots[potId] : undefined;
+                        return potInfo ? (
+                          <Badge bg="light" text="dark" className="border">
+                            {potInfo.name}
+                          </Badge>
+                        ) : null;
                       })()}
                     </div>
-                    {(() => {
-                      const d = toDate(goal.updatedAt);
-                      return d ? (
-                        <div style={{ display: 'flex', alignItems: 'center', color: textColor, fontWeight: '500' }}>
-                          <Calendar size={12} style={{ marginRight: '4px' }} />
-                          <span>
-                            Updated: {formatDate(d)} at {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                      ) : null;
-                    })()}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <Calendar size={12} style={{ marginRight: '4px' }} />
+                        {(() => {
+                          const d = toDate(goal.createdAt);
+                          return (
+                            <span>Created: {d ? formatDate(d) : '—'}</span>
+                          );
+                        })()}
+                      </div>
+                      {(() => {
+                        const d = toDate(goal.updatedAt);
+                        return d ? (
+                          <div style={{ display: 'flex', alignItems: 'center', color: textColor, fontWeight: '500' }}>
+                            <Calendar size={12} style={{ marginRight: '4px' }} />
+                            <span>
+                              Updated: {formatDate(d)} at {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                        ) : null;
+                      })()}
+                    </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     {activityButton}

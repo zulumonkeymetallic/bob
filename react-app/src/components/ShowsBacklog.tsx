@@ -232,7 +232,7 @@ const ShowsBacklog: React.FC = () => {
               <td>
                 <div className="d-flex gap-2">
                   <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)}>Convert to Story</Button>
-                  {converted && <Button size="sm" variant="outline-secondary" href={`/stories?storyId=${s.lastConvertedStoryId}`}>View story</Button>}
+                  {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${s.lastConvertedStoryId}`}>View story</Button>}
                   <Button size="sm" variant="outline-success" onClick={() => markWatched(s)}>Mark watched</Button>
                 </div>
               </td>

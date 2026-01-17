@@ -15,6 +15,7 @@ import ResearchDocModal from './ResearchDocModal';
 import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 import { ChoiceHelper } from '../config/choices';
 import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
+import { useNavigate } from 'react-router-dom';
 
 interface EntityLookupInputProps {
   type: 'goal' | 'story';
@@ -189,6 +190,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, toggleCollapse, updateItem } = useSidebar();
   const { isTestMode, testModeLabel } = useTestMode();
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -200,6 +202,10 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [orchestrating, setOrchestrating] = useState(false);
   // Quick edit state for inline updates
   const [quickEdit, setQuickEdit] = useState<any>({});
+  const linkedGoalId = (selectedType === 'task' || selectedType === 'story')
+    ? (quickEdit.goalId || (selectedItem as any)?.goalId || '')
+    : '';
+  const linkedGoal = linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null;
 
   // Ensure status labels/variants match each entity’s board semantics
   const getStatusDisplay = (
@@ -299,14 +305,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     if (!currentUser?.uid) return;
 
     // Subscribe to activity stream for this item
-    const unsubscribe = ActivityStreamService.subscribeToActivityStream(
+    const entityType = (selectedType === 'task' || selectedType === 'story' || selectedType === 'goal')
+      ? selectedType
+      : 'task';
+    const unsubscribe = ActivityStreamService.subscribeToActivityStreamAny(
       selectedItem.id,
+      entityType,
       setActivities,
       currentUser.uid
     );
 
     return unsubscribe;
-  }, [selectedItem, currentUser?.uid]);
+  }, [selectedItem, selectedType, currentUser?.uid]);
 
   // Determine responsive sidebar width
   const getSidebarWidth = React.useCallback(() => {
@@ -1115,6 +1125,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                           placeholder="Search goals…"
                           initialOptions={goals.map((g) => ({ id: g.id, title: g.title, ref: (g as any).ref }))}
                         />
+                        {linkedGoalId && (
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="p-0 mt-1"
+                            onClick={() => navigate(`/goals/${linkedGoalId}`)}
+                          >
+                            Open goal{linkedGoal ? `: ${linkedGoal.title}` : ''}
+                          </Button>
+                        )}
                       </div>
                     )}
                     {selectedType === 'task' && (

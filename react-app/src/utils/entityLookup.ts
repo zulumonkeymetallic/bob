@@ -1,5 +1,5 @@
 import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 
 export type EntityLookupType = 'goal' | 'story';
 
@@ -96,13 +96,13 @@ export async function resolveEntityByRef<T extends { id: string }>(
   // Fall back to querying by ref/reference fields
   try {
     const refs = ['ref', 'reference'];
+    const ownerUid = auth.currentUser?.uid;
+    const colRef = collection(db, collectionName);
     for (const field of refs) {
       const snap = await getDocs(
-        query(
-          collection(db, collectionName),
-          where(field, '==', trimmed),
-          limit(1)
-        )
+        ownerUid
+          ? query(colRef, where(field, '==', trimmed), where('ownerUid', '==', ownerUid), limit(1))
+          : query(colRef, where(field, '==', trimmed), limit(1))
       );
       if (!snap.empty) {
         const hit = snap.docs[0];

@@ -128,6 +128,11 @@ service cloud.firestore {
       allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
       allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
     }
+    // Monzo pots per user
+    match /monzo_pots/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
     match /monzo_transactions/{id} {
       // Individual transaction rows carry ownerUid
       // Create: enforce ownerUid equals request.auth.uid

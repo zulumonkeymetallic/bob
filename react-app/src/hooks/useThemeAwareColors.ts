@@ -108,7 +108,10 @@ export const getThemeAwareGoalColor = (themeId: number, isDark: boolean): { back
     6: '--theme-growth-primary',
     7: '--theme-growth-primary',
     8: '--theme-home-primary',
-    9: '--theme-growth-primary'
+    9: '--theme-growth-primary',
+    12: '--theme-work-primary',
+    13: '--theme-sleep-primary',
+    14: '--theme-random-primary'
   } as const;
   const cssVar = map[(themeId as unknown as number)] || '--theme-growth-primary';
   const backgroundColor = getCssVarValue(cssVar, '#6b7280');

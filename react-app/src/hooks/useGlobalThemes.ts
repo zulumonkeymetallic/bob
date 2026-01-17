@@ -12,6 +12,14 @@ export const useGlobalThemes = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const mergeThemes = useCallback((saved?: GlobalTheme[] | null) => {
+    if (!Array.isArray(saved) || saved.length === 0) return GLOBAL_THEMES;
+    const savedById = new Map(saved.map((t) => [t.id, t]));
+    const merged = GLOBAL_THEMES.map((t) => savedById.get(t.id) || t);
+    const extras = saved.filter((t) => !GLOBAL_THEMES.find((d) => d.id === t.id));
+    return extras.length ? [...merged, ...extras] : merged;
+  }, []);
+
   const load = useCallback(async () => {
     if (!currentUser) return;
     setLoading(true);
@@ -22,7 +30,7 @@ export const useGlobalThemes = () => {
       if (snap.exists()) {
         const data = snap.data() as any;
         if (Array.isArray(data.themes) && data.themes.length) {
-          setThemes(data.themes as GlobalTheme[]);
+          setThemes(mergeThemes(data.themes as GlobalTheme[]));
         } else {
           setThemes(GLOBAL_THEMES);
         }
@@ -39,7 +47,7 @@ export const useGlobalThemes = () => {
     } finally {
       setLoading(false);
     }
-  }, [currentUser]);
+  }, [currentUser, mergeThemes]);
 
   useEffect(() => {
     load();

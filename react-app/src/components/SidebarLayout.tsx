@@ -8,6 +8,7 @@ import VersionDisplay from './VersionDisplay';
 import { useSprint } from '../contexts/SprintContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import SprintSelector from './SprintSelector';
+import GlobalSearchBar from './GlobalSearchBar';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
 // Test mode UI removed per request
@@ -138,7 +139,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'calendar',
       items: [
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Weekly Plan', path: '/calendar/themes', icon: 'palette' },
+        { label: 'Weekly Plan', path: '/calendar/planner', icon: 'palette' },
         { label: 'Sprint Capacity', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]
@@ -641,6 +642,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 const ApprovalsBadge = require('./planner/ApprovalsBadge').default;
                 return <ApprovalsBadge />;
               })()}
+              <GlobalSearchBar />
               <Button size="sm" variant="outline-primary" onClick={() => setAssistantOpen(v => !v)}>
                 {assistantOpen ? 'Hide Assistant' : 'Assistant'}
               </Button>

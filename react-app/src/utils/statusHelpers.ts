@@ -75,35 +75,65 @@ export const isPriority = (actualPriority: any, expectedPriority: string): boole
 };
 
 export const isTheme = (actualTheme: any, expectedTheme: string): boolean => {
-  // Handle numeric theme values
-  if (typeof actualTheme === 'number') {
-    if (expectedTheme === 'Health') return actualTheme === 1;
-    if (expectedTheme === 'Growth') return actualTheme === 2;
-    if (expectedTheme === 'Wealth') return actualTheme === 3;
-    if (expectedTheme === 'Tribe') return actualTheme === 4;
-    if (expectedTheme === 'Home') return actualTheme === 5;
-    return false;
-  }
-  
-  // Handle string theme values (legacy)
-  return actualTheme === expectedTheme;
+  const normalizeThemeId = (value: any): number | null => {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    const lower = raw.toLowerCase();
+    const direct = GLOBAL_THEMES.find((t) => t.label.toLowerCase() === lower || t.name.toLowerCase() === lower);
+    if (direct) return direct.id;
+    const legacy: Record<string, number> = {
+      health: 1,
+      growth: 2,
+      wealth: 3,
+      tribe: 4,
+      home: 5,
+    };
+    if (legacy[lower] != null) return legacy[lower];
+    const partial = GLOBAL_THEMES.find((t) =>
+      t.label.toLowerCase().includes(lower) || t.name.toLowerCase().includes(lower)
+    );
+    return partial ? partial.id : null;
+  };
+
+  const actualId = normalizeThemeId(actualTheme);
+  const expectedId = normalizeThemeId(expectedTheme);
+  if (actualId != null && expectedId != null) return actualId === expectedId;
+
+  const actualStr = String(actualTheme || '').trim().toLowerCase();
+  const expectedStr = String(expectedTheme || '').trim().toLowerCase();
+  if (!actualStr || !expectedStr) return false;
+  return actualStr === expectedStr;
 };
 
 // Helper to get theme class name for styling
 export const getThemeClass = (theme: any): string => {
-  if (typeof theme === 'number') {
-    switch (theme) {
-      case 1: return 'health';
-      case 2: return 'growth';
-      case 3: return 'wealth';
-      case 4: return 'tribe';
-      case 5: return 'home';
-      default: return 'default';
+  const resolveLabel = (value: any): string => {
+    if (typeof value === 'number') {
+      const match = GLOBAL_THEMES.find((t) => t.id === value);
+      return match?.label || '';
     }
-  }
-  
-  // Handle string themes (legacy)
-  return typeof theme === 'string' ? theme.toLowerCase() : 'default';
+    return String(value || '').trim();
+  };
+  const label = resolveLabel(theme);
+  const lower = label.toLowerCase();
+
+  if (lower.includes('health')) return 'health';
+  if (lower.includes('growth')) return 'growth';
+  if (lower.includes('wealth') || lower.includes('finance')) return 'wealth';
+  if (lower.includes('tribe') || lower.includes('family') || lower.includes('relationship')) return 'tribe';
+  if (lower.includes('home')) return 'home';
+  if (lower.includes('work')) return 'work';
+  if (lower.includes('sleep')) return 'sleep';
+  if (lower.includes('random')) return 'random';
+  if (lower.includes('hobby')) return 'hobbies';
+  if (lower.includes('travel') || lower.includes('adventure')) return 'travel';
+  if (lower.includes('spirit')) return 'spiritual';
+  if (lower.includes('chore')) return 'chores';
+  if (lower.includes('rest') || lower.includes('recovery')) return 'rest';
+  return 'default';
 };
 
 // Helper to get theme display name

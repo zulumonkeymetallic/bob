@@ -19,6 +19,8 @@ interface KanbanBoardV2Props {
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
     showDescriptions?: boolean;
+    dueFilter?: 'all' | 'today' | 'overdue';
+    sortByAi?: boolean;
 }
 
 const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
@@ -27,7 +29,9 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     goalFilter,
     onItemSelect,
     onEdit,
-    showDescriptions = false
+    showDescriptions = false,
+    dueFilter = 'all',
+    sortByAi = true
 }) => {
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
@@ -245,8 +249,24 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                 return false;
             });
         }
+
+        if (dueFilter !== 'all') {
+            const todayStart = new Date();
+            todayStart.setHours(0, 0, 0, 0);
+            const todayEnd = new Date(todayStart);
+            todayEnd.setHours(23, 59, 59, 999);
+            result = result.filter((t) => {
+                const due = (t as any).dueDate || (t as any).targetDate || null;
+                if (!due) return false;
+                const dueMs = typeof due === 'number' ? due : (typeof due === 'string' ? Date.parse(due) : null);
+                if (!dueMs) return false;
+                if (dueFilter === 'today') return dueMs >= todayStart.getTime() && dueMs <= todayEnd.getTime();
+                if (dueFilter === 'overdue') return dueMs < todayStart.getTime();
+                return true;
+            });
+        }
         return result;
-    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter]);
+    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter]);
 
     // Helper to determine column for an item
     const getColumnForStatus = (status: string | number): 'backlog' | 'in-progress' | 'done' => {
@@ -318,6 +338,29 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         const col = getTaskColumn(t);
         columns[col].items.push(t);
     });
+
+    if (sortByAi) {
+        const scoreOf = (item: any) => {
+            const score = Number(item.aiCriticalityScore ?? 0);
+            return Number.isFinite(score) ? score : 0;
+        };
+        const dueMs = (item: any) => {
+            const d = item.dueDate || item.targetDate || item.endDate || null;
+            if (!d) return Number.MAX_SAFE_INTEGER;
+            if (typeof d === 'number') return d;
+            const parsed = Date.parse(d);
+            return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+        };
+        const sorter = (a: any, b: any) => {
+            const sa = scoreOf(a);
+            const sb = scoreOf(b);
+            if (sa !== sb) return sb - sa;
+            return dueMs(a) - dueMs(b);
+        };
+        (Object.values(columns) as any[]).forEach(col => {
+            col.items.sort(sorter);
+        });
+    }
 
     if (loading) {
         return <div>Loading board...</div>;

@@ -33,6 +33,8 @@ const SprintKanbanPageV2: React.FC = () => {
     const [showDescriptions, setShowDescriptions] = useState(false);
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
+    const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue'>('all');
+    const [sortByAi, setSortByAi] = useState<boolean>(false);
     const [taskForm, setTaskForm] = useState({
         title: '',
         description: '',
@@ -117,6 +119,7 @@ const SprintKanbanPageV2: React.FC = () => {
                 where('persona', '==', currentPersona),
                 where('sprintId', '==', filterSprintId),
                 where('isOpen', '==', true),
+                orderBy('dueDate', 'asc'),
                 limit(1000)
             );
         } else {
@@ -125,6 +128,7 @@ const SprintKanbanPageV2: React.FC = () => {
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
                 where('isOpen', '==', true),
+                orderBy('dueDate', 'asc'),
                 limit(1000)
             );
         }
@@ -139,6 +143,9 @@ const SprintKanbanPageV2: React.FC = () => {
 
         const unsubTasks = onSnapshot(tasksQuery, (snap) => {
             setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task)));
+            setLoading(false);
+        }, (err) => {
+            console.error('[kanban] tasks snapshot error', err?.message || err);
             setLoading(false);
         });
 
@@ -355,6 +362,26 @@ const SprintKanbanPageV2: React.FC = () => {
                                 className="ms-2"
                             />
 
+                            <Dropdown>
+                                <Dropdown.Toggle variant="outline-secondary" size="sm">
+                                    {dueFilter === 'today' ? 'Due Today' : dueFilter === 'overdue' ? 'Overdue' : 'All Due'}
+                                </Dropdown.Toggle>
+                                <Dropdown.Menu>
+                                    <Dropdown.Item active={dueFilter === 'all'} onClick={() => setDueFilter('all')}>All</Dropdown.Item>
+                                    <Dropdown.Item active={dueFilter === 'today'} onClick={() => setDueFilter('today')}>Due Today</Dropdown.Item>
+                                    <Dropdown.Item active={dueFilter === 'overdue'} onClick={() => setDueFilter('overdue')}>Overdue</Dropdown.Item>
+                                </Dropdown.Menu>
+                            </Dropdown>
+
+                            <Form.Check
+                                type="switch"
+                                id="toggle-ai-sort"
+                                label="Sort by AI score"
+                                checked={sortByAi}
+                                onChange={(e) => setSortByAi(e.target.checked)}
+                                className="ms-2"
+                            />
+
                             <Button
                                 variant="outline-secondary"
                                 size="sm"
@@ -496,6 +523,8 @@ const SprintKanbanPageV2: React.FC = () => {
                                 onItemSelect={(item, type) => showSidebar(item, type)}
                                 onEdit={handleEditItem}
                                 showDescriptions={showDescriptions}
+                                dueFilter={dueFilter}
+                                sortByAi={sortByAi}
                             />
                         </Card.Body>
                     </Card>

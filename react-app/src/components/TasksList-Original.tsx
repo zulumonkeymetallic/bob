@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Task, Goal, Story, WorkProject } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../utils/statusHelpers';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { taskStatusText } from '../utils/storyCardFormatting';
 
 const TasksList: React.FC = () => {
@@ -19,6 +20,7 @@ const TasksList: React.FC = () => {
   const [showAddTask, setShowAddTask] = useState(false);
   const [showEditTask, setShowEditTask] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const { themes: globalThemes } = useGlobalThemes();
   const [filters, setFilters] = useState({
     status: '',
     priority: '',
@@ -34,7 +36,7 @@ const TasksList: React.FC = () => {
     effort: 'M' as 'S' | 'M' | 'L',
     parentType: 'story' as 'story' | 'project',
     parentId: '',
-    theme: 'Health' as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
+    theme: '1',
     estimatedHours: 1
   });
 
@@ -146,10 +148,12 @@ const TasksList: React.FC = () => {
     try {
       const estimateMin = newTask.effort === 'S' ? 30 : newTask.effort === 'M' ? 60 : 120;
       const estimatedHours = Math.round((estimateMin / 60) * 100) / 100;
+      const themeValue = Number.isFinite(Number(newTask.theme)) ? Number(newTask.theme) : newTask.theme;
 
       const priorityMap: Record<string, number> = { high: 1, med: 2, low: 3 };
       await addDoc(collection(db, 'tasks'), {
         ...newTask,
+        theme: themeValue,
         persona: currentPersona,
         status: 0,
         priority: priorityMap[String((newTask as any).priority).toLowerCase()] ?? 2,
@@ -174,7 +178,7 @@ const TasksList: React.FC = () => {
         effort: 'M',
         parentType: 'story',
         parentId: '',
-        theme: 'Health',
+        theme: '1',
         estimatedHours: 1
       });
       setShowAddTask(false);
@@ -205,6 +209,7 @@ const TasksList: React.FC = () => {
       const estimatedHours = newTask.estimatedHours !== undefined
         ? Math.round(newTask.estimatedHours * 100) / 100
         : Math.round((estimateMin / 60) * 100) / 100;
+      const themeValue = Number.isFinite(Number(newTask.theme)) ? Number(newTask.theme) : newTask.theme;
 
       await updateDoc(taskRef, {
         title: newTask.title,
@@ -213,7 +218,7 @@ const TasksList: React.FC = () => {
         effort: newTask.effort,
         parentType: newTask.parentType,
         parentId: newTask.parentId,
-        theme: newTask.theme,
+        theme: themeValue,
         estimateMin,
         estimatedHours,
         updatedAt: serverTimestamp()
@@ -226,7 +231,7 @@ const TasksList: React.FC = () => {
         effort: 'M',
         parentType: 'story',
         parentId: '',
-        theme: 'Health',
+        theme: '1',
         estimatedHours: 1
       });
       setShowEditTask(false);
@@ -266,7 +271,7 @@ const TasksList: React.FC = () => {
       effort: task.effort,
       parentType: task.parentType,
       parentId: task.parentId,
-      theme: getThemeName(task.theme) as 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home',
+      theme: String(task.theme ?? '1'),
       estimatedHours: typeof task.estimatedHours === 'number'
         ? Math.round(task.estimatedHours * 100) / 100
         : task.estimateMin
@@ -509,11 +514,11 @@ const TasksList: React.FC = () => {
                     value={newTask.theme}
                     onChange={(e) => setNewTask({...newTask, theme: e.target.value as any})}
                   >
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
+                    {globalThemes.map((theme) => (
+                      <option key={theme.id} value={String(theme.id)}>
+                        {theme.label}
+                      </option>
+                    ))}
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -631,11 +636,11 @@ const TasksList: React.FC = () => {
                     value={newTask.theme}
                     onChange={(e) => setNewTask({...newTask, theme: e.target.value as any})}
                   >
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
+                    {globalThemes.map((theme) => (
+                      <option key={theme.id} value={String(theme.id)}>
+                        {theme.label}
+                      </option>
+                    ))}
                   </Form.Select>
                 </Form.Group>
               </Col>

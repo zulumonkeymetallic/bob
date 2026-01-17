@@ -723,6 +723,9 @@
 .md-chip.growth { background: rgba(156, 39, 176, 0.12); color: #9c27b0; }
 .md-chip.tribe { background: rgba(33, 150, 243, 0.12); color: #2196f3; }
 .md-chip.home { background: rgba(121, 85, 72, 0.12); color: #795548; }
+.md-chip.work { background: rgba(37, 99, 235, 0.12); color: #2563eb; }
+.md-chip.sleep { background: rgba(99, 102, 241, 0.12); color: #6366f1; }
+.md-chip.random { background: rgba(100, 116, 139, 0.12); color: #64748b; }
 
 /* Material Design Typography */
 .md-headline-1 { font-size: 96px; font-weight: 300; }

@@ -1,14 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { Button } from 'react-bootstrap';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen } from 'lucide-react';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebase';
+import { functions, db } from '../firebase';
 import { Story, Task, Goal } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, colorWithAlpha, goalThemeColor } from '../utils/storyCardFormatting';
 import { themeVars } from '../utils/themeVars';
+import { useAuth } from '../contexts/AuthContext';
+import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 
 interface KanbanCardV2Props {
     item: Story | Task;
@@ -38,6 +40,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const ref = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
     const { showSidebar } = useSidebar();
+    const { currentUser } = useAuth();
+    const [actionMessage, setActionMessage] = useState<string | null>(null);
 
     useEffect(() => {
         const el = ref.current;
@@ -97,8 +101,58 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         try {
             const callable = httpsCallable(functions, 'orchestrateStoryPlanning');
             await callable({ storyId: item.id });
+            setActionMessage('Planning tasks…');
+            setTimeout(() => setActionMessage(null), 2000);
         } catch (error) {
             alert((error as any)?.message || 'Failed to orchestrate story planning');
+        }
+    };
+
+    const handleConvertTaskToStory = async (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        setActionMessage(null);
+        try {
+            const callable = httpsCallable(functions, 'convertTasksToStories');
+            await callable({
+                conversions: [{
+                    taskId: item.id,
+                    storyTitle: item.title || 'Converted task',
+                    storyDescription: (item as any).description || ''
+                }]
+            });
+            setActionMessage('Converted to story');
+            setTimeout(() => setActionMessage(null), 2500);
+        } catch (err: any) {
+            alert(err?.message || 'Convert failed');
+        }
+    };
+
+    const handleConvertStoryToTask = async (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        if (!currentUser) {
+            alert('Sign in required');
+            return;
+        }
+        setActionMessage(null);
+        try {
+            const story = item as Story;
+            const payload: any = {
+                ownerUid: currentUser.uid,
+                title: story.title || 'Converted story',
+                description: story.description || '',
+                status: 0,
+                storyId: story.id,
+                sprintId: (story as any).sprintId || null,
+                goalId: (story as any).goalId || null,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+                persona: (story as any).persona || 'personal',
+              };
+            await addDoc(collection(db, 'tasks'), payload);
+            setActionMessage('Converted to task');
+            setTimeout(() => setActionMessage(null), 2500);
+        } catch (err: any) {
+            alert(err?.message || 'Convert failed');
         }
     };
 
@@ -157,6 +211,32 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 onPointerDown={(e) => e.stopPropagation()}
                             >
                                 <Wand2 size={12} />
+                            </Button>
+                        )}
+                        {type === 'task' && (
+                            <Button
+                                variant="link"
+                                size="sm"
+                                className="p-0"
+                                style={{ width: 24, height: 24, color: themeVars.muted }}
+                                title="Convert to story"
+                                onClick={handleConvertTaskToStory}
+                                onPointerDown={(e) => e.stopPropagation()}
+                            >
+                                <Shuffle size={12} />
+                            </Button>
+                        )}
+                        {type === 'story' && (
+                            <Button
+                                variant="link"
+                                size="sm"
+                                className="p-0"
+                                style={{ width: 24, height: 24, color: themeVars.muted }}
+                                title="Convert to task"
+                                onClick={handleConvertStoryToTask}
+                                onPointerDown={(e) => e.stopPropagation()}
+                            >
+                                <Shuffle size={12} />
                             </Button>
                         )}
 
@@ -220,6 +300,12 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             {(item as Task).effort}
                         </span>
                     )}
+                    {(item as any).aiCriticalityScore != null ? (
+                        <span className="kanban-card__meta-badge" title="AI score">
+                            AI&nbsp;
+                            {Math.round(Number((item as any).aiCriticalityScore))}
+                        </span>
+                    ) : null}
                     <span className="kanban-card__meta-text" title="Status">
                         {statusLabel}
                     </span>
@@ -246,6 +332,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     )}
                 </div>
             </div>
+            {actionMessage && (
+                <div className="kanban-card__meta-text text-muted small px-3 pb-2">
+                    {actionMessage}
+                </div>
+            )}
         </div>
     );
 };

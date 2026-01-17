@@ -33,6 +33,24 @@
   --theme-home-dark: rgb(174, 118, 6);
   --theme-home-darker: rgb(154, 98, 0);
 
+  --theme-work-primary: #2563eb;
+  --theme-work-light: rgba(37, 99, 235, 0.2);
+  --theme-work-lighter: rgba(37, 99, 235, 0.1);
+  --theme-work-dark: rgb(30, 64, 175);
+  --theme-work-darker: rgb(30, 58, 138);
+
+  --theme-sleep-primary: #6366f1;
+  --theme-sleep-light: rgba(99, 102, 241, 0.2);
+  --theme-sleep-lighter: rgba(99, 102, 241, 0.1);
+  --theme-sleep-dark: rgb(79, 70, 229);
+  --theme-sleep-darker: rgb(55, 48, 163);
+
+  --theme-random-primary: #64748b;
+  --theme-random-light: rgba(100, 116, 139, 0.2);
+  --theme-random-lighter: rgba(100, 116, 139, 0.1);
+  --theme-random-dark: rgb(71, 85, 105);
+  --theme-random-darker: rgb(51, 65, 85);
+
   /* Defect status styling */
   --defect-primary: #dc3545;
   --defect-light: rgba(220, 53, 69, 0.2);
@@ -144,6 +162,46 @@
 
 .theme-badge.Home {
   background-color: var(--theme-home-primary) !important;
+  color: white;
+}
+
+.theme-badge.health {
+  background-color: var(--theme-health-primary) !important;
+  color: white;
+}
+
+.theme-badge.growth {
+  background-color: var(--theme-growth-primary) !important;
+  color: white;
+}
+
+.theme-badge.wealth {
+  background-color: var(--theme-wealth-primary) !important;
+  color: white;
+}
+
+.theme-badge.tribe {
+  background-color: var(--theme-tribe-primary) !important;
+  color: white;
+}
+
+.theme-badge.home {
+  background-color: var(--theme-home-primary) !important;
+  color: white;
+}
+
+.theme-badge.work {
+  background-color: var(--theme-work-primary) !important;
+  color: white;
+}
+
+.theme-badge.sleep {
+  background-color: var(--theme-sleep-primary) !important;
+  color: white;
+}
+
+.theme-badge.random {
+  background-color: var(--theme-random-primary) !important;
   color: white;
 }
 

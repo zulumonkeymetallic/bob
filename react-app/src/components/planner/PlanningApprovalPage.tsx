@@ -113,9 +113,10 @@ const PlanningApprovalPage: React.FC = () => {
     const map = new Map<string, { title: string; deepLink?: string | null }>();
     for (const block of blocks) {
       if (block.goal?.id) {
+        const refOrId = block.goal?.ref || block.goal.id;
         map.set(block.goal.id, {
           title: block.goal.title,
-          deepLink: block.deepLink || `/goals/roadmap?goalId=${block.goal.id}`,
+          deepLink: block.deepLink || `/goals/${refOrId}`,
         });
       }
     }
@@ -126,9 +127,10 @@ const PlanningApprovalPage: React.FC = () => {
     const map = new Map<string, { title: string; deepLink?: string | null }>();
     for (const block of blocks) {
       if (block.task?.id) {
+        const refOrId = block.task?.ref || block.task.id;
         map.set(block.task.id, {
           title: block.task.title,
-          deepLink: block.deepLink || `/tasks?taskId=${block.task.id}`,
+          deepLink: block.deepLink || `/tasks/${refOrId}`,
         });
       }
     }

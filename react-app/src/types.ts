@@ -1,5 +1,6 @@
 export interface Goal {
   id: string;
+  ref?: string;
   persona: 'personal'; // Goals are personal-only per requirements
   title: string;
   description?: string;
@@ -212,7 +213,7 @@ export interface CalendarBlock {
   subTheme?: string;
   persona: 'personal' | 'work';
   theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home' | string;
-  category: 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep';
+  category: 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep' | 'Work Shift';
   start: number; // timestamp
   end: number; // timestamp
   flexibility: 'hard' | 'soft';

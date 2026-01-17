@@ -53,6 +53,33 @@ const getDefaultThemesFromCss = (): ThemeSettings['themes'] => ({
     lighter: getCssVarValue('--theme-home-lighter', '#fff7ed'),
     dark: getCssVarValue('--theme-home-dark', '#c2410c'),
     darker: getCssVarValue('--theme-home-darker', '#9a3412')
+  },
+  'Work (Main Gig)': {
+    name: 'Work (Main Gig)',
+    primary: getCssVarValue('--theme-work-primary', '#2563eb'),
+    secondary: getCssVarValue('--theme-work-dark', '#1e40af'),
+    light: getCssVarValue('--theme-work-light', '#c7d2fe'),
+    lighter: getCssVarValue('--theme-work-lighter', '#e0e7ff'),
+    dark: getCssVarValue('--theme-work-dark', '#1e3a8a'),
+    darker: getCssVarValue('--theme-work-darker', '#1d4ed8')
+  },
+  Sleep: {
+    name: 'Sleep',
+    primary: getCssVarValue('--theme-sleep-primary', '#6366f1'),
+    secondary: getCssVarValue('--theme-sleep-dark', '#4f46e5'),
+    light: getCssVarValue('--theme-sleep-light', '#c7d2fe'),
+    lighter: getCssVarValue('--theme-sleep-lighter', '#e0e7ff'),
+    dark: getCssVarValue('--theme-sleep-dark', '#4338ca'),
+    darker: getCssVarValue('--theme-sleep-darker', '#3730a3')
+  },
+  Random: {
+    name: 'Random',
+    primary: getCssVarValue('--theme-random-primary', '#64748b'),
+    secondary: getCssVarValue('--theme-random-dark', '#475569'),
+    light: getCssVarValue('--theme-random-light', '#e2e8f0'),
+    lighter: getCssVarValue('--theme-random-lighter', '#f1f5f9'),
+    dark: getCssVarValue('--theme-random-dark', '#334155'),
+    darker: getCssVarValue('--theme-random-darker', '#1f2937')
   }
 });
 const DEFAULT_THEMES: ThemeSettings['themes'] = getDefaultThemesFromCss();
@@ -239,7 +266,15 @@ export const useThemeColor = (props: UseThemeColorProps = {}): UseThemeColorRetu
       doc(db, 'theme_settings', currentUser.uid),
       (doc) => {
         if (doc.exists()) {
-          setThemeSettings(doc.data() as ThemeSettings);
+          const data = doc.data() as ThemeSettings;
+          const mergedThemes = {
+            ...DEFAULT_THEMES,
+            ...(data?.themes || {})
+          };
+          setThemeSettings({
+            ...data,
+            themes: mergedThemes
+          });
         } else {
           // Create default theme settings
           setThemeSettings({

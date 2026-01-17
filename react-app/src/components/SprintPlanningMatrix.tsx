@@ -7,12 +7,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
-import { Calendar, Filter, Plus, ArrowUpDown, ArrowRight, Target } from 'lucide-react';
+import { Calendar, Filter, Plus, ArrowUpDown, ArrowRight, Target, Maximize2, Minimize2, LayoutGrid } from 'lucide-react';
 import KanbanCardV2 from './KanbanCardV2';
 import GLOBAL_THEMES from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import '../styles/KanbanCards.css';
 import { goalThemeColor } from '../utils/storyCardFormatting';
+import { useNavigate } from 'react-router-dom';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -168,6 +169,8 @@ const SprintPlanningMatrix: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const navigate = useNavigate();
+  const containerRef = useRef<HTMLDivElement>(null);
   
   // State
   const [stories, setStories] = useState<Story[]>([]);
@@ -175,11 +178,31 @@ const SprintPlanningMatrix: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [showDescriptions, setShowDescriptions] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   
   // Filters
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<number | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [goalSearch, setGoalSearch] = useState('');
+
+  useEffect(() => {
+    const handler = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const toggleFullscreen = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
 
   useEffect(() => {
     if (!currentUser || !currentPersona) return;
@@ -257,6 +280,12 @@ const SprintPlanningMatrix: React.FC = () => {
     });
   }, [stories, goals, filterGoal, filterTheme]);
 
+  const filteredGoals = useMemo(() => {
+    if (!goalSearch.trim()) return goals;
+    const q = goalSearch.toLowerCase();
+    return goals.filter((g) => g.title.toLowerCase().includes(q));
+  }, [goals, goalSearch]);
+
   // Story groups per sprint (including backlog)
   const storiesBySprint = filteredStories.reduce((acc, story) => {
     const sprintKey = normalizeSprintId((story as any).sprintId) ?? 'backlog';
@@ -326,7 +355,7 @@ const SprintPlanningMatrix: React.FC = () => {
   }
 
   return (
-    <Container fluid style={{ padding: '24px', backgroundColor: themeVars.bg as string, minHeight: '100vh' }}>
+    <Container fluid style={{ padding: '24px', backgroundColor: themeVars.bg as string, minHeight: '100vh' }} ref={containerRef}>
       {/* Header */}
       <Row className="mb-4">
         <Col>
@@ -341,6 +370,32 @@ const SprintPlanningMatrix: React.FC = () => {
             </div>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => navigate('/sprints/kanban')}
+                className="d-inline-flex align-items-center"
+              >
+                <LayoutGrid size={16} style={{ marginRight: 6 }} />
+                Kanban
+              </Button>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => {
+                  const el = containerRef.current;
+                  if (!el) return;
+                  if (!document.fullscreenElement) {
+                    el.requestFullscreen().catch(() => {});
+                  } else {
+                    document.exitFullscreen().catch(() => {});
+                  }
+                }}
+                className="d-inline-flex align-items-center"
+              >
+                {isFullscreen ? <Minimize2 size={16} style={{ marginRight: 6 }} /> : <Maximize2 size={16} style={{ marginRight: 6 }} />}
+                {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+              </Button>
               <Button variant="primary" href="/sprints/new">
                 <Plus size={16} style={{ marginRight: '8px' }} />
                 Create Sprint
@@ -357,45 +412,76 @@ const SprintPlanningMatrix: React.FC = () => {
             <Card.Body>
               <Row className="align-items-center">
                 <Col md={3}>
-                  <Form.Group>
-                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
-                      <Target size={14} style={{ marginRight: '6px' }} />
-                      Filter by Goal
-                    </Form.Label>
-                    <Form.Select
-                      value={filterGoal}
-                      onChange={(e) => setFilterGoal(e.target.value)}
-                      size="sm"
-                    >
-                      <option value="all">All Goals</option>
-                      {goals.map(goal => (
-                        <option key={goal.id} value={goal.id}>
-                          {goal.title}
-                        </option>
-                      ))}
-                    </Form.Select>
-                  </Form.Group>
+                  <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <Target size={14} style={{ marginRight: '6px' }} />
+                    Filter by Goal
+                  </Form.Label>
+                  <Dropdown>
+                    <Dropdown.Toggle variant="outline-secondary" size="sm" style={{ minWidth: '200px' }} className="text-truncate">
+                      {filterGoal === 'all'
+                        ? 'All Goals'
+                        : (goals.find(g => g.id === filterGoal)?.title || 'Unknown Goal')}
+                    </Dropdown.Toggle>
+                    <Dropdown.Menu style={{ maxHeight: '420px', overflowY: 'auto', minWidth: '260px' }}>
+                      <div className="p-2 sticky-top bg-white border-bottom">
+                        <Form.Control
+                          size="sm"
+                          placeholder="Search goals..."
+                          value={goalSearch}
+                          onChange={(e) => setGoalSearch(e.target.value)}
+                          autoFocus
+                        />
+                      </div>
+                      <Dropdown.Item onClick={() => setFilterGoal('all')} active={filterGoal === 'all'}>
+                        All Goals
+                      </Dropdown.Item>
+                      <Dropdown.Divider />
+                      {filteredGoals.length > 0 ? (
+                        filteredGoals.map(goal => (
+                          <Dropdown.Item
+                            key={goal.id}
+                            onClick={() => setFilterGoal(goal.id)}
+                            active={filterGoal === goal.id}
+                          >
+                            <div className="text-truncate" title={goal.title}>{goal.title}</div>
+                          </Dropdown.Item>
+                        ))
+                      ) : (
+                        <div className="p-2 text-center text-muted small">No goals found</div>
+                      )}
+                    </Dropdown.Menu>
+                  </Dropdown>
                 </Col>
                 <Col md={3}>
-                  <Form.Group>
-                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
-                      <Filter size={14} style={{ marginRight: '6px' }} />
-                      Filter by Theme
-                    </Form.Label>
-                    <Form.Select
-                      value={filterTheme ?? 'all'}
-                      onChange={(e) => {
-                        const val = e.target.value === 'all' ? null : Number(e.target.value);
-                        setFilterTheme(val);
-                      }}
-                      size="sm"
-                    >
-                      <option value="all">All Themes</option>
+                  <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <Filter size={14} style={{ marginRight: '6px' }} />
+                    Filter by Theme
+                  </Form.Label>
+                  <Dropdown>
+                    <Dropdown.Toggle variant="outline-secondary" size="sm" style={{ minWidth: '200px' }}>
+                      {filterTheme === null
+                        ? 'All Themes'
+                        : (GLOBAL_THEMES.find(t => t.id === filterTheme)?.label || 'Unknown Theme')}
+                    </Dropdown.Toggle>
+                    <Dropdown.Menu style={{ maxHeight: '420px', overflowY: 'auto' }}>
+                      <Dropdown.Item onClick={() => setFilterTheme(null)} active={filterTheme === null}>
+                        All Themes
+                      </Dropdown.Item>
+                      <Dropdown.Divider />
                       {GLOBAL_THEMES.map(theme => (
-                        <option key={theme.id} value={theme.id}>{theme.label}</option>
+                        <Dropdown.Item
+                          key={theme.id}
+                          onClick={() => setFilterTheme(theme.id)}
+                          active={filterTheme === theme.id}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: theme.color }} />
+                            {theme.label}
+                          </div>
+                        </Dropdown.Item>
                       ))}
-                    </Form.Select>
-                  </Form.Group>
+                    </Dropdown.Menu>
+                  </Dropdown>
                 </Col>
                 <Col md={3}>
                   <Form.Group>
@@ -437,6 +523,7 @@ const SprintPlanningMatrix: React.FC = () => {
                         setFilterTheme(null);
                         setShowCompleted(false);
                         setShowDescriptions(false);
+                        setGoalSearch('');
                       }}
                     >
                       Clear Filters

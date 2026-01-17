@@ -21,7 +21,8 @@ import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { 
   Settings, 
@@ -31,14 +32,16 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Activity, Pencil, Trash2 } from 'lucide-react';
+import { Activity, Pencil, Trash2, Wand2, ExternalLink } from 'lucide-react';
 import { Story, Goal, Sprint, Task } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useNavigate } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
+import { storyStatusText } from '../utils/storyCardFormatting';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -90,7 +93,7 @@ const defaultColumns: Column[] = [
     key: 'description', 
     label: 'Description', 
     width: '30%', 
-    visible: true, 
+    visible: false, 
     editable: true, 
     type: 'text' 
   },
@@ -117,7 +120,7 @@ const defaultColumns: Column[] = [
     key: 'priority', 
     label: 'Priority', 
     width: '8%', 
-    visible: true, 
+    visible: false, 
     editable: true, 
     type: 'select',
     options: ['low', 'medium', 'high', 'critical']
@@ -134,7 +137,7 @@ const defaultColumns: Column[] = [
     key: 'effort', 
     label: 'Effort', 
     width: '8%', 
-    visible: true, 
+    visible: false, 
     editable: true, 
     type: 'select',
     options: ['XS', 'S', 'M', 'L', 'XL']
@@ -142,7 +145,7 @@ const defaultColumns: Column[] = [
   { 
     key: 'sprintId', 
     label: 'Sprint', 
-    width: '12%', 
+    width: '18%', 
     visible: true, 
     editable: true, 
     type: 'select',
@@ -359,6 +362,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { showSidebar } = useSidebar();
+  const navigate = useNavigate();
   const {
     attributes,
     listeners,
@@ -370,6 +374,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const [generatingStoryId, setGeneratingStoryId] = useState<string | null>(null);
   const { trackFieldChange } = useActivityTracking();
 
   // Track story view when component mounts (only once per story)
@@ -390,6 +395,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'goalTitle') {
       const currentTitle = goals.find(g => g.id === story.goalId)?.title || '';
       setEditValue(currentTitle);
+    } else if (key === 'status') {
+      setEditValue(storyStatusText(value));
     } else {
       setEditValue(value || '');
     }
@@ -407,13 +414,21 @@ const SortableRow: React.FC<SortableRowProps> = ({
         const match = goals.find(g => g.id === editValue || g.title === editValue);
         valueToSave = match ? match.id : editValue;
       } else if (actualKey === 'status') {
-        // Map human label to canonical numeric status (0,2,4)
+        // Map human label/number to canonical numeric status (0,2,4)
         const label = String(editValue).toLowerCase();
         const map: Record<string, number> = {
+          '0': 0,
+          '1': 2,
+          '2': 2,
+          '3': 2,
+          '4': 4,
           'backlog': 0,
+          'planned': 0,
           'in progress': 2,
           'in-progress': 2,
-          'done': 4
+          'active': 2,
+          'done': 4,
+          'complete': 4,
         };
         valueToSave = map[label] ?? editValue;
       }
@@ -472,6 +487,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
       return String(value);
     }
     
+    if (key === 'status') {
+      return storyStatusText(value);
+    }
     if (key === 'sprintId' && value) {
       const sprint = sprints.find(s => s.id === value);
       return sprint ? sprint.name : value;
@@ -596,6 +614,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
     );
     }
 
+    const displayValue = formatValue(column.key, value);
+    const canLinkGoal = column.key === 'goalTitle' && !!story.goalId;
+    const linkedGoal = canLinkGoal ? goals.find((goal) => goal.id === story.goalId) : undefined;
+    const goalRefOrId = linkedGoal?.ref || story.goalId;
+
     return (
       <td 
         key={column.key} 
@@ -616,7 +639,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             e.currentTarget.style.backgroundColor = 'transparent';
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, formatValue(column.key, value))}
+        onClick={() => column.editable && handleCellEdit(column.key, displayValue)}
       >
         <div style={{
           minHeight: '20px',
@@ -627,8 +650,53 @@ const SortableRow: React.FC<SortableRowProps> = ({
           wordBreak: 'break-word',
           whiteSpace: 'normal',
           lineHeight: '1.4',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
         }}>
-          {formatValue(column.key, value)}
+          {canLinkGoal ? (
+            <>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/goals/${goalRefOrId}`);
+                }}
+                title="Open goal"
+                style={{
+                  border: 'none',
+                  background: 'none',
+                  color: themeVars.brand as string,
+                  padding: 0,
+                  display: 'inline-flex',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+              >
+                {displayValue || 'View goal'}
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/goals/${goalRefOrId}`);
+                }}
+                title="Open goal in table"
+                style={{
+                  border: 'none',
+                  background: 'none',
+                  color: themeVars.muted as string,
+                  padding: 0,
+                  display: 'inline-flex',
+                  cursor: 'pointer',
+                }}
+              >
+                <ExternalLink size={14} />
+              </button>
+            </>
+          ) : (
+            <span>{displayValue}</span>
+          )}
         </div>
       </td>
     );
@@ -655,7 +723,6 @@ const SortableRow: React.FC<SortableRowProps> = ({
           !e.target.closest('select')
         ) {
           onStorySelect(story);
-          onToggleExpand && onToggleExpand(story.id);
         }
       }}
       onMouseEnter={(e) => {
@@ -749,6 +816,43 @@ const SortableRow: React.FC<SortableRowProps> = ({
             <Activity size={14} />
           </button>
           <button
+            onClick={async (e) => {
+              e.stopPropagation();
+              try {
+                setGeneratingStoryId(story.id);
+                const fn = httpsCallable(functions, 'generateTasksForStory');
+                await fn({ storyId: story.id });
+              } catch (err) {
+                console.error('generateTasksForStory failed', err);
+                alert('Failed to generate tasks for this story.');
+              } finally {
+                setGeneratingStoryId(null);
+              }
+            }}
+            style={{
+              color: themeVars.brand as string,
+              padding: '4px',
+              borderRadius: '4px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: generatingStoryId === story.id ? 'wait' : 'pointer',
+              transition: 'all 0.15s ease',
+              opacity: generatingStoryId === story.id ? 0.6 : 1,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = rgbaCard(0.15);
+              e.currentTarget.style.color = themeVars.brand as string;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.color = themeVars.brand as string;
+            }}
+            title={generatingStoryId === story.id ? 'Generating tasks…' : 'AI: Generate tasks for story'}
+            disabled={generatingStoryId === story.id}
+          >
+            <Wand2 size={14} />
+          </button>
+          <button
             onClick={() => onEditStory ? onEditStory(story) : handleCellEdit('title', story.title)}
             style={{
               color: themeVars.brand as string,
@@ -827,6 +931,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     display: false,
   });
   const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [generatingStoryId, setGeneratingStoryId] = useState<string | null>(null);
   
   // New story row state
   const [isAddingNewStory, setIsAddingNewStory] = useState(false);
@@ -1012,8 +1117,15 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
       if (!matches) return false;
     }
 
-    // Status filter (convert string to number)
-    if (filters.status && story.status !== parseInt(filters.status)) return false;
+    // Status filter (convert string to number, normalize 1/3 into In Progress)
+    if (filters.status) {
+      const filterVal = parseInt(filters.status, 10);
+      const canonicalStoryStatus = typeof story.status === 'number'
+        ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0)
+        : 0;
+      const canonicalFilter = filterVal >= 4 ? 4 : filterVal >= 2 ? 2 : 0;
+      if (canonicalStoryStatus !== canonicalFilter) return false;
+    }
 
     // Priority filter (convert string to number)
     if (filters.priority && story.priority !== parseInt(filters.priority)) return false;
@@ -1247,17 +1359,15 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
               fontSize: '14px',
               border: '1px solid var(--line)',
               borderRadius: '4px',
-              backgroundColor: 'var(--panel)'
-            }}
-          >
-            <option value="">All Statuses</option>
-            <option value="0">Backlog</option>
-            <option value="1">Planned</option>
-            <option value="2">In Progress</option>
-            <option value="3">Testing</option>
-            <option value="4">Done</option>
-          </select>
-        </div>
+            backgroundColor: 'var(--panel)'
+          }}
+        >
+          <option value="">All Statuses</option>
+          <option value="0">Backlog</option>
+          <option value="2">In Progress</option>
+          <option value="4">Done</option>
+        </select>
+      </div>
 
         {/* Priority Filter */}
         <div>

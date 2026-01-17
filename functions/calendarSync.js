@@ -2,12 +2,14 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { google } = require('googleapis');
 const { loadThemesForUser, mapThemeIdToLabel, getGoogleColorForThemeId } = require('./services/themeManager');
-const { buildAbsoluteUrl } = require('./utils/urlHelpers');
+const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const GCAL_PAST_DAYS = 14;
 const GCAL_FUTURE_DAYS = 90;
 const ALLOWED_ROUTINE_TYPES = new Set(['chore', 'routine', 'habit']);
+const TASK_TABLE_LIMIT = 12;
+const MAX_PRIVATE_TASK_REFS = 6;
 
 function toMillis(value) {
   if (value === null || value === undefined) return 0;
@@ -30,6 +32,207 @@ function toMillis(value) {
     }
   }
   return 0;
+}
+
+function isValidUrl(value) {
+  if (!value) return false;
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function toPrivateString(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function buildPrivateProps(values) {
+  const entries = Object.entries(values || {});
+  const out = {};
+  for (const [key, value] of entries) {
+    const asString = toPrivateString(value);
+    if (asString === null) continue;
+    out[key] = asString;
+  }
+  return out;
+}
+
+function resolveBlockDeepLink(block) {
+  if (!block) return null;
+  if (block.storyId) {
+    return buildEntityUrl('story', String(block.storyId), block.storyRef || block.storyReference || null);
+  }
+  if (block.taskId) {
+    return buildEntityUrl('task', String(block.taskId), block.taskRef || block.taskReference || null);
+  }
+  const raw = block.deepLink || block.linkUrl || block.url || block.link || null;
+  if (raw) return buildAbsoluteUrl(String(raw));
+  if (block.choreId) return buildAbsoluteUrl(`/chores?choreId=${encodeURIComponent(String(block.choreId))}`);
+  if (block.routineId) return buildAbsoluteUrl(`/routines?routineId=${encodeURIComponent(String(block.routineId))}`);
+  if (block.habitId) return buildAbsoluteUrl(`/habits?habitId=${encodeURIComponent(String(block.habitId))}`);
+  return null;
+}
+
+function normalizeTaskStatus(status) {
+  if (typeof status === 'number') {
+    if (status === 0) return 'To Do';
+    if (status === 1) return 'In Progress';
+    if (status === 2) return 'Done';
+    if (status === 3) return 'Blocked';
+    return 'Unknown';
+  }
+  const raw = String(status || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!raw) return 'Unknown';
+  if (['todo', 'backlog', 'planned', 'new'].includes(raw)) return 'To Do';
+  if (['in-progress', 'in progress', 'active', 'wip', 'testing', 'review'].includes(raw)) return 'In Progress';
+  if (['blocked', 'paused', 'on-hold', 'stalled'].includes(raw)) return 'Blocked';
+  if (['done', 'complete', 'completed', 'closed', 'finished'].includes(raw)) return 'Done';
+  return raw.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function normalizeTaskPriority(priority) {
+  if (typeof priority === 'number') {
+    if (priority === 4) return 'Critical';
+    if (priority === 3) return 'Low';
+    if (priority === 2) return 'Medium';
+    if (priority === 1) return 'High';
+    if (priority === 0) return 'None';
+    return 'Unknown';
+  }
+  const raw = String(priority || '').trim().toLowerCase();
+  if (!raw) return 'Unknown';
+  if (raw === 'critical') return 'Critical';
+  if (raw === 'high') return 'High';
+  if (raw === 'medium' || raw === 'med') return 'Medium';
+  if (raw === 'low') return 'Low';
+  if (raw === 'none') return 'None';
+  return raw.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function resolveTaskDueDate(task) {
+  const candidates = [task.dueDateMs, task.dueDate, task.targetDate, task.startDate];
+  for (const value of candidates) {
+    if (!value) continue;
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+      return value;
+    }
+    const ms = toMillis(value);
+    if (ms) return new Date(ms).toISOString().slice(0, 10);
+  }
+  return '';
+}
+
+function safeTableCell(value) {
+  return String(value || '')
+    .replace(/[|\r\n]+/g, ' ')
+    .trim();
+}
+
+function resolveTaskRef(task) {
+  if (!task) return '';
+  return task.ref || task.reference || task.displayId || task.id || '';
+}
+
+function buildLinkedTasksTable(tasks) {
+  if (!tasks.length) return [];
+  const statusRank = (status) => {
+    const label = String(normalizeTaskStatus(status)).toLowerCase();
+    if (label === 'done') return 2;
+    if (label === 'blocked') return 1;
+    return 0;
+  };
+  const priorityRank = (priority) => {
+    if (typeof priority === 'number') {
+      if (priority === 4) return 0;
+      if (priority === 1) return 1;
+      if (priority === 2) return 2;
+      if (priority === 3) return 3;
+      return 4;
+    }
+    const raw = String(priority || '').toLowerCase();
+    if (raw === 'critical') return 0;
+    if (raw === 'high') return 1;
+    if (raw === 'medium' || raw === 'med') return 2;
+    if (raw === 'low') return 3;
+    return 4;
+  };
+  const dueRank = (task) => {
+    const ms = toMillis(task.dueDateMs || task.dueDate || task.targetDate || task.startDate);
+    return ms || Number.MAX_SAFE_INTEGER;
+  };
+
+  const rows = tasks
+    .filter((task) => !task.deleted)
+    .sort((a, b) => {
+      const statusDiff = statusRank(a.status) - statusRank(b.status);
+      if (statusDiff !== 0) return statusDiff;
+      const priorityDiff = priorityRank(a.priority) - priorityRank(b.priority);
+      if (priorityDiff !== 0) return priorityDiff;
+      const dueDiff = dueRank(a) - dueRank(b);
+      if (dueDiff !== 0) return dueDiff;
+      return String(a.title || '').localeCompare(String(b.title || ''));
+    });
+
+  const limited = rows.slice(0, TASK_TABLE_LIMIT);
+  const lines = [
+    'Linked tasks:',
+    '| Ref | Title | Status | Priority | Points | Due |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  limited.forEach((task) => {
+    const ref = resolveTaskRef(task);
+    const title = task.title || 'Untitled task';
+    const status = normalizeTaskStatus(task.status);
+    const priority = normalizeTaskPriority(task.priority);
+    const points = Number.isFinite(Number(task.points)) ? Number(task.points) : '';
+    const due = resolveTaskDueDate(task);
+    lines.push(`| ${safeTableCell(ref)} | ${safeTableCell(title)} | ${safeTableCell(status)} | ${safeTableCell(priority)} | ${safeTableCell(points)} | ${safeTableCell(due)} |`);
+  });
+
+  if (rows.length > limited.length) {
+    lines.push(`...and ${rows.length - limited.length} more linked tasks`);
+  }
+
+  return lines;
+}
+
+async function fetchLinkedTasksForStory(uid, storyId) {
+  const tasksRef = admin.firestore().collection('tasks');
+  const fetchSnap = (query) => query.get().catch(() => ({ docs: [] }));
+  const [byStory, byParent] = await Promise.all([
+    fetchSnap(
+      tasksRef
+        .where('ownerUid', '==', uid)
+        .where('storyId', '==', String(storyId))
+        .limit(TASK_TABLE_LIMIT * 2),
+    ),
+    fetchSnap(
+      tasksRef
+        .where('ownerUid', '==', uid)
+        .where('parentType', '==', 'story')
+        .where('parentId', '==', String(storyId))
+        .limit(TASK_TABLE_LIMIT * 2),
+    ),
+  ]);
+
+  const map = new Map();
+  [byStory, byParent].forEach((snap) => {
+    (snap.docs || []).forEach((doc) => {
+      map.set(doc.id, { id: doc.id, ...(doc.data() || {}) });
+    });
+  });
+  return Array.from(map.values());
 }
 
 async function logCalendarIntegration(uid, payload) {
@@ -145,8 +348,24 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const themes = await loadThemesForUser(uid);
       const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
       const activityName = block.title || block.category || 'BOB Block';
+      const refPart = block.storyRef || block.taskRef || '';
+      const summaryParts = [];
+      summaryParts.push(activityName);
+      if (refPart) summaryParts.push(refPart);
+      summaryParts.push(`[${themeLabel}]`);
+      const summaryText = summaryParts.filter(Boolean).join(' - ');
       const startMs = toMillis(block.start);
       const endMs = toMillis(block.end);
+      let eventDeepLink = resolveBlockDeepLink(block);
+      const eventContext = {
+        storyRef: block.storyRef || null,
+        taskRef: block.taskRef || null,
+        goalId: null,
+        goalRef: null,
+        storyTitle: null,
+        taskTitle: null,
+        linkedTaskRefs: [],
+      };
       errorContext.startMs = startMs;
       errorContext.endMs = endMs;
       errorContext.themeLabel = themeLabel;
@@ -155,13 +374,24 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         throw new Error('Invalid start/end on block');
       }
       let enrichedDesc = block.rationale || '';
+      let aiScoreVal = block.aiScore ?? block.aiCriticalityScore ?? null;
+      let aiReasonVal = block.aiReason || block.aiCriticalityReason || block.dueDateReason || '';
       try {
         if (block.storyId) {
           const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
           if (s.exists) {
             const sd = s.data() || {};
             const storyRef = sd.ref || s.id;
-            const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
+            const link = buildEntityUrl('story', s.id, storyRef);
+            eventContext.storyRef = storyRef;
+            eventContext.storyTitle = sd.title || null;
+            eventDeepLink = link;
+            if (sd.aiCriticalityScore != null) {
+              aiScoreVal = aiScoreVal ?? sd.aiCriticalityScore;
+            }
+            if (!aiReasonVal && sd.aiCriticalityReason) {
+              aiReasonVal = sd.aiCriticalityReason || '';
+            }
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
               : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
@@ -171,9 +401,34 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
 
             // NEW: Mandatory Deep Links
             lines.push(`Story Link: ${link}`);
-            if (sd.goalId) lines.push(`Goal Link: ${buildAbsoluteUrl(`/goals?goalId=${sd.goalId}`)}`);
+            if (sd.goalId) {
+              let goalRef = sd.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = sd.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+            }
             if (sd.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${sd.sprintId}`)}`);
-            lines.push(`Planner: ${buildAbsoluteUrl('/planner')}`);
+            lines.push(`Planner: ${buildAbsoluteUrl('/calendar/planner')}`);
+
+            const aiLineParts = [];
+            if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
+            if (aiReasonVal) aiLineParts.push(aiReasonVal);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+            if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+
+            const linkedTasks = await fetchLinkedTasksForStory(uid, s.id);
+            eventContext.linkedTaskRefs = linkedTasks.map(resolveTaskRef).filter(Boolean);
+            const taskTable = buildLinkedTasksTable(linkedTasks);
+            if (taskTable.length) {
+              lines.push('', ...taskTable);
+            }
 
             if (acArr.length) {
               lines.push('', 'Acceptance criteria:');
@@ -181,10 +436,103 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             }
             enrichedDesc = lines.join('\n');
           }
+        } else if (block.taskId) {
+          const t = await admin.firestore().collection('tasks').doc(String(block.taskId)).get();
+          if (t.exists) {
+            const td = t.data() || {};
+            const taskRef = resolveTaskRef(td) || t.id;
+            const taskLink = buildEntityUrl('task', t.id, taskRef);
+            eventContext.taskRef = taskRef;
+            eventContext.taskTitle = td.title || null;
+            eventDeepLink = taskLink;
+            if (td.aiCriticalityScore != null) {
+              aiScoreVal = aiScoreVal ?? td.aiCriticalityScore;
+            }
+            if (!aiReasonVal && td.aiCriticalityReason) {
+              aiReasonVal = td.aiCriticalityReason || '';
+            }
+            const lines = [];
+            if (enrichedDesc) lines.push(enrichedDesc);
+            lines.push(`Task: ${taskRef} – ${td.title || 'Task'}`);
+            lines.push(`Task Link: ${taskLink}`);
+            const storyId = td.storyId || (td.parentType === 'story' ? td.parentId : null);
+            if (storyId) {
+              try {
+                const s = await admin.firestore().collection('stories').doc(String(storyId)).get();
+                if (s.exists) {
+                  const sd = s.data() || {};
+                  const storyRef = sd.ref || s.id;
+                  const storyLink = buildEntityUrl('story', s.id, storyRef);
+                  eventContext.storyRef = storyRef;
+                  eventContext.storyTitle = sd.title || null;
+                  lines.push(`Story Link: ${storyLink}`);
+                  if (sd.goalId) {
+                    let goalRef = sd.goalId;
+                    try {
+                      const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                      if (g.exists) {
+                        const gd = g.data() || {};
+                        goalRef = gd.ref || gd.reference || goalRef;
+                      }
+                    } catch { }
+                    eventContext.goalId = sd.goalId;
+                    eventContext.goalRef = goalRef;
+                    lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+                  }
+                }
+              } catch { }
+            }
+            if (td.goalId && !eventContext.goalId) {
+              let goalRef = td.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(td.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = td.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', td.goalId, goalRef)}`);
+            }
+            if (td.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${td.sprintId}`)}`);
+            lines.push(`Planner: ${buildAbsoluteUrl('/calendar/planner')}`);
+
+            const aiLineParts = [];
+            if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
+            if (aiReasonVal) aiLineParts.push(aiReasonVal);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+            if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+
+            enrichedDesc = lines.join('\n');
+          }
         }
       } catch { }
+      if (!block.storyId && !block.taskId) {
+        if (eventDeepLink) {
+          const linkLabel = block.taskId
+            ? 'Task Link'
+            : block.choreId
+              ? 'Chore Link'
+              : block.routineId
+                ? 'Routine Link'
+                : block.habitId
+                  ? 'Habit Link'
+                  : 'Link';
+          const linkLine = `${linkLabel}: ${eventDeepLink}`;
+          enrichedDesc = enrichedDesc ? `${enrichedDesc}\n${linkLine}` : linkLine;
+        }
+        const aiLineParts = [];
+        if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
+        if (aiReasonVal) aiLineParts.push(aiReasonVal);
+        if (block.placementReason) aiLineParts.push(`Placement: ${block.placementReason}`);
+        if (aiLineParts.length) {
+          const aiBlock = aiLineParts.join(' – ');
+          enrichedDesc = enrichedDesc ? `${enrichedDesc}\n\n${aiBlock}` : aiBlock;
+        }
+      }
       const minimalEvent = {
-        summary: `[${themeLabel}] – ${activityName}`,
+        summary: summaryText,
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
       };
@@ -210,24 +558,51 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       }
 
       // Step 2: patch with full metadata (rationale, links, acceptance criteria, ext props)
+      const entityType = block.storyId
+        ? 'story'
+        : block.taskId
+          ? 'task'
+          : block.choreId
+            ? 'chore'
+            : block.routineId
+              ? 'routine'
+              : block.habitId
+                ? 'habit'
+                : 'block';
+      const linkedTaskRefs = eventContext.linkedTaskRefs.filter(Boolean);
+      const privateProps = buildPrivateProps({
+        'bob-block-id': blockId,
+        'bob-entity-type': entityType,
+        'bob-persona': block.persona,
+        'bob-theme': themeLabel,
+        'bob-theme-id': block.theme_id,
+        'bob-category': block.category,
+        'bob-story-id': block.storyId,
+        'bob-story-ref': eventContext.storyRef,
+        'bob-story-title': eventContext.storyTitle,
+        'bob-task-id': block.taskId,
+        'bob-task-ref': eventContext.taskRef,
+        'bob-task-title': eventContext.taskTitle,
+        'bob-goal-id': eventContext.goalId,
+        'bob-goal-ref': eventContext.goalRef,
+        'bob-flexibility': block.flexibility,
+        'bob-rationale': block.rationale || '',
+        'bob-deeplink': eventDeepLink || '',
+        'bob-ai-score': aiScoreVal ?? '',
+        'bob-ai-reason': aiReasonVal || '',
+        'bob-placement': block.placementReason || block.rationale || '',
+        'bob-linked-task-refs': linkedTaskRefs.length ? linkedTaskRefs.slice(0, MAX_PRIVATE_TASK_REFS).join(',') : null,
+        'bob-linked-task-count': linkedTaskRefs.length ? linkedTaskRefs.length : null,
+      });
+      const eventSource = isValidUrl(eventDeepLink) ? { title: 'BOB', url: eventDeepLink } : undefined;
       const fullEvent = {
-        summary: `[${themeLabel}] – ${activityName}`,
+        summary: summaryText,
         description: enrichedDesc || 'BOB calendar block',
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
         colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
-        extendedProperties: {
-          private: {
-            'bob-block-id': blockId,
-            'bob-persona': block.persona,
-            'bob-theme': themeLabel,
-            'bob-theme-id': block.theme_id || null,
-            'bob-category': block.category,
-            'bob-flexibility': block.flexibility,
-            'bob-rationale': block.rationale || '',
-            'bob-deeplink': block.deepLink || '',
-          }
-        }
+        source: eventSource,
+        extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
       try {
         await calendar.events.patch({ calendarId: 'primary', eventId, resource: fullEvent });
@@ -271,14 +646,41 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const themes = await loadThemesForUser(uid);
       const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
       const activityName = block.title || block.category || 'BOB Block';
+      const refPart = block.storyRef || block.taskRef || '';
+      const summaryParts = [];
+      summaryParts.push(activityName);
+      if (refPart) summaryParts.push(refPart);
+      summaryParts.push(`[${themeLabel}]`);
+      const summaryText = summaryParts.filter(Boolean).join(' - ');
       let enrichedDesc2 = block.rationale || '';
+      let aiScoreVal2 = block.aiScore ?? block.aiCriticalityScore ?? null;
+      let aiReasonVal2 = block.aiReason || block.aiCriticalityReason || block.dueDateReason || '';
+      let eventDeepLink = resolveBlockDeepLink(block);
+      const eventContext = {
+        storyRef: block.storyRef || null,
+        taskRef: block.taskRef || null,
+        goalId: null,
+        goalRef: null,
+        storyTitle: null,
+        taskTitle: null,
+        linkedTaskRefs: [],
+      };
       try {
         if (block.storyId) {
           const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
           if (s.exists) {
             const sd = s.data() || {};
             const storyRef = sd.ref || s.id;
-            const link = buildAbsoluteUrl(`/stories?storyId=${encodeURIComponent(s.id)}`);
+            const link = buildEntityUrl('story', s.id, storyRef);
+            eventContext.storyRef = storyRef;
+            eventContext.storyTitle = sd.title || null;
+            eventDeepLink = link;
+            if (sd.aiCriticalityScore != null) {
+              aiScoreVal2 = aiScoreVal2 ?? sd.aiCriticalityScore;
+            }
+            if (!aiReasonVal2 && sd.aiCriticalityReason) {
+              aiReasonVal2 = sd.aiCriticalityReason || '';
+            }
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
               : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
@@ -288,9 +690,34 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
 
             // NEW: Mandatory Deep Links
             lines.push(`Story Link: ${link}`);
-            if (sd.goalId) lines.push(`Goal Link: ${buildAbsoluteUrl(`/goals?goalId=${sd.goalId}`)}`);
+            if (sd.goalId) {
+              let goalRef = sd.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = sd.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+            }
             if (sd.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${sd.sprintId}`)}`);
-            lines.push(`Planner: ${buildAbsoluteUrl('/planner')}`);
+            lines.push(`Planner: ${buildAbsoluteUrl('/calendar/planner')}`);
+
+            const aiLineParts = [];
+            if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
+            if (aiReasonVal2) aiLineParts.push(aiReasonVal2);
+            if (block.placementReason) aiLineParts.push(`Placement: ${block.placementReason}`);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+
+            const linkedTasks = await fetchLinkedTasksForStory(uid, s.id);
+            eventContext.linkedTaskRefs = linkedTasks.map(resolveTaskRef).filter(Boolean);
+            const taskTable = buildLinkedTasksTable(linkedTasks);
+            if (taskTable.length) {
+              lines.push('', ...taskTable);
+            }
 
             if (acArr.length) {
               lines.push('', 'Acceptance criteria:');
@@ -298,8 +725,101 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             }
             enrichedDesc2 = lines.join('\n');
           }
+        } else if (block.taskId) {
+          const t = await admin.firestore().collection('tasks').doc(String(block.taskId)).get();
+          if (t.exists) {
+            const td = t.data() || {};
+            const taskRef = resolveTaskRef(td) || t.id;
+            const taskLink = buildEntityUrl('task', t.id, taskRef);
+            eventContext.taskRef = taskRef;
+            eventContext.taskTitle = td.title || null;
+            eventDeepLink = taskLink;
+            if (td.aiCriticalityScore != null) {
+              aiScoreVal2 = aiScoreVal2 ?? td.aiCriticalityScore;
+            }
+            if (!aiReasonVal2 && td.aiCriticalityReason) {
+              aiReasonVal2 = td.aiCriticalityReason || '';
+            }
+            const lines = [];
+            if (enrichedDesc2) lines.push(enrichedDesc2);
+            lines.push(`Task: ${taskRef} – ${td.title || 'Task'}`);
+            lines.push(`Task Link: ${taskLink}`);
+            const storyId = td.storyId || (td.parentType === 'story' ? td.parentId : null);
+            if (storyId) {
+              try {
+                const s = await admin.firestore().collection('stories').doc(String(storyId)).get();
+                if (s.exists) {
+                  const sd = s.data() || {};
+                  const storyRef = sd.ref || s.id;
+                  const storyLink = buildEntityUrl('story', s.id, storyRef);
+                  eventContext.storyRef = storyRef;
+                  eventContext.storyTitle = sd.title || null;
+                  lines.push(`Story Link: ${storyLink}`);
+                  if (sd.goalId) {
+                    let goalRef = sd.goalId;
+                    try {
+                      const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                      if (g.exists) {
+                        const gd = g.data() || {};
+                        goalRef = gd.ref || gd.reference || goalRef;
+                      }
+                    } catch { }
+                    eventContext.goalId = sd.goalId;
+                    eventContext.goalRef = goalRef;
+                    lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+                  }
+                }
+              } catch { }
+            }
+            if (td.goalId && !eventContext.goalId) {
+              let goalRef = td.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(td.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = td.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', td.goalId, goalRef)}`);
+            }
+            if (td.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${td.sprintId}`)}`);
+            lines.push(`Planner: ${buildAbsoluteUrl('/calendar/planner')}`);
+
+            const aiLineParts = [];
+            if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
+            if (aiReasonVal2) aiLineParts.push(aiReasonVal2);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+            if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+
+            enrichedDesc2 = lines.join('\n');
+          }
         }
       } catch { }
+      if (!block.storyId && !block.taskId) {
+        if (eventDeepLink) {
+          const linkLabel = block.taskId
+            ? 'Task Link'
+            : block.choreId
+              ? 'Chore Link'
+              : block.routineId
+                ? 'Routine Link'
+                : block.habitId
+                  ? 'Habit Link'
+                  : 'Link';
+          const linkLine = `${linkLabel}: ${eventDeepLink}`;
+          enrichedDesc2 = enrichedDesc2 ? `${enrichedDesc2}\n${linkLine}` : linkLine;
+        }
+        const aiLineParts = [];
+        if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
+        if (aiReasonVal2) aiLineParts.push(aiReasonVal2);
+        if (block.placementReason) aiLineParts.push(`Placement: ${block.placementReason}`);
+        if (aiLineParts.length) {
+          const aiBlock = aiLineParts.join(' – ');
+          enrichedDesc2 = enrichedDesc2 ? `${enrichedDesc2}\n\n${aiBlock}` : aiBlock;
+        }
+      }
       const startMs = toMillis(block.start);
       const endMs = toMillis(block.end);
       errorContext.startMs = startMs;
@@ -309,12 +829,51 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       if (!startMs || !endMs || startMs >= endMs) {
         throw new Error('Invalid start/end on block');
       }
+      const entityType = block.storyId
+        ? 'story'
+        : block.taskId
+          ? 'task'
+          : block.choreId
+            ? 'chore'
+            : block.routineId
+              ? 'routine'
+              : block.habitId
+                ? 'habit'
+                : 'block';
+      const linkedTaskRefs = eventContext.linkedTaskRefs.filter(Boolean);
+      const privateProps = buildPrivateProps({
+        'bob-block-id': blockId,
+        'bob-entity-type': entityType,
+        'bob-persona': block.persona,
+        'bob-theme': themeLabel,
+        'bob-theme-id': block.theme_id,
+        'bob-category': block.category,
+        'bob-story-id': block.storyId,
+        'bob-story-ref': eventContext.storyRef,
+        'bob-story-title': eventContext.storyTitle,
+        'bob-task-id': block.taskId,
+        'bob-task-ref': eventContext.taskRef,
+        'bob-task-title': eventContext.taskTitle,
+        'bob-goal-id': eventContext.goalId,
+        'bob-goal-ref': eventContext.goalRef,
+        'bob-flexibility': block.flexibility,
+        'bob-rationale': block.rationale || '',
+        'bob-deeplink': eventDeepLink || '',
+        'bob-ai-score': aiScoreVal2 ?? '',
+        'bob-ai-reason': aiReasonVal2 || '',
+        'bob-placement': block.placementReason || block.rationale || '',
+        'bob-linked-task-refs': linkedTaskRefs.length ? linkedTaskRefs.slice(0, MAX_PRIVATE_TASK_REFS).join(',') : null,
+        'bob-linked-task-count': linkedTaskRefs.length ? linkedTaskRefs.length : null,
+      });
+      const eventSource = isValidUrl(eventDeepLink) ? { title: 'BOB', url: eventDeepLink } : undefined;
       const updateEvent = {
-        summary: `[${themeLabel}] – ${activityName}`,
+        summary: summaryText,
         description: enrichedDesc2 || 'BOB calendar block',
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
         colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
+        source: eventSource,
+        extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
       await calendar.events.update({ calendarId: 'primary', eventId: block.googleEventId, resource: updateEvent });
       await admin.firestore().collection('calendar_blocks').doc(blockId).update({ updatedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -389,6 +948,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
   }
 }
 
+exports._syncBlockToGoogle = syncBlockToGoogle;
+
 exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
   const { blockId, action } = data;
@@ -458,7 +1019,25 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
 
   // Update
   // Check if relevant fields changed
-  const relevantFields = ['start', 'end', 'title', 'category', 'theme', 'theme_id', 'rationale', 'storyId'];
+  const relevantFields = [
+    'start',
+    'end',
+    'title',
+    'category',
+    'theme',
+    'theme_id',
+    'rationale',
+    'storyId',
+    'storyRef',
+    'taskId',
+    'taskRef',
+    'deepLink',
+    'aiScore',
+    'aiCriticalityScore',
+    'aiReason',
+    'aiCriticalityReason',
+    'placementReason',
+  ];
   const hasChanges = relevantFields.some(f => JSON.stringify(before[f]) !== JSON.stringify(after[f]));
 
   // If googleEventId changed, it's a sync update, skip
@@ -483,6 +1062,23 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
   try {
     const { calendar } = await getCalendarClientForUser(uid);
     const events = await listAllEvents(calendar, { timeMin, timeMax });
+    const ownedByEventId = new Map();
+    const windowStartMs = windowStart.getTime();
+    const windowEndMs = windowEnd.getTime();
+    const ownedSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', windowStartMs)
+      .where('start', '<=', windowEndMs)
+      .get()
+      .catch(() => ({ docs: [] }));
+    ownedSnap.docs.forEach((doc) => {
+      const data = doc.data() || {};
+      const eventId = data.googleEventId;
+      if (!eventId) return;
+      const source = String(data.source || data.entry_method || '').toLowerCase();
+      if (source === 'gcal' || source === 'google_calendar') return;
+      ownedByEventId.set(eventId, { id: doc.id, data });
+    });
     const syncResults = [];
     const counts = { processed: events.length, created: 0, updated: 0, deleted: 0, skipped: 0 };
 
@@ -536,6 +1132,34 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
               blockId: bobBlockId,
               message: 'Orphaned Google event preserved (no matching block)',
             });
+          }
+          continue;
+        }
+
+        const owned = ownedByEventId.get(event.id);
+        if (owned) {
+          const ref = db.collection('calendar_blocks').doc(owned.id);
+          const data = owned.data || {};
+          const blockUpdated = toMillis(data.updatedAt || data.serverUpdatedAt);
+          const needsUpdate = updatedMs > blockUpdated + 500
+            || data.start !== startMs
+            || data.end !== endMs
+            || data.googleEventId !== event.id
+            || (!data.rationale && !!event.description);
+          if (needsUpdate) {
+            await ref.set({
+              start: startMs,
+              end: endMs,
+              googleEventId: event.id,
+              calendarId,
+              rationale: event.description || data.rationale || '',
+              status: data.status || 'synced',
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            counts.updated += 1;
+            syncResults.push({ blockId: owned.id, action: 'linked_existing_block' });
+          } else {
+            counts.skipped += 1;
           }
           continue;
         }
@@ -612,6 +1236,80 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
   } catch (error) {
     await logCalendarIntegration(uid, { action: 'pull', status: 'error', windowStart: timeMin, windowEnd: timeMax, error: error?.message || String(error) });
     throw error;
+  }
+}
+
+async function runLightCalendarReplan(uid, options = {}) {
+  const days = Math.max(1, Math.min(Number(options.days || 7), 14));
+  let replanFn = null;
+  try {
+    const orchestration = require('./nightlyOrchestration');
+    replanFn = orchestration?._replanExistingBlocksForUser;
+  } catch (err) {
+    console.warn('[calendarSync] failed to load replan helper', err?.message || err);
+    return null;
+  }
+  if (typeof replanFn !== 'function') return null;
+
+  const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const windowStart = new Date();
+  windowStart.setHours(0, 0, 0, 0);
+  const windowEnd = new Date(windowStart);
+  windowEnd.setDate(windowEnd.getDate() + days);
+  windowEnd.setHours(23, 59, 59, 999);
+
+  let themeAllocations = [];
+  try {
+    const allocDoc = await db.collection('theme_allocations').doc(uid).get();
+    if (allocDoc.exists) themeAllocations = allocDoc.data()?.allocations || [];
+  } catch { /* ignore */ }
+
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', windowStart.getTime())
+    .where('start', '<=', windowEnd.getTime())
+    .get()
+    .catch(() => ({ docs: [] }));
+  const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  try {
+    const result = await replanFn({
+      db,
+      userId: uid,
+      profile,
+      windowStart,
+      windowEnd,
+      themeAllocations,
+      existingBlocks,
+      reason: options.reason || `calendar_pull_${options.trigger || 'sync'}`,
+      days,
+    });
+    await logCalendarIntegration(uid, {
+      action: 'replan',
+      status: 'success',
+      trigger: options.trigger || 'sync',
+      counts: {
+        rescheduled: result?.rescheduled || 0,
+        blocked: result?.blocked || 0,
+        totalMovable: result?.totalMovable || 0,
+      },
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+    });
+    return result;
+  } catch (err) {
+    console.warn('[calendarSync] replan after pull failed', err?.message || err);
+    await logCalendarIntegration(uid, {
+      action: 'replan',
+      status: 'error',
+      trigger: options.trigger || 'sync',
+      error: err?.message || String(err),
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+    });
+    return null;
   }
 }
 
@@ -783,7 +1481,16 @@ async function syncUserCalendar(uid, options = {}) {
       source: options.trigger || 'sync',
     });
   }
-  return { pull, push };
+  let replan = null;
+  const shouldReplan = options.replanAlways || (pull?.syncResults?.length > 0);
+  if (shouldReplan) {
+    replan = await runLightCalendarReplan(uid, {
+      trigger: options.trigger,
+      reason: options.replanReason,
+      days: options.replanDays || 7,
+    });
+  }
+  return { pull, push, replan };
 }
 
 // Sync Google Calendar changes back to Firestore (pull-only)
@@ -925,7 +1632,7 @@ exports.scheduledCalendarSync = functions.pubsub.schedule('every 1 hours').onRun
 
     for (const uid of uids) {
       try {
-        await syncUserCalendar(uid, { trigger: 'scheduled' });
+        await syncUserCalendar(uid, { trigger: 'scheduled', replanAlways: true });
       } catch (err) {
         console.error(`[scheduledCalendarSync] failed for ${uid}`, err?.message || err);
         await logCalendarIntegration(uid, { action: 'scheduled_sync', status: 'error', error: err?.message || String(err) });

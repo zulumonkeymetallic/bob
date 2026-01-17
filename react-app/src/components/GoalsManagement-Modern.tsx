@@ -14,6 +14,7 @@ import PageHeader from './common/PageHeader';
 import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -26,6 +27,7 @@ const GoalsManagement: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const { themes: globalThemes } = useGlobalThemes();
 
   // Handle query parameters from Dashboard
   useEffect(() => {
@@ -229,11 +231,11 @@ const GoalsManagement: React.FC = () => {
                     onChange={(e) => setFilterTheme(e.target.value)}
                   >
                     <option value="all">All Themes</option>
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
+                    {globalThemes.map((theme) => (
+                      <option key={theme.id} value={String(theme.id)}>
+                        {theme.label}
+                      </option>
+                    ))}
                   </Form.Select>
                 </Form.Group>
               </Col>

@@ -1000,37 +1000,22 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
 
           <Row className="mb-3">
             <Col md={6}>
-              <Form.Label>Device Code Sign-in</Form.Label>
+              <Form.Label>Browser Sign-in</Form.Label>
               <div className="d-flex flex-column gap-2">
                 <Button
                   variant="outline-primary"
                   size="sm"
-                  onClick={startTraktDeviceFlow}
+                  onClick={connectTraktBrowser}
                   disabled={traktLoading}
                 >
-                  {traktLoading ? 'Generating…' : 'Generate code'}
+                  {traktLoading ? 'Connecting…' : 'Connect via browser'}
                 </Button>
-                {traktUserCode ? (
-                  <div className="small">
-                    Code: <code>{traktUserCode}</code><br />
-                    Visit{' '}
-                    <a href={traktVerificationUrl || 'https://trakt.tv/activate'} target="_blank" rel="noreferrer">
-                      {traktVerificationUrl || 'trakt.tv/activate'}
-                    </a>
-                  </div>
-                ) : (
-                  <div className="text-muted small">Use a device code to connect without sharing your password.</div>
-                )}
+                <div className="text-muted small">Use the Trakt web flow to connect your account.</div>
               </div>
             </Col>
             <Col md={6} className="text-md-end mt-3 mt-md-0">
               <div><strong>Status:</strong> {profile?.traktConnected ? 'Connected' : 'Not connected'}</div>
               <div className="text-muted small">Backlog imports require a connected Trakt session.</div>
-              <div className="mt-2">
-                <Button variant="outline-primary" size="sm" onClick={connectTraktBrowser}>
-                  Connect via browser
-                </Button>
-              </div>
             </Col>
           </Row>
 

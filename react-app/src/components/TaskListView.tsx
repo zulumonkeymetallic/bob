@@ -9,6 +9,7 @@ import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useSprint } from '../contexts/SprintContext';
 
 const TaskListView: React.FC = () => {
@@ -24,6 +25,7 @@ const TaskListView: React.FC = () => {
   const [dueFilter, setDueFilter] = useState<'all' | 'today'>('all');
   const [loading, setLoading] = useState(true);
   const { selectedSprintId, setSelectedSprintId, sprints: rawSprints } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -352,11 +354,11 @@ const TaskListView: React.FC = () => {
                     style={{ border: '1px solid var(--line)' }}
                   >
                     <option value="all">All Themes</option>
-                    <option value="Health">Health</option>
-                    <option value="Growth">Growth</option>
-                    <option value="Wealth">Wealth</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Home">Home</option>
+                    {globalThemes.map((theme) => (
+                      <option key={theme.id} value={String(theme.id)}>
+                        {theme.label}
+                      </option>
+                    ))}
                   </Form.Select>
                 </Form.Group>
               </Col>

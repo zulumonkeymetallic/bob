@@ -96,6 +96,7 @@ import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
 import DeepLinkTask from './components/routes/DeepLinkTask';
+import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import AdvancedOverview from './components/AdvancedOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
 import CapacityDashboard from './components/CapacityDashboard';
@@ -238,7 +239,10 @@ function AppContent() {
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/overview/advanced" element={<AdvancedOverview />} />
-            <Route path="/tasks" element={<TaskListView />} />
+            <Route
+              path="/tasks"
+              element={<QueryDeepLinkGate paramKey="taskId" pathPrefix="/tasks" fallback={<TaskListView />} />}
+            />
             <Route path="/tasks/:id" element={<DeepLinkTask />} />
             {/* Back-compat for older deep links */}
             <Route path="/task/:id" element={<DeepLinkTask />} />
@@ -284,12 +288,18 @@ function AppContent() {
             <Route path="/planning" element={<PlanningDashboard />} />
             <Route path="/planning/approvals" element={<ApprovalsCenter />} />
             <Route path="/planning/approval" element={<PlanningApprovalPage />} />
-            <Route path="/stories" element={<StoriesManagement />} />
+            <Route
+              path="/stories"
+              element={<QueryDeepLinkGate paramKey="storyId" pathPrefix="/stories" fallback={<StoriesManagement />} />}
+            />
             <Route path="/stories/:id" element={<DeepLinkStory />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
             <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
             <Route path="/personal-backlogs" element={<BacklogManager />} />
-            <Route path="/goals" element={<GoalsManagement />} />
+            <Route
+              path="/goals"
+              element={<QueryDeepLinkGate paramKey="goalId" pathPrefix="/goals" fallback={<GoalsManagement />} />}
+            />
             <Route path="/goals/:id" element={<DeepLinkGoal />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
             <Route path="/goals/roadmap" element={<GoalRoadmapV5 />} />
@@ -320,7 +330,8 @@ function AppContent() {
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
             <Route path="/calendar" element={<UnifiedPlannerPage />} />
-            <Route path="/calendar/themes" element={<WeeklyThemePlanner />} />
+            <Route path="/calendar/planner" element={<WeeklyThemePlanner />} />
+            <Route path="/calendar/themes" element={<Navigate to="/calendar/planner" replace />} />
             <Route path="/running-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
             <Route path="/finance" element={<FinanceDashboardModern />} />

@@ -342,7 +342,7 @@ react-app/src/components/planner/WeeklyThemePlanner.tsx
 
 constants/globalThemes.ts
 
-Route: /calendar/themes (added to 
+Route: /calendar/planner (added to 
 
 App.tsx
  and 
@@ -594,7 +594,7 @@ react-app/src/constants/globalThemes.ts
  - Theme definitions (10 themes)
 
 react-app/src/App.tsx
- - Route: /calendar/themes
+ - Route: /calendar/planner
 Test Data
 User ID: 3L3nnXSuTPfr08c8DTXG5zYX37A2
 Story ID: 7YStTUPivC28sK2C2c7Y

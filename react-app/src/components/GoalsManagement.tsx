@@ -104,6 +104,20 @@ const GoalsManagement: React.FC = () => {
     return active?.id || null;
   }, [sprints]);
 
+  // If user picks a non-current year, stop scoping by sprint so they can see all goals for that year
+  useEffect(() => {
+    if (filterYear !== 'current') {
+      if (applyActiveSprintFilter) setApplyActiveSprintFilter(false);
+      if (selectedSprintId !== '') setSelectedSprintId('');
+      return;
+    }
+    // Restore sprint scoping when back on current year
+    if (!applyActiveSprintFilter) setApplyActiveSprintFilter(true);
+    if (selectedSprintId === '' && activeSprintId) {
+      setSelectedSprintId(activeSprintId);
+    }
+  }, [filterYear, applyActiveSprintFilter, selectedSprintId, setSelectedSprintId, activeSprintId]);
+
   useEffect(() => {
     const sprintId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
     if (!currentUser || !sprintId) {

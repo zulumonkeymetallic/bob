@@ -12,12 +12,24 @@ import {
 import { db } from '../firebase';
 
 export type ActivitySource = 'human' | 'function' | 'ai' | 'system';
+export type ActivityType =
+  | 'created'
+  | 'updated'
+  | 'deleted'
+  | 'note_added'
+  | 'status_changed'
+  | 'sprint_changed'
+  | 'priority_changed'
+  | 'task_to_story_conversion'
+  | 'automation_event'
+  | 'automation_alert'
+  | 'automation_activity';
 
 export interface ActivityEntry {
   id?: string;
   entityId: string;
   entityType: 'goal' | 'story' | 'task' | 'calendar_block';
-  activityType: 'created' | 'updated' | 'deleted' | 'note_added' | 'status_changed' | 'sprint_changed' | 'priority_changed';
+  activityType: ActivityType;
   userId: string;
   userEmail?: string;
   timestamp: Timestamp;
@@ -240,6 +252,13 @@ export class ActivityStreamService {
           'sprint_changed',
           'priority_changed',
           'task_to_story_conversion',
+          'ai_priority_score',
+          'ai_due_date_adjustment',
+          'calendar_insertion',
+          'calendar_reschedule',
+          'automation_event',
+          'automation_alert',
+          'automation_activity'
         ]);
         const activities = raw.filter((a) => {
           const t = String(a.activityType || '').toLowerCase();
@@ -263,6 +282,120 @@ export class ActivityStreamService {
         callback([]);
       }
     );
+  }
+
+  // Subscribe to activity stream entries that may use legacy fields (taskId/storyId/goalId)
+  static subscribeToActivityStreamAny(
+    entityId: string,
+    entityType: 'task' | 'story' | 'goal',
+    callback: (activities: ActivityEntry[]) => void,
+    userId?: string
+  ): () => void {
+    if (!userId) {
+      console.warn('ActivityStreamService.subscribeToActivityStreamAny called without userId, skipping listener', { entityId });
+      return () => { };
+    }
+
+    const fields: string[] = ['entityId'];
+    if (entityType === 'task') {
+      fields.push('taskId');
+    } else if (entityType === 'story') {
+      fields.push('storyId');
+    } else if (entityType === 'goal') {
+      fields.push('goalId');
+    }
+
+    const unsubs: (() => void)[] = [];
+    const state: Record<string, ActivityEntry> = {};
+    const normalizeTimestamp = (val: any): Timestamp | undefined => {
+      if (!val) return undefined;
+      if ((val as any).toDate) return val as Timestamp;
+      return undefined;
+    };
+
+    const emit = () => {
+      const sorted = Object.values(state).sort((a, b) => {
+        const ta = (a.timestamp as any)?.toMillis ? (a.timestamp as any).toMillis() : 0;
+        const tb = (b.timestamp as any)?.toMillis ? (b.timestamp as any).toMillis() : 0;
+        return tb - ta;
+      });
+      callback(sorted);
+    };
+
+    // activity_stream (primary) plus automation collections for richer context
+    const sources: {
+      name: string;
+      fields: string[];
+      orderField: string;
+      defaultType: ActivityType;
+    }[] = [
+      { name: 'activity_stream', fields, orderField: 'timestamp', defaultType: 'updated' },
+      { name: 'automation_events', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_event' },
+      { name: 'automation_alerts', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_alert' },
+      { name: 'activity', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_activity' }
+    ];
+
+    sources.forEach((source) => {
+      source.fields.forEach((field) => {
+        const q = query(
+          collection(db, source.name),
+          where('ownerUid', '==', userId),
+          where(field, '==', entityId),
+          orderBy(source.orderField, 'desc'),
+          fslimit(50)
+        );
+        const unsub = onSnapshot(
+          q,
+          (snapshot) => {
+            snapshot.docs.forEach((doc) => {
+              const data = doc.data() as any;
+              const id = `${source.name}:${doc.id}`;
+              const activityType =
+                (data.activityType as ActivityType) ||
+                (data.type as ActivityType) ||
+                source.defaultType;
+              const timestamp =
+                normalizeTimestamp(data[source.orderField]) ||
+                normalizeTimestamp(data.timestamp) ||
+                normalizeTimestamp(data.createdAt);
+              const description =
+                data.description ||
+                data.message ||
+                data.reason ||
+                (data.action ? `Integration: ${data.action}${data.title ? ` · ${data.title}` : ''}` : '') ||
+                `${activityType} via ${source.name}`;
+              state[id] = {
+                id,
+                entityId,
+                entityType,
+                activityType,
+                userId: (data.userId as string) || userId,
+                userEmail: data.userEmail,
+                timestamp: timestamp || (serverTimestamp() as any),
+                fieldName: data.fieldName,
+                oldValue: data.oldValue,
+                newValue: data.newValue,
+                noteContent: data.noteContent,
+                description,
+                persona: data.persona,
+                referenceNumber: data.referenceNumber,
+                source: (data.source as ActivitySource) || 'system'
+              };
+            });
+            emit();
+          },
+          (error) => {
+            console.warn(`Activity stream subscribe error (${source.name})`, error?.message || error);
+            emit();
+          }
+        );
+        unsubs.push(unsub);
+      });
+    });
+
+    return () => {
+      unsubs.forEach((fn) => fn());
+    };
   }
 
   // Get activity stream for multiple entities (for dashboard views)

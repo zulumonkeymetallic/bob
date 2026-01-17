@@ -197,7 +197,7 @@ const Dashboard: React.FC = () => {
               <div key={theme} className="mb-3">
                 <div className="d-flex justify-content-between align-items-center mb-1">
                   <div className="d-flex align-items-center gap-2">
-                    <Badge className={`md-chip ${theme.toLowerCase()}`}>{theme}</Badge>
+                    <Badge className={`md-chip ${getThemeClass(theme)}`}>{theme}</Badge>
                     <span className="md-body-2">{completed} / {total} tasks</span>
                   </div>
                   <span className="md-caption text-muted">{Math.round(progress)}%</span>

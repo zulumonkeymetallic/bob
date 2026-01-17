@@ -66,9 +66,28 @@ const SettingsPage: React.FC = () => {
   const [parkrunAutoComputePercentiles, setParkrunAutoComputePercentiles] = useState(false);
   const [autoEnrichStravaHR, setAutoEnrichStravaHR] = useState(false);
   const [autoComputeFitnessMetrics, setAutoComputeFitnessMetrics] = useState(false);
+  const [locationName, setLocationName] = useState('');
+  const [locationLat, setLocationLat] = useState<string>('');
+  const [locationLon, setLocationLon] = useState<string>('');
+  const [timezone, setTimezone] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchingLocation, setSearchingLocation] = useState(false);
+  const [searchError, setSearchError] = useState('');
   const [saveProfileMsg, setSaveProfileMsg] = useState<string>('');
   const [saveProfileError, setSaveProfileError] = useState<string>('');
   const [savingProfile, setSavingProfile] = useState<boolean>(false);
+  const [savingLocation, setSavingLocation] = useState<boolean>(false);
+  const [saveLocationMsg, setSaveLocationMsg] = useState('');
+  const [saveLocationError, setSaveLocationError] = useState('');
+  const timezones = React.useMemo(() => {
+    const anyIntl = Intl as any;
+    if (anyIntl && typeof anyIntl.supportedValuesOf === 'function') {
+      return anyIntl.supportedValuesOf('timeZone') as string[];
+    }
+    // Fallback minimal list
+    return ['Europe/London', 'Europe/Dublin', 'UTC', 'America/New_York', 'America/Los_Angeles'];
+  }, []);
 
   const [maintenanceStatus, setMaintenanceStatus] = useState('');
   const [maintenanceError, setMaintenanceError] = useState('');
@@ -249,6 +268,10 @@ const SettingsPage: React.FC = () => {
           setAutoEnrichStravaHR(!!p.autoEnrichStravaHR);
         setAutoComputeFitnessMetrics(!!p.autoComputeFitnessMetrics);
         setMonzoConnected(!!p.monzoConnected);
+        setLocationName(p.locationName || '');
+        setLocationLat(p.locationLat != null ? String(p.locationLat) : '');
+        setLocationLon(p.locationLon != null ? String(p.locationLon) : '');
+        setTimezone(p.timezone || '');
       }
         
         // Check migration status
@@ -904,6 +927,143 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                   <Card.Body>
                     {/* AI Story Generation Prompt */}
                     <AISettings />
+
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h5 className="mb-2">Profile: Location & Timezone</h5>
+                        <Row className="g-3">
+                          <Col md={6}>
+                            <Form.Label style={{ color: colors.primary }}>Location name</Form.Label>
+                            <Form.Control
+                              type="text"
+                              placeholder="e.g., Belfast, UK"
+                              value={locationName}
+                              onChange={(e) => setLocationName(e.target.value)}
+                            />
+                            <Form.Text className="text-muted">Used for weather/news in daily briefings.</Form.Text>
+                          </Col>
+                          <Col md={6}>
+                              <Form.Label style={{ color: colors.primary }}>Timezone</Form.Label>
+                              <Form.Select
+                              value={timezone}
+                              onChange={(e) => setTimezone(e.target.value)}
+                            >
+                              <option value="">Select timezone</option>
+                              {timezones.map((tz) => (
+                                <option key={tz} value={tz}>{tz}</option>
+                              ))}
+                            </Form.Select>
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-2">
+                          <Col md={3}>
+                            <Form.Label>Latitude</Form.Label>
+                            <Form.Control
+                              type="number"
+                              step="any"
+                              value={locationLat}
+                              onChange={(e) => setLocationLat(e.target.value)}
+                              placeholder="54.597"
+                            />
+                          </Col>
+                          <Col md={3}>
+                            <Form.Label>Longitude</Form.Label>
+                            <Form.Control
+                              type="number"
+                              step="any"
+                              value={locationLon}
+                              onChange={(e) => setLocationLon(e.target.value)}
+                              placeholder="-5.93"
+                            />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Label>Search location</Form.Label>
+                            <div className="d-flex gap-2">
+                              <Form.Control
+                                type="text"
+                                placeholder="Search e.g., Belfast"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                              />
+                              <Button
+                                variant="outline-primary"
+                                disabled={searchingLocation || !searchQuery.trim()}
+                                onClick={async () => {
+                                  setSearchingLocation(true);
+                                  setSearchError('');
+                                  try {
+                                    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5`, {
+                                      headers: { 'Accept-Language': 'en' },
+                                    });
+                                    const data = await res.json();
+                                    setSearchResults(Array.isArray(data) ? data : []);
+                                  } catch (err: any) {
+                                    setSearchError(err?.message || 'Search failed');
+                                  } finally {
+                                    setSearchingLocation(false);
+                                  }
+                                }}
+                              >
+                                {searchingLocation ? 'Searching…' : 'Search'}
+                              </Button>
+                            </div>
+                            {searchError && <div className="text-danger small mt-1">{searchError}</div>}
+                            {searchResults.length > 0 && (
+                              <div className="border rounded mt-2 p-2" style={{ maxHeight: 180, overflowY: 'auto' }}>
+                                {searchResults.map((r, idx) => (
+                                  <div
+                                    key={idx}
+                                    role="button"
+                                    className="small mb-2"
+                                    onClick={() => {
+                                      setLocationName(r.display_name || '');
+                                      setLocationLat(r.lat || '');
+                                      setLocationLon(r.lon || '');
+                                      setSearchResults([]);
+                                      setSearchQuery(r.display_name || '');
+                                    }}
+                                  >
+                                    <div className="fw-semibold">{r.display_name}</div>
+                                    <div className="text-muted">lat {r.lat}, lon {r.lon}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </Col>
+                        </Row>
+                        <div className="mt-3 d-flex align-items-center gap-2">
+                          <Button
+                            variant="primary"
+                            disabled={savingLocation}
+                            onClick={async () => {
+                              if (!currentUser) return;
+                              setSavingLocation(true);
+                              setSaveLocationError('');
+                              try {
+                                await setDoc(doc(db, 'profiles', currentUser.uid), {
+                                  ownerUid: currentUser.uid,
+                                  locationName: locationName || null,
+                                  locationLat: locationLat ? Number(locationLat) : null,
+                                  locationLon: locationLon ? Number(locationLon) : null,
+                                  timezone: timezone || null,
+                                  updatedAt: serverTimestamp(),
+                                }, { merge: true });
+                                setSaveLocationMsg('Location saved');
+                                setTimeout(() => setSaveLocationMsg(''), 2500);
+                              } catch (e: any) {
+                                setSaveLocationError(e?.message || 'Failed to save');
+                              } finally {
+                                setSavingLocation(false);
+                              }
+                            }}
+                          >
+                            {savingLocation ? 'Saving…' : 'Save Location'}
+                          </Button>
+                          {saveLocationMsg && <span className="text-success small">{saveLocationMsg}</span>}
+                          {saveLocationError && <span className="text-danger small">{saveLocationError}</span>}
+                        </div>
+                      </Card.Body>
+                    </Card>
 
                     <Card className="mb-3">
                       <Card.Body>

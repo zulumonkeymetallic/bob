@@ -11,6 +11,8 @@ const {
   toMillis,
 } = require('./time');
 const { expandRecurrence } = require('../scheduler/engine');
+const { fetchWeather, fetchNews } = require('../services/newsWeather');
+const { buildAbsoluteUrl, buildEntityUrl } = require('../utils/urlHelpers');
 
 const TASK_DONE_STATUSES = new Set(['done', 'completed', 'complete', 'archived', 2, 3]);
 const STORY_DONE_STATUSES = new Set(['done', 'complete', 'archived', 3]);
@@ -223,6 +225,14 @@ const normaliseTaskStatus = (status) => {
   return 'backlog';
 };
 
+const isRoutineLikeTask = (task) => {
+  const type = String(task?.type || task?.category || '').toLowerCase();
+  if (['routine', 'chore', 'habit', 'habitual'].some((k) => type.includes(k))) return true;
+  const tags = Array.isArray(task?.tags) ? task.tags.map((t) => String(t || '').toLowerCase()) : [];
+  if (tags.some((t) => ['routine', 'chore', 'habit', 'habitual'].includes(t))) return true;
+  return false;
+};
+
 const normaliseStoryStatus = (status) => {
   if (typeof status === 'number') {
     return STORY_STATUS_MAP[status] || 'backlog';
@@ -249,6 +259,17 @@ const normaliseGoalStatus = (status) => {
   return 'new';
 };
 
+const normaliseSprintStatus = (value) => {
+  if (typeof value === 'number') return value;
+  const str = String(value || '').toLowerCase();
+  if (!str) return null;
+  if (str.includes('active')) return 1;
+  if (str.includes('plan')) return 0;
+  if (str.includes('done') || str.includes('complete')) return 2;
+  if (str.includes('cancel')) return 3;
+  return null;
+};
+
 const ensureTaskReference = (task) => {
   const ref = task.ref || task.reference || task.displayId || null;
   if (ref) return ref;
@@ -271,14 +292,15 @@ const ensureGoalReference = (goal) => {
 
 const makeDeepLink = (type, refOrId) => {
   if (!type || !refOrId) return null;
+  if (type === 'task' || type === 'story' || type === 'goal') {
+    return buildEntityUrl(type, null, refOrId);
+  }
   const base =
-    type === 'task' ? '/task/' :
-      type === 'story' ? '/story/' :
-        type === 'goal' ? '/goal/' :
-          type === 'chore' ? '/chore/' :
-            type === 'routine' ? '/routine/' :
-              '/';
-  return `${base}${refOrId}`;
+    type === 'chore' ? '/chores' :
+      type === 'routine' ? '/routines' :
+        type === 'habit' ? '/habits' :
+          '/';
+  return buildAbsoluteUrl(`${base}/${encodeURIComponent(refOrId)}`);
 };
 
 const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-GB' }) => {
@@ -316,22 +338,55 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   ]);
 
   const taskDocs = toList(tasksSnap);
-  const tasks = taskDocs.filter((task) => {
-    if (TASK_DONE_STATUSES.has(task.status)) return false;
-    const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
-    if (!dueMs) return false;
-    return dueMs >= startMs && dueMs <= endMs;
-  });
+  const allTasks = taskDocs;
+  const tasksById = new Map(allTasks.map((task) => [task.id, task]));
 
   const storiesAll = toList(storiesSnap);
-  const stories = storiesAll.filter((story) => {
-    if (STORY_DONE_STATUSES.has(story.status)) return false;
-    if (story.sprintDueDate || story.targetDate) {
-      const dueMs = toMillis(story.sprintDueDate || story.targetDate);
-      return dueMs && dueMs <= end.plus({ days: 7 }).toMillis();
-    }
-    return true;
-  });
+  const storiesById = new Map(storiesAll.map((story) => [story.id, story]));
+
+  const goalsAll = toList(goalsAllSnap);
+  const goalLookup = new Map(goalsAll.map((goal) => [goal.id, goal]));
+  const sprints = toList(sprintsSnap);
+
+  const resolveActiveSprint = (sprintList) => {
+    if (!Array.isArray(sprintList) || !sprintList.length) return null;
+    const nowMs = Date.now();
+    const byStatus = sprintList.find((sprint) => normaliseSprintStatus(sprint.status) === 1);
+    if (byStatus) return byStatus;
+    const inWindow = sprintList.find((sprint) => {
+      const startMs = toMillis(sprint.startDate || sprint.start);
+      const endMs = toMillis(sprint.endDate || sprint.end);
+      if (!startMs || !endMs) return false;
+      return nowMs >= startMs && nowMs <= endMs;
+    });
+    if (inWindow) return inWindow;
+    return sprintList.find((sprint) => normaliseSprintStatus(sprint.status) === 0) || null;
+  };
+
+  const activeSprint = resolveActiveSprint(sprints);
+  const activeSprintId = activeSprint?.id || null;
+
+  const activeStories = activeSprintId
+    ? storiesAll.filter((story) => {
+        if (STORY_DONE_STATUSES.has(story.status)) return false;
+        return story.sprintId === activeSprintId;
+      })
+    : [];
+  const activeStoryIds = new Set(activeStories.map((story) => story.id));
+
+  const activeTasks = activeSprintId
+    ? allTasks.filter((task) => {
+        if (TASK_DONE_STATUSES.has(task.status)) return false;
+        if (task.deleted) return false;
+        if (isRoutineLikeTask(task)) return false;
+        const inSprint = task.sprintId && task.sprintId === activeSprintId;
+        const inStorySprint = task.storyId && activeStoryIds.has(task.storyId);
+        return inSprint || inStorySprint;
+      })
+    : [];
+
+  const tasks = activeTasks;
+  const stories = activeStories;
 
   const rawChores = toList(choresSnap);
   const dueChores = rawChores
@@ -377,19 +432,17 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     .filter(Boolean)
     .sort((a, b) => (a.dueMs || Number.MAX_SAFE_INTEGER) - (b.dueMs || Number.MAX_SAFE_INTEGER));
 
-  const goalsAll = toList(goalsAllSnap);
-  const goalLookup = new Map(goalsAll.map((goal) => [goal.id, goal]));
-  const sprints = toList(sprintsSnap);
-
-  const { goalsById, storiesById } = await collectGoalsAndStories(db, tasks, stories);
+  const goalsById = goalLookup;
   const taskSummaries = tasks.map((task) => {
     const goal = task.goalId ? goalsById.get(task.goalId) : null;
     const story = task.storyId ? storiesById.get(task.storyId) : null;
     const dueDt = toDateTime(task.dueDate || task.dueDateMs || task.targetDate, { zone });
+    const aiReason = task.aiCriticalityReason || task.dueDateReason || null;
     return {
       id: task.id,
       ref: ensureTaskReference(task),
       title: task.title || task.description || 'Task',
+      description: task.description || task.notes || task.details || null,
       goalId: goal?.id || null,
       goalTitle: goal?.title || null,
       storyId: story?.id || null,
@@ -402,6 +455,11 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       deepLink: makeDeepLink('task', ensureTaskReference(task)),
       status: normaliseTaskStatus(task.status),
       estimateMinutes: Number(task.estimateMin || task.estimatedMinutes || 0) || null,
+      aiScore: task.aiCriticalityScore ?? null,
+      aiReason,
+      aiTextScore: task.aiCriticalityTextScore ?? task.aiPriorityTextScore ?? null,
+      aiTextReason: task.aiCriticalityTextReason ?? task.aiPriorityTextReason ?? null,
+      aiTextModel: task.aiCriticalityTextModel ?? task.aiPriorityTextModel ?? null,
     };
   });
   const { latestByEntity } = await buildActivityIndex(db, userId, 400);
@@ -515,12 +573,73 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       return aDue.localeCompare(bDue);
     });
 
+  const normaliseAcceptanceCriteria = (entity) => {
+    if (!entity) return [];
+    if (Array.isArray(entity.acceptanceCriteria)) {
+      return entity.acceptanceCriteria.filter(Boolean).map((item) => String(item).trim()).filter(Boolean).slice(0, 6);
+    }
+    if (typeof entity.acceptanceCriteria === 'string') {
+      return entity.acceptanceCriteria.split('\n').map((item) => item.trim()).filter(Boolean).slice(0, 6);
+    }
+    return [];
+  };
+
+  const activeWorkItems = [
+    ...tasks.map((task) => {
+      const story = task.storyId ? storiesById.get(task.storyId) : null;
+      const goal = task.goalId ? goalsById.get(task.goalId) : null;
+      const dueDt = toDateTime(task.dueDate || task.dueDateMs || task.targetDate, { zone });
+      return {
+        type: 'task',
+        id: task.id,
+        ref: ensureTaskReference(task),
+        title: task.title || task.description || 'Task',
+        description: task.description || task.notes || task.details || null,
+        acceptanceCriteria: normaliseAcceptanceCriteria(task),
+        theme: task.theme || story?.theme || goal?.theme || 'General',
+        goalId: goal?.id || null,
+        storyId: story?.id || null,
+        storyRef: story ? ensureStoryReference(story) : null,
+        dueIso: dueDt ? dueDt.toISO() : null,
+        dueDisplay: dueDt ? formatDateTime(dueDt, { locale }) : null,
+        deepLink: makeDeepLink('task', ensureTaskReference(task)),
+        aiScore: task.aiCriticalityScore ?? null,
+        aiReason: task.aiCriticalityReason || task.dueDateReason || null,
+        aiTextScore: task.aiCriticalityTextScore ?? task.aiPriorityTextScore ?? null,
+        aiTextReason: task.aiCriticalityTextReason ?? task.aiPriorityTextReason ?? null,
+        aiTextModel: task.aiCriticalityTextModel ?? task.aiPriorityTextModel ?? null,
+      };
+    }),
+    ...stories.map((story) => {
+      const goal = story.goalId ? goalsById.get(story.goalId) : null;
+      const dueDt = toDateTime(story.sprintDueDate || story.targetDate || story.plannedStartDate, { zone });
+      return {
+        type: 'story',
+        id: story.id,
+        ref: ensureStoryReference(story),
+        title: story.title || 'Story',
+        description: story.description || null,
+        acceptanceCriteria: normaliseAcceptanceCriteria(story),
+        theme: story.theme || goal?.theme || 'General',
+        goalId: goal?.id || null,
+        dueIso: dueDt ? dueDt.toISO() : null,
+        dueDisplay: dueDt ? formatDateTime(dueDt, { locale }) : null,
+        deepLink: makeDeepLink('story', ensureStoryReference(story)),
+        aiScore: story.aiCriticalityScore ?? null,
+        aiReason: story.aiCriticalityReason || story.dueDateReason || null,
+        aiTextScore: story.aiCriticalityTextScore ?? story.aiPriorityTextScore ?? null,
+        aiTextReason: story.aiCriticalityTextReason ?? story.aiPriorityTextReason ?? null,
+        aiTextModel: story.aiCriticalityTextModel ?? story.aiPriorityTextModel ?? null,
+      };
+    }),
+  ].sort((a, b) => (Number(b.aiScore || 0) - Number(a.aiScore || 0)));
+
   const calendarBlocks = toList(calendarSnap)
     .map((block) => {
       const startDt = toDateTime(block.start || block.startAt, { zone });
       const endDt = toDateTime(block.end || block.endAt, { zone });
       const story = block.storyId ? storiesById.get(block.storyId) : null;
-      const task = block.taskId ? tasks.find((t) => t.id === block.taskId) : null;
+      const task = block.taskId ? tasksById.get(block.taskId) : null;
       return {
         id: block.id,
         title: block.title || block.note || block.category || 'Block',
@@ -551,12 +670,29 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     }));
 
   const priorityCandidates = [];
+  const resolvePriorityScore = (entity, type) => {
+    const fields = [
+      entity.aiCriticalityScore,
+      entity.aiCriticalityScore,
+      entity.priorityScore,
+      entity.importanceScore,
+      entity.priority,
+      type === 'story' ? entity.points : null,
+    ];
+    for (const val of fields) {
+      const num = Number(val);
+      if (Number.isFinite(num)) return num;
+    }
+    return 0;
+  };
 
   for (const task of tasks) {
-    const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate) || end.toMillis();
-    const importance = Number(task.importanceScore || task.priority || 0);
-    const urgency = Math.max(0, 1_000_000 - Math.max(0, dueMs - start.toMillis()));
-    const score = importance * 1000 + urgency;
+    const dueDt = toDateTime(task.dueDate || task.dueDateMs || task.targetDate, { zone });
+    const dueMs = dueDt ? dueDt.toMillis() : end.toMillis();
+    const priorityScore = resolvePriorityScore(task, 'task');
+    const urgencyScore = Math.max(0, 1_000_000 - Math.max(0, dueMs - startMs));
+    const score = priorityScore * 1000 + urgencyScore;
+    const aiReason = task.aiCriticalityReason || task.dueDateReason || null;
     priorityCandidates.push({
       type: 'task',
       id: task.id,
@@ -564,26 +700,42 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       title: task.title || 'Task',
       goalId: task.goalId || null,
       storyId: task.storyId || null,
+      status: normaliseTaskStatus(task.status),
       score,
+      priorityScore,
+      urgencyScore,
+      aiScore: task.aiCriticalityScore ?? priorityScore ?? null,
+      aiReason,
+      aiTextModel: task.aiCriticalityTextModel ?? task.aiPriorityTextModel ?? null,
       deepLink: makeDeepLink('task', ensureTaskReference(task)),
-      dueDateDisplay: formatDateTime(toDateTime(task.dueDate || task.targetDate, { zone }), { locale }),
+      dueDateDisplay: dueDt ? formatDateTime(dueDt, { locale }) : null,
+      dueDateIso: dueDt ? dueDt.toISO() : null,
     });
   }
 
   for (const story of stories) {
-    const dueMs = toMillis(story.sprintDueDate || story.targetDate || story.plannedStartDate) || end.plus({ days: 3 }).toMillis();
-    const importance = Number(story.importanceScore || story.priority || story.points || 0);
-    const urgency = Math.max(0, 1_000_000 - Math.max(0, dueMs - start.toMillis()));
-    const score = importance * 1200 + urgency;
+    const dueDt = toDateTime(story.sprintDueDate || story.targetDate || story.plannedStartDate, { zone });
+    const dueMs = dueDt ? dueDt.toMillis() : end.plus({ days: 3 }).toMillis();
+    const priorityScore = resolvePriorityScore(story, 'story');
+    const urgencyScore = Math.max(0, 1_000_000 - Math.max(0, dueMs - startMs));
+    const score = priorityScore * 1000 + urgencyScore;
+    const aiReason = story.aiCriticalityReason || story.dueDateReason || null;
     priorityCandidates.push({
       type: 'story',
       id: story.id,
       ref: ensureStoryReference(story),
       title: story.title || 'Story',
       goalId: story.goalId || null,
+      status: normaliseStoryStatus(story.status),
       score,
+      priorityScore,
+      urgencyScore,
+      aiScore: story.aiCriticalityScore ?? priorityScore ?? null,
+      aiReason,
+      aiTextModel: story.aiCriticalityTextModel ?? story.aiPriorityTextModel ?? null,
       deepLink: makeDeepLink('story', ensureStoryReference(story)),
-      dueDateDisplay: formatDateTime(toDateTime(story.sprintDueDate || story.targetDate, { zone }), { locale }),
+      dueDateDisplay: dueDt ? formatDateTime(dueDt, { locale }) : null,
+      dueDateIso: dueDt ? dueDt.toISO() : null,
     });
   }
 
@@ -610,6 +762,71 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const profile = await loadProfile(db, userId);
   if (!worldSummary) worldSummary = profile.worldSummary || profile.newsBrief || null;
   if (!worldWeather) worldWeather = profile.weatherSnapshot || profile.weatherBrief || null;
+
+  // Fallback: fetch fresh news/weather if still missing
+  try {
+    if (!worldSummary) {
+      const newsItems = await fetchNews(5);
+      if (Array.isArray(newsItems) && newsItems.length) {
+        worldSummary = { news: newsItems, highlights: newsItems, source: 'newsWeather' };
+        if (!worldSource) worldSource = 'newsWeather';
+      }
+    }
+    if (!worldWeather) {
+      const lat = profile.locationLat || profile.lat || 51.5074;
+      const lon = profile.locationLon || profile.lon || -0.1278;
+      const weather = await fetchWeather(lat, lon);
+      if (weather) {
+        worldWeather = weather;
+        if (!worldSummary || typeof worldSummary !== 'object') {
+          worldSummary = { summary: null, weather, source: worldSource || 'newsWeather' };
+        } else {
+          worldSummary = { ...(worldSummary || {}), weather, source: worldSource || 'newsWeather' };
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[reporting] news/weather fetch failed', error?.message || error);
+  }
+
+  const extractNewsLines = (summary) => {
+    if (!summary) return [];
+    if (Array.isArray(summary.highlights)) return summary.highlights;
+    if (Array.isArray(summary.news)) return summary.news;
+    return [];
+  };
+
+  const normaliseWeather = (weather) => {
+    if (!weather) return null;
+    if (typeof weather === 'string') return { summary: weather, temp: null };
+    return {
+      summary: weather.summary || weather.description || null,
+      temp: weather.temp || weather.temperature || null,
+    };
+  };
+
+  const dailyBrief = (() => {
+    const lines = [];
+    if (typeof worldSummary === 'string') lines.push(worldSummary);
+    if (worldSummary && typeof worldSummary === 'object' && typeof worldSummary.summary === 'string') {
+      lines.push(worldSummary.summary);
+    }
+    const newsItems = extractNewsLines(worldSummary)
+      .map((item) => {
+        if (!item) return null;
+        if (typeof item === 'string') return item;
+        return item.title || item.summary || item.headline || null;
+      })
+      .filter(Boolean)
+      .slice(0, 5);
+    const weatherPayload = normaliseWeather(worldWeather || (worldSummary && worldSummary.weather));
+    return {
+      lines,
+      news: newsItems,
+      weather: weatherPayload,
+      source: worldSource || (worldSummary && worldSummary.source) || null,
+    };
+  })();
 
   let fitness = null;
   try {
@@ -669,17 +886,6 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     console.warn('[reporting] monzo lookup failed', error?.message || error);
   }
 
-  const normaliseSprintStatus = (value) => {
-    if (typeof value === 'number') return value;
-    const str = String(value || '').toLowerCase();
-    if (!str) return null;
-    if (str.includes('active')) return 1;
-    if (str.includes('plan')) return 0;
-    if (str.includes('done') || str.includes('complete')) return 2;
-    if (str.includes('cancel')) return 3;
-    return null;
-  };
-
   let goalProgress = null;
   if (goalsAll.length) {
     const counts = {
@@ -721,46 +927,79 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   }
 
   let sprintProgress = null;
-  if (sprints.length) {
-    const activeSprint =
-      sprints.find((sprint) => normaliseSprintStatus(sprint.status) === 1) ||
-      sprints.find((sprint) => normaliseSprintStatus(sprint.status) === 0) ||
-      null;
-    if (activeSprint) {
-      const sprintStories = storiesAll.filter((story) => story.sprintId === activeSprint.id);
-      const completedStories = sprintStories.filter((story) => normaliseStoryStatus(story.status) === 'done').length;
-      const pendingStories = sprintStories
-        .filter((story) => STORY_NOT_STARTED_STATUSES.has(normaliseStoryStatus(story.status)))
-        .map((story) => {
-          const goal = story.goalId ? (goalLookup.get(story.goalId) || goalsById.get(story.goalId)) : null;
-          const due = toDateTime(story.sprintDueDate || story.targetDate, { zone });
-          const status = normaliseStoryStatus(story.status);
-          return {
-            id: story.id,
-            ref: ensureStoryReference(story),
-            title: story.title || 'Story',
-            status,
-            goal: goal?.title || null,
-            dueDisplay: due ? formatDate(due, { locale }) : null,
-            deepLink: makeDeepLink('story', ensureStoryReference(story)),
-          };
-        })
-        .slice(0, 5);
-      const totalStories = sprintStories.length;
-      sprintProgress = {
-        sprintId: activeSprint.id,
-        sprintName: activeSprint.name || activeSprint.ref || `Sprint ${activeSprint.id.slice(0, 4)}`,
-        startDate: activeSprint.startDate || null,
-        endDate: activeSprint.endDate || null,
-        totalStories,
-        completedStories,
-        percentComplete: totalStories ? Math.round((completedStories / totalStories) * 100) : null,
-        pendingStories,
-      };
+  if (activeSprint) {
+    const sprintStories = storiesAll.filter((story) => story.sprintId === activeSprint.id);
+    const completedStories = sprintStories.filter((story) => normaliseStoryStatus(story.status) === 'done').length;
+    const pendingStories = sprintStories
+      .filter((story) => STORY_NOT_STARTED_STATUSES.has(normaliseStoryStatus(story.status)))
+      .map((story) => {
+        const goal = story.goalId ? (goalLookup.get(story.goalId) || goalsById.get(story.goalId)) : null;
+        const due = toDateTime(story.sprintDueDate || story.targetDate, { zone });
+        const status = normaliseStoryStatus(story.status);
+        return {
+          id: story.id,
+          ref: ensureStoryReference(story),
+          title: story.title || 'Story',
+          status,
+          goal: goal?.title || null,
+          dueDisplay: due ? formatDate(due, { locale }) : null,
+          deepLink: makeDeepLink('story', ensureStoryReference(story)),
+        };
+      })
+      .slice(0, 5);
+    const totalStories = sprintStories.length;
+    const nowMs = Date.now();
+    const startMs = toMillis(activeSprint.startDate || activeSprint.start || null);
+    const endMs = toMillis(activeSprint.endDate || activeSprint.end || null);
+    let daysTotal = null;
+    let daysRemaining = null;
+    let daysElapsed = null;
+    let timeProgress = null;
+    let onTrack = null;
+    if (startMs && endMs && endMs >= startMs) {
+      daysTotal = Math.max(1, Math.ceil((endMs - startMs) / 86400000));
+      daysRemaining = Math.max(0, Math.ceil((endMs - nowMs) / 86400000));
+      daysElapsed = Math.min(daysTotal, Math.max(0, daysTotal - daysRemaining));
+      timeProgress = daysTotal ? Math.round((daysElapsed / daysTotal) * 100) : null;
+      if (timeProgress != null) {
+        const completedPct = totalStories ? Math.round((completedStories / totalStories) * 100) : 0;
+        onTrack = completedPct >= timeProgress - 5;
+      }
     }
+    sprintProgress = {
+      sprintId: activeSprint.id,
+      sprintName: activeSprint.name || activeSprint.ref || `Sprint ${activeSprint.id.slice(0, 4)}`,
+      startDate: activeSprint.startDate || null,
+      endDate: activeSprint.endDate || null,
+      totalStories,
+      completedStories,
+      percentComplete: totalStories ? Math.round((completedStories / totalStories) * 100) : null,
+      pendingStories,
+      daysTotal,
+      daysElapsed,
+      daysRemaining,
+      timeProgress,
+      onTrack,
+    };
   }
 
   const budgetProgress = monzo?.totals && monzo?.budgetProgress ? monzo.budgetProgress : null;
+
+  const budgetSummary = (() => {
+    if (!budgetProgress || !budgetProgress.length) return null;
+    const totalBudget = budgetProgress.reduce((sum, entry) => sum + (Number(entry.budget) || 0), 0);
+    const totalActual = budgetProgress.reduce((sum, entry) => sum + (Number(entry.actual) || 0), 0);
+    if (!totalBudget) return null;
+    const utilisation = Math.min(100, Math.round((totalActual / totalBudget) * 100));
+    const remaining = totalBudget - totalActual;
+    return {
+      totalBudget,
+      totalActual,
+      remaining,
+      utilisation,
+      currency: monzo?.currency || 'GBP',
+    };
+  })();
 
   let financeAlerts = [];
   if (monzo?.budgetProgress) {
@@ -780,6 +1019,20 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
 
   const schedulerChanges = schedulerSnap.docs[0]?.data()?.changes || [];
 
+  const kpis = {
+    sprint: sprintProgress
+      ? {
+          name: sprintProgress.sprintName || null,
+          percentComplete: sprintProgress.percentComplete ?? null,
+          daysRemaining: sprintProgress.daysRemaining ?? null,
+          timeProgress: sprintProgress.timeProgress ?? null,
+          status: sprintProgress.onTrack == null ? null : (sprintProgress.onTrack ? 'On track' : 'Behind'),
+        }
+      : null,
+    fitness: fitness && fitness.fitnessScore != null ? { score: fitness.fitnessScore } : null,
+    budget: budgetSummary,
+  };
+
   return {
     metadata: {
       dayIso: isoDate(start),
@@ -793,11 +1046,13 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     hierarchy,
     tasksDue: taskSummaries,
     storiesToStart,
+    activeWorkItems,
     calendarBlocks,
     reminders,
     choresDue: dueChores,
     routinesDue: dueRoutines,
     priorities,
+    dailyBrief,
     worldSummary: worldSummary ? { summary: worldSummary, weather: worldWeather, source: worldSource } : null,
     fitness,
     monzo,
@@ -807,6 +1062,8 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     goalProgress,
     sprintProgress,
     budgetProgress,
+    budgetSummary,
+    kpis,
   };
 };
 
@@ -1022,6 +1279,7 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
       ref: ensureStoryReference(story),
       title: story.title || 'Story',
       autoFilled: !!story.acceptanceCriteriaGenerated || !!story.generatedAcceptanceCriteria,
+      deepLink: makeDeepLink('story', ensureStoryReference(story)),
     }));
 
   const missingGoalLink = stories
@@ -1030,6 +1288,7 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
       id: story.id,
       ref: ensureStoryReference(story),
       title: story.title || 'Story',
+      deepLink: makeDeepLink('story', ensureStoryReference(story)),
     }));
 
   const summaryStats = {

@@ -40,6 +40,7 @@ const MobileChecklistView: React.FC = () => {
   }
 
   const briefing = summary?.dailyBriefing || null;
+  const dailyBrief = summary?.dailyBrief || null;
   const dailyChecklist = summary?.dailyChecklist || null;
 
   return (
@@ -48,16 +49,43 @@ const MobileChecklistView: React.FC = () => {
       {summaryLoading && (
         <div className="text-muted small mb-3">Syncing the latest briefing&hellip;</div>
       )}
-      {briefing ? (
+      {(briefing || dailyBrief) ? (
         <div className="mb-3 p-3 border rounded" style={{ background: '#f3f4ff' }}>
-          {briefing.headline && <div className="fw-semibold mb-1">{briefing.headline}</div>}
-          {briefing.body && <div className="mb-1" style={{ fontSize: 14 }}>{briefing.body}</div>}
-          {briefing.checklist && (
+          {briefing?.headline && <div className="fw-semibold mb-1">{briefing.headline}</div>}
+          {briefing?.body && <div className="mb-1" style={{ fontSize: 14 }}>{briefing.body}</div>}
+          {briefing?.checklist && (
             <div className="text-muted" style={{ fontSize: 13 }}>{briefing.checklist}</div>
+          )}
+          {!briefing && dailyBrief && (
+            <>
+              {Array.isArray(dailyBrief.lines) && dailyBrief.lines.length > 0 && (
+                <ul className="mb-2 small">
+                  {dailyBrief.lines.slice(0, 4).map((line: string, idx: number) => (
+                    <li key={idx}>{line}</li>
+                  ))}
+                </ul>
+              )}
+              {dailyBrief.weather?.summary && (
+                <div className="text-muted small mb-1">
+                  Weather: {dailyBrief.weather.summary}
+                  {dailyBrief.weather.temp ? ` (${dailyBrief.weather.temp})` : ''}
+                </div>
+              )}
+              {Array.isArray(dailyBrief.news) && dailyBrief.news.length > 0 && (
+                <div className="mt-2">
+                  <div className="fw-semibold" style={{ fontSize: 14 }}>News</div>
+                  <ul className="mb-0 small">
+                    {dailyBrief.news.slice(0, 3).map((item: string, idx: number) => (
+                      <li key={idx}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
           )}
         </div>
       ) : null}
-      {!briefing && !summaryLoading && (
+      {!briefing && !dailyBrief && !summaryLoading && (
         <div className="mb-3" style={{ fontSize: 13, color: '#6b7280' }}>
           Daily briefing will appear here once nightly maintenance runs.
         </div>

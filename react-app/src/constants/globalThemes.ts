@@ -157,6 +157,36 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     lightColor: getCssVarValue('--theme-rest-light', '#cfd8dc'),
     textColor: contrastText(getCssVarValue('--theme-rest-primary', '#607d8b')),
     description: 'Downtime, relaxation, sleep, and recovery activities'
+  },
+  {
+    id: 12,
+    name: 'Work (Main Gig)',
+    label: 'Work (Main Gig)',
+    color: getCssVarValue('--theme-work-primary', '#2563eb'),
+    darkColor: getCssVarValue('--theme-work-dark', '#1e40af'),
+    lightColor: getCssVarValue('--theme-work-light', '#c7d2fe'),
+    textColor: contrastText(getCssVarValue('--theme-work-primary', '#2563eb')),
+    description: 'Primary job or main professional commitments'
+  },
+  {
+    id: 13,
+    name: 'Sleep',
+    label: 'Sleep',
+    color: getCssVarValue('--theme-sleep-primary', '#6366f1'),
+    darkColor: getCssVarValue('--theme-sleep-dark', '#4f46e5'),
+    lightColor: getCssVarValue('--theme-sleep-light', '#c7d2fe'),
+    textColor: contrastText(getCssVarValue('--theme-sleep-primary', '#6366f1')),
+    description: 'Sleep routines, bedtimes, and recovery windows'
+  },
+  {
+    id: 14,
+    name: 'Random',
+    label: 'Random',
+    color: getCssVarValue('--theme-random-primary', '#64748b'),
+    darkColor: getCssVarValue('--theme-random-dark', '#475569'),
+    lightColor: getCssVarValue('--theme-random-light', '#e2e8f0'),
+    textColor: contrastText(getCssVarValue('--theme-random-primary', '#64748b')),
+    description: 'Miscellaneous blocks without a specific theme'
   }
 ];
 
@@ -171,7 +201,12 @@ export const LEGACY_THEME_MAP = {
   'Learning': 4,
   'Finance': 3,
   'Financial': 3,
-  'General': 0
+  'General': 0,
+  'Work': 12,
+  'Work (Main Gig)': 12,
+  'Main Gig': 12,
+  'Sleep': 13,
+  'Random': 14
 };
 
 export const LEGACY_ID_TO_NEW_ID = {

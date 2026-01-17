@@ -4,6 +4,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { Activity, Wand2 } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
+import { getThemeClass, getThemeName } from '../utils/statusHelpers';
 
 interface StoryCardProps {
   story: Story;
@@ -15,11 +16,13 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
   const [aiBusy, setAiBusy] = useState(false);
   // Handle both Story and EnhancedStory types
   const storyRef = (story as any).ref || `STRY-${String(index + 1).padStart(3, '0')}`;
+  const themeLabel = story.theme != null ? getThemeName(story.theme) : '';
+  const themeClass = story.theme != null ? getThemeClass(story.theme) : '';
   
   return (
     <div
       className="card story-card mb-2"
-      data-theme={story.theme}
+      data-theme={themeLabel || undefined}
       onClick={(e) => {
         // avoid button click duplication
         if ((e.target as HTMLElement).closest('button')) return;
@@ -34,9 +37,9 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
             <h6 className="card-title mb-0 mt-1" style={{ fontSize: '0.9rem' }}>{story.title}</h6>
           </div>
           <div className="d-flex align-items-center gap-1">
-            {story.theme && (
-              <span className={`badge theme-badge ${story.theme}`} style={{ fontSize: '0.7rem' }}>
-                {story.theme}
+            {themeLabel && (
+              <span className={`badge theme-badge ${themeClass}`} style={{ fontSize: '0.7rem' }}>
+                {themeLabel}
               </span>
             )}
             <button

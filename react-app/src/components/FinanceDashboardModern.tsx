@@ -47,9 +47,16 @@ interface GoalAlignmentDoc {
         potBalance: number;
         fundedPercent: number;
         monthsToSave?: number | null;
+        monthsToTarget?: number | null;
+        monthlyRequired?: number | null;
         shortfall?: number;
         potName?: string;
     }>;
+    goalFundingPlan?: {
+        goalsWithTargets?: number;
+        totalShortfall?: number;
+        monthlyRequired?: number;
+    };
 }
 
 // --- Components ---
@@ -86,6 +93,7 @@ const FinanceDashboardModern: React.FC = () => {
     const [isRecomputing, setIsRecomputing] = useState(false);
     const [showBudgetModal, setShowBudgetModal] = useState(false);
     const [budgets, setBudgets] = useState<Record<string, number>>({});
+    const [bucketPotMap, setBucketPotMap] = useState<Record<string, string>>({});
     const [filterMode, setFilterMode] = useState<'month' | 'quarter' | 'year' | 'custom'>('month');
     const [startDate, setStartDate] = useState<string>(() => {
         const now = new Date();
@@ -158,7 +166,11 @@ const FinanceDashboardModern: React.FC = () => {
         });
 
         getDoc(budgetRef).then(snap => {
-            if (snap.exists()) setBudgets(snap.data().byCategory || {});
+            if (snap.exists()) {
+                const data = snap.data() || {};
+                setBudgets(data.byCategory || {});
+                setBucketPotMap(data.bucketPotMap || {});
+            }
         });
 
         return () => { unsubSummary(); unsubAlignment(); unsubTx(); };
@@ -234,14 +246,37 @@ const FinanceDashboardModern: React.FC = () => {
 
     const saveBudgets = async () => {
         if (!currentUser) return;
-        await setDoc(doc(db, 'finance_budgets', currentUser.uid), { byCategory: budgets }, { merge: true });
+        await setDoc(doc(db, 'finance_budgets', currentUser.uid), { byCategory: budgets, bucketPotMap }, { merge: true });
         setShowBudgetModal(false);
+        recomputeAnalytics();
+    };
+
+    const applyGoalFundingToBudget = async (recommended: number) => {
+        if (!currentUser || !recommended) return;
+        const nextBudgets = { ...budgets, savings: recommended };
+        setBudgets(nextBudgets);
+        await setDoc(doc(db, 'finance_budgets', currentUser.uid), { byCategory: nextBudgets }, { merge: true });
         recomputeAnalytics();
     };
 
     // --- Derived Data ---
     const currency = summary?.currency || 'GBP';
     const formatMoney = (val: number) => val.toLocaleString('en-GB', { style: 'currency', currency });
+    const potOptions = useMemo(() => Object.entries(pots || {}).map(([id, p]) => ({ id, name: p.name || id })), [pots]);
+    const goalFundingPlan = alignment?.goalFundingPlan;
+    const recommendedGoalSavings = goalFundingPlan?.monthlyRequired ? Number(goalFundingPlan.monthlyRequired.toFixed(2)) : 0;
+    const goalShortfall = goalFundingPlan?.totalShortfall || 0;
+    const goalsWithTargets = goalFundingPlan?.goalsWithTargets || 0;
+
+    // Auto-fill savings budget when recommended goal funding exists and savings budget is empty/low
+    useEffect(() => {
+        if (!recommendedGoalSavings) return;
+        setBudgets((prev) => {
+            const current = prev?.savings || 0;
+            if (current && current >= recommendedGoalSavings) return prev;
+            return { ...prev, savings: recommendedGoalSavings };
+        });
+    }, [recommendedGoalSavings]);
 
     const parseMonthKey = (m: string) => {
         if (!m) return new Date(NaN);
@@ -512,6 +547,35 @@ const FinanceDashboardModern: React.FC = () => {
                 </Col>
             </Row>
 
+            {/* Goal funding plan */}
+            {recommendedGoalSavings > 0 && (
+                <Row className="g-2 mb-3">
+                    <Col lg={6}>
+                        <Card className="border-0 shadow-sm h-100">
+                            <Card.Body>
+                                <Card.Title className="h6 mb-2">Goal funding plan</Card.Title>
+                                <div className="small text-muted mb-2">
+                                    Based on {goalsWithTargets || 0} goal(s) with target dates and current pot balances.
+                                </div>
+                                <div className="d-flex flex-wrap align-items-baseline gap-4">
+                                    <div>
+                                        <div className="text-muted small">Monthly needed</div>
+                                        <div className="h5 mb-0">{formatMoney(recommendedGoalSavings)}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-muted small">Shortfall</div>
+                                        <div className="h6 mb-0">{formatMoney(goalShortfall || 0)}</div>
+                                    </div>
+                                </div>
+                                <Button size="sm" variant="primary" className="mt-3" onClick={() => applyGoalFundingToBudget(recommendedGoalSavings)}>
+                                    Apply to savings budget
+                                </Button>
+                            </Card.Body>
+                        </Card>
+                    </Col>
+                </Row>
+            )}
+
             {/* Charts Row - Reduced Height */}
             <Row className="g-2 mb-3">
                 <Col lg={8}>
@@ -639,6 +703,17 @@ const FinanceDashboardModern: React.FC = () => {
                                 onChange={e => setBudgets({ ...budgets, [bucket]: Number(e.target.value) })}
                                 placeholder="0.00"
                             />
+                            <Form.Text className="text-muted">Link this bucket to a pot (optional).</Form.Text>
+                            <Form.Select
+                                className="mt-1"
+                                value={bucketPotMap[bucket] || ''}
+                                onChange={(e) => setBucketPotMap({ ...bucketPotMap, [bucket]: e.target.value })}
+                            >
+                                <option value="">No pot linked</option>
+                                {potOptions.map((p) => (
+                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                            </Form.Select>
                         </Form.Group>
                     ))}
                 </Modal.Body>

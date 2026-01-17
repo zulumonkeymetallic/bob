@@ -40,8 +40,9 @@ import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebase';
+import { functions, db } from '../firebase';
 import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -94,7 +95,7 @@ const defaultColumns: Column[] = [
     key: 'description',
     label: 'Description',
     width: '30%',
-    visible: true,
+    visible: false,
     editable: true,
     type: 'text'
   },
@@ -113,7 +114,7 @@ const defaultColumns: Column[] = [
     key: 'priority',
     label: 'Priority',
     width: '10%',
-    visible: true,
+    visible: false,
     editable: true,
     type: 'select',
     options: ['1', '2', '3', '4', '5']
@@ -122,7 +123,7 @@ const defaultColumns: Column[] = [
     key: 'effort',
     label: 'Effort',
     width: '8%',
-    visible: true,
+    visible: false,
     editable: true,
     type: 'select',
     options: ['S', 'M', 'L']
@@ -134,6 +135,14 @@ const defaultColumns: Column[] = [
     visible: true,
     editable: true,
     type: 'date'
+  },
+  {
+    key: 'points',
+    label: 'Points',
+    width: '8%',
+    visible: true,
+    editable: true,
+    type: 'number'
   },
   {
     key: 'theme',
@@ -269,7 +278,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
           updates = { dueDate: normalizedValue ?? null };
         } else if (key === 'status') {
           const next = Number(editValue);
-          updates = { status: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
+          const canonical = Number.isFinite(next)
+            ? (next >= 2 ? 2 : next <= 0 ? 0 : 1)
+            : editValue;
+          updates = { status: canonical } as any;
+          trackFieldChange(task.id, 'task', 'status', oldValue, canonical, task.ref);
         } else if (key === 'priority') {
           const next = Number(editValue);
           updates = { priority: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
@@ -324,6 +337,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
     if (key === 'status') {
       return taskStatusText(value);
+    }
+    if (key === 'points' && typeof value === 'number') {
+      return String(value);
     }
     if (key === 'theme' && typeof value === 'number') {
       const theme = GLOBAL_THEMES.find(t => t.id === value);
@@ -857,7 +873,26 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   };
 
   const handleSprintAssign = async (taskId: string, newSprintId: string | null) => {
-    await handleValidatedUpdate(taskId, { sprintId: newSprintId });
+    // When assigning a sprint, align due date to sprint start and cascade to parent story
+    const sprint = newSprintId ? sprints.find(s => s.id === newSprintId) : null;
+    const dueDate = sprint ? sprint.startDate : null;
+
+    const updates: Partial<Task> = { sprintId: newSprintId, dueDate };
+    await handleValidatedUpdate(taskId, updates);
+
+    // Cascade sprint to parent story if present
+    const task = tasks.find(t => t.id === taskId);
+    const parentStoryId = (task as any)?.storyId;
+    if (parentStoryId && newSprintId) {
+      try {
+        await updateDoc(doc(db, 'stories', parentStoryId as string), {
+          sprintId: newSprintId,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (e) {
+        console.warn('Failed to cascade sprint to story', parentStoryId, e);
+      }
+    }
   };
 
   const handleConvertToStory = async (task: TaskTableRow) => {

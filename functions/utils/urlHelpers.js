@@ -6,6 +6,23 @@ function buildAbsoluteUrl(path) {
   return `${origin}${path}`;
 }
 
+function buildEntityPath(type, id, ref) {
+  const raw = ref || id;
+  if (!type || !raw) return null;
+  const safeId = encodeURIComponent(String(raw));
+  if (type === 'task') return `/tasks/${safeId}`;
+  if (type === 'story') return `/stories/${safeId}`;
+  if (type === 'goal') return `/goals/${safeId}`;
+  return null;
+}
+
+function buildEntityUrl(type, id, ref) {
+  const path = buildEntityPath(type, id, ref);
+  return path ? buildAbsoluteUrl(path) : null;
+}
+
 module.exports = {
   buildAbsoluteUrl,
+  buildEntityPath,
+  buildEntityUrl,
 };
