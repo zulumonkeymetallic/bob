@@ -31,6 +31,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const [goalSearch, setGoalSearch] = useState('');
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [showDescriptions, setShowDescriptions] = useState(false);
+    const [showLatestNotes, setShowLatestNotes] = useState(false);
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue'>('all');
@@ -361,6 +362,14 @@ const SprintKanbanPageV2: React.FC = () => {
                                 onChange={(e) => setShowDescriptions(e.target.checked)}
                                 className="ms-2"
                             />
+                            <Form.Check
+                                type="switch"
+                                id="toggle-kanban-notes"
+                                label="Show latest notes"
+                                checked={showLatestNotes}
+                                onChange={(e) => setShowLatestNotes(e.target.checked)}
+                                className="ms-2"
+                            />
 
                             <Dropdown>
                                 <Dropdown.Toggle variant="outline-secondary" size="sm">
@@ -523,6 +532,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                 onItemSelect={(item, type) => showSidebar(item, type)}
                                 onEdit={handleEditItem}
                                 showDescriptions={showDescriptions}
+                                showLatestNotes={showLatestNotes}
                                 dueFilter={dueFilter}
                                 sortByAi={sortByAi}
                             />

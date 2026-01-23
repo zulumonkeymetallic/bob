@@ -16,6 +16,7 @@ import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 import { ChoiceHelper } from '../config/choices';
 import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
 import { useNavigate } from 'react-router-dom';
+import { isStatus } from '../utils/statusHelpers';
 
 interface EntityLookupInputProps {
   type: 'goal' | 'story';
@@ -170,6 +171,29 @@ const EntityLookupInput: React.FC<EntityLookupInputProps> = ({
       </div>
     </div>
   );
+};
+
+const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
+const formatSprintRange = (sprint: Sprint) => {
+  const start = sprint.startDate ? new Date(sprint.startDate).toLocaleDateString() : '';
+  const end = sprint.endDate ? new Date(sprint.endDate).toLocaleDateString() : '';
+  if (!start && !end) return '';
+  if (start && end) return `${start} - ${end}`;
+  if (start) return `${start} - TBD`;
+  return `TBD - ${end}`;
+};
+const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
+  const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
+  const statusLabel = statusOverride
+    ? ` (${statusOverride})`
+    : (isStatus(sprint.status, 'active') ? ' (Active)' : '');
+  const range = formatSprintRange(sprint);
+  return range ? `${name}${statusLabel} - ${range}` : `${name}${statusLabel}`;
+};
+const getHiddenSprintStatus = (sprint: Sprint) => {
+  if (isStatus(sprint.status, 'closed')) return 'Completed';
+  if (isStatus(sprint.status, 'cancelled')) return 'Cancelled';
+  return '';
 };
 
 interface GlobalSidebarProps {
@@ -333,6 +357,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     if (selectedType === 'story') return ChoiceHelper.getOptions('story', 'status');
     return ChoiceHelper.getOptions('task', 'status');
   }, [selectedType]);
+  const visibleSprints = React.useMemo(() => sprints.filter((sprint) => !isHiddenSprint(sprint)), [sprints]);
+  const selectedSprintId = (quickEdit.sprintId || (selectedItem as any)?.sprintId || '') as string;
+  const selectedSprint = selectedSprintId ? sprints.find((sprint) => sprint.id === selectedSprintId) : null;
 
   // Seed quick edit when selection changes
   React.useEffect(() => {
@@ -1093,9 +1120,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                           style={{ minHeight: '31px' }}
                         >
                           <option value="">None</option>
-                          {sprints.map(s => (
-                            <option key={s.id} value={s.id}>
-                              {s.name || s.ref || `Sprint ${s.id.slice(-4)}`}
+                          {selectedSprint && isHiddenSprint(selectedSprint) && (
+                            <option key={selectedSprint.id} value={selectedSprint.id} disabled>
+                              {formatSprintLabel(selectedSprint, getHiddenSprintStatus(selectedSprint) || 'Inactive')}
+                            </option>
+                          )}
+                          {visibleSprints.map((sprint) => (
+                            <option key={sprint.id} value={sprint.id}>
+                              {formatSprintLabel(sprint)}
                             </option>
                           ))}
                         </Form.Select>
