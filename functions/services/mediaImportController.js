@@ -1,5 +1,5 @@
 // Media Import Controller
-// Creates Stories + Tasks from external media sources (Trakt, Steam, Goodreads-like inputs)
+// Creates Stories + Tasks from external media sources (Steam, Goodreads-like inputs)
 
 const admin = require('firebase-admin');
 const { ensureTaskPoints } = require('../utils/taskPoints');
@@ -91,7 +91,7 @@ async function importFromSteam(uid, options = {}) {
 async function importFromTrakt(uid, options = {}) {
   const db = admin.firestore();
   const snap = await db.collection('trakt').where('ownerUid', '==', uid).get();
-  const created = [];
+  let incoming = 0;
   for (const doc of snap.docs) {
     const data = doc.data() || {};
     if (data.category && data.category !== 'watchlist') continue;
@@ -100,40 +100,9 @@ async function importFromTrakt(uid, options = {}) {
     const show = data.show || null;
     const ids = show?.ids || movie?.ids || data.ids || {};
     if (!movie && !show && !Object.keys(ids).length) continue;
-    const title = movie?.title || show?.title || data.title || 'Trakt Title';
-    const externalId = String(ids.slug || ids.trakt || movie?.ids?.slug || show?.ids?.slug || data.id);
-    const storyId = await createStory(db, uid, {
-      title,
-      description: `Imported from Trakt: ${title}`,
-      theme: 'Hobbies & Interests',
-      source: 'trakt',
-      externalId,
-      entry_method: 'import:trakt',
-      metadata: {
-        traktIds: ids,
-        traktShowId: ids.trakt || null,
-        traktSlug: ids.slug || null,
-        rating: data.rating ?? null,
-      },
-    });
-    await createTask(db, uid, storyId, {
-      title: movie ? 'Watch movie' : 'Watch Ep. 1',
-      estimated_duration: movie ? 120 : (data.runtime || 45),
-      effort: movie ? 'L' : 'M',
-      entry_method: 'import:trakt',
-      task_type: 'task',
-      theme: 'Hobbies & Interests',
-      source: 'trakt',
-      externalId,
-    });
-    await db.collection('trakt').doc(doc.id).set({
-      lastConvertedStoryId: storyId,
-      lastConvertedAt: admin.firestore.FieldValue.serverTimestamp(),
-      persona: 'personal',
-    }, { merge: true });
-    created.push({ storyId, externalId });
+    incoming += 1;
   }
-  return { ok: true, created: created.length };
+  return { ok: true, incoming };
 }
 
 async function importFromGoodreadsLike(uid, items = []) {

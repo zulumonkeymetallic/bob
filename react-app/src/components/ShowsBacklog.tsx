@@ -6,7 +6,7 @@ import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Goal, Sprint } from '../types';
+import { Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 
@@ -36,7 +36,6 @@ interface TraktShowItem {
 }
 
 interface ConvertPayload {
-  goalId: string;
   sprintId: string | null;
   targetDate: string;
   rating: number;
@@ -48,12 +47,11 @@ const ShowsBacklog: React.FC = () => {
   const { sprints } = useSprint();
 
   const [shows, setShows] = useState<TraktShowItem[]>([]);
-  const [goals, setGoals] = useState<Goal[]>([]);
   const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'converted' | 'unconverted'>('all');
   const [selected, setSelected] = useState<TraktShowItem | null>(null);
-  const [convertForm, setConvertForm] = useState<ConvertPayload>({ goalId: '', sprintId: null, targetDate: '', rating: 3 });
+  const [convertForm, setConvertForm] = useState<ConvertPayload>({ sprintId: null, targetDate: '', rating: 3 });
   const [savingConversion, setSavingConversion] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -74,13 +72,6 @@ const ShowsBacklog: React.FC = () => {
     });
     return unsub;
   }, [currentUser]);
-
-  useEffect(() => {
-    if (!currentUser) return;
-    const goalsQuery = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona));
-    const unsub = onSnapshot(goalsQuery, snap => setGoals(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[]));
-    return unsub;
-  }, [currentUser, currentPersona]);
 
   const filteredShows = useMemo(() => {
     return shows.filter(show => {
@@ -103,12 +94,15 @@ const ShowsBacklog: React.FC = () => {
 
   const openConvert = (show: TraktShowItem) => {
     setSelected(show);
-    setConvertForm({ goalId: goals[0]?.id || '', sprintId: null, targetDate: '', rating: show.rating ?? 3 });
+    setConvertForm({ sprintId: null, targetDate: '', rating: show.rating ?? 3 });
   };
 
   const handleConvert = async () => {
     if (!currentUser || !selected) return;
-    if (!convertForm.goalId) { window.alert('Choose a goal.'); return; }
+    if (selected.lastConvertedStoryId) {
+      window.alert('A story has already been generated for this item.');
+      return;
+    }
     setSavingConversion(true);
     try {
       const dueDateMs = convertForm.targetDate ? new Date(convertForm.targetDate).getTime() : null;
@@ -119,7 +113,7 @@ const ShowsBacklog: React.FC = () => {
         ref: storyRef,
         title: selected.title,
         description: `Watch ${selected.title}${selected.year ? ` (${selected.year})` : ''}. Imported from Trakt watchlist.`,
-        goalId: convertForm.goalId,
+        goalId: '',
         sprintId: sprintId || null,
         dueDate: dueDateMs || null,
         status: 0,
@@ -134,8 +128,6 @@ const ShowsBacklog: React.FC = () => {
         orderIndex: Date.now(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        source: 'trakt',
-        entry_method: 'import:trakt-watchlist',
         metadata: {
           traktShowId: selected.traktId || ids.trakt || null,
           traktSlug: selected.slug || ids.slug || null,
@@ -154,8 +146,8 @@ const ShowsBacklog: React.FC = () => {
       });
       setSelected(null);
     } catch (e) {
-      console.error('Failed to convert show', e);
-      window.alert('Could not convert this show to a story.');
+      console.error('Failed to generate story from show', e);
+      window.alert('Could not generate a story for this show.');
     } finally {
       setSavingConversion(false);
     }
@@ -231,7 +223,7 @@ const ShowsBacklog: React.FC = () => {
               <td>{renderRatingStars(s)}</td>
               <td>
                 <div className="d-flex gap-2">
-                  <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)}>Convert to Story</Button>
+                  <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)} disabled={converted}>Generate Story</Button>
                   {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${s.lastConvertedStoryId}`}>View story</Button>}
                   <Button size="sm" variant="outline-success" onClick={() => markWatched(s)}>Mark watched</Button>
                 </div>
@@ -261,7 +253,7 @@ const ShowsBacklog: React.FC = () => {
                 <div className="d-flex justify-content-between align-items-center mt-auto">
                   {converted ? <Badge bg="success">Story Linked</Badge> : <Badge bg="secondary">Watchlist</Badge>}
                   <div className="d-flex gap-2">
-                    <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)}>Convert</Button>
+                    <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)} disabled={converted}>Generate</Button>
                     <Button size="sm" variant="outline-success" onClick={() => markWatched(s)}>Watched</Button>
                   </div>
                 </div>
@@ -281,7 +273,7 @@ const ShowsBacklog: React.FC = () => {
       <Card.Header className="bg-white d-flex flex-wrap gap-3 align-items-center justify-content-between">
         <div>
           <h5 className="mb-1">Shows Backlog</h5>
-          <div className="text-muted small">Imported from Trakt watchlist — convert into stories or push watched status.</div>
+          <div className="text-muted small">Imported from Trakt watchlist — generate stories and link goals later.</div>
         </div>
         <div className="d-flex flex-wrap gap-2 align-items-center">
           <Form.Control size="sm" placeholder="Search shows" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 220 }} />
@@ -302,16 +294,9 @@ const ShowsBacklog: React.FC = () => {
       </Card.Body>
 
       <Modal show={!!selected} onHide={() => setSelected(null)} centered>
-        <Modal.Header closeButton><Modal.Title>Convert to Story</Modal.Title></Modal.Header>
+        <Modal.Header closeButton><Modal.Title>Generate Story</Modal.Title></Modal.Header>
         <Modal.Body>
           <Form>
-            <Form.Group className="mb-3">
-              <Form.Label>Goal</Form.Label>
-              <Form.Select value={convertForm.goalId} onChange={(e) => setConvertForm(prev => ({ ...prev, goalId: e.target.value }))}>
-                <option value="">Select goal…</option>
-                {goals.map(g => (<option key={g.id} value={g.id}>{g.title}</option>))}
-              </Form.Select>
-            </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Sprint (optional)</Form.Label>
               <Form.Select value={convertForm.sprintId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, sprintId: e.target.value || null }))}>
@@ -333,7 +318,7 @@ const ShowsBacklog: React.FC = () => {
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setSelected(null)}>Cancel</Button>
-          <Button variant="primary" onClick={handleConvert} disabled={savingConversion}>{savingConversion ? 'Converting…' : 'Convert'}</Button>
+          <Button variant="primary" onClick={handleConvert} disabled={savingConversion}>{savingConversion ? 'Generating…' : 'Generate'}</Button>
         </Modal.Footer>
       </Modal>
     </Card>

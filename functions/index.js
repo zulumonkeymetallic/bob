@@ -2028,6 +2028,174 @@ exports.testLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async 
   return { ok: true, model: 'gemini', response: raw.slice(0, 200) };
 });
 
+const TRAVEL_GOAL_MATCH_PROMPT_VERSION = '2025-09-05-01';
+
+// LLM matcher: pick best travel goal for a place (or suggest a new goal title)
+exports.matchTravelGoal = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const placeInput = (req?.data?.place && typeof req.data.place === 'object') ? req.data.place : {};
+  const goalsInput = Array.isArray(req?.data?.goals) ? req.data.goals : [];
+  const placeId = req?.data?.placeId ? String(req.data.placeId) : null;
+
+  const placeName = String(placeInput?.name || placeInput?.title || '').trim();
+  const placeType = String(placeInput?.type || placeInput?.placeType || '').trim() || 'unknown';
+  const hierarchyInput = (placeInput?.hierarchy && typeof placeInput.hierarchy === 'object') ? placeInput.hierarchy : {};
+  const placeHierarchy = {
+    city: String(hierarchyInput?.city || hierarchyInput?.cityName || '').trim(),
+    country: String(hierarchyInput?.country || hierarchyInput?.countryName || '').trim(),
+    continent: String(hierarchyInput?.continent || hierarchyInput?.continentName || '').trim(),
+  };
+  const notes = placeInput?.notes ? String(placeInput.notes).trim().slice(0, 280) : '';
+
+  const candidates = goalsInput.map((goal) => {
+    const goalId = String(goal?.goalId || goal?.id || '').trim();
+    const title = String(goal?.title || '').trim();
+    const description = String(goal?.description || '').trim().slice(0, 600);
+    const tags = Array.isArray(goal?.tags)
+      ? goal.tags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 6)
+      : [];
+    const themeRaw = Number(goal?.theme);
+    const theme = Number.isFinite(themeRaw) ? themeRaw : null;
+    return { goalId, title, description, tags, theme };
+  }).filter((goal) => goal.goalId && goal.title).slice(0, 40);
+
+  const db = ensureFirestore();
+  const logActivity = async (payload) => {
+    try {
+      const ref = db.collection('activity_stream').doc();
+      await ref.set({
+        id: ref.id,
+        entityType: 'travel',
+        entityId: placeId ? `travel_${placeId}` : `travel_${uid}`,
+        activityType: 'travel_goal_match',
+        userId: uid,
+        ownerUid: uid,
+        description: payload?.description || 'Travel goal match evaluated',
+        metadata: redact(payload?.metadata || {}),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch { }
+  };
+
+  const defaultSuggestion = placeName ? `Trip to ${placeName}` : null;
+
+  if (!candidates.length) {
+    await logActivity({
+      description: 'Travel goal match skipped (no candidates)',
+      metadata: {
+        promptVersion: TRAVEL_GOAL_MATCH_PROMPT_VERSION,
+        placeId,
+        placeName,
+        placeType,
+        hierarchy: placeHierarchy,
+        candidateCount: 0,
+        matchedGoalId: null,
+        confidence: 0,
+        llmCalled: false,
+        reason: 'no_candidates',
+      }
+    });
+    return {
+      matchedGoalId: null,
+      confidence: 0,
+      rationale: 'No candidate travel goals provided.',
+      suggestNewGoalTitle: defaultSuggestion,
+      promptVersion: TRAVEL_GOAL_MATCH_PROMPT_VERSION,
+    };
+  }
+
+  const system = [
+    'You are a travel goal matching assistant.',
+    'Select the single best goal for the provided place OR return null if none fit.',
+    'Only return a goalId that exists in the provided list.',
+    'Return STRICT JSON only with keys:',
+    '{"matchedGoalId": string|null, "confidence": number, "rationale": string, "suggestNewGoalTitle": string|null}',
+    'confidence must be 0..1; rationale <= 200 chars.',
+  ].join('\n');
+
+  const user = [
+    'Place:',
+    JSON.stringify({
+      name: placeName || 'Unknown place',
+      type: placeType,
+      hierarchy: placeHierarchy,
+      notes: notes || null,
+    }, null, 2),
+    'Goals:',
+    JSON.stringify(candidates, null, 2),
+  ].join('\n');
+
+  let matchedGoalId = null;
+  let confidence = 0;
+  let rationale = '';
+  let suggestNewGoalTitle = defaultSuggestion;
+  let llmError = null;
+
+  try {
+    const raw = await callLLMJson({
+      system,
+      user,
+      purpose: 'travelGoalMatch',
+      userId: uid,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    let parsed = {};
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (parseError) {
+      console.warn('[travelGoalMatch] JSON parse failed', parseError);
+      parsed = {};
+    }
+
+    const candidateIds = new Set(candidates.map((goal) => goal.goalId));
+    const rawMatchId = parsed?.matchedGoalId;
+    const matchCandidate = (rawMatchId === null || rawMatchId === undefined || rawMatchId === '')
+      ? null
+      : String(rawMatchId);
+    matchedGoalId = (matchCandidate && candidateIds.has(matchCandidate)) ? matchCandidate : null;
+
+    const confidenceRaw = Number(parsed?.confidence);
+    confidence = Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0;
+    if (!matchedGoalId) confidence = 0;
+
+    rationale = String(parsed?.rationale || '').trim().slice(0, 200);
+    const suggestionRaw = String(parsed?.suggestNewGoalTitle || '').trim();
+    suggestNewGoalTitle = matchedGoalId ? null : (suggestionRaw || defaultSuggestion);
+  } catch (error) {
+    llmError = error?.message || String(error);
+    console.warn('[travelGoalMatch] LLM call failed', { uid, error: llmError });
+  }
+
+  await logActivity({
+    description: matchedGoalId ? 'Travel goal match found' : 'No travel goal match found',
+    metadata: {
+      promptVersion: TRAVEL_GOAL_MATCH_PROMPT_VERSION,
+      placeId,
+      placeName,
+      placeType,
+      hierarchy: placeHierarchy,
+      candidateCount: candidates.length,
+      matchedGoalId,
+      confidence,
+      rationale,
+      llmCalled: true,
+      llmError,
+    }
+  });
+
+  return {
+    matchedGoalId,
+    confidence,
+    rationale,
+    suggestNewGoalTitle,
+    promptVersion: TRAVEL_GOAL_MATCH_PROMPT_VERSION,
+  };
+});
+
 // Admin: fetch sanitized email settings from Firestore
 exports.getEmailSettings = httpsV2.onCall({}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -11198,16 +11366,18 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const rawSlug = String(req?.data?.listSlug || req?.data?.list || '').trim();
-  const goalId = String(req?.data?.goalId || '').trim();
+  const goalIdRaw = String(req?.data?.goalId || '').trim();
+  const goalId = goalIdRaw || '';
   const priority = Number(req?.data?.priority ?? 1);
   const persona = String(req?.data?.persona || 'personal');
   if (!rawSlug) throw new httpsV2.HttpsError('invalid-argument', 'listSlug is required');
-  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
 
   const db = admin.firestore();
-  const goalDoc = await db.collection('goals').doc(goalId).get();
-  if (!goalDoc.exists || goalDoc.data()?.ownerUid !== uid) {
-    throw new httpsV2.HttpsError('permission-denied', 'Goal not found or not owned by user');
+  if (goalId) {
+    const goalDoc = await db.collection('goals').doc(goalId).get();
+    if (!goalDoc.exists || goalDoc.data()?.ownerUid !== uid) {
+      throw new httpsV2.HttpsError('permission-denied', 'Goal not found or not owned by user');
+    }
   }
 
   const slug = (() => {
@@ -11284,7 +11454,7 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
         ownerPersona: persona,
         title: b.title || 'Book',
         description: `Read ${b.title || 'this book'}${b.subtitle ? ': ' + b.subtitle : ''}. Imported from Hardcover list ${slug}.`,
-        goalId,
+        goalId: goalId || '',
         sprintId: null,
         status: 0,
         priority: Number.isFinite(priority) ? priority : 1,
@@ -11323,7 +11493,7 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
 exports.mediaImportGenerateStories = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const sources = Array.isArray(req?.data?.sources) ? req.data.sources : ['steam', 'trakt'];
+  const sources = Array.isArray(req?.data?.sources) ? req.data.sources : ['steam'];
   const goodreadsItems = Array.isArray(req?.data?.goodreadsItems) ? req.data.goodreadsItems : [];
   const results = {};
   if (sources.includes('steam')) {

@@ -18,6 +18,7 @@ import PersonalListsManagement from './components/PersonalListsManagement';
 import GamesBacklog from './components/GamesBacklog';
 import BooksBacklog from './components/BooksBacklog';
 import ShowsBacklog from './components/ShowsBacklog';
+import VideosBacklog from './components/VideosBacklog';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
@@ -252,6 +253,7 @@ function AppContent() {
             <Route path="/games-backlog" element={<GamesBacklog />} />
             <Route path="/books-backlog" element={<BooksBacklog />} />
             <Route path="/shows-backlog" element={<ShowsBacklog />} />
+            <Route path="/videos-backlog" element={<VideosBacklog />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
             {/* Legacy sprint routes - redirect to consolidated */}
             <Route path="/kanban" element={<Navigate to="/sprints/kanban" replace />} />
