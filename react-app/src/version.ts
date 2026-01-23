@@ -1,6 +1,6 @@
 // Version tracking for cache busting
 // Align version with branch build
-export const VERSION = '4.5.0';
+export const VERSION = '4.5.484';
 export const BUILD_TIME = new Date().toISOString();
 export const BUILD_HASH = 'kanban-roadmap-theming-4.5.0';
 
