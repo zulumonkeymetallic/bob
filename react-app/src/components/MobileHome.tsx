@@ -8,6 +8,7 @@ import { Goal, Story, Task, Sprint as SprintType } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper, StoryStatus } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
+import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 
 type TabKey = 'overview' | 'tasks' | 'stories' | 'goals';
 
@@ -25,6 +26,9 @@ const MobileHome: React.FC = () => {
   const [noteModal, setNoteModal] = useState<{ type: 'task'|'story'|'goal'; id: string; show: boolean } | null>(null);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+  const briefWeatherSummary = extractWeatherSummary(summary?.dailyBrief?.weather);
+  const briefWeatherTemp = extractWeatherTemp(summary?.dailyBrief?.weather);
+  const worldWeatherLine = formatWeatherLine(summary?.worldSummary?.weather);
 
   // Mobile override: if no explicit sprint is selected, prefer the active sprint
   useEffect(() => {
@@ -202,10 +206,10 @@ const MobileHome: React.FC = () => {
                     ))}
                   </ul>
                 )}
-                {summary.dailyBrief.weather?.summary && (
+                {briefWeatherSummary && (
                   <div className="text-muted small mb-1">
-                    Weather: {summary.dailyBrief.weather.summary}
-                    {summary.dailyBrief.weather.temp ? ` (${summary.dailyBrief.weather.temp})` : ''}
+                    Weather: {briefWeatherSummary}
+                    {briefWeatherTemp ? ` (${briefWeatherTemp})` : ''}
                   </div>
                 )}
                 {Array.isArray(summary.dailyBrief.news) && summary.dailyBrief.news.length > 0 && (
@@ -316,8 +320,8 @@ const MobileHome: React.FC = () => {
                 {summary.worldSummary.summary && (
                   <div className="mb-2" style={{ fontSize: 14 }}>{summary.worldSummary.summary}</div>
                 )}
-                {summary.worldSummary.weather && (
-                  <div className="text-muted" style={{ fontSize: 13 }}>{summary.worldSummary.weather}</div>
+                {worldWeatherLine && (
+                  <div className="text-muted" style={{ fontSize: 13 }}>{worldWeatherLine}</div>
                 )}
               </Card.Body>
             </Card>
