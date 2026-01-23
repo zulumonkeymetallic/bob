@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
-import { collection, query, getDocs, where, orderBy, updateDoc, doc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Goal, Sprint } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -45,21 +45,12 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [goalInput, setGoalInput] = useState('');
   const { currentUser } = useAuth();
   const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
-  const formatSprintRange = (sprint: Sprint) => {
-    const start = sprint.startDate ? new Date(sprint.startDate).toLocaleDateString() : '';
-    const end = sprint.endDate ? new Date(sprint.endDate).toLocaleDateString() : '';
-    if (!start && !end) return '';
-    if (start && end) return `${start} - ${end}`;
-    if (start) return `${start} - TBD`;
-    return `TBD - ${end}`;
-  };
   const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
     const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
     const statusLabel = statusOverride
       ? ` (${statusOverride})`
       : (isStatus(sprint.status, 'active') ? ' (Active)' : '');
-    const range = formatSprintRange(sprint);
-    return range ? `${name}${statusLabel} - ${range}` : `${name}${statusLabel}`;
+    return `${name}${statusLabel}`;
   };
   const visibleSprints = sprints.filter((sprint) => !isHiddenSprint(sprint));
   const selectedSprint = editedStory.sprintId ? sprints.find((sprint) => sprint.id === editedStory.sprintId) : null;

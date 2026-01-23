@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Container, Row, Col, Button, Dropdown, Badge, Form, Modal } from 'react-bootstrap';
+import { Card, Container, Row, Col, Button, Dropdown, Badge, Form } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -14,6 +14,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import GLOBAL_THEMES from '../constants/globalThemes';
 import SprintSelector from './SprintSelector';
 import EditStoryModal from './EditStoryModal';
+import EditTaskModal from './EditTaskModal';
 
 const SprintKanbanPageV2: React.FC = () => {
     const { currentUser } = useAuth();
@@ -36,14 +37,6 @@ const SprintKanbanPageV2: React.FC = () => {
     const [editTask, setEditTask] = useState<Task | null>(null);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue'>('all');
     const [sortByAi, setSortByAi] = useState<boolean>(false);
-    const [taskForm, setTaskForm] = useState({
-        title: '',
-        description: '',
-        status: 0 as number | string,
-        priority: 2 as any,
-        sprintId: '',
-    });
-    const [savingTask, setSavingTask] = useState(false);
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -210,58 +203,11 @@ const SprintKanbanPageV2: React.FC = () => {
 
     const activeTheme = themeFilter !== null ? GLOBAL_THEMES.find(t => t.id === themeFilter) : null;
 
-    const normalizeTaskStatus = (status: any) => {
-        if (typeof status === 'number') return status;
-        const value = String(status || '').toLowerCase();
-        if (value.includes('done') || value.includes('complete')) return 2;
-        if (value.includes('progress') || value.includes('active')) return 1;
-        if (value.includes('block')) return 3;
-        return 0;
-    };
-
-    const normalizeTaskPriority = (priority: any) => {
-        if (typeof priority === 'number') return priority;
-        const value = String(priority || '').toLowerCase();
-        if (value.includes('high')) return 1;
-        if (value.includes('low')) return 3;
-        return 2;
-    };
-
     const handleEditItem = (item: Story | Task, type: 'story' | 'task') => {
         if (type === 'story') {
             setEditStory(item as Story);
         } else {
-            const t = item as Task;
-            setEditTask(t);
-            setTaskForm({
-                title: t.title || '',
-                description: (t as any).description || '',
-                status: normalizeTaskStatus((t as any).status),
-                priority: normalizeTaskPriority((t as any).priority),
-                sprintId: (t as any).sprintId || '',
-            });
-        }
-    };
-
-    const handleSaveTask = async () => {
-        if (!editTask) return;
-        setSavingTask(true);
-        try {
-            const updates: any = {
-                title: taskForm.title.trim() || editTask.title,
-                description: taskForm.description,
-                status: typeof taskForm.status === 'string' ? Number(taskForm.status) || taskForm.status : taskForm.status,
-                priority: taskForm.priority,
-                sprintId: taskForm.sprintId || null,
-                updatedAt: serverTimestamp()
-            };
-            await updateDoc(doc(db, 'tasks', editTask.id), updates);
-            setEditTask(null);
-        } catch (e) {
-            console.error('Failed to update task', e);
-            alert('Failed to update task. Please try again.');
-        } finally {
-            setSavingTask(false);
+            setEditTask(item as Task);
         }
     };
 
@@ -550,87 +496,13 @@ const SprintKanbanPageV2: React.FC = () => {
                 container={boardContainerRef.current}
             />
 
-            <Modal show={!!editTask} onHide={() => setEditTask(null)} container={boardContainerRef.current ?? undefined}>
-                <Modal.Header closeButton>
-                    <Modal.Title>Edit Task</Modal.Title>
-                </Modal.Header>
-                <Modal.Body>
-                    {editTask ? (
-                        <Form>
-                            <Form.Group className="mb-3">
-                                <Form.Label>Title</Form.Label>
-                                <Form.Control
-                                    type="text"
-                                    value={taskForm.title}
-                                    onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })}
-                                />
-                            </Form.Group>
-                            <Form.Group className="mb-3">
-                                <Form.Label>Description</Form.Label>
-                                <Form.Control
-                                    as="textarea"
-                                    rows={3}
-                                    value={taskForm.description}
-                                    onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })}
-                                />
-                            </Form.Group>
-                            <Row>
-                                <Col md={4}>
-                                    <Form.Group className="mb-3">
-                                        <Form.Label>Status</Form.Label>
-                                        <Form.Select
-                                            value={String(taskForm.status)}
-                                            onChange={(e) => setTaskForm({ ...taskForm, status: Number(e.target.value) })}
-                                        >
-                                            <option value={0}>Backlog</option>
-                                            <option value={1}>In Progress</option>
-                                            <option value={2}>Done</option>
-                                            <option value={3}>Blocked</option>
-                                        </Form.Select>
-                                    </Form.Group>
-                                </Col>
-                                <Col md={4}>
-                                    <Form.Group className="mb-3">
-                                        <Form.Label>Priority</Form.Label>
-                                        <Form.Select
-                                            value={String(taskForm.priority)}
-                                            onChange={(e) => setTaskForm({ ...taskForm, priority: Number(e.target.value) })}
-                                        >
-                                            <option value={1}>High</option>
-                                            <option value={2}>Medium</option>
-                                            <option value={3}>Low</option>
-                                        </Form.Select>
-                                    </Form.Group>
-                                </Col>
-                                <Col md={4}>
-                                    <Form.Group className="mb-3">
-                                        <Form.Label>Sprint</Form.Label>
-                                        <Form.Select
-                                            value={taskForm.sprintId || ''}
-                                            onChange={(e) => setTaskForm({ ...taskForm, sprintId: e.target.value })}
-                                        >
-                                            <option value="">Backlog</option>
-                                            {sprints.map((s) => (
-                                                <option key={s.id} value={s.id}>
-                                                    {s.name}
-                                                </option>
-                                            ))}
-                                        </Form.Select>
-                                    </Form.Group>
-                                </Col>
-                            </Row>
-                        </Form>
-                    ) : null}
-                </Modal.Body>
-                <Modal.Footer>
-                    <Button variant="secondary" onClick={() => setEditTask(null)}>
-                        Cancel
-                    </Button>
-                    <Button variant="primary" onClick={handleSaveTask} disabled={savingTask}>
-                        {savingTask ? 'Saving...' : 'Save'}
-                    </Button>
-                </Modal.Footer>
-            </Modal>
+            <EditTaskModal
+                show={!!editTask}
+                task={editTask}
+                onHide={() => setEditTask(null)}
+                onUpdated={() => setEditTask(null)}
+                container={boardContainerRef.current}
+            />
         </Container>
     );
 };

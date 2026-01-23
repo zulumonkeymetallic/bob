@@ -2,20 +2,48 @@ import React, { useEffect, useState } from 'react';
 import { Modal, Spinner } from 'react-bootstrap';
 import { useParams } from 'react-router-dom';
 import StoriesManagement from '../StoriesManagement';
-import EntityDetailModal from '../EntityDetailModal';
+import EditStoryModal from '../EditStoryModal';
 import { useNavigate } from 'react-router-dom';
 import { resolveEntityByRef } from '../../utils/entityLookup';
+import { useAuth } from '../../contexts/AuthContext';
+import { usePersona } from '../../contexts/PersonaContext';
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { db } from '../../firebase';
+import type { Goal } from '../../types';
 
 const DeepLinkStory: React.FC = () => {
   const { id: refOrId } = useParams();
   const navigate = useNavigate();
+  const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const [item, setItem] = useState<any | null>(null);
   const [open, setOpen] = useState(true);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [goals, setGoals] = useState<Goal[]>([]);
 
   // updates handled inside modal
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setGoals([]);
+      return;
+    }
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
+    const unsub = onSnapshot(
+      goalsQuery,
+      (snap) => setGoals(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Goal)),
+      (err) => console.warn('[deep-link] goals snapshot error', err?.message || err)
+    );
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,11 +74,11 @@ const DeepLinkStory: React.FC = () => {
   return (
     <>
       <StoriesManagement />
-      <EntityDetailModal
+      <EditStoryModal
         show={open && !!item}
         onHide={handleClose}
-        type="story"
-        item={item}
+        story={item}
+        goals={goals}
       />
       <Modal show={open && loading} backdrop="static" keyboard={false} centered>
         <Modal.Body className="text-center">

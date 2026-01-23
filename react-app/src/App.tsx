@@ -32,7 +32,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider, usePersona } from './contexts/PersonaContext';
-import { SprintProvider } from './contexts/SprintContext';
+import { SprintProvider, useSprint } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 
 // Import theme-aware styles
@@ -101,6 +101,9 @@ import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import AdvancedOverview from './components/AdvancedOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
 import CapacityDashboard from './components/CapacityDashboard';
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { db } from './firebase';
+import type { Goal, Story } from './types';
 
 
 // Lazy-loaded heavy routes
@@ -129,6 +132,7 @@ function AppContent() {
   const navigate = useNavigate();
   const deviceInfo = useDeviceInfo();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
@@ -140,9 +144,49 @@ function AppContent() {
   };
 
   // Data for the global sidebar
-  const [goals, setGoals] = useState([]);
-  const [stories, setStories] = useState([]);
-  const [sprints, setSprints] = useState([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setGoals([]);
+      setStories([]);
+      return;
+    }
+
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
+
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
+
+    const unsubGoals = onSnapshot(
+      goalsQuery,
+      (snap) => setGoals(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Goal)),
+      (err) => console.warn('[global-sidebar] goals snapshot error', err?.message || err)
+    );
+
+    const unsubStories = onSnapshot(
+      storiesQuery,
+      (snap) => setStories(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Story)),
+      (err) => console.warn('[global-sidebar] stories snapshot error', err?.message || err)
+    );
+
+    return () => {
+      unsubGoals();
+      unsubStories();
+    };
+  }, [currentUser?.uid, currentPersona]);
 
   // 🖱️ Initialize global click tracking service
   useEffect(() => {
