@@ -109,6 +109,9 @@ const Dashboard: React.FC = () => {
   const [dailySummarySource, setDailySummarySource] = useState<string | null>(null);
   const [prioritySource, setPrioritySource] = useState<string | null>(null);
   const [metricsCollapsed, setMetricsCollapsed] = useState<boolean>(true);
+  const [capacityData, setCapacityData] = useState<any | null>(null);
+  const [capacityLoading, setCapacityLoading] = useState(false);
+  const [capacityError, setCapacityError] = useState<string | null>(null);
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -670,6 +673,34 @@ const Dashboard: React.FC = () => {
     };
   }, [currentUser, currentPersona, selectedSprintId]);
 
+  useEffect(() => {
+    if (!currentUser?.uid || !selectedSprintId) {
+      setCapacityData(null);
+      return;
+    }
+    let active = true;
+    setCapacityLoading(true);
+    setCapacityError(null);
+    const fetchCapacity = async () => {
+      try {
+        const calculateCapacity = httpsCallable(functions, 'calculateSprintCapacity');
+        const result = await calculateCapacity({ sprintId: selectedSprintId });
+        if (!active) return;
+        setCapacityData(result.data);
+      } catch (err: any) {
+        if (!active) return;
+        console.warn('capacity fetch failed', err);
+        setCapacityError(err?.message || 'Failed to load capacity data.');
+        setCapacityData(null);
+      } finally {
+        if (!active) return;
+        setCapacityLoading(false);
+      }
+    };
+    fetchCapacity();
+    return () => { active = false; };
+  }, [currentUser?.uid, selectedSprintId]);
+
   if (!currentUser) {
     return <div>Please sign in to view your dashboard.</div>;
   }
@@ -702,6 +733,18 @@ const Dashboard: React.FC = () => {
   ];
 
   const selectedSprint = selectedSprintId ? (sprintsById[selectedSprintId] ?? null) : (sprints[0] ?? null);
+  const capacitySummary = capacityData ? {
+    total: Number(capacityData.totalCapacityHours ?? 0),
+    allocated: Number(capacityData.allocatedHours ?? 0),
+    free: Number(capacityData.freeCapacityHours ?? 0),
+    utilization: capacityData.utilization ? Math.min(150, Math.round(capacityData.utilization * 100)) : 0,
+    scheduled: Number(capacityData.scheduledHours ?? 0),
+  } : null;
+  const capacityUtilVariant = (utilization: number) => {
+    if (utilization > 100) return 'danger';
+    if (utilization > 80) return 'warning';
+    return 'success';
+  };
 
   return (
     <Container fluid className="p-4">
@@ -750,9 +793,68 @@ const Dashboard: React.FC = () => {
                     {metricsCollapsed ? 'Expand' : 'Collapse'}
                   </Button>
                 </Card.Header>
+                <Card.Body className="pt-3 pb-2">
+                  {!hasSelectedSprint && (
+                    <div className="text-muted small">Select a sprint to see capacity.</div>
+                  )}
+                  {hasSelectedSprint && capacityLoading && (
+                    <div className="text-muted small">Loading capacity…</div>
+                  )}
+                  {hasSelectedSprint && capacityError && (
+                    <div className="text-danger small">{capacityError}</div>
+                  )}
+                  {hasSelectedSprint && capacitySummary && (
+                    <Row className="g-2">
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <div className="text-muted small">Total capacity</div>
+                            <div className="fw-semibold">{capacitySummary.total.toFixed(1)}h</div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <div className="text-muted small">Allocated</div>
+                            <div className="fw-semibold">{capacitySummary.allocated.toFixed(1)}h</div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <div className="text-muted small">Free</div>
+                            <div className={`fw-semibold ${capacitySummary.free < 0 ? 'text-danger' : 'text-success'}`}>
+                              {capacitySummary.free.toFixed(1)}h
+                            </div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <div className="text-muted small">Utilization</div>
+                            <div className={`fw-semibold text-${capacityUtilVariant(capacitySummary.utilization)}`}>
+                              {capacitySummary.utilization}%
+                            </div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <div className="text-muted small">Scheduled</div>
+                            <div className="fw-semibold">{capacitySummary.scheduled.toFixed(1)}h</div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
+                  )}
+                </Card.Body>
                 <Collapse in={!metricsCollapsed}>
                   <div>
-                    <Card.Body>
+                    <div className="px-3 pb-3">
                       {selectedSprint ? (
                         <SprintMetricsPanel
                           sprint={selectedSprint}
@@ -771,7 +873,7 @@ const Dashboard: React.FC = () => {
                           </Button>
                         </div>
                       )}
-                    </Card.Body>
+                    </div>
                   </div>
                 </Collapse>
               </Card>
