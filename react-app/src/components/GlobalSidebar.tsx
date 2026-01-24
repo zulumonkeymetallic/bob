@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2, ExternalLink } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
@@ -214,6 +214,11 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [editForm, setEditForm] = useState<any>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [activityLimit, setActivityLimit] = useState(5);
+  const [activityHasMore, setActivityHasMore] = useState(true);
+  const [activityLoadingMore, setActivityLoadingMore] = useState(false);
+  const activityScrollRef = useRef<HTMLDivElement | null>(null);
+  const lastActivityCountRef = useRef(0);
   const [showAddNote, setShowAddNote] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [showChat, setShowChat] = useState(false);
@@ -317,6 +322,20 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       setActivities([]);
       return;
     }
+    setActivityLimit(5);
+    setActivityHasMore(true);
+    setActivityLoadingMore(false);
+    lastActivityCountRef.current = 0;
+    if (activityScrollRef.current) {
+      activityScrollRef.current.scrollTop = 0;
+    }
+  }, [selectedItem?.id, selectedType]);
+
+  React.useEffect(() => {
+    if (!selectedItem) {
+      setActivities([]);
+      return;
+    }
 
     setEditForm({ ...selectedItem });
     setIsEditing(false);
@@ -330,12 +349,23 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     const unsubscribe = ActivityStreamService.subscribeToActivityStreamAny(
       selectedItem.id,
       entityType,
-      setActivities,
-      currentUser.uid
+      (items) => {
+        setActivities(items);
+        const previousCount = lastActivityCountRef.current;
+        lastActivityCountRef.current = items.length;
+        if (activityLoadingMore && items.length <= previousCount) {
+          setActivityHasMore(false);
+        } else {
+          setActivityHasMore(items.length >= activityLimit);
+        }
+        setActivityLoadingMore(false);
+      },
+      currentUser.uid,
+      activityLimit
     );
 
     return unsubscribe;
-  }, [selectedItem, selectedType, currentUser?.uid]);
+  }, [selectedItem, selectedType, currentUser?.uid, activityLimit]);
 
   React.useEffect(() => {
     setShowFullEditor(false);
@@ -347,6 +377,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     if (mobile) return '100vw';
     return isCollapsed ? '60px' : '400px';
   }, [isCollapsed]);
+
+  const handleActivityScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - 40;
+    if (!nearBottom || activityLoadingMore || !activityHasMore) return;
+    setActivityLoadingMore(true);
+    setActivityLimit((prev) => prev + 20);
+  };
 
 
 
@@ -1239,13 +1277,17 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   </Button>
                 </div>
 
-                <div style={{
-                  maxHeight: '300px',
-                  overflow: 'auto',
-                  backgroundColor: themeVars.card,
-                  borderRadius: '6px',
-                  padding: '8px'
-                }}>
+                <div
+                  ref={activityScrollRef}
+                  onScroll={handleActivityScroll}
+                  style={{
+                    maxHeight: '300px',
+                    overflow: 'auto',
+                    backgroundColor: themeVars.card,
+                    borderRadius: '6px',
+                    padding: '8px'
+                  }}
+                >
                   {activities.length === 0 ? (
                     <div style={{
                       textAlign: 'center',
@@ -1299,6 +1341,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                         </ListGroup.Item>
                       ))}
                     </ListGroup>
+                  )}
+                  {activities.length > 0 && activityLoadingMore && (
+                    <div style={{ fontSize: '12px', color: themeVars.muted, paddingTop: '6px' }}>
+                      Loading more…
+                    </div>
+                  )}
+                  {activities.length > 0 && !activityHasMore && (
+                    <div style={{ fontSize: '12px', color: themeVars.muted, paddingTop: '6px' }}>
+                      All activity loaded
+                    </div>
                   )}
                 </div>
               </div>
