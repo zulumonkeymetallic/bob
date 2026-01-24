@@ -3,6 +3,7 @@ import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/f
 import ChecklistPanel from './ChecklistPanel';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
+import { extractWeatherSummary, extractWeatherTemp } from '../utils/weatherFormat';
 
 const MobileChecklistView: React.FC = () => {
   const { currentUser } = useAuth();
@@ -42,6 +43,8 @@ const MobileChecklistView: React.FC = () => {
   const briefing = summary?.dailyBriefing || null;
   const dailyBrief = summary?.dailyBrief || null;
   const dailyChecklist = summary?.dailyChecklist || null;
+  const briefWeatherSummary = extractWeatherSummary(dailyBrief?.weather);
+  const briefWeatherTemp = extractWeatherTemp(dailyBrief?.weather);
 
   return (
     <div className="container py-3" style={{ maxWidth: 720 }}>
@@ -65,10 +68,10 @@ const MobileChecklistView: React.FC = () => {
                   ))}
                 </ul>
               )}
-              {dailyBrief.weather?.summary && (
+              {briefWeatherSummary && (
                 <div className="text-muted small mb-1">
-                  Weather: {dailyBrief.weather.summary}
-                  {dailyBrief.weather.temp ? ` (${dailyBrief.weather.temp})` : ''}
+                  Weather: {briefWeatherSummary}
+                  {briefWeatherTemp ? ` (${briefWeatherTemp})` : ''}
                 </div>
               )}
               {Array.isArray(dailyBrief.news) && dailyBrief.news.length > 0 && (

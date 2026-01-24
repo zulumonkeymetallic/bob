@@ -1,6 +1,6 @@
 {
   "name": "bob-productivity-platform",
-  "version": "4.5.0",
+  "version": "4.5.484",
   "description": "AI-Powered Personal Productivity Platform with Personal Backlogs, Mobile UX & Visual Canvas",
   "private": true,
   "dependencies": {
@@ -41,6 +41,7 @@
     "firebase": "^12.1.0",
     "i18n-iso-countries": "^7.11.0",
     "lucide-react": "^0.542.0",
+    "maplibre-gl": "^4.7.1",
     "papaparse": "^5.5.3",
     "react": "^18.0.0",
     "react-aria": "^3.42.0",
@@ -63,6 +64,7 @@
     "typescript": "^4.9.5",
     "web-vitals": "^2.1.4",
     "world-atlas": "^2.0.2",
+    "topojson-client": "^3.1.0",
     "xlsx": "^0.18.5",
     "zustand": "^4.5.4"
   },

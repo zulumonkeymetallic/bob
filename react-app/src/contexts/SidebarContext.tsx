@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, ReactNode, useRef } from 'react';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Story, Task, Goal, Sprint } from '../types';
+import { db } from '../firebase';
 
 interface SidebarContextType {
   selectedItem: Story | Task | Goal | null;
@@ -53,11 +55,20 @@ export const SidebarProvider: React.FC<SidebarProviderProps> = ({ children }) =>
   };
 
   const updateItem = async (updates: any) => {
-    if (selectedItem && selectedType && updateHandler) {
-      await updateHandler(selectedItem, selectedType, updates);
-      // Update the local state with the updates
-      setSelectedItem({ ...selectedItem, ...updates });
+    if (!selectedItem || !selectedType) return;
+    const normalizedUpdates = { ...(updates || {}) };
+    delete (normalizedUpdates as any).id;
+    if (updateHandler) {
+      await updateHandler(selectedItem, selectedType, normalizedUpdates);
+    } else {
+      const collectionName = selectedType === 'goal' ? 'goals' : selectedType === 'story' ? 'stories' : 'tasks';
+      await updateDoc(doc(db, collectionName, (selectedItem as any).id), {
+        ...normalizedUpdates,
+        updatedAt: serverTimestamp(),
+      });
     }
+    // Update the local state with the updates
+    setSelectedItem({ ...selectedItem, ...normalizedUpdates });
   };
 
   const setUpdateHandlerCallback = (handler: (item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => Promise<void>) => {

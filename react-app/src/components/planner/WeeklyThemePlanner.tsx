@@ -47,6 +47,18 @@ const toTimeString = (minutes: number) => {
 };
 
 const isHealthTheme = (themeName: string) => String(themeName || '').toLowerCase().includes('health');
+const getJsDay = (dayIndex: number) => (dayIndex + 1) % 7;
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+type DragMode = 'create' | 'resize-start' | 'resize-end' | 'move' | null;
+
+interface DragSelection {
+    day: number;
+    startMinutes: number;
+    endMinutes: number;
+    theme: string;
+    subTheme: string | null;
+}
 
 const WeeklyThemePlanner: React.FC = () => {
     const { currentUser } = useAuth();
@@ -61,9 +73,12 @@ const WeeklyThemePlanner: React.FC = () => {
     const [allocations, setAllocations] = useState<Allocation[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [selectedCell, setSelectedCell] = useState<{ day: number, minutes: number } | null>(null);
-    const [dragStart, setDragStart] = useState<{ day: number, minutes: number } | null>(null);
-    const [dragEnd, setDragEnd] = useState<{ day: number, minutes: number } | null>(null);
+    const [dragMode, setDragMode] = useState<DragMode>(null);
+    const [dragSelection, setDragSelection] = useState<DragSelection | null>(null);
+    const [dragAnchor, setDragAnchor] = useState<{ day: number; minutes: number } | null>(null);
+    const [dragAlloc, setDragAlloc] = useState<Allocation | null>(null);
+    const [dragOffsetMinutes, setDragOffsetMinutes] = useState(0);
+    const [pendingSelection, setPendingSelection] = useState<{ day: number; startMinutes: number; endMinutes: number } | null>(null);
     const [showModal, setShowModal] = useState(false);
     const [selectedTheme, setSelectedTheme] = useState(themeOptions[0]?.name || 'General');
     const [selectedSubTheme, setSelectedSubTheme] = useState('');
@@ -154,28 +169,111 @@ const WeeklyThemePlanner: React.FC = () => {
         }
     };
 
-    const beginSelection = (dayIndex: number, minutes: number) => {
-        const jsDay = (dayIndex + 1) % 7;
-        setDragStart({ day: jsDay, minutes });
-        setDragEnd({ day: jsDay, minutes });
-        setSelectedCell({ day: jsDay, minutes });
-        const existing = allocations.find(a =>
-            a.dayOfWeek === jsDay &&
-            toMinutes(a.startTime) <= minutes &&
-            toMinutes(a.endTime) > minutes
-        );
-        setSelectedTheme(existing ? existing.theme : (themeOptions[0]?.name || 'General'));
-        setSelectedSubTheme(existing?.subTheme || '');
+    const findAllocationForCell = (day: number, minutes: number, source = allocations) => source.find((alloc) =>
+        alloc.dayOfWeek === day &&
+        toMinutes(alloc.startTime) <= minutes &&
+        toMinutes(alloc.endTime) > minutes
+    );
+
+    const clearDragState = () => {
+        setDragMode(null);
+        setDragAnchor(null);
+        setDragSelection(null);
+        setDragAlloc(null);
+        setDragOffsetMinutes(0);
     };
 
-    const finalizeSelection = (dayIndex: number, minutes: number) => {
-        const jsDay = (dayIndex + 1) % 7;
-        if (!dragStart) {
-            beginSelection(dayIndex, minutes);
+    const beginSelection = (dayIndex: number, minutes: number) => {
+        const jsDay = getJsDay(dayIndex);
+        const existing = findAllocationForCell(jsDay, minutes);
+        const nextTheme = existing ? existing.theme : (themeOptions[0]?.name || 'General');
+        const nextSubTheme = existing?.subTheme || '';
+        setSelectedTheme(nextTheme);
+        setSelectedSubTheme(nextSubTheme);
+        setDragAlloc(null);
+        setDragOffsetMinutes(0);
+        setDragMode('create');
+        setDragAnchor({ day: jsDay, minutes });
+        setDragSelection({
+            day: jsDay,
+            startMinutes: minutes,
+            endMinutes: minutes + SLOT_MINUTES,
+            theme: nextTheme,
+            subTheme: nextSubTheme || null,
+        });
+        setPendingSelection(null);
+    };
+
+    const beginResize = (alloc: Allocation, direction: 'start' | 'end') => {
+        const startMinutes = toMinutes(alloc.startTime);
+        const endMinutes = toMinutes(alloc.endTime);
+        setDragMode(direction === 'start' ? 'resize-start' : 'resize-end');
+        setDragAlloc(alloc);
+        setDragAnchor(null);
+        setDragOffsetMinutes(0);
+        setDragSelection({
+            day: alloc.dayOfWeek,
+            startMinutes,
+            endMinutes,
+            theme: alloc.theme,
+            subTheme: alloc.subTheme || null,
+        });
+    };
+
+    const beginMove = (alloc: Allocation, minutes: number) => {
+        const startMinutes = toMinutes(alloc.startTime);
+        const endMinutes = toMinutes(alloc.endTime);
+        setDragMode('move');
+        setDragAlloc(alloc);
+        setDragAnchor(null);
+        setDragOffsetMinutes(minutes - startMinutes);
+        setDragSelection({
+            day: alloc.dayOfWeek,
+            startMinutes,
+            endMinutes,
+            theme: alloc.theme,
+            subTheme: alloc.subTheme || null,
+        });
+    };
+
+    const updateSelection = (dayIndex: number, minutes: number) => {
+        if (!dragMode || !dragSelection) return;
+        const jsDay = getJsDay(dayIndex);
+
+        if (dragMode === 'create') {
+            if (!dragAnchor || jsDay !== dragAnchor.day) return;
+            const startMinutes = Math.min(dragAnchor.minutes, minutes);
+            const endMinutes = Math.max(dragAnchor.minutes, minutes) + SLOT_MINUTES;
+            if (startMinutes === dragSelection.startMinutes && endMinutes === dragSelection.endMinutes) return;
+            setDragSelection({ ...dragSelection, startMinutes, endMinutes });
+            return;
         }
-        setDragEnd({ day: jsDay, minutes });
-        setSelectedCell({ day: jsDay, minutes });
-        setShowModal(true);
+
+        if (dragMode === 'resize-start') {
+            if (jsDay !== dragSelection.day) return;
+            const nextStart = Math.min(minutes, dragSelection.endMinutes - SLOT_MINUTES);
+            if (nextStart === dragSelection.startMinutes) return;
+            setDragSelection({ ...dragSelection, startMinutes: nextStart });
+            return;
+        }
+
+        if (dragMode === 'resize-end') {
+            if (jsDay !== dragSelection.day) return;
+            const nextEnd = Math.max(minutes + SLOT_MINUTES, dragSelection.startMinutes + SLOT_MINUTES);
+            if (nextEnd === dragSelection.endMinutes) return;
+            setDragSelection({ ...dragSelection, endMinutes: nextEnd });
+            return;
+        }
+
+        if (dragMode === 'move') {
+            const duration = dragSelection.endMinutes - dragSelection.startMinutes;
+            const minStart = START_HOUR * 60;
+            const maxStart = END_HOUR * 60 - duration;
+            const nextStart = clamp(minutes - dragOffsetMinutes, minStart, maxStart);
+            const nextEnd = nextStart + duration;
+            if (nextStart === dragSelection.startMinutes && jsDay === dragSelection.day) return;
+            setDragSelection({ ...dragSelection, day: jsDay, startMinutes: nextStart, endMinutes: nextEnd });
+        }
     };
 
     const mergeAllocations = (allocationsToMerge: Allocation[]) => {
@@ -213,24 +311,28 @@ const WeeklyThemePlanner: React.FC = () => {
         return merged;
     };
 
-    const handleApplySelection = async ({
-        day,
-        startMinutes,
-        endMinutes,
-        theme,
-        subTheme,
-    }: {
-        day: number;
-        startMinutes: number;
-        endMinutes: number;
-        theme: string;
-        subTheme: string | null;
-    }) => {
+    const applySelectionToAllocations = (
+        source: Allocation[],
+        {
+            day,
+            startMinutes,
+            endMinutes,
+            theme,
+            subTheme,
+        }: {
+            day: number;
+            startMinutes: number;
+            endMinutes: number;
+            theme: string;
+            subTheme: string | null;
+        },
+    ) => {
+        if (endMinutes <= startMinutes) return source.slice();
         const startStr = toTimeString(startMinutes);
         const endStr = toTimeString(endMinutes);
 
-        const dayAllocations = allocations.filter((alloc) => alloc.dayOfWeek === day);
-        const otherAllocations = allocations.filter((alloc) => alloc.dayOfWeek !== day);
+        const dayAllocations = source.filter((alloc) => alloc.dayOfWeek === day);
+        const otherAllocations = source.filter((alloc) => alloc.dayOfWeek !== day);
         const updatedDayAllocations: Allocation[] = [];
 
         dayAllocations.forEach((alloc) => {
@@ -266,13 +368,17 @@ const WeeklyThemePlanner: React.FC = () => {
         }
 
         const merged = mergeAllocations(nextAllocations);
-        setAllocations(merged);
+        return merged;
+    };
+
+    const commitAllocations = async (nextAllocations: Allocation[]) => {
+        setAllocations(nextAllocations);
         setShowModal(false);
-        setDragStart(null);
-        setDragEnd(null);
+        setPendingSelection(null);
+        clearDragState();
         setSaving(true);
         try {
-            await saveAllocationsFn({ allocations: merged });
+            await saveAllocationsFn({ allocations: nextAllocations });
         } catch (e) {
             console.error('save allocations failed', e);
         } finally {
@@ -280,29 +386,106 @@ const WeeklyThemePlanner: React.FC = () => {
         }
     };
 
+    const finalizeSelection = async () => {
+        if (!dragMode) return;
+        if (dragMode === 'create') {
+            if (dragSelection) {
+                setPendingSelection({
+                    day: dragSelection.day,
+                    startMinutes: dragSelection.startMinutes,
+                    endMinutes: dragSelection.endMinutes,
+                });
+                setShowModal(true);
+            }
+            setDragMode(null);
+            setDragAnchor(null);
+            setDragAlloc(null);
+            setDragOffsetMinutes(0);
+            return;
+        }
+
+        if (!dragSelection || !dragAlloc) {
+            clearDragState();
+            return;
+        }
+
+        const originalStart = toMinutes(dragAlloc.startTime);
+        const originalEnd = toMinutes(dragAlloc.endTime);
+        const selectionChanged = (
+            dragSelection.day !== dragAlloc.dayOfWeek ||
+            dragSelection.startMinutes !== originalStart ||
+            dragSelection.endMinutes !== originalEnd
+        );
+        if (!selectionChanged) {
+            clearDragState();
+            return;
+        }
+
+        let next = applySelectionToAllocations(allocations, {
+            day: dragAlloc.dayOfWeek,
+            startMinutes: originalStart,
+            endMinutes: originalEnd,
+            theme: 'Clear',
+            subTheme: null,
+        });
+        next = applySelectionToAllocations(next, {
+            day: dragSelection.day,
+            startMinutes: dragSelection.startMinutes,
+            endMinutes: dragSelection.endMinutes,
+            theme: dragAlloc.theme,
+            subTheme: dragAlloc.subTheme || null,
+        });
+        await commitAllocations(next);
+    };
+
     const handleSaveTheme = async () => {
-        if (!selectedCell) return;
-        const { day, minutes } = selectedCell;
-        const baseStart = dragStart?.minutes ?? minutes;
-        const baseEnd = dragEnd?.minutes ?? minutes;
-        const startMinutes = Math.min(baseStart, baseEnd);
-        const endMinutes = Math.max(baseStart, baseEnd) + SLOT_MINUTES;
-        await handleApplySelection({
-            day,
-            startMinutes,
-            endMinutes,
+        if (!pendingSelection) return;
+        const next = applySelectionToAllocations(allocations, {
+            day: pendingSelection.day,
+            startMinutes: pendingSelection.startMinutes,
+            endMinutes: pendingSelection.endMinutes,
             theme: selectedTheme,
             subTheme: selectedSubTheme || null,
         });
+        await commitAllocations(next);
     };
 
-    const getThemeForCell = (dayIndex: number, minutes: number) => {
-        const jsDay = (dayIndex + 1) % 7;
-        return allocations.find(a =>
-            a.dayOfWeek === jsDay &&
-            toMinutes(a.startTime) <= minutes &&
-            toMinutes(a.endTime) > minutes
-        );
+    const handleModalClose = () => {
+        setShowModal(false);
+        setPendingSelection(null);
+        clearDragState();
+    };
+
+    const getDisplayAllocation = (dayIndex: number, minutes: number) => {
+        const jsDay = getJsDay(dayIndex);
+        if (
+            dragSelection &&
+            dragSelection.day === jsDay &&
+            minutes >= dragSelection.startMinutes &&
+            minutes < dragSelection.endMinutes
+        ) {
+            return {
+                allocation: {
+                    dayOfWeek: dragSelection.day,
+                    startTime: toTimeString(dragSelection.startMinutes),
+                    endTime: toTimeString(dragSelection.endMinutes),
+                    theme: dragSelection.theme,
+                    subTheme: dragSelection.subTheme || null,
+                },
+                preview: true,
+            };
+        }
+
+        if (dragAlloc && dragMode && dragMode !== 'create' && jsDay === dragAlloc.dayOfWeek) {
+            const dragStart = toMinutes(dragAlloc.startTime);
+            const dragEnd = toMinutes(dragAlloc.endTime);
+            if (minutes >= dragStart && minutes < dragEnd) {
+                return { allocation: null, preview: false };
+            }
+        }
+
+        const allocation = findAllocationForCell(jsDay, minutes);
+        return { allocation: allocation || null, preview: false };
     };
 
     const getThemeColor = (themeName: string) => {
@@ -318,7 +501,7 @@ const WeeklyThemePlanner: React.FC = () => {
                 <div>
                     <h2>Weekly Plan</h2>
                     <p className="text-muted">Define your ideal week by assigning themes to time blocks. The AI will prioritize these themes when scheduling.</p>
-                    <small className="text-muted d-block">Tip: click and drag across time slots to create or resize a block. Use Clear to remove only the selected range.</small>
+                    <small className="text-muted d-block">Tip: click and drag across time slots to create. Use the top/bottom handles to resize and drag the label to move. Use Clear to remove only the selected range.</small>
                 </div>
                 <div className="d-flex flex-wrap gap-2">
                     <Button onClick={saveAllocations} disabled={saving || applying || nightlyRunning}>
@@ -351,27 +534,65 @@ const WeeklyThemePlanner: React.FC = () => {
                     <div key={slot} className="time-row">
                         <div className="time-label">{toTimeString(slot)}</div>
                         {DAYS.map((_, dIndex) => {
-                            const alloc = getThemeForCell(dIndex, slot);
+                            const { allocation: alloc, preview } = getDisplayAllocation(dIndex, slot);
+                            const isStart = Boolean(alloc && toMinutes(alloc.startTime) === slot);
+                            const isEnd = Boolean(alloc && toMinutes(alloc.endTime) === slot + SLOT_MINUTES);
+                            const cellClasses = [
+                                'grid-cell',
+                                alloc ? 'has-alloc' : '',
+                                preview ? 'drag-preview' : '',
+                            ].filter(Boolean).join(' ');
                             return (
                                 <div
                                     key={dIndex}
-                                    className="grid-cell"
+                                    className={cellClasses}
                                     style={{ backgroundColor: alloc ? getThemeColor(alloc.theme) : 'white' }}
                                     onMouseDown={(e) => {
                                         e.preventDefault();
                                         beginSelection(dIndex, slot);
                                     }}
                                     onMouseEnter={(e) => {
-                                        if (dragStart && e.buttons === 1) {
-                                            const jsDay = (dIndex + 1) % 7;
-                                            if (jsDay === dragStart.day) {
-                                                setDragEnd({ day: jsDay, minutes: slot });
-                                            }
-                                        }
+                                        if (e.buttons === 1) updateSelection(dIndex, slot);
                                     }}
-                                    onMouseUp={() => finalizeSelection(dIndex, slot)}
+                                    onMouseUp={() => { void finalizeSelection(); }}
                                 >
-                                    {alloc && <span className="theme-label">{alloc.subTheme || alloc.theme}</span>}
+                                    {alloc && isStart && (
+                                        <div
+                                            className={`block-label${preview ? ' block-label-preview' : ''}`}
+                                            onMouseDown={(e) => {
+                                                if (preview) return;
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                beginMove(alloc, slot);
+                                            }}
+                                            title={preview ? undefined : 'Drag to move block'}
+                                        >
+                                            <span className="block-grip" aria-hidden="true" />
+                                            <span className="block-text">{alloc.subTheme || alloc.theme}</span>
+                                        </div>
+                                    )}
+                                    {alloc && isStart && !preview && (
+                                        <div
+                                            className="resize-handle resize-handle-top"
+                                            onMouseDown={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                beginResize(alloc, 'start');
+                                            }}
+                                            title="Drag to resize start"
+                                        />
+                                    )}
+                                    {alloc && isEnd && !preview && (
+                                        <div
+                                            className="resize-handle resize-handle-bottom"
+                                            onMouseDown={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                beginResize(alloc, 'end');
+                                            }}
+                                            title="Drag to resize end"
+                                        />
+                                    )}
                                 </div>
                             );
                         })}
@@ -379,7 +600,7 @@ const WeeklyThemePlanner: React.FC = () => {
                 ))}
             </div>
 
-            <Modal show={showModal} onHide={() => setShowModal(false)} centered>
+            <Modal show={showModal} onHide={handleModalClose} centered>
                 <Modal.Header closeButton><Modal.Title>Set Theme</Modal.Title></Modal.Header>
                 <Modal.Body>
                     <Form.Group>
@@ -414,11 +635,7 @@ const WeeklyThemePlanner: React.FC = () => {
             <Modal.Footer>
                 <Button
                     variant="secondary"
-                    onClick={() => {
-                        setShowModal(false);
-                        setDragStart(null);
-                        setDragEnd(null);
-                    }}
+                    onClick={handleModalClose}
                 >
                     Cancel
                 </Button>

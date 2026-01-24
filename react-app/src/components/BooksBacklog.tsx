@@ -26,7 +26,6 @@ interface BookItem {
 }
 
 interface ConvertPayload {
-  goalId: string;
   sprintId: string | null;
   targetDate: string;
   rating: number;
@@ -42,7 +41,7 @@ const BooksBacklog: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'to-read' | 'reading' | 'read' | 'unconverted' | 'converted'>('all');
   const [selected, setSelected] = useState<BookItem | null>(null);
-  const [convertForm, setConvertForm] = useState<ConvertPayload>({ goalId: '', sprintId: null, targetDate: '', rating: 3 });
+  const [convertForm, setConvertForm] = useState<ConvertPayload>({ sprintId: null, targetDate: '', rating: 3 });
   const [savingConversion, setSavingConversion] = useState(false);
   const [addedSince, setAddedSince] = useState<string>('');
   const [msg, setMsg] = useState<string | null>(null);
@@ -115,7 +114,7 @@ const BooksBacklog: React.FC = () => {
 
   const openConvert = (book: BookItem) => {
     setSelected(book);
-    setConvertForm({ goalId: goals[0]?.id || '', sprintId: null, targetDate: '', rating: book.rating ?? 3 });
+    setConvertForm({ sprintId: null, targetDate: '', rating: book.rating ?? 3 });
   };
 
   const markRead = async (book: BookItem) => {
@@ -137,7 +136,10 @@ const BooksBacklog: React.FC = () => {
 
   const handleConvert = async () => {
     if (!currentUser || !selected) return;
-    if (!convertForm.goalId) { window.alert('Choose a goal.'); return; }
+    if (selected.lastConvertedStoryId) {
+      window.alert('A story has already been generated for this item.');
+      return;
+    }
     setSavingConversion(true);
     try {
       const dueDateMs = convertForm.targetDate ? new Date(convertForm.targetDate).getTime() : null;
@@ -147,7 +149,7 @@ const BooksBacklog: React.FC = () => {
         ref: storyRef,
         title: selected.title,
         description: `Read ${selected.title}${selected.subtitle ? ': ' + selected.subtitle : ''}.` + (selected.authors?.length ? `\nBy: ${selected.authors.join(', ')}` : ''),
-        goalId: convertForm.goalId,
+        goalId: '',
         sprintId: sprintId || null,
         dueDate: dueDateMs || null,
         status: 0,
@@ -179,8 +181,8 @@ const BooksBacklog: React.FC = () => {
       });
       setSelected(null);
     } catch (e) {
-      console.error('Failed to convert book', e);
-      window.alert('Could not convert this book to a story.');
+      console.error('Failed to generate story from book', e);
+      window.alert('Could not generate a story for this book.');
     } finally {
       setSavingConversion(false);
     }
@@ -229,7 +231,7 @@ const BooksBacklog: React.FC = () => {
               <td>{renderRatingStars(b)}</td>
               <td>
                 <div className="d-flex gap-2">
-                  <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)}>Convert to Story</Button>
+                  <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)} disabled={converted}>Generate Story</Button>
                   {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${b.lastConvertedStoryId}`}>View story</Button>}
                   {String(b.status || '').toLowerCase() !== 'read' && (
                     <Button size="sm" variant="outline-success" onClick={() => markRead(b)}>Mark Read</Button>
@@ -264,7 +266,7 @@ const BooksBacklog: React.FC = () => {
                   <div className="d-flex justify-content-between align-items-center">
                     <Badge bg={String(b.status || '').toLowerCase()==='read' ? 'success' : 'secondary'}>{b.status || '—'}</Badge>
                     <div className="d-flex gap-2">
-                      <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)}>Convert</Button>
+                      <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)} disabled={converted}>Generate</Button>
                       {String(b.status || '').toLowerCase() !== 'read' && (
                         <Button size="sm" variant="outline-success" onClick={() => markRead(b)}>Read</Button>
                       )}
@@ -287,7 +289,7 @@ const BooksBacklog: React.FC = () => {
       <Card.Header className="bg-white d-flex flex-wrap gap-3 align-items-center justify-content-between">
         <div>
           <h5 className="mb-1">Books Backlog</h5>
-          <div className="text-muted small">Imported from Hardcover — convert into stories.</div>
+          <div className="text-muted small">Imported from Hardcover — generate stories and link goals later.</div>
         </div>
         <div className="d-flex flex-wrap gap-2 align-items-center">
           <Form.Control size="sm" placeholder="Search books" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 200 }} />
@@ -327,16 +329,9 @@ const BooksBacklog: React.FC = () => {
       </Card.Body>
 
       <Modal show={!!selected} onHide={() => setSelected(null)} centered>
-        <Modal.Header closeButton><Modal.Title>Convert to Story</Modal.Title></Modal.Header>
+        <Modal.Header closeButton><Modal.Title>Generate Story</Modal.Title></Modal.Header>
         <Modal.Body>
           <Form>
-            <Form.Group className="mb-3">
-              <Form.Label>Goal</Form.Label>
-              <Form.Select value={convertForm.goalId} onChange={(e) => setConvertForm(prev => ({ ...prev, goalId: e.target.value }))}>
-                <option value="">Select goal…</option>
-                {goals.map(g => (<option key={g.id} value={g.id}>{g.title}</option>))}
-              </Form.Select>
-            </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Sprint (optional)</Form.Label>
               <Form.Select value={convertForm.sprintId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, sprintId: e.target.value || null }))}>
@@ -358,7 +353,7 @@ const BooksBacklog: React.FC = () => {
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setSelected(null)}>Cancel</Button>
-          <Button variant="primary" onClick={handleConvert} disabled={savingConversion}>{savingConversion ? 'Converting…' : 'Convert'}</Button>
+          <Button variant="primary" onClick={handleConvert} disabled={savingConversion}>{savingConversion ? 'Generating…' : 'Generate'}</Button>
         </Modal.Footer>
       </Modal>
 
@@ -371,7 +366,7 @@ const BooksBacklog: React.FC = () => {
               <Form.Control value={importSlug} onChange={(e) => setImportSlug(e.target.value)} placeholder="e.g. https://hardcover.app/@user/lists/2026" />
             </Form.Group>
             <Form.Group className="mb-3">
-              <Form.Label>Goal to link</Form.Label>
+              <Form.Label>Goal to link (optional)</Form.Label>
               <Form.Select value={importGoalId} onChange={(e) => setImportGoalId(e.target.value)}>
                 <option value="">Select goal…</option>
                 {goals.map(g => (<option key={g.id} value={g.id}>{g.title}</option>))}
@@ -389,7 +384,6 @@ const BooksBacklog: React.FC = () => {
           <Button variant="secondary" onClick={() => setShowImportModal(false)}>Cancel</Button>
           <Button variant="primary" onClick={async () => {
             if (!currentUser) return;
-            if (!importGoalId) { window.alert('Select a goal'); return; }
             const slug = (() => {
               const raw = importSlug.trim();
               const m = raw.match(/lists\/([^/?]+)/i);
@@ -401,7 +395,7 @@ const BooksBacklog: React.FC = () => {
             setImportMsg(null);
             try {
               const fn = httpsCallable(functions, 'importHardcoverListToStories');
-              const res:any = await fn({ listSlug: slug, goalId: importGoalId, priority: importPriority, persona: currentPersona });
+              const res:any = await fn({ listSlug: slug, goalId: importGoalId || null, priority: importPriority, persona: currentPersona });
               const data = res?.data || res;
               setImportMsg(`Imported ${data?.created || 0} stories (skipped ${data?.skipped || 0}) from list ${data?.listSlug || slug}.`);
               setShowImportModal(false);

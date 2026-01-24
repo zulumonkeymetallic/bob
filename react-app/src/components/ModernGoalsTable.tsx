@@ -70,6 +70,8 @@ interface ModernGoalsTableProps {
   onGoalPriorityChange: (goalId: string, newPriority: number) => Promise<void>;
   onEditModal?: (goal: Goal) => void;
   onGoalReorder?: (activeId: string, overId: string) => Promise<void>;
+  highlightStoryId?: string;
+  highlightGoalId?: string;
 }
 
 const defaultColumns: Column[] = [
@@ -185,6 +187,7 @@ interface SortableRowProps {
   storyCounts: Record<string, number>;
   sprintStoryCounts: Record<string, number>;
   storyPointsData: Record<string, { total: number; completed: number; progress: number }>;
+  highlightStoryId?: string;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({
@@ -206,7 +209,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   availableGoals,
   storyCounts,
   sprintStoryCounts,
-  storyPointsData
+  storyPointsData,
+  highlightStoryId
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
@@ -821,6 +825,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 onStoryDelete={onStoryDelete}
                 onStoryPriorityChange={onStoryPriorityChange}
                 onStoryAdd={onStoryAdd(goal.id)}
+                highlightStoryId={highlightStoryId}
               />
             </div>
           </td>
@@ -837,6 +842,8 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   onGoalPriorityChange,
   onEditModal,
   onGoalReorder,
+  highlightStoryId,
+  highlightGoalId,
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
@@ -864,6 +871,11 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     key: 'startDate',
     direction: 'asc'
   });
+
+  useEffect(() => {
+    if (!highlightGoalId) return;
+    setExpandedGoalId(highlightGoalId);
+  }, [highlightGoalId]);
 
   // Load user-defined global themes
   useEffect(() => {
@@ -1390,6 +1402,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       onStoryDelete={handleStoryDelete}
                       onStoryPriorityChange={handleStoryPriorityChange}
                       onStoryAdd={handleStoryAdd}
+                      highlightStoryId={highlightStoryId}
                     />
                   ))}
                 </SortableContext>

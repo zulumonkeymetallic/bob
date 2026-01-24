@@ -1,21 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Spinner } from 'react-bootstrap';
-import { useLocation, useParams } from 'react-router-dom';
-import { db } from '../../firebase';
+import { useParams } from 'react-router-dom';
 import TaskListView from '../TaskListView';
-import EntityDetailModal from '../EntityDetailModal';
+import EditTaskModal from '../EditTaskModal';
 import { useNavigate } from 'react-router-dom';
 import { resolveEntityByRef } from '../../utils/entityLookup';
 
 const DeepLinkTask: React.FC = () => {
   const { id: refOrId } = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
-  const initialTab = useMemo(() => {
-    const params = new URLSearchParams(location.search);
-    const tab = (params.get('tab') || '').toLowerCase();
-    return tab === 'activity' ? 'activity' : 'details';
-  }, [location.search]);
   const [item, setItem] = useState<any | null>(null);
   const [open, setOpen] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -55,12 +48,10 @@ const DeepLinkTask: React.FC = () => {
   return (
     <>
       <TaskListView />
-      <EntityDetailModal
+      <EditTaskModal
         show={open && !!item}
+        task={item}
         onHide={handleClose}
-        type="task"
-        item={item}
-        initialTab={initialTab as any}
       />
       <Modal show={open && loading} backdrop="static" keyboard={false} centered>
         <Modal.Body className="text-center">

@@ -21,6 +21,7 @@ export type ActivityType =
   | 'sprint_changed'
   | 'priority_changed'
   | 'task_to_story_conversion'
+  | 'story_status_from_reminder'
   | 'automation_event'
   | 'automation_alert'
   | 'automation_activity';
@@ -289,7 +290,8 @@ export class ActivityStreamService {
     entityId: string,
     entityType: 'task' | 'story' | 'goal',
     callback: (activities: ActivityEntry[]) => void,
-    userId?: string
+    userId?: string,
+    limit: number = 50
   ): () => void {
     if (!userId) {
       console.warn('ActivityStreamService.subscribeToActivityStreamAny called without userId, skipping listener', { entityId });
@@ -328,8 +330,10 @@ export class ActivityStreamService {
       fields: string[];
       orderField: string;
       defaultType: ActivityType;
+      idPrefix?: string;
     }[] = [
-      { name: 'activity_stream', fields, orderField: 'timestamp', defaultType: 'updated' },
+      { name: 'activity_stream', fields, orderField: 'timestamp', defaultType: 'updated', idPrefix: 'activity_stream' },
+      { name: 'activity_stream', fields, orderField: 'createdAt', defaultType: 'updated', idPrefix: 'activity_stream' },
       { name: 'automation_events', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_event' },
       { name: 'automation_alerts', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_alert' },
       { name: 'activity', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_activity' }
@@ -342,14 +346,15 @@ export class ActivityStreamService {
           where('ownerUid', '==', userId),
           where(field, '==', entityId),
           orderBy(source.orderField, 'desc'),
-          fslimit(50)
+          fslimit(limit)
         );
         const unsub = onSnapshot(
           q,
           (snapshot) => {
             snapshot.docs.forEach((doc) => {
               const data = doc.data() as any;
-              const id = `${source.name}:${doc.id}`;
+              const idPrefix = source.idPrefix ?? source.name;
+              const id = `${idPrefix}:${doc.id}`;
               const activityType =
                 (data.activityType as ActivityType) ||
                 (data.type as ActivityType) ||
@@ -358,12 +363,18 @@ export class ActivityStreamService {
                 normalizeTimestamp(data[source.orderField]) ||
                 normalizeTimestamp(data.timestamp) ||
                 normalizeTimestamp(data.createdAt);
-              const description =
+              let description =
                 data.description ||
                 data.message ||
                 data.reason ||
                 (data.action ? `Integration: ${data.action}${data.title ? ` · ${data.title}` : ''}` : '') ||
                 `${activityType} via ${source.name}`;
+              if (activityType === 'story_status_from_reminder') {
+                const meta = data.metadata || {};
+                const prev = meta.previousStatus ?? meta.previous_status ?? '';
+                const next = meta.newStatus ?? meta.new_status ?? '';
+                description = `Story status updated from reminder${prev !== '' || next !== '' ? ` (${prev} → ${next})` : ''}`;
+              }
               state[id] = {
                 id,
                 entityId,
@@ -436,6 +447,7 @@ export class ActivityStreamService {
       case 'status_changed': return '🔄';
       case 'sprint_changed': return '🏃';
       case 'priority_changed': return '⚡';
+      case 'story_status_from_reminder': return '✅';
       default: return '📋';
     }
   }

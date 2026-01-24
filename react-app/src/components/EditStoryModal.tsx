@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
-import { collection, query, getDocs, where, orderBy, updateDoc, doc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Goal, Sprint } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
-import { getPriorityName, getStatusName, getThemeName } from '../utils/statusHelpers';
+import { getPriorityName, getStatusName, getThemeName, isStatus } from '../utils/statusHelpers';
 import TagInput from './common/TagInput';
 
 interface EditStoryModalProps {
@@ -44,6 +44,19 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [goalInput, setGoalInput] = useState('');
   const { currentUser } = useAuth();
+  const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
+  const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
+    const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
+    const statusLabel = statusOverride
+      ? ` (${statusOverride})`
+      : (isStatus(sprint.status, 'active') ? ' (Active)' : '');
+    return `${name}${statusLabel}`;
+  };
+  const visibleSprints = sprints.filter((sprint) => !isHiddenSprint(sprint));
+  const selectedSprint = editedStory.sprintId ? sprints.find((sprint) => sprint.id === editedStory.sprintId) : null;
+  const selectedSprintStatus = selectedSprint
+    ? (isStatus(selectedSprint.status, 'closed') ? 'Completed' : (isStatus(selectedSprint.status, 'cancelled') ? 'Cancelled' : ''))
+    : '';
 
   // Initialize form when story changes
   useEffect(() => {
@@ -172,9 +185,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   onChange={(e) => handleInputChange('sprintId', e.target.value)}
                 >
                   <option value="">Backlog (No Sprint)</option>
-                  {sprints.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} {s.status === 1 ? '(Active)' : ''}
+                  {selectedSprint && isHiddenSprint(selectedSprint) && (
+                    <option key={selectedSprint.id} value={selectedSprint.id} disabled>
+                      {formatSprintLabel(selectedSprint, selectedSprintStatus || 'Inactive')}
+                    </option>
+                  )}
+                  {visibleSprints.map((sprint) => (
+                    <option key={sprint.id} value={sprint.id}>
+                      {formatSprintLabel(sprint)}
                     </option>
                   ))}
                 </Form.Select>

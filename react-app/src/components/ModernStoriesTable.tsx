@@ -67,6 +67,7 @@ interface ModernStoriesTableProps {
   onStoryAdd: (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
   onStorySelect?: (story: Story) => void; // New prop for story selection
   onEditStory?: (story: Story) => void; // New prop for story editing
+  highlightStoryId?: string;
   goalId?: string; // Made optional for full stories table
   enableInlineTasks?: boolean; // Only show green caret + inline tasks when true
   onStoryReorder?: (activeId: string, overId: string) => Promise<void>;
@@ -345,6 +346,7 @@ interface SortableRowProps {
   onEditStory?: (story: Story) => void;
   onToggleExpand?: (storyId: string) => void;
   isExpanded?: boolean;
+  isHighlighted?: boolean;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -358,7 +360,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStorySelect,
   onEditStory,
   onToggleExpand,
-  isExpanded
+  isExpanded,
+  isHighlighted
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { showSidebar } = useSidebar();
@@ -383,6 +386,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
     // View tracking should only happen on explicit user interactions
   }, [story.id]); // Only re-run when story ID changes
 
+  const baseRowColor = isHighlighted ? '#eff6ff' : themeVars.card as string;
+  const hoverRowColor = isHighlighted ? '#dbeafe' : rgbaCard(0.08);
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -707,8 +712,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
       ref={setNodeRef}
       style={{
         ...style,
-        backgroundColor: themeVars.card as string,
+        backgroundColor: baseRowColor,
         borderBottom: `1px solid ${themeVars.border}`,
+        boxShadow: isHighlighted ? 'inset 0 0 0 2px #2563eb' : undefined,
         transition: 'background-color 0.15s ease',
         cursor: onStorySelect ? 'pointer' : 'default',
       }}
@@ -727,12 +733,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}
       onMouseEnter={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+          e.currentTarget.style.backgroundColor = hoverRowColor;
         }
       }}
       onMouseLeave={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = themeVars.card as string;
+          e.currentTarget.style.backgroundColor = baseRowColor;
         }
       }}
     >
@@ -915,6 +921,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onStoryAdd,
   onStorySelect,
   onEditStory,
+  highlightStoryId,
   goalId,
   enableInlineTasks = false,
   onStoryReorder,
@@ -1607,6 +1614,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         onEditStory={onEditStory}
                         onToggleExpand={handleToggleExpand}
                         isExpanded={expandedStoryId === story.id}
+                        isHighlighted={highlightStoryId === story.id}
                       />
                       {enableInlineTasks && expandedStoryId === story.id && (
                         <tr>

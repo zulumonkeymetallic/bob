@@ -35,6 +35,7 @@ export interface Goal {
 export interface Story {
   id: string;
   ref: string;
+  referenceNumber?: string;
   persona: 'personal'; // Stories are personal-only per requirements
   title: string;
   description?: string;

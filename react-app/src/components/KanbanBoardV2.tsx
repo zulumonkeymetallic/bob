@@ -19,6 +19,7 @@ interface KanbanBoardV2Props {
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
     showDescriptions?: boolean;
+    showLatestNotes?: boolean;
     dueFilter?: 'all' | 'today' | 'overdue';
     sortByAi?: boolean;
 }
@@ -30,6 +31,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     onItemSelect,
     onEdit,
     showDescriptions = false,
+    showLatestNotes = false,
     dueFilter = 'all',
     sortByAi = true
 }) => {
@@ -42,6 +44,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const [tasks, setTasks] = useState<Task[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
+    const [latestNotesById, setLatestNotesById] = useState<Record<string, string>>({});
 
     // Data fetching
     useEffect(() => {
@@ -268,6 +271,55 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         return result;
     }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter]);
 
+    const visibleEntityIds = useMemo(() => {
+        const ids = new Set<string>();
+        filteredStories.forEach((story) => ids.add(story.id));
+        filteredTasks.forEach((task) => ids.add(task.id));
+        return ids;
+    }, [filteredStories, filteredTasks]);
+
+    useEffect(() => {
+        if (!showLatestNotes) {
+            setLatestNotesById({});
+            return;
+        }
+        const uid = currentUser?.uid;
+        if (!uid || visibleEntityIds.size === 0) {
+            setLatestNotesById({});
+            return;
+        }
+
+        const queryLimit = Math.min(500, Math.max(50, visibleEntityIds.size * 3));
+        const notesQuery = query(
+            collection(db, 'activity_stream'),
+            where('ownerUid', '==', uid),
+            where('activityType', '==', 'note_added'),
+            orderBy('timestamp', 'desc'),
+            limit(queryLimit)
+        );
+
+        return onSnapshot(
+            notesQuery,
+            (snapshot) => {
+                const next: Record<string, string> = {};
+                snapshot.docs.forEach((docSnap) => {
+                    const data = docSnap.data() as any;
+                    const entityId = data.entityId || data.storyId || data.taskId;
+                    if (!entityId || !visibleEntityIds.has(entityId)) return;
+                    if (data.userId && data.userId !== uid) return;
+                    const noteContent = typeof data.noteContent === 'string' ? data.noteContent.trim() : '';
+                    if (!noteContent) return;
+                    if (!next[entityId]) next[entityId] = noteContent;
+                });
+                setLatestNotesById(next);
+            },
+            (error) => {
+                console.warn('[KanbanBoardV2] latest notes query error', error?.message || error);
+                setLatestNotesById({});
+            }
+        );
+    }, [showLatestNotes, currentUser?.uid, visibleEntityIds]);
+
     // Helper to determine column for an item
     const getColumnForStatus = (status: string | number): 'backlog' | 'in-progress' | 'done' => {
         if (typeof status === 'number') {
@@ -401,6 +453,8 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 taskCount={type === 'story' ? tasks.filter(t => t.parentId === item.id).length : 0}
                                 onItemSelect={onItemSelect}
                                 showDescription={showDescriptions}
+                                showLatestNote={showLatestNotes}
+                                latestNote={latestNotesById[item.id]}
                                 onEdit={() => onEdit?.(item, type)}
                             />
                         );

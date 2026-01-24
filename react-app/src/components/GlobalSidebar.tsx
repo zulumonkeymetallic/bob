@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
-import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2 } from 'lucide-react';
+import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2, ExternalLink } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
@@ -12,10 +12,14 @@ import { ActivityStreamService, ActivityEntry } from '../services/ActivityStream
 import { validateRef } from '../utils/referenceGenerator';
 import GoalChatModal from './GoalChatModal';
 import ResearchDocModal from './ResearchDocModal';
+import EditStoryModal from './EditStoryModal';
+import EditGoalModal from './EditGoalModal';
+import EditTaskModal from './EditTaskModal';
 import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 import { ChoiceHelper } from '../config/choices';
 import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
 import { useNavigate } from 'react-router-dom';
+import { isStatus } from '../utils/statusHelpers';
 
 interface EntityLookupInputProps {
   type: 'goal' | 'story';
@@ -172,6 +176,20 @@ const EntityLookupInput: React.FC<EntityLookupInputProps> = ({
   );
 };
 
+const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
+const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
+  const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
+  const statusLabel = statusOverride
+    ? ` (${statusOverride})`
+    : (isStatus(sprint.status, 'active') ? ' (Active)' : '');
+  return `${name}${statusLabel}`;
+};
+const getHiddenSprintStatus = (sprint: Sprint) => {
+  if (isStatus(sprint.status, 'closed')) return 'Completed';
+  if (isStatus(sprint.status, 'cancelled')) return 'Cancelled';
+  return '';
+};
+
 interface GlobalSidebarProps {
   goals: Goal[];
   stories: Story[];
@@ -192,9 +210,15 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [isEditing, setIsEditing] = useState(false);
+  const [showFullEditor, setShowFullEditor] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [activityLimit, setActivityLimit] = useState(5);
+  const [activityHasMore, setActivityHasMore] = useState(true);
+  const [activityLoadingMore, setActivityLoadingMore] = useState(false);
+  const activityScrollRef = useRef<HTMLDivElement | null>(null);
+  const lastActivityCountRef = useRef(0);
   const [showAddNote, setShowAddNote] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [showChat, setShowChat] = useState(false);
@@ -298,6 +322,20 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       setActivities([]);
       return;
     }
+    setActivityLimit(5);
+    setActivityHasMore(true);
+    setActivityLoadingMore(false);
+    lastActivityCountRef.current = 0;
+    if (activityScrollRef.current) {
+      activityScrollRef.current.scrollTop = 0;
+    }
+  }, [selectedItem?.id, selectedType]);
+
+  React.useEffect(() => {
+    if (!selectedItem) {
+      setActivities([]);
+      return;
+    }
 
     setEditForm({ ...selectedItem });
     setIsEditing(false);
@@ -311,12 +349,27 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     const unsubscribe = ActivityStreamService.subscribeToActivityStreamAny(
       selectedItem.id,
       entityType,
-      setActivities,
-      currentUser.uid
+      (items) => {
+        setActivities(items);
+        const previousCount = lastActivityCountRef.current;
+        lastActivityCountRef.current = items.length;
+        if (activityLoadingMore && items.length <= previousCount) {
+          setActivityHasMore(false);
+        } else {
+          setActivityHasMore(items.length >= activityLimit);
+        }
+        setActivityLoadingMore(false);
+      },
+      currentUser.uid,
+      activityLimit
     );
 
     return unsubscribe;
-  }, [selectedItem, selectedType, currentUser?.uid]);
+  }, [selectedItem, selectedType, currentUser?.uid, activityLimit]);
+
+  React.useEffect(() => {
+    setShowFullEditor(false);
+  }, [selectedItem?.id, selectedType]);
 
   // Determine responsive sidebar width
   const getSidebarWidth = React.useCallback(() => {
@@ -324,6 +377,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     if (mobile) return '100vw';
     return isCollapsed ? '60px' : '400px';
   }, [isCollapsed]);
+
+  const handleActivityScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    const nearBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - 40;
+    if (!nearBottom || activityLoadingMore || !activityHasMore) return;
+    setActivityLoadingMore(true);
+    setActivityLimit((prev) => prev + 20);
+  };
 
 
 
@@ -333,6 +394,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     if (selectedType === 'story') return ChoiceHelper.getOptions('story', 'status');
     return ChoiceHelper.getOptions('task', 'status');
   }, [selectedType]);
+  const visibleSprints = React.useMemo(() => sprints.filter((sprint) => !isHiddenSprint(sprint)), [sprints]);
+  const selectedSprintId = (quickEdit.sprintId || (selectedItem as any)?.sprintId || '') as string;
+  const selectedSprint = selectedSprintId ? sprints.find((sprint) => sprint.id === selectedSprintId) : null;
 
   // Seed quick edit when selection changes
   React.useEffect(() => {
@@ -483,12 +547,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     }
   };
 
-  const handleEdit = () => {
+  const handleInlineEdit = () => {
+    setIsEditing(true);
+  };
+
+  const handleOpenFullEditor = () => {
     if (onEdit) {
       onEdit(selectedItem, selectedType);
-    } else {
-      setIsEditing(true);
+      return;
     }
+    setShowFullEditor(true);
   };
 
   const handleDelete = () => {
@@ -583,6 +651,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const themeId = goal?.theme != null ? migrateThemeValue(goal.theme as any) : null;
   const themeHex = themeId != null ? getThemeById(themeId).color : '#6b7280';
   const themeColor = themeHex; // use hex for colors/gradients
+  const actionIconColor = themeVars.text as string;
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return 'Not set';
@@ -792,7 +861,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <Button
                     variant="link"
                     size="sm"
-                    style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                    style={{ color: actionIconColor, padding: '4px' }}
                     onClick={() => setShowAddNote(true)}
                     title="Add Note"
                   >
@@ -802,7 +871,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     <Button
                       variant="link"
                       size="sm"
-                      style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                      style={{ color: actionIconColor, padding: '4px' }}
                       onClick={() => setShowResearch(true)}
                       title="Open Research"
                     >
@@ -813,7 +882,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     <Button
                       variant="link"
                       size="sm"
-                      style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                      style={{ color: actionIconColor, padding: '4px' }}
                       onClick={async () => {
                         if (!selectedItem?.id) return;
                         setOrchestrating(true);
@@ -836,7 +905,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     <Button
                       variant="link"
                       size="sm"
-                      style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                      style={{ color: actionIconColor, padding: '4px' }}
                       onClick={() => setShowChat(true)}
                       title="AI Goal Chat"
                     >
@@ -846,15 +915,25 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <Button
                     variant="link"
                     size="sm"
-                    style={{ color: themeVars.onAccent as string, padding: '4px' }}
-                    onClick={handleEdit}
+                    style={{ color: actionIconColor, padding: '4px' }}
+                    onClick={handleInlineEdit}
+                    title="Quick edit inline"
                   >
                     <Edit3 size={16} />
                   </Button>
                   <Button
                     variant="link"
                     size="sm"
-                    style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                    style={{ color: actionIconColor, padding: '4px' }}
+                    onClick={handleOpenFullEditor}
+                    title="Open full editor"
+                  >
+                    <ExternalLink size={16} />
+                  </Button>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    style={{ color: actionIconColor, padding: '4px' }}
                     onClick={handleDelete}
                   >
                     <Trash2 size={16} />
@@ -862,7 +941,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <Button
                     variant="link"
                     size="sm"
-                    style={{ color: themeVars.onAccent as string, padding: '4px' }}
+                    style={{ color: actionIconColor, padding: '4px' }}
                     onClick={hideSidebar}
                   >
                     <X size={16} />
@@ -1093,9 +1172,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                           style={{ minHeight: '31px' }}
                         >
                           <option value="">None</option>
-                          {sprints.map(s => (
-                            <option key={s.id} value={s.id}>
-                              {s.name || s.ref || `Sprint ${s.id.slice(-4)}`}
+                          {selectedSprint && isHiddenSprint(selectedSprint) && (
+                            <option key={selectedSprint.id} value={selectedSprint.id} disabled>
+                              {formatSprintLabel(selectedSprint, getHiddenSprintStatus(selectedSprint) || 'Inactive')}
+                            </option>
+                          )}
+                          {visibleSprints.map((sprint) => (
+                            <option key={sprint.id} value={sprint.id}>
+                              {formatSprintLabel(sprint)}
                             </option>
                           ))}
                         </Form.Select>
@@ -1193,13 +1277,17 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   </Button>
                 </div>
 
-                <div style={{
-                  maxHeight: '300px',
-                  overflow: 'auto',
-                  backgroundColor: themeVars.card,
-                  borderRadius: '6px',
-                  padding: '8px'
-                }}>
+                <div
+                  ref={activityScrollRef}
+                  onScroll={handleActivityScroll}
+                  style={{
+                    maxHeight: '300px',
+                    overflow: 'auto',
+                    backgroundColor: themeVars.card,
+                    borderRadius: '6px',
+                    padding: '8px'
+                  }}
+                >
                   {activities.length === 0 ? (
                     <div style={{
                       textAlign: 'center',
@@ -1253,6 +1341,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                         </ListGroup.Item>
                       ))}
                     </ListGroup>
+                  )}
+                  {activities.length > 0 && activityLoadingMore && (
+                    <div style={{ fontSize: '12px', color: themeVars.muted, paddingTop: '6px' }}>
+                      Loading more…
+                    </div>
+                  )}
+                  {activities.length > 0 && !activityHasMore && (
+                    <div style={{ fontSize: '12px', color: themeVars.muted, paddingTop: '6px' }}>
+                      All activity loaded
+                    </div>
                   )}
                 </div>
               </div>
@@ -1325,6 +1423,34 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {/* Full Edit Modals */}
+      {showFullEditor && selectedType === 'story' && (
+        <EditStoryModal
+          show={showFullEditor}
+          onHide={() => setShowFullEditor(false)}
+          story={selectedItem as Story}
+          goals={goals}
+          onStoryUpdated={() => setShowFullEditor(false)}
+        />
+      )}
+      {showFullEditor && selectedType === 'goal' && (
+        <EditGoalModal
+          show={showFullEditor}
+          onClose={() => setShowFullEditor(false)}
+          goal={selectedItem as Goal}
+          currentUserId={currentUser?.uid || ''}
+          allGoals={goals}
+        />
+      )}
+      {showFullEditor && selectedType === 'task' && (
+        <EditTaskModal
+          show={showFullEditor}
+          task={selectedItem as Task}
+          onHide={() => setShowFullEditor(false)}
+          onUpdated={() => setShowFullEditor(false)}
+        />
+      )}
 
       {/* Goal Chat Modal */}
       {selectedType === 'goal' && (

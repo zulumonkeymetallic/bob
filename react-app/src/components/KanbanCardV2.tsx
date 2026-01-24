@@ -23,6 +23,8 @@ interface KanbanCardV2Props {
     onDelete?: (item: Story | Task) => void;
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     showDescription?: boolean;
+    showLatestNote?: boolean;
+    latestNote?: string;
 }
 
 const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
@@ -36,6 +38,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     onDelete,
     onItemSelect,
     showDescription = true,
+    showLatestNote = false,
+    latestNote,
 }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
@@ -89,6 +93,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
 
     const priorityClass = priorityPillClass(item.priority);
     const priorityLabel = formatPriorityLabel(item.priority);
+    const notePreview = latestNote ? latestNote.replace(/\s+/g, ' ').trim() : '';
+    const trimmedNote = notePreview.length > 140 ? `${notePreview.slice(0, 140)}...` : notePreview;
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -283,6 +289,12 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 {showDescription && item.description && item.description.trim().length > 0 && (
                     <div className="kanban-card__description">
                         {item.description}
+                    </div>
+                )}
+                {showLatestNote && trimmedNote && (
+                    <div className="kanban-card__note">
+                        <span className="kanban-card__note-label">Last note:</span>{' '}
+                        {trimmedNote}
                     </div>
                 )}
 
