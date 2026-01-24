@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar, Collapse } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar, Collapse, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import { Target, BookOpen, TrendingUp, ListChecks } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -808,7 +808,16 @@ const Dashboard: React.FC = () => {
                       <Col xs={6} md={4} xl={2}>
                         <Card className="h-100 border-0 shadow-sm">
                           <Card.Body className="p-2">
-                            <div className="text-muted small">Total capacity</div>
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-total-tooltip">
+                                  16h/day (24h − 8h sleep) minus work blocks in the sprint. If no work block, defaults to 8h weekdays.
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Total capacity</div>
+                            </OverlayTrigger>
                             <div className="fw-semibold">{capacitySummary.total.toFixed(1)}h</div>
                           </Card.Body>
                         </Card>
@@ -816,7 +825,16 @@ const Dashboard: React.FC = () => {
                       <Col xs={6} md={4} xl={2}>
                         <Card className="h-100 border-0 shadow-sm">
                           <Card.Body className="p-2">
-                            <div className="text-muted small">Allocated</div>
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-allocated-tooltip">
+                                  Story estimates/points allocated to this sprint.
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Allocated</div>
+                            </OverlayTrigger>
                             <div className="fw-semibold">{capacitySummary.allocated.toFixed(1)}h</div>
                           </Card.Body>
                         </Card>
@@ -824,7 +842,16 @@ const Dashboard: React.FC = () => {
                       <Col xs={6} md={4} xl={2}>
                         <Card className="h-100 border-0 shadow-sm">
                           <Card.Body className="p-2">
-                            <div className="text-muted small">Free</div>
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-free-tooltip">
+                                  Remaining capacity after subtracting allocated story hours.
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Free</div>
+                            </OverlayTrigger>
                             <div className={`fw-semibold ${capacitySummary.free < 0 ? 'text-danger' : 'text-success'}`}>
                               {capacitySummary.free.toFixed(1)}h
                             </div>
@@ -834,7 +861,16 @@ const Dashboard: React.FC = () => {
                       <Col xs={6} md={4} xl={2}>
                         <Card className="h-100 border-0 shadow-sm">
                           <Card.Body className="p-2">
-                            <div className="text-muted small">Utilization</div>
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-utilization-tooltip">
+                                  Allocated hours ÷ total capacity.
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Utilization</div>
+                            </OverlayTrigger>
                             <div className={`fw-semibold text-${capacityUtilVariant(capacitySummary.utilization)}`}>
                               {capacitySummary.utilization}%
                             </div>
@@ -844,7 +880,16 @@ const Dashboard: React.FC = () => {
                       <Col xs={6} md={4} xl={2}>
                         <Card className="h-100 border-0 shadow-sm">
                           <Card.Body className="p-2">
-                            <div className="text-muted small">Scheduled</div>
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-scheduled-tooltip">
+                                  Calendar blocks linked to sprint stories/tasks (excludes chores/routines and external calendars).
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Scheduled</div>
+                            </OverlayTrigger>
                             <div className="fw-semibold">{capacitySummary.scheduled.toFixed(1)}h</div>
                           </Card.Body>
                         </Card>
