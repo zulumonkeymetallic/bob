@@ -64,13 +64,7 @@ service cloud.firestore {
         request.resource.data.ownerUid == request.auth.uid ||
         request.resource.data.userId == request.auth.uid
       );
-      allow list: if isSignedIn() && (
-        (request.query.limit <= 500) && (
-          (request.query.filters.ownerUid == request.auth.uid) ||
-          (request.query.filters.userId == request.auth.uid)
-        )
-      );
-      allow get, update, delete: if activityOwned();
+      allow read, update, delete: if activityOwned();
     }
     // Materialized view: sprint task index (server-managed)
     match /sprint_task_index/{id} {
@@ -239,6 +233,15 @@ service cloud.firestore {
     match /automation_runs/{id} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+    // Automation event/alert logs (ownerUid-scoped)
+    match /automation_events/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+    match /automation_alerts/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
     }
 
     // Plans -> per-day document with assignments subcollection

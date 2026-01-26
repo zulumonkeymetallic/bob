@@ -11,6 +11,7 @@ import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import WeeklyThemePlanner from './components/planner/WeeklyThemePlanner';
 import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
 import ApprovalsCenter from './components/planner/ApprovalsCenter';
+import ThemeProgressDashboard from './components/ThemeProgressDashboard';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
@@ -283,7 +284,9 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/overview/advanced" element={<AdvancedOverview />} />
+            <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
+            <Route path="/metrics" element={<AdvancedOverview />} />
+            <Route path="/overview/advanced" element={<Navigate to="/metrics" replace />} />
             <Route
               path="/tasks"
               element={<QueryDeepLinkGate paramKey="taskId" pathPrefix="/tasks" fallback={<TaskListView />} />}

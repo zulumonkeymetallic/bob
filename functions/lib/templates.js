@@ -282,6 +282,94 @@ const renderSchedule = (blocks) => {
   return `<ul style="padding-left:20px;">${items}</ul>`;
 };
 
+const renderPlannerOutput = (summary, blocks) => {
+  if (!summary || !Array.isArray(blocks) || !blocks.length) {
+    return '<p style="color:#6b7280;">No AI planner blocks were created for today.</p>';
+  }
+
+  const themeRows = summary.byTheme && summary.byTheme.length
+    ? summary.byTheme
+      .map((row) => `
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(row.theme || 'General')}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(formatNumber(row.hours || 0, 1) || '0.0')} h</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(row.count || 0)}</td>
+        </tr>
+      `).join('\n')
+    : '<tr><td colspan="3" style="padding:8px;color:#6b7280;text-align:center;">No theme breakdown available.</td></tr>';
+
+  const maxRows = 12;
+  const blockRows = blocks.slice(0, maxRows).map((block) => {
+    const timeLabel = [block.startDisplay, block.endDisplay].filter(Boolean).join(' – ');
+    const goal = block.linkedGoal;
+    const story = block.linkedStory;
+    const task = block.linkedTask;
+    const entity = task || story || null;
+    const goalLabel = goal
+      ? `${escape(goal.title || 'Goal')}${goal.ref ? ` (${escape(goal.ref)})` : ''}`
+      : '—';
+    const goalLink = goal?.deepLink
+      ? `<a href="${escape(goal.deepLink)}" style="color:#2563eb;">${goalLabel}</a>`
+      : goalLabel;
+    const entityLabel = entity
+      ? `${escape(entity.ref || '')}${entity.ref ? ' — ' : ''}${escape(block.title || '')}`
+      : escape(block.title || '');
+    const entityLink = entity?.deepLink
+      ? `<a href="${escape(entity.deepLink)}" style="color:#2563eb;">${entityLabel}</a>`
+      : entityLabel || '—';
+    const bobLink = block.deepLink
+      ? `<a href="${escape(block.deepLink)}" style="color:#2563eb;">BOB</a>`
+      : '';
+    const gcalLink = block.googleLink
+      ? `<a href="${escape(block.googleLink)}" style="color:#2563eb;">GCal</a>`
+      : '';
+    const links = [bobLink, gcalLink].filter(Boolean).join(' · ') || '—';
+    return `
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(timeLabel || '')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(block.theme || 'General')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${goalLink}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${entityLink}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${links}</td>
+      </tr>
+    `;
+  }).join('\n');
+
+  const truncatedNote = blocks.length > maxRows
+    ? `<div style="margin-top:8px;color:#6b7280;font-size:12px;">Showing ${maxRows} of ${blocks.length} planner blocks.</div>`
+    : '';
+
+  return `
+    <div style="margin-bottom:12px;color:#111827;">
+      <strong>${escape(summary.totalBlocks || 0)}</strong> blocks •
+      <strong>${escape(formatNumber(summary.totalHours || 0, 1) || '0.0')} h</strong> scheduled by the planner today.
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Theme</th>
+          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Hours</th>
+          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Blocks</th>
+        </tr>
+      </thead>
+      <tbody>${themeRows}</tbody>
+    </table>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Time</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Theme</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Goal</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Story/Task</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Links</th>
+        </tr>
+      </thead>
+      <tbody>${blockRows}</tbody>
+    </table>
+    ${truncatedNote}
+  `;
+};
+
 const renderKpiSummary = (kpis) => {
   if (!kpis) return '<p style="color:#6b7280;">No KPI metrics available.</p>';
   const cards = [];
@@ -744,6 +832,11 @@ const renderDailySummaryEmail = (data) => {
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Today\'s Schedule</h2>
         ${renderSchedule(data.calendarBlocks || [])}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">AI Planner Output</h2>
+        ${renderPlannerOutput(data.plannerSummary, data.plannerBlocks || [])}
       </section>
 
       <footer style="margin-top:24px;text-align:center;color:#6b7280;font-size:12px;">

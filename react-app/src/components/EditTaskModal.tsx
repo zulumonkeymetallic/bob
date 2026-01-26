@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { useSprint } from '../contexts/SprintContext';
 import { Task, Sprint } from '../types';
 import { isStatus } from '../utils/statusHelpers';
+import ActivityStreamPanel from './common/ActivityStreamPanel';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -91,81 +92,92 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   };
 
   return (
-    <Modal show={show} onHide={onHide} container={container || undefined}>
+    <Modal show={show} onHide={onHide} size="lg" container={container || undefined}>
       <Modal.Header closeButton>
         <Modal.Title>Edit Task</Modal.Title>
       </Modal.Header>
       <Modal.Body>
         {task ? (
-          <Form>
-            <Form.Group className="mb-3">
-              <Form.Label>Title</Form.Label>
-              <Form.Control
-                type="text"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
+          <Row className="g-3">
+            <Col lg={8}>
+              <Form>
+                <Form.Group className="mb-3">
+                  <Form.Label>Title</Form.Label>
+                  <Form.Control
+                    type="text"
+                    value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  />
+                </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Description</Form.Label>
+                  <Form.Control
+                    as="textarea"
+                    rows={3}
+                    value={form.description}
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </Form.Group>
+                <Row>
+                  <Col md={4}>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Status</Form.Label>
+                      <Form.Select
+                        value={String(form.status)}
+                        onChange={(e) => setForm({ ...form, status: Number(e.target.value) })}
+                      >
+                        <option value={0}>Backlog</option>
+                        <option value={1}>In Progress</option>
+                        <option value={2}>Done</option>
+                        <option value={3}>Blocked</option>
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={4}>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Priority</Form.Label>
+                      <Form.Select
+                        value={String(form.priority)}
+                        onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
+                      >
+                        <option value={1}>High</option>
+                        <option value={2}>Medium</option>
+                        <option value={3}>Low</option>
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={4}>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Sprint</Form.Label>
+                      <Form.Select
+                        value={form.sprintId || ''}
+                        onChange={(e) => setForm({ ...form, sprintId: e.target.value })}
+                      >
+                        <option value="">Backlog (No Sprint)</option>
+                        {selectedSprint && isHiddenSprint(selectedSprint) && (
+                          <option key={selectedSprint.id} value={selectedSprint.id} disabled>
+                            {formatSprintLabel(selectedSprint, selectedSprintStatus || 'Inactive')}
+                          </option>
+                        )}
+                        {visibleSprints.map((sprint) => (
+                          <option key={sprint.id} value={sprint.id}>
+                            {formatSprintLabel(sprint)}
+                          </option>
+                        ))}
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                </Row>
+              </Form>
+            </Col>
+            <Col lg={4}>
+              <ActivityStreamPanel
+                entityId={task?.id}
+                entityType="task"
+                referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
               />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Description</Form.Label>
-              <Form.Control
-                as="textarea"
-                rows={3}
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-              />
-            </Form.Group>
-            <Row>
-              <Col md={4}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Status</Form.Label>
-                  <Form.Select
-                    value={String(form.status)}
-                    onChange={(e) => setForm({ ...form, status: Number(e.target.value) })}
-                  >
-                    <option value={0}>Backlog</option>
-                    <option value={1}>In Progress</option>
-                    <option value={2}>Done</option>
-                    <option value={3}>Blocked</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={4}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Priority</Form.Label>
-                  <Form.Select
-                    value={String(form.priority)}
-                    onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
-                  >
-                    <option value={1}>High</option>
-                    <option value={2}>Medium</option>
-                    <option value={3}>Low</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={4}>
-                <Form.Group className="mb-3">
-                  <Form.Label>Sprint</Form.Label>
-                  <Form.Select
-                    value={form.sprintId || ''}
-                    onChange={(e) => setForm({ ...form, sprintId: e.target.value })}
-                  >
-                    <option value="">Backlog (No Sprint)</option>
-                    {selectedSprint && isHiddenSprint(selectedSprint) && (
-                      <option key={selectedSprint.id} value={selectedSprint.id} disabled>
-                        {formatSprintLabel(selectedSprint, selectedSprintStatus || 'Inactive')}
-                      </option>
-                    )}
-                    {visibleSprints.map((sprint) => (
-                      <option key={sprint.id} value={sprint.id}>
-                        {formatSprintLabel(sprint)}
-                      </option>
-                    ))}
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-            </Row>
-          </Form>
+            </Col>
+          </Row>
         ) : null}
       </Modal.Body>
       <Modal.Footer>

@@ -25,6 +25,12 @@ interface KanbanCardV2Props {
     showDescription?: boolean;
     showLatestNote?: boolean;
     latestNote?: string;
+    steamMeta?: {
+        appId?: string | number;
+        playtimeMinutes?: number | null;
+        lastPlayedAt?: number | null;
+        lastSyncAt?: any;
+    };
 }
 
 const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
@@ -40,6 +46,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     showDescription = true,
     showLatestNote = false,
     latestNote,
+    steamMeta,
 }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
@@ -95,6 +102,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const priorityLabel = formatPriorityLabel(item.priority);
     const notePreview = latestNote ? latestNote.replace(/\s+/g, ' ').trim() : '';
     const trimmedNote = notePreview.length > 140 ? `${notePreview.slice(0, 140)}...` : notePreview;
+    const toDate = (value: any): Date | null => {
+        if (!value) return null;
+        if (typeof value?.toDate === 'function') return value.toDate();
+        if (typeof value?.seconds === 'number') return new Date(value.seconds * 1000);
+        if (typeof value === 'number') return new Date(value);
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+    const steamPlaytimeMinutes = steamMeta?.playtimeMinutes ?? null;
+    const steamPlaytimeHours = steamPlaytimeMinutes != null ? Math.round((steamPlaytimeMinutes / 60) * 10) / 10 : null;
+    const steamSyncDate = toDate(steamMeta?.lastSyncAt);
+    const steamSyncLabel = steamSyncDate ? steamSyncDate.toLocaleDateString() : null;
+    const showSteamInfo = type === 'story' && steamMeta && (steamPlaytimeHours != null || steamSyncLabel);
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -295,6 +315,15 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     <div className="kanban-card__note">
                         <span className="kanban-card__note-label">Last note:</span>{' '}
                         {trimmedNote}
+                    </div>
+                )}
+                {showSteamInfo && (
+                    <div className="kanban-card__steam">
+                        <span className="kanban-card__steam-label">Steam</span>
+                        <span>{steamPlaytimeHours != null ? ` ${steamPlaytimeHours}h` : ' —'}</span>
+                        {steamSyncLabel && (
+                            <span className="kanban-card__steam-muted"> · synced {steamSyncLabel}</span>
+                        )}
                     </div>
                 )}
 

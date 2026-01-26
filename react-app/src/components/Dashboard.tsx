@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar, Collapse, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import { Target, BookOpen, TrendingUp, ListChecks } from 'lucide-react';
@@ -8,12 +8,10 @@ import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, get
 import { db } from '../firebase';
 import { Story, Task, Sprint, Goal } from '../types';
 import { isStatus } from '../utils/statusHelpers';
-import SprintSelector from './SprintSelector';
 import { useSprint } from '../contexts/SprintContext';
 import ChecklistPanel from './ChecklistPanel';
 import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
-import CompactSprintMetrics from './CompactSprintMetrics';
 import ThemeBreakdown from './ThemeBreakdown';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
@@ -23,12 +21,19 @@ import StatCard from './common/StatCard';
 import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import '../styles/Dashboard.css';
 
 interface DashboardStats {
   activeGoals: number;
   goalsDueSoon: number;
   activeStories: number;
   storyCompletion: number;
+  totalGoals: number;
+  doneGoals: number;
+  goalCompletion: number;
+  totalStoryPoints: number;
+  doneStoryPoints: number;
+  storyPointsCompletion: number;
   pendingTasks: number;
   completedToday: number;
   upcomingDeadlines: number;
@@ -78,6 +83,12 @@ const Dashboard: React.FC = () => {
     goalsDueSoon: 0,
     activeStories: 0,
     storyCompletion: 0,
+    totalGoals: 0,
+    doneGoals: 0,
+    goalCompletion: 0,
+    totalStoryPoints: 0,
+    doneStoryPoints: 0,
+    storyPointsCompletion: 0,
     pendingTasks: 0,
     completedToday: 0,
     upcomingDeadlines: 0,
@@ -257,6 +268,12 @@ const Dashboard: React.FC = () => {
       limit(8)
     );
 
+    const storiesSummaryQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
@@ -291,6 +308,32 @@ const Dashboard: React.FC = () => {
       }));
     });
 
+    const unsubscribeStorySummary = onSnapshot(storiesSummaryQuery, (snapshot) => {
+      let totalPoints = 0;
+      let donePoints = 0;
+      let totalStories = 0;
+      let doneStories = 0;
+      snapshot.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const points = Number(data.points || 0) || 0;
+        totalPoints += points;
+        totalStories += 1;
+        if (isStatus(data.status, 'done')) {
+          donePoints += points;
+          doneStories += 1;
+        }
+      });
+      const percent = totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : 0;
+      setStats(prev => ({
+        ...prev,
+        totalStoryPoints: totalPoints,
+        doneStoryPoints: donePoints,
+        storyPointsCompletion: percent,
+        activeStories: totalStories - doneStories,
+        storyCompletion: totalStories > 0 ? Math.round((doneStories / totalStories) * 100) : 0,
+      }));
+    });
+
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalData = snapshot.docs.map((docSnap) => {
         const data = docSnap.data();
@@ -303,6 +346,7 @@ const Dashboard: React.FC = () => {
       });
       setGoalsList(goalData);
       const activeGoals = goalData.filter(goal => !isStatus(goal.status, 'Complete')).length;
+      const doneGoals = goalData.filter(goal => isStatus(goal.status, 'Complete')).length;
       const now = new Date();
       const soon = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
       const dueSoon = goalData.filter(goal => {
@@ -313,6 +357,9 @@ const Dashboard: React.FC = () => {
         ...prev,
         activeGoals,
         goalsDueSoon: dueSoon,
+        totalGoals: goalData.length,
+        doneGoals,
+        goalCompletion: goalData.length > 0 ? Math.round((doneGoals / goalData.length) * 100) : 0,
       }));
     });
 
@@ -382,6 +429,7 @@ const Dashboard: React.FC = () => {
 
     return () => {
       unsubscribeStories();
+      unsubscribeStorySummary();
       unsubscribeGoals();
       unsubscribeTasks();
     };
@@ -701,10 +749,6 @@ const Dashboard: React.FC = () => {
     return () => { active = false; };
   }, [currentUser?.uid, selectedSprintId]);
 
-  if (!currentUser) {
-    return <div>Please sign in to view your dashboard.</div>;
-  }
-
   const sprintProgress = stats.sprintTasksTotal > 0
     ? Math.min(100, Math.round((stats.sprintTasksDone / stats.sprintTasksTotal) * 100))
     : 0;
@@ -746,6 +790,57 @@ const Dashboard: React.FC = () => {
     return 'success';
   };
 
+  const sprintSummaryMetrics = useMemo(() => {
+    if (!selectedSprint) return null;
+    const now = new Date();
+    const startDate = new Date(selectedSprint.startDate);
+    const endDate = new Date(selectedSprint.endDate);
+    const hasStarted = now >= startDate;
+    const hasEnded = now > endDate;
+    const daysLeft = Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    const daysUntilStart = Math.max(0, Math.ceil((startDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+
+    const sprintStoryIds = new Set(sprintStories.map((story) => story.id));
+    const sprintStoryTasks = sprintTasks.filter((task) => (
+      task.parentType === 'story' && task.parentId && sprintStoryIds.has(task.parentId)
+    ));
+
+    const totalStories = sprintStories.length;
+    const completedStories = sprintStories.filter((story) => story.status === 4).length;
+    const totalTasks = sprintStoryTasks.length;
+    const completedTasks = sprintStoryTasks.filter((task) => task.status === 2).length;
+
+    const totalPoints = sprintStories.reduce((sum, story) => sum + (story.points || 0), 0);
+    const completedPoints = sprintStories
+      .filter((story) => story.status === 4)
+      .reduce((sum, story) => sum + (story.points || 0), 0);
+
+    const progress = totalPoints > 0
+      ? Math.round((completedPoints / totalPoints) * 100)
+      : (totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0);
+
+    const timeLabel = hasEnded
+      ? 'Ended'
+      : hasStarted
+        ? `${daysLeft}d left`
+        : `${daysUntilStart}d to start`;
+
+    return {
+      timeLabel,
+      totalStories,
+      completedStories,
+      totalTasks,
+      completedTasks,
+      progress,
+      completedPoints,
+      totalPoints
+    };
+  }, [selectedSprint, sprintStories, sprintTasks]);
+
+  if (!currentUser) {
+    return <div>Please sign in to view your dashboard.</div>;
+  }
+
   return (
     <Container fluid className="p-4">
       <Row>
@@ -754,11 +849,42 @@ const Dashboard: React.FC = () => {
             <div>
               <div className="d-flex align-items-center gap-3 flex-wrap">
                 <h2 className="mb-0">Dashboard</h2>
-                <SprintSelector
-                  selectedSprintId={selectedSprintId}
-                  onSprintChange={(sprintId: string) => setSelectedSprintId(sprintId)}
-                />
-                <CompactSprintMetrics selectedSprintId={selectedSprintId} />
+                <div className="d-flex align-items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => navigate('/metrics/progress')}
+                    style={{
+                      border: '1px solid var(--bs-border-color, #dee2e6)',
+                      backgroundColor: 'var(--bs-body-bg)',
+                      color: 'var(--bs-body-color)',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <div className="text-muted" style={{ fontSize: 10 }}>Story Points</div>
+                    <div className="fw-semibold" style={{ fontSize: 12 }}>
+                      {stats.doneStoryPoints}/{stats.totalStoryPoints} pts
+                      {stats.totalStoryPoints > 0 ? ` · ${stats.storyPointsCompletion}%` : ' · 0%'}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => navigate('/metrics/progress')}
+                    style={{
+                      border: '1px solid var(--bs-border-color, #dee2e6)',
+                      backgroundColor: 'var(--bs-body-bg)',
+                      color: 'var(--bs-body-color)',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <div className="text-muted" style={{ fontSize: 10 }}>Goals</div>
+                    <div className="fw-semibold" style={{ fontSize: 12 }}>
+                      {stats.doneGoals}/{stats.totalGoals}
+                      {stats.totalGoals > 0 ? ` · ${stats.goalCompletion}%` : ' · 0%'}
+                    </div>
+                  </button>
+                </div>
                 {stats.tasksUnlinked > 0 && (
                   <Badge bg="warning" text="dark" pill>
                     {stats.tasksUnlinked} unlinked tasks
@@ -783,7 +909,7 @@ const Dashboard: React.FC = () => {
             <Col xl={12}>
               <Card className="shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                  <div className="fw-semibold">Sprint Metrics</div>
+                  <div className="fw-semibold">Key Metrics</div>
                   <Button
                     size="sm"
                     variant="link"
@@ -804,7 +930,7 @@ const Dashboard: React.FC = () => {
                     <div className="text-danger small">{capacityError}</div>
                   )}
                   {hasSelectedSprint && capacitySummary && (
-                    <Row className="g-2">
+                    <Row className="g-2 dashboard-inline-row dashboard-key-metrics">
                       <Col xs={6} md={4} xl={2}>
                         <Card className="h-100 border-0 shadow-sm">
                           <Card.Body className="p-2">
@@ -946,6 +1072,49 @@ const Dashboard: React.FC = () => {
                           <li key={idx}>{line}</li>
                         ))}
                       </ul>
+                    </div>
+                  )}
+                  {selectedSprint && sprintSummaryMetrics && (
+                    <div className="mb-3">
+                      <div className="fw-semibold mb-2">Sprint Snapshot</div>
+                      <Row className="g-2 dashboard-inline-row">
+                        <Col xs={6} md={3}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2 text-center">
+                              <div className="text-muted small">Time</div>
+                              <div className="fw-semibold">{sprintSummaryMetrics.timeLabel}</div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={3}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2 text-center">
+                              <div className="text-muted small">Stories</div>
+                              <div className="fw-semibold">
+                                {sprintSummaryMetrics.completedStories}/{sprintSummaryMetrics.totalStories}
+                              </div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={3}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2 text-center">
+                              <div className="text-muted small">Tasks</div>
+                              <div className="fw-semibold">
+                                {sprintSummaryMetrics.completedTasks}/{sprintSummaryMetrics.totalTasks}
+                              </div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={3}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2 text-center">
+                              <div className="text-muted small">Progress</div>
+                              <div className="fw-semibold">{sprintSummaryMetrics.progress}%</div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      </Row>
                     </div>
                   )}
                   {unscheduledToday.length > 0 && (

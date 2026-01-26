@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer } from 'react-bootstrap';
 import { db } from '../firebase';
-import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, orderBy, limit, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
-import { Goal } from '../types';
-import { ActivityStreamService } from '../services/ActivityStreamService';
-import { GLOBAL_THEMES, getThemeById, migrateThemeValue } from '../constants/globalThemes';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
+import { Goal, Story, Task } from '../types';
+import { migrateThemeValue } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { toDate } from '../utils/firestoreAdapters';
 import TagInput from './common/TagInput';
+import ActivityStreamPanel from './common/ActivityStreamPanel';
+import ModernStoriesTable from './ModernStoriesTable';
+import ModernTaskTable from './ModernTaskTable';
+import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -18,6 +22,8 @@ interface EditGoalModalProps {
 }
 
 const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = [] }) => {
+  const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -44,15 +50,31 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const resolveThemeId = useCallback((input: string, fallback: number) => {
     const trimmed = (input || '').trim();
     if (!trimmed) return fallback;
-    const match = themes.find(t => t.label === trimmed || t.name === trimmed || String(t.id) === trimmed);
+    const normalize = (value: string) =>
+      value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const normalizedInput = normalize(trimmed);
+    const match = themes.find(t => {
+      const label = t.label || '';
+      const name = t.name || '';
+      return (
+        normalize(label) === normalizedInput ||
+        normalize(name) === normalizedInput ||
+        normalize(String(t.id)) === normalizedInput ||
+        normalize(label).includes(normalizedInput) ||
+        normalize(name).includes(normalizedInput)
+      );
+    });
     if (match) return match.id;
     const numeric = Number.parseInt(trimmed, 10);
     return Number.isFinite(numeric) ? numeric : fallback;
   }, [themes]);
   const [parentSearch, setParentSearch] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
-  const [recentActivity, setRecentActivity] = useState<Array<{ id: string; description?: string; activityType?: string; createdAt?: any }>>([]);
   const [monzoConnected, setMonzoConnected] = useState(false);
+  const [linkedStories, setLinkedStories] = useState<Story[]>([]);
+  const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
+  const [storiesLoading, setStoriesLoading] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(false);
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -106,6 +128,152 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       return title.toLowerCase().includes(query) || ref.toLowerCase().includes(query);
     });
   }, [parentCandidates, parentSearch]);
+
+  const activePersona = (goal as any)?.persona || currentPersona;
+
+  useEffect(() => {
+    const loadLinkedStories = async () => {
+      if (!show || !goal || !currentUserId) {
+        setLinkedStories([]);
+        return;
+      }
+      setStoriesLoading(true);
+      try {
+        let list: Story[] = [];
+        try {
+          const baseQuery = query(
+            collection(db, 'stories'),
+            where('ownerUid', '==', currentUserId),
+            where('goalId', '==', goal.id)
+          );
+          const snap = await getDocs(baseQuery);
+          list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+        } catch (err) {
+          const fallback = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUserId)));
+          list = fallback.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+          list = list.filter((story) => story.goalId === goal.id);
+        }
+        if (activePersona) {
+          list = list.filter((story) => !story.persona || story.persona === activePersona);
+        }
+        setLinkedStories(list);
+      } catch (err) {
+        console.error('Failed to load linked stories', err);
+        setLinkedStories([]);
+      } finally {
+        setStoriesLoading(false);
+      }
+    };
+    loadLinkedStories();
+  }, [show, goal?.id, currentUserId, activePersona]);
+
+  useEffect(() => {
+    const loadLinkedTasks = async () => {
+      if (!show || !goal || !currentUserId) {
+        setLinkedTasks([]);
+        return;
+      }
+      setTasksLoading(true);
+      try {
+        const tasksSnap = await getDocs(query(collection(db, 'tasks'), where('ownerUid', '==', currentUserId)));
+        let list = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[];
+        const storyIds = new Set(linkedStories.map((story) => story.id));
+        list = list.filter((task) => {
+          if (activePersona && task.persona && task.persona !== activePersona) return false;
+          if (task.goalId === goal.id) return true;
+          if (task.storyId && storyIds.has(task.storyId)) return true;
+          if (task.parentId && storyIds.has(task.parentId)) return true;
+          return false;
+        });
+        setLinkedTasks(list);
+      } catch (err) {
+        console.error('Failed to load linked tasks', err);
+        setLinkedTasks([]);
+      } finally {
+        setTasksLoading(false);
+      }
+    };
+    loadLinkedTasks();
+  }, [show, goal?.id, currentUserId, activePersona, linkedStories]);
+
+  const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
+    await updateDoc(doc(db, 'stories', storyId), { ...updates, updatedAt: serverTimestamp() } as any);
+    setLinkedStories((prev) => prev.map((story) => (story.id === storyId ? { ...story, ...updates } as Story : story)));
+    if (updates.goalId && goal && updates.goalId !== goal.id) {
+      setLinkedStories((prev) => prev.filter((story) => story.id !== storyId));
+    }
+  };
+
+  const handleStoryDelete = async (storyId: string) => {
+    await deleteDoc(doc(db, 'stories', storyId));
+    setLinkedStories((prev) => prev.filter((story) => story.id !== storyId));
+  };
+
+  const handleStoryPriorityChange = async (storyId: string, newPriority: number) => {
+    await updateDoc(doc(db, 'stories', storyId), { priority: newPriority, updatedAt: serverTimestamp() } as any);
+    setLinkedStories((prev) => prev.map((story) => (story.id === storyId ? { ...story, priority: newPriority } as Story : story)));
+  };
+
+  const handleStoryAdd = async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
+    if (!goal) return;
+    const payload: any = {
+      ...storyData,
+      goalId: storyData.goalId || goal.id,
+      ownerUid: currentUserId,
+      persona: activePersona || 'personal',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    const ref = await addDoc(collection(db, 'stories'), payload);
+    setLinkedStories((prev) => [...prev, { id: ref.id, ...(payload as any) } as Story]);
+  };
+
+  const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
+    const payload: any = { ...updates, updatedAt: serverTimestamp() };
+    if ((updates as any).storyId) {
+      payload.parentType = 'story';
+      payload.parentId = (updates as any).storyId;
+      const linkedStory = linkedStories.find((story) => story.id === (updates as any).storyId);
+      if (linkedStory?.goalId) payload.goalId = linkedStory.goalId;
+    }
+    await updateDoc(doc(db, 'tasks', taskId), payload);
+    setLinkedTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, ...updates } as Task : task)));
+  };
+
+  const handleTaskDelete = async (taskId: string) => {
+    await deleteDoc(doc(db, 'tasks', taskId));
+    setLinkedTasks((prev) => prev.filter((task) => task.id !== taskId));
+  };
+
+  const handleTaskPriorityChange = async (taskId: string, newPriority: number) => {
+    await updateDoc(doc(db, 'tasks', taskId), { priority: newPriority, updatedAt: serverTimestamp() } as any);
+    setLinkedTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, priority: newPriority } as Task : task)));
+  };
+
+  const handleTaskCreate = async (newTask: Partial<Task>) => {
+    if (!goal) return;
+    const storyId = (newTask as any).storyId || null;
+    const linkedStory = storyId ? linkedStories.find((story) => story.id === storyId) : null;
+    const payload: any = {
+      title: newTask.title || '',
+      description: newTask.description || '',
+      status: (newTask as any).status ?? 0,
+      priority: (newTask as any).priority ?? 2,
+      effort: (newTask as any).effort ?? 'M',
+      dueDate: (newTask as any).dueDate || null,
+      points: (newTask as any).points ?? 1,
+      ownerUid: currentUserId,
+      persona: activePersona || 'personal',
+      goalId: linkedStory?.goalId || goal.id,
+      storyId: storyId || null,
+      parentType: storyId ? 'story' : 'project',
+      parentId: storyId || goal.id,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    const ref = await addDoc(collection(db, 'tasks'), payload);
+    setLinkedTasks((prev) => [...prev, { id: ref.id, ...(payload as any) } as Task]);
+  };
 
   // Load goal data when modal opens
   useEffect(() => {
@@ -203,25 +371,6 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     loadMonzoStatus();
   }, [show, currentUserId]);
 
-  // Load recent activity for this goal when modal is open
-  useEffect(() => {
-    if (!goal || !show) return;
-    try {
-      const qref = query(
-        collection(db, 'activity_stream'),
-        where('entityType', '==', 'goal'),
-        where('entityId', '==', goal.id),
-        orderBy('createdAt', 'desc'),
-        limit(15)
-      );
-      const unsub = onSnapshot(qref, (snap) => {
-        const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-        setRecentActivity(list);
-      });
-      return () => unsub();
-    } catch { }
-  }, [goal, show]);
-
   // KPI Management functions
   const addKPI = () => {
     setFormData({
@@ -261,6 +410,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         title: formData.title.trim(),
         description: formData.description.trim(),
         theme: themeId,
+        theme_id: themeId,
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
@@ -377,7 +527,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   // if (!goal) return null; // Removed to allow create mode
 
   return (
-    <Modal show={show} onHide={handleClose} centered size="lg">
+    <Modal show={show} onHide={handleClose} centered size="xl" fullscreen="lg-down" scrollable>
       <ToastContainer position="bottom-end" className="p-3">
         <Toast bg="success" onClose={() => setToastMsg(null)} show={!!toastMsg} delay={1800} autohide>
           <Toast.Body className="text-white">{toastMsg}</Toast.Body>
@@ -387,357 +537,397 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <Form>
-          <Form.Group className="mb-3">
-            <Form.Label>Title *</Form.Label>
-            <Form.Control
-              type="text"
-              value={formData.title}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-              placeholder="Enter goal title..."
-              autoFocus
-            />
-          </Form.Group>
-
-          <Form.Group className="mb-3">
-            <Form.Label>Estimated Cost (£)</Form.Label>
-            <InputGroup>
-              <InputGroup.Text>£</InputGroup.Text>
-              <Form.Control
-                type="number"
-                min="0"
-                step="0.01"
-                value={formData.estimatedCost}
-                onChange={(e) => setFormData({ ...formData, estimatedCost: e.target.value })}
-                placeholder="e.g. 1250"
-              />
-            </InputGroup>
-            <Form.Text className="text-muted">
-              Used for finance projections and Monzo pot alignment.
-            </Form.Text>
-          </Form.Group>
-
-          <div className="row">
-            <div className="col-md-4">
+        <div className="row g-3">
+          <div className="col-lg-8">
+            <Form>
               <Form.Group className="mb-3">
-                <Form.Label>Cost Type</Form.Label>
-                <Form.Select id="goal-cost-type" defaultValue={(goal as any)?.costType || ''}>
-                  <option value="">Not set</option>
-                  <option value="one_off">One-off</option>
-                  <option value="recurring">Recurring</option>
-                </Form.Select>
-              </Form.Group>
-            </div>
-            <div className="col-md-4">
-              <Form.Group className="mb-3">
-                <Form.Label>Recurrence</Form.Label>
-                <Form.Select id="goal-recurrence" defaultValue={(goal as any)?.recurrence || ''}>
-                  <option value="">Not set</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="annual">Annual</option>
-                </Form.Select>
-              </Form.Group>
-            </div>
-            <div className="col-md-4">
-              <Form.Group className="mb-3">
-                <Form.Label>Target Year</Form.Label>
-                <Form.Control id="goal-target-year" type="number" min="2024" step="1" defaultValue={(goal as any)?.targetYear || ''} placeholder="e.g., 2026" />
-              </Form.Group>
-            </div>
-          </div>
-
-          <Form.Group className="mb-3">
-            <Form.Label>Link Monzo Pot (optional)</Form.Label>
-            <Form.Select
-              value={formData.linkedPotId}
-              onChange={(e) => setFormData({ ...formData, linkedPotId: e.target.value })}
-            >
-              <option value="">No pot linked</option>
-              {monzoPots.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </Form.Select>
-            <Form.Text className="text-muted">If set, analytics will use this pot rather than name matching.</Form.Text>
-          </Form.Group>
-          <Form.Check
-            className="mb-3"
-            type="checkbox"
-            label="Auto-create a Monzo pot for this goal (target = estimated cost)"
-            checked={formData.autoCreatePot}
-            onChange={(e) => setFormData({ ...formData, autoCreatePot: e.target.checked })}
-          />
-
-          <Form.Group className="mb-3">
-            <Form.Label>Description</Form.Label>
-            <Form.Control
-              as="textarea"
-              rows={3}
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="Describe this goal in detail..."
-            />
-          </Form.Group>
-
-          <Form.Group className="mb-3">
-            <Form.Label>Tags</Form.Label>
-            <TagInput
-              value={formData.tags}
-              onChange={(tags) => setFormData({ ...formData, tags })}
-              placeholder="Add tags..."
-            />
-          </Form.Group>
-
-          <div className="row">
-            <div className="col-md-6">
-              <Form.Group className="mb-3">
-                <Form.Label>Theme</Form.Label>
-                <Form.Control
-                  list="edit-goal-theme-options"
-                  value={themeInput}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setThemeInput(value);
-                    setFormData(prev => ({
-                      ...prev,
-                      theme: resolveThemeId(value, prev.theme)
-                    }));
-                  }}
-                  onBlur={() => {
-                    setThemeInput(prevInput => {
-                      let nextLabel = prevInput;
-                      setFormData(prev => {
-                        const nextThemeId = resolveThemeId(prevInput, prev.theme);
-                        const match = themes.find(t => t.id === nextThemeId);
-                        nextLabel = match?.label ?? prevInput;
-                        return { ...prev, theme: nextThemeId };
-                      });
-                      return nextLabel;
-                    });
-                  }}
-                  placeholder="Search themes..."
-                />
-                <datalist id="edit-goal-theme-options">
-                  {themes.map(t => (
-                    <option key={t.id} value={t.label} />
-                  ))}
-                </datalist>
-              </Form.Group>
-            </div>
-            <div className="col-md-6">
-              <Form.Group className="mb-3">
-                <Form.Label>Size</Form.Label>
-                <Form.Select
-                  value={formData.size}
-                  onChange={(e) => {
-                    const size = e.target.value;
-                    const sizeData = sizes.find(s => s.value === size);
-                    setFormData({
-                      ...formData,
-                      size,
-                      timeToMasterHours: sizeData?.hours || 40
-                    });
-                  }}
-                >
-                  {sizes.map(size => (
-                    <option key={size.value} value={size.value}>{size.label}</option>
-                  ))}
-                </Form.Select>
-              </Form.Group>
-            </div>
-          </div>
-
-          <div className="row">
-            <div className="col-md-12">
-              <Form.Group className="mb-3">
-                <Form.Label>Parent Goal</Form.Label>
+                <Form.Label>Title *</Form.Label>
                 <Form.Control
                   type="text"
-                  size="sm"
-                  placeholder="Search parent goals..."
-                  value={parentSearch}
-                  onChange={(e) => setParentSearch(e.target.value)}
-                  className="mb-2"
+                  value={formData.title}
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                  placeholder="Enter goal title..."
+                  autoFocus
                 />
-                <Form.Select
-                  value={formData.parentGoalId}
-                  onChange={(e) => setFormData({ ...formData, parentGoalId: e.target.value })}
-                  size="sm"
-                >
-                  <option value="">No parent</option>
-                  {filteredParentOptions.map(option => (
-                    <option key={option.id} value={option.id}>
-                      {option.title || 'Untitled goal'}
-                    </option>
-                  ))}
-                </Form.Select>
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Estimated Cost (£)</Form.Label>
+                <InputGroup>
+                  <InputGroup.Text>£</InputGroup.Text>
+                  <Form.Control
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.estimatedCost}
+                    onChange={(e) => setFormData({ ...formData, estimatedCost: e.target.value })}
+                    placeholder="e.g. 1250"
+                  />
+                </InputGroup>
                 <Form.Text className="text-muted">
-                  Hold Option/Alt while dragging one goal onto another in the roadmap to link quickly.
+                  Used for finance projections and Monzo pot alignment.
                 </Form.Text>
               </Form.Group>
-            </div>
-          </div>
 
-          <div className="row">
-            <div className="col-md-6">
-              <Form.Group className="mb-3">
-                <Form.Label>Start Date</Form.Label>
-                <Form.Control
-                  type="date"
-                  value={formData.startDate}
-                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                />
-              </Form.Group>
-            </div>
-            <div className="col-md-6">
-              <Form.Group className="mb-3">
-                <Form.Label>End Date (Planned)</Form.Label>
-                <Form.Control
-                  type="date"
-                  value={formData.endDate}
-                  onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                />
-              </Form.Group>
-            </div>
-          </div>
-
-          <div className="row">
-            <div className="col-md-12">
-              <Form.Group className="mb-3">
-                <Form.Label>Confidence Level</Form.Label>
-                <Form.Range
-                  value={formData.confidence}
-                  onChange={(e) => setFormData({ ...formData, confidence: parseFloat(e.target.value) })}
-                  min={0}
-                  max={1}
-                  step={0.1}
-                />
-                <Form.Text className="text-muted">
-                  {Math.round(formData.confidence * 100)}% - How confident are you about achieving this?
-                </Form.Text>
-              </Form.Group>
-            </div>
-          </div>
-
-          <div className="row">
-            <div className="col-md-6">
-              <Form.Group className="mb-3">
-                <Form.Label>Status</Form.Label>
-                <Form.Select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                >
-                  {statuses.map(status => (
-                    <option key={status} value={status}>{status}</option>
-                  ))}
-                </Form.Select>
-              </Form.Group>
-            </div>
-            <div className="col-md-6">
-              <Form.Group className="mb-3">
-                <Form.Label>Priority</Form.Label>
-                <Form.Select
-                  value={formData.priority}
-                  onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) })}
-                >
-                  {priorities.map(priority => (
-                    <option key={priority.value} value={priority.value}>{priority.label}</option>
-                  ))}
-                </Form.Select>
-              </Form.Group>
-            </div>
-          </div>
-
-          <Form.Group className="mb-3">
-            <Form.Label>Estimated Hours to Master</Form.Label>
-            <Form.Control
-              type="number"
-              value={formData.timeToMasterHours}
-              onChange={(e) => setFormData({ ...formData, timeToMasterHours: parseInt(e.target.value) })}
-              min={1}
-              max={1000}
-            />
-            <Form.Text className="text-muted">
-              Total time you expect to invest in this goal
-            </Form.Text>
-          </Form.Group>
-
-          {/* KPIs Section */}
-          <Form.Group className="mb-3">
-            <div className="d-flex justify-content-between align-items-center mb-2">
-              <Form.Label>Key Performance Indicators (KPIs)</Form.Label>
-              <Button
-                variant="outline-primary"
-                size="sm"
-                onClick={addKPI}
-              >
-                + Add KPI
-              </Button>
-            </div>
-            {formData.kpis.map((kpi, index) => (
-              <div key={index} className="border rounded p-3 mb-2">
-                <div className="row">
-                  <div className="col-md-4">
-                    <Form.Control
-                      type="text"
-                      placeholder="KPI Name (e.g., Weight Lost)"
-                      value={kpi.name}
-                      onChange={(e) => updateKPI(index, 'name', e.target.value)}
-                    />
-                  </div>
-                  <div className="col-md-3">
-                    <Form.Control
-                      type="number"
-                      placeholder="Target"
-                      value={kpi.target}
-                      onChange={(e) => updateKPI(index, 'target', parseFloat(e.target.value))}
-                    />
-                  </div>
-                  <div className="col-md-3">
-                    <Form.Control
-                      type="text"
-                      placeholder="Unit (e.g., lbs, books)"
-                      value={kpi.unit}
-                      onChange={(e) => updateKPI(index, 'unit', e.target.value)}
-                    />
-                  </div>
-                  <div className="col-md-2">
-                    <Button
-                      variant="outline-danger"
-                      size="sm"
-                      onClick={() => removeKPI(index)}
-                    >
-                      Remove
-                    </Button>
-                  </div>
+              <div className="row">
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Cost Type</Form.Label>
+                    <Form.Select id="goal-cost-type" defaultValue={(goal as any)?.costType || ''}>
+                      <option value="">Not set</option>
+                      <option value="one_off">One-off</option>
+                      <option value="recurring">Recurring</option>
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Recurrence</Form.Label>
+                    <Form.Select id="goal-recurrence" defaultValue={(goal as any)?.recurrence || ''}>
+                      <option value="">Not set</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="annual">Annual</option>
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Target Year</Form.Label>
+                    <Form.Control id="goal-target-year" type="number" min="2024" step="1" defaultValue={(goal as any)?.targetYear || ''} placeholder="e.g., 2026" />
+                  </Form.Group>
                 </div>
               </div>
-            ))}
-            <Form.Text className="text-muted">
-              Add measurable metrics to track progress toward this goal
-            </Form.Text>
-          </Form.Group>
-        </Form>
 
-        {/* Recent activity */}
-        <div className="mt-3">
-          <h6 className="mb-2">Recent Activity</h6>
-          {recentActivity.length === 0 ? (
-            <div className="text-muted small">No recent entries.</div>
-          ) : (
-            <ul className="list-unstyled small mb-0">
-              {recentActivity.map((a) => (
-                <li key={a.id} className="border rounded p-2 mb-1">
-                  <div><strong>{a.activityType || 'activity'}</strong> – {a.description || ''}</div>
-                </li>
-              ))}
-            </ul>
-          )}
+              <Form.Group className="mb-3">
+                <Form.Label>Link Monzo Pot (optional)</Form.Label>
+                <Form.Select
+                  value={formData.linkedPotId}
+                  onChange={(e) => setFormData({ ...formData, linkedPotId: e.target.value })}
+                >
+                  <option value="">No pot linked</option>
+                  {monzoPots.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </Form.Select>
+                <Form.Text className="text-muted">If set, analytics will use this pot rather than name matching.</Form.Text>
+              </Form.Group>
+              <Form.Check
+                className="mb-3"
+                type="checkbox"
+                label="Auto-create a Monzo pot for this goal (target = estimated cost)"
+                checked={formData.autoCreatePot}
+                onChange={(e) => setFormData({ ...formData, autoCreatePot: e.target.checked })}
+              />
+
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Describe this goal in detail..."
+                />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Tags</Form.Label>
+                <TagInput
+                  value={formData.tags}
+                  onChange={(tags) => setFormData({ ...formData, tags })}
+                  placeholder="Add tags..."
+                />
+              </Form.Group>
+
+              <div className="row">
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Theme</Form.Label>
+                    <Form.Control
+                      list="edit-goal-theme-options"
+                      value={themeInput}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setThemeInput(value);
+                        setFormData(prev => ({
+                          ...prev,
+                          theme: resolveThemeId(value, prev.theme)
+                        }));
+                      }}
+                      onBlur={() => {
+                        setThemeInput(prevInput => {
+                          let nextLabel = prevInput;
+                          setFormData(prev => {
+                            const nextThemeId = resolveThemeId(prevInput, prev.theme);
+                            const match = themes.find(t => t.id === nextThemeId);
+                            nextLabel = match?.label ?? prevInput;
+                            return { ...prev, theme: nextThemeId };
+                          });
+                          return nextLabel;
+                        });
+                      }}
+                      placeholder="Search themes..."
+                    />
+                    <datalist id="edit-goal-theme-options">
+                      {themes.map(t => (
+                        <option key={t.id} value={t.label} />
+                      ))}
+                    </datalist>
+                  </Form.Group>
+                </div>
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Size</Form.Label>
+                    <Form.Select
+                      value={formData.size}
+                      onChange={(e) => {
+                        const size = e.target.value;
+                        const sizeData = sizes.find(s => s.value === size);
+                        setFormData({
+                          ...formData,
+                          size,
+                          timeToMasterHours: sizeData?.hours || 40
+                        });
+                      }}
+                    >
+                      {sizes.map(size => (
+                        <option key={size.value} value={size.value}>{size.label}</option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <div className="row">
+                <div className="col-md-12">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Parent Goal</Form.Label>
+                    <Form.Control
+                      type="text"
+                      size="sm"
+                      placeholder="Search parent goals..."
+                      value={parentSearch}
+                      onChange={(e) => setParentSearch(e.target.value)}
+                      className="mb-2"
+                    />
+                    <Form.Select
+                      value={formData.parentGoalId}
+                      onChange={(e) => setFormData({ ...formData, parentGoalId: e.target.value })}
+                      size="sm"
+                    >
+                      <option value="">No parent</option>
+                      {filteredParentOptions.map(option => (
+                        <option key={option.id} value={option.id}>
+                          {option.title || 'Untitled goal'}
+                        </option>
+                      ))}
+                    </Form.Select>
+                    <Form.Text className="text-muted">
+                      Hold Option/Alt while dragging one goal onto another in the roadmap to link quickly.
+                    </Form.Text>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <div className="row">
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Start Date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={formData.startDate}
+                      onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                    />
+                  </Form.Group>
+                </div>
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>End Date (Planned)</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={formData.endDate}
+                      onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                    />
+                  </Form.Group>
+                </div>
+              </div>
+
+              <div className="row">
+                <div className="col-md-12">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Confidence Level</Form.Label>
+                    <Form.Range
+                      value={formData.confidence}
+                      onChange={(e) => setFormData({ ...formData, confidence: parseFloat(e.target.value) })}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                    />
+                    <Form.Text className="text-muted">
+                      {Math.round(formData.confidence * 100)}% - How confident are you about achieving this?
+                    </Form.Text>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <div className="row">
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Status</Form.Label>
+                    <Form.Select
+                      value={formData.status}
+                      onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                    >
+                      {statuses.map(status => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Priority</Form.Label>
+                    <Form.Select
+                      value={formData.priority}
+                      onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) })}
+                    >
+                      {priorities.map(priority => (
+                        <option key={priority.value} value={priority.value}>{priority.label}</option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Estimated Hours to Master</Form.Label>
+                <Form.Control
+                  type="number"
+                  value={formData.timeToMasterHours}
+                  onChange={(e) => setFormData({ ...formData, timeToMasterHours: parseInt(e.target.value) })}
+                  min={1}
+                  max={1000}
+                />
+                <Form.Text className="text-muted">
+                  Total time you expect to invest in this goal
+                </Form.Text>
+              </Form.Group>
+
+              {/* KPIs Section */}
+              <Form.Group className="mb-3">
+                <div className="d-flex justify-content-between align-items-center mb-2">
+                  <Form.Label>Key Performance Indicators (KPIs)</Form.Label>
+                  <Button
+                    variant="outline-primary"
+                    size="sm"
+                    onClick={addKPI}
+                  >
+                    + Add KPI
+                  </Button>
+                </div>
+                {formData.kpis.map((kpi, index) => (
+                  <div key={index} className="border rounded p-3 mb-2">
+                    <div className="row">
+                      <div className="col-md-4">
+                        <Form.Control
+                          type="text"
+                          placeholder="KPI Name (e.g., Weight Lost)"
+                          value={kpi.name}
+                          onChange={(e) => updateKPI(index, 'name', e.target.value)}
+                        />
+                      </div>
+                      <div className="col-md-3">
+                        <Form.Control
+                          type="number"
+                          placeholder="Target"
+                          value={kpi.target}
+                          onChange={(e) => updateKPI(index, 'target', parseFloat(e.target.value))}
+                        />
+                      </div>
+                      <div className="col-md-3">
+                        <Form.Control
+                          type="text"
+                          placeholder="Unit (e.g., lbs, books)"
+                          value={kpi.unit}
+                          onChange={(e) => updateKPI(index, 'unit', e.target.value)}
+                        />
+                      </div>
+                      <div className="col-md-2">
+                        <Button
+                          variant="outline-danger"
+                          size="sm"
+                          onClick={() => removeKPI(index)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <Form.Text className="text-muted">
+                  Add measurable metrics to track progress toward this goal
+                </Form.Text>
+              </Form.Group>
+            </Form>
+
+            {submitResult && (
+              <Alert variant={submitResult.includes('✅') ? 'success' : 'danger'}>
+                {submitResult}
+              </Alert>
+            )}
+          </div>
+          <div className="col-lg-4">
+            <ActivityStreamPanel
+              entityId={goal?.id}
+              entityType="goal"
+              referenceNumber={(goal as any)?.ref || (goal as any)?.referenceNumber}
+            />
+          </div>
         </div>
 
-        {submitResult && (
-          <Alert variant={submitResult.includes('✅') ? 'success' : 'danger'}>
-            {submitResult}
-          </Alert>
+        {goal && (
+          <div className="mt-4">
+            <div className="mb-4">
+              <h5 className="mb-2">Linked Stories</h5>
+              {storiesLoading ? (
+                <div className="text-muted small">Loading stories…</div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <ModernStoriesTable
+                    stories={linkedStories}
+                    goals={allGoals.length ? allGoals : (goal ? [goal] : [])}
+                    goalId={goal.id}
+                    onStoryUpdate={handleStoryUpdate}
+                    onStoryDelete={handleStoryDelete}
+                    onStoryPriorityChange={handleStoryPriorityChange}
+                    onStoryAdd={handleStoryAdd}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h5 className="mb-2">Linked Tasks</h5>
+              {tasksLoading ? (
+                <div className="text-muted small">Loading tasks…</div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <ModernTaskTable
+                    tasks={linkedTasks}
+                    stories={linkedStories}
+                    goals={allGoals.length ? allGoals : (goal ? [goal] : [])}
+                    sprints={sprints as any}
+                    compact
+                    defaultColumns={['ref', 'title', 'status', 'priority', 'dueDate', 'points', 'storyTitle']}
+                    onTaskCreate={handleTaskCreate}
+                    onTaskUpdate={handleTaskUpdate}
+                    onTaskDelete={handleTaskDelete}
+                    onTaskPriorityChange={handleTaskPriorityChange}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </Modal.Body>
       <Modal.Footer>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Badge, Button, Dropdown, Modal, Alert, Toast, ToastContainer, Form } from 'react-bootstrap';
-import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus } from 'lucide-react';
+import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus, Wand2, Activity } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -580,85 +580,141 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     </h5>
                   </div>
                   
-                  <Dropdown onClick={(e) => e.stopPropagation()}>
-                    <Dropdown.Toggle 
-                      variant="outline-secondary" 
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Button
+                      variant="link"
                       size="sm"
-                      style={{ border: 'none', padding: '4px 8px' }}
+                      className="p-0"
+                      style={{ width: 24, height: 24, color: textColor }}
+                      title="View activity stream"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleViewActivityStream(goal, e);
+                      }}
                     >
-                      <ChevronDown size={16} />
-                    </Dropdown.Toggle>
-                    <Dropdown.Menu style={{ zIndex: 2000 }} popperConfig={{ strategy: 'fixed' }}>
-                      <Dropdown.Item 
-                        onClick={() => setShowEditModal(goal)}
+                      <Activity size={14} />
+                    </Button>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="p-0"
+                      style={{ width: 24, height: 24, color: textColor }}
+                      title="Edit goal"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowEditModal(goal);
+                      }}
+                    >
+                      <Edit3 size={14} />
+                    </Button>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="p-0"
+                      style={{ width: 24, height: 24, color: textColor }}
+                      title="Auto-generate stories"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAutoGenerateStories(goal);
+                      }}
+                      disabled={generatingForGoal === goal.id}
+                    >
+                      <Wand2 size={14} />
+                    </Button>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="p-0"
+                      style={{ width: 24, height: 24, color: textColor }}
+                      title="Generate calendar blocks"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        scheduleGoalTime(goal);
+                      }}
+                      disabled={isSchedulingGoal === goal.id}
+                    >
+                      <CalendarPlus size={14} />
+                    </Button>
+                    <Dropdown onClick={(e) => e.stopPropagation()}>
+                      <Dropdown.Toggle 
+                        variant="outline-secondary" 
+                        size="sm"
+                        style={{ border: 'none', padding: '4px 8px' }}
                       >
-                        <Edit3 size={14} className="me-2" />
-                        Edit Goal
-                      </Dropdown.Item>
-                      <Dropdown.Item 
-                        onClick={() => setShowAddStoryModal(goal.id)}
-                      >
-                        <Plus size={14} className="me-2" />
-                        Add Story
-                      </Dropdown.Item>
-                      <Dropdown.Item 
-                        onClick={() => handleAutoGenerateStories(goal)}
-                        disabled={generatingForGoal === goal.id}
-                      >
-                        {generatingForGoal === goal.id ? (
-                          <>
-                            <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                            Generating Stories...
-                          </>
-                        ) : (
-                          <>Auto-Generate Stories</>
-                        )}
-                      </Dropdown.Item>
-                      <Dropdown.Item 
-                        onClick={() => scheduleGoalTime(goal)}
-                        disabled={isSchedulingGoal === goal.id}
-                      >
-                        <CalendarPlus size={14} className="me-2" />
-                        {isSchedulingGoal === goal.id ? 'Scheduling...' : 'Schedule Time Blocks'}
-                      </Dropdown.Item>
-                      <Dropdown.Divider />
-                      <Dropdown.Header>Change Status</Dropdown.Header>
-                      <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'New')}>
-                        New
-                      </Dropdown.Item>
-                      <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Work in Progress')}>
-                        Work in Progress
-                      </Dropdown.Item>
-                      <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Complete')}>
-                        Complete
-                      </Dropdown.Item>
-                      <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Blocked')}>
-                        Blocked (Pending Story)
-                      </Dropdown.Item>
-                      <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Deferred')}>
-                        Deferred
-                      </Dropdown.Item>
-                      <Dropdown.Divider />
-                      <Dropdown.Header>Change Priority</Dropdown.Header>
-                      <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 1)}>
-                        High Priority (1)
-                      </Dropdown.Item>
-                      <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 2)}>
-                        Medium Priority (2)
-                      </Dropdown.Item>
-                      <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 3)}>
-                        Low Priority (3)
-                      </Dropdown.Item>
-                      <Dropdown.Divider />
-                      <Dropdown.Item 
-                        className="text-danger"
-                        onClick={() => setShowDeleteModal(goal.id)}
-                      >
-                        <Trash2 size={14} className="me-2" />
-                        Delete Goal
-                      </Dropdown.Item>
-                    </Dropdown.Menu>
-                  </Dropdown>
+                        <ChevronDown size={16} />
+                      </Dropdown.Toggle>
+                      <Dropdown.Menu style={{ zIndex: 2000 }} popperConfig={{ strategy: 'fixed' }}>
+                        <Dropdown.Item 
+                          onClick={() => setShowEditModal(goal)}
+                        >
+                          <Edit3 size={14} className="me-2" />
+                          Edit Goal
+                        </Dropdown.Item>
+                        <Dropdown.Item 
+                          onClick={() => setShowAddStoryModal(goal.id)}
+                        >
+                          <Plus size={14} className="me-2" />
+                          Add Story
+                        </Dropdown.Item>
+                        <Dropdown.Item 
+                          onClick={() => handleAutoGenerateStories(goal)}
+                          disabled={generatingForGoal === goal.id}
+                        >
+                          {generatingForGoal === goal.id ? (
+                            <>
+                              <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                              Generating Stories...
+                            </>
+                          ) : (
+                            <>Auto-Generate Stories</>
+                          )}
+                        </Dropdown.Item>
+                        <Dropdown.Item 
+                          onClick={() => scheduleGoalTime(goal)}
+                          disabled={isSchedulingGoal === goal.id}
+                        >
+                          <CalendarPlus size={14} className="me-2" />
+                          {isSchedulingGoal === goal.id ? 'Scheduling...' : 'Schedule Time Blocks'}
+                        </Dropdown.Item>
+                        <Dropdown.Divider />
+                        <Dropdown.Header>Change Status</Dropdown.Header>
+                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'New')}>
+                          New
+                        </Dropdown.Item>
+                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Work in Progress')}>
+                          Work in Progress
+                        </Dropdown.Item>
+                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Complete')}>
+                          Complete
+                        </Dropdown.Item>
+                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Blocked')}>
+                          Blocked (Pending Story)
+                        </Dropdown.Item>
+                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Deferred')}>
+                          Deferred
+                        </Dropdown.Item>
+                        <Dropdown.Divider />
+                        <Dropdown.Header>Change Priority</Dropdown.Header>
+                        <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 1)}>
+                          High Priority (1)
+                        </Dropdown.Item>
+                        <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 2)}>
+                          Medium Priority (2)
+                        </Dropdown.Item>
+                        <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 3)}>
+                          Low Priority (3)
+                        </Dropdown.Item>
+                        <Dropdown.Divider />
+                        <Dropdown.Item 
+                          className="text-danger"
+                          onClick={() => setShowDeleteModal(goal.id)}
+                        >
+                          <Trash2 size={14} className="me-2" />
+                          Delete Goal
+                        </Dropdown.Item>
+                      </Dropdown.Menu>
+                    </Dropdown>
+                  </div>
                 </div>
 
                 {(shouldShowDescription || latestActivity) && (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -930,6 +930,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { selectedSprintId, sprints } = useSprint();
+  const navigate = useNavigate();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -1319,31 +1320,34 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
         gap: '12px',
         alignItems: 'end'
       }}>
-        {/* Search Input */}
-        <div>
-          <label style={{ 
-            display: 'block', 
-            fontSize: '12px', 
-            fontWeight: '500', 
-            color: 'var(--text)', 
-            marginBottom: '4px' 
-          }}>
-            Search Stories
-          </label>
-          <input
-            type="text"
-            placeholder="Search title, description, ref..."
-            value={filters.search}
-            onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-            style={{
-              width: '100%',
-              padding: '6px 10px',
-              fontSize: '14px',
-              border: '1px solid var(--line)',
-              borderRadius: '4px',
-              backgroundColor: 'var(--panel)',
-            }}
-          />
+        {/* Search + KPI Summary */}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 220px', minWidth: '220px' }}>
+            <label style={{ 
+              display: 'block', 
+              fontSize: '12px', 
+              fontWeight: '500', 
+              color: 'var(--text)', 
+              marginBottom: '4px' 
+            }}>
+              Search Stories
+            </label>
+            <input
+              type="text"
+              placeholder="Search title, description, ref..."
+              value={filters.search}
+              onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+              style={{
+                width: '100%',
+                padding: '6px 10px',
+                fontSize: '14px',
+                border: '1px solid var(--line)',
+                borderRadius: '4px',
+                backgroundColor: 'var(--panel)',
+              }}
+            />
+          </div>
+
         </div>
 
         {/* Status Filter */}

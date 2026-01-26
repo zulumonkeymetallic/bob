@@ -52,6 +52,32 @@
   text-align: center;
 }
 
+.dashboard-inline-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.dashboard-inline-row > .col,
+.dashboard-inline-row > [class*='col-'] {
+  flex: 1 0 140px;
+  min-width: 140px;
+}
+
+.dashboard-key-metrics > .col,
+.dashboard-key-metrics > [class*='col-'] {
+  flex: 1 0 120px;
+  min-width: 120px;
+}
+
+.dashboard-key-metrics .card-body {
+  padding: 6px 8px;
+}
+
+.dashboard-key-metrics .text-muted.small {
+  font-size: 11px;
+}
+
 @media (max-width: 768px) {
   .dashboard-charts {
     grid-template-columns: 1fr;

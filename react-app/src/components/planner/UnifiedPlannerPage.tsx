@@ -459,14 +459,24 @@ const UnifiedPlannerPage: React.FC = () => {
   );
 
   const getTaskDueMs = useCallback((task: Task): number | null => {
-    const raw: any = (task as any).dueDateMs ?? (task as any).dueDate ?? (task as any).due;
+    const raw: any = (task as any).dueDateMs
+      ?? (task as any).dueDate
+      ?? (task as any).targetDate
+      ?? (task as any).dueAt
+      ?? (task as any).due;
     if (!raw) return null;
     if (typeof raw === 'number') return raw;
     if (typeof raw === 'string') {
       const parsed = new Date(raw).getTime();
       return Number.isNaN(parsed) ? null : parsed;
     }
-    if (raw.seconds) return raw.seconds * 1000;
+    if (raw instanceof Date) return raw.getTime();
+    if (typeof raw.toDate === 'function') {
+      const d = raw.toDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    if (typeof raw.toMillis === 'function') return raw.toMillis();
+    if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
     return null;
   }, []);
 

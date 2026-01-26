@@ -33,7 +33,7 @@ export interface ActivityEntry {
   activityType: ActivityType;
   userId: string;
   userEmail?: string;
-  timestamp: Timestamp;
+  timestamp: Timestamp | Date | number;
 
   // For field changes
   fieldName?: string;
@@ -309,9 +309,12 @@ export class ActivityStreamService {
 
     const unsubs: (() => void)[] = [];
     const state: Record<string, ActivityEntry> = {};
-    const normalizeTimestamp = (val: any): Timestamp | undefined => {
+    const normalizeTimestamp = (val: any): Timestamp | Date | undefined => {
       if (!val) return undefined;
-      if ((val as any).toDate) return val as Timestamp;
+      if (typeof val?.toDate === 'function') return val as Timestamp;
+      if (val instanceof Date) return val;
+      if (typeof val === 'number') return new Date(val);
+      if (typeof val?.seconds === 'number') return new Date(val.seconds * 1000);
       return undefined;
     };
 
@@ -362,7 +365,8 @@ export class ActivityStreamService {
               const timestamp =
                 normalizeTimestamp(data[source.orderField]) ||
                 normalizeTimestamp(data.timestamp) ||
-                normalizeTimestamp(data.createdAt);
+                normalizeTimestamp(data.createdAt) ||
+                Timestamp.now();
               let description =
                 data.description ||
                 data.message ||
@@ -382,7 +386,7 @@ export class ActivityStreamService {
                 activityType,
                 userId: (data.userId as string) || userId,
                 userEmail: data.userEmail,
-                timestamp: timestamp || (serverTimestamp() as any),
+                timestamp,
                 fieldName: data.fieldName,
                 oldValue: data.oldValue,
                 newValue: data.newValue,
@@ -477,10 +481,21 @@ export class ActivityStreamService {
   }
 
   // Utility to format timestamp
-  static formatTimestamp(timestamp: Timestamp): string {
+  static formatTimestamp(timestamp: Timestamp | Date | number | null | undefined): string {
     if (!timestamp) return 'Unknown time';
 
-    const date = timestamp.toDate();
+    let date: Date | null = null;
+    if (typeof (timestamp as any)?.toDate === 'function') {
+      date = (timestamp as Timestamp).toDate();
+    } else if (timestamp instanceof Date) {
+      date = timestamp;
+    } else if (typeof timestamp === 'number') {
+      date = new Date(timestamp);
+    } else if (typeof (timestamp as any)?.seconds === 'number') {
+      date = new Date((timestamp as any).seconds * 1000);
+    }
+
+    if (!date || Number.isNaN(date.getTime())) return 'Unknown time';
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));

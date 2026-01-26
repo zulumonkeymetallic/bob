@@ -45,6 +45,8 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
     const [latestNotesById, setLatestNotesById] = useState<Record<string, string>>({});
+    const [steamByAppId, setSteamByAppId] = useState<Record<string, any>>({});
+    const [steamLastSyncAt, setSteamLastSyncAt] = useState<any>(null);
 
     // Data fetching
     useEffect(() => {
@@ -131,6 +133,42 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         };
     }, [currentUser, currentPersona, sprintId]);
 
+    useEffect(() => {
+        if (!currentUser) {
+            setSteamByAppId({});
+            setSteamLastSyncAt(null);
+            return;
+        }
+
+        const steamQuery = query(
+            collection(db, 'steam'),
+            where('ownerUid', '==', currentUser.uid)
+        );
+
+        const unsubSteam = onSnapshot(steamQuery, (snap) => {
+            const map: Record<string, any> = {};
+            snap.docs.forEach((docSnap) => {
+                const data = docSnap.data() as any;
+                const appId = data.appid ?? data.steamAppId ?? data.externalId;
+                if (appId != null) {
+                    map[String(appId)] = { id: docSnap.id, ...data };
+                }
+            });
+            setSteamByAppId(map);
+        });
+
+        const profileRef = doc(db, 'profiles', currentUser.uid);
+        const unsubProfile = onSnapshot(profileRef, (snap) => {
+            const data = snap.data() as any;
+            setSteamLastSyncAt(data?.steamLastSyncAt ?? null);
+        });
+
+        return () => {
+            unsubSteam();
+            unsubProfile();
+        };
+    }, [currentUser]);
+
     // Drag and Drop Monitor
     useEffect(() => {
         return monitorForElements({
@@ -193,6 +231,17 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             },
         });
     }, [stories, tasks, trackFieldChange, sprintId]);
+
+    const getSteamAppId = (story: Story) => {
+        const meta = (story as any)?.metadata || {};
+        return meta.steamAppId ?? meta.appId ?? meta.steamId ?? (story as any).externalId ?? null;
+    };
+
+    const isSteamStory = (story: Story) => {
+        const source = String((story as any).source || '').toLowerCase();
+        const entry = String((story as any).entry_method || '').toLowerCase();
+        return source === 'steam' || entry.includes('steam') || !!getSteamAppId(story);
+    };
 
     // Filtering and Grouping
     const filteredStories = useMemo(() => {
@@ -443,6 +492,27 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                             }
                         }
 
+                        let steamMeta: { playtimeMinutes?: number; lastPlayedAt?: number; lastSyncAt?: any; appId?: string | number } | undefined;
+                        if (type === 'story' && isSteamStory(item as Story)) {
+                            const appId = getSteamAppId(item as Story);
+                            if (appId != null) {
+                                const steamEntry = steamByAppId[String(appId)];
+                                if (steamEntry) {
+                                    steamMeta = {
+                                        appId,
+                                        playtimeMinutes: steamEntry.playtime_forever ?? steamEntry.playtimeForever ?? steamEntry.playtime ?? null,
+                                        lastPlayedAt: steamEntry.rtime_last_played ? steamEntry.rtime_last_played * 1000 : (steamEntry.last_played ? steamEntry.last_played * 1000 : null),
+                                        lastSyncAt: steamLastSyncAt ?? steamEntry.updatedAt ?? null
+                                    };
+                                } else {
+                                    steamMeta = {
+                                        appId,
+                                        lastSyncAt: steamLastSyncAt ?? null
+                                    };
+                                }
+                            }
+                        }
+
                         return (
                             <KanbanCardV2
                                 key={item.id}
@@ -455,6 +525,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 showDescription={showDescriptions}
                                 showLatestNote={showLatestNotes}
                                 latestNote={latestNotesById[item.id]}
+                                steamMeta={steamMeta}
                                 onEdit={() => onEdit?.(item, type)}
                             />
                         );
