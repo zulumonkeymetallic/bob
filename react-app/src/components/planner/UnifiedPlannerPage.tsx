@@ -646,10 +646,38 @@ const UnifiedPlannerPage: React.FC = () => {
     [],
   );
 
+  const updateExternalEventTiming = useCallback(
+    async (event: PlannerCalendarEvent, start: Date, end: Date) => {
+      const external = event.external;
+      const eventId = external?.id || event.id;
+      if (!external || !eventId) {
+        setFeedback({ variant: 'danger', message: 'External event is missing a Google Calendar ID.' });
+        return;
+      }
+      const raw: any = external.raw || {};
+      const isAllDay = Boolean(raw?.start?.date) && !raw?.start?.dateTime;
+      if (isAllDay) {
+        setFeedback({ variant: 'info', message: 'All-day events must be edited in Google Calendar.' });
+        return;
+      }
+      try {
+        const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+        await updateEv({ eventId, start: start.toISOString(), end: end.toISOString() });
+        setActiveEvent((prev) => (prev && prev.id === event.id ? { ...prev, start, end } : prev));
+        setFeedback({ variant: 'success', message: 'Google Calendar event updated.' });
+        await planner.refreshExternalEvents();
+      } catch (err) {
+        console.warn('Failed to update external event', err);
+        setFeedback({ variant: 'danger', message: 'Unable to update Google Calendar event. Edit it in Google Calendar instead.' });
+      }
+    },
+    [functions, planner, setFeedback],
+  );
+
   const handleEventMove = useCallback(
     async ({ event, start, end }: { event: PlannerCalendarEvent; start: Date; end: Date }) => {
       if (event.type === 'external') {
-        setFeedback({ variant: 'info', message: 'Editing external events happens in Google Calendar.' });
+        await updateExternalEventTiming(event, start, end);
         return;
       }
       if (event.type === 'block') {
@@ -712,7 +740,7 @@ const UnifiedPlannerPage: React.FC = () => {
         }
       }
     },
-    [updateBlockTiming, updateInstanceTiming],
+    [updateBlockTiming, updateExternalEventTiming, updateInstanceTiming],
   );
 
   const handleEventResize = useCallback(
@@ -969,6 +997,10 @@ const UnifiedPlannerPage: React.FC = () => {
 
   const applyEventTiming = useCallback(async (event: PlannerCalendarEvent, start: Date, end: Date) => {
     setLastActionPatch({ id: event.id, prevStart: event.start, prevEnd: event.end });
+    if (event.type === 'external') {
+      await updateExternalEventTiming(event, start, end);
+      return;
+    }
     if (event.type === 'block') {
       await updateBlockTiming(event, start, end);
       // Attempt Google sync if block configured
@@ -994,7 +1026,7 @@ const UnifiedPlannerPage: React.FC = () => {
         }
       } catch { }
     }
-  }, [functions, updateBlockTiming, updateInstanceTiming]);
+  }, [functions, updateBlockTiming, updateExternalEventTiming, updateInstanceTiming]);
 
   const findNextFreeSlot = useCallback((event: PlannerCalendarEvent) => {
     const duration = event.end.getTime() - event.start.getTime();
@@ -1476,6 +1508,11 @@ const UnifiedPlannerPage: React.FC = () => {
                   >
                     <ExternalLink size={16} className="me-1" /> Open in Google Calendar
                   </Button>
+                )}
+                {activeEvent.type === 'external' && (
+                  <div className="text-muted small">
+                    Drag to reschedule. External events are never deleted from BOB.
+                  </div>
                 )}
                 {activeEvent.type === 'instance' && activeEvent.instance && (
                   <>
