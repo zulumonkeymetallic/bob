@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer } from 'react-bootstrap';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { Goal, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
+import { httpsCallable } from 'firebase/functions';
 import { migrateThemeValue } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { toDate } from '../utils/firestoreAdapters';
@@ -442,7 +443,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       goalData.potId = formData.linkedPotId || null;
       const estimatedCostValue = formData.estimatedCost ? Number(formData.estimatedCost) : null;
 
-      const maybeCreateVirtualPot = async (goalId: string | null, goalRef?: string | null): Promise<string | null> => {
+      const maybeCreateMonzoPot = async (goalId: string | null, goalRef?: string | null): Promise<string | null> => {
         if (!goalId) return null;
         if (!formData.autoCreatePot) return null;
         if (!estimatedCostValue || Number.isNaN(estimatedCostValue)) return null;
@@ -453,23 +454,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         }
         const refLabel = (goalRef || '').trim();
         const titleLabel = (formData.title || 'Goal pot').trim();
-        const potName = refLabel ? `${refLabel} — ${titleLabel}` : titleLabel;
-        const potDocId = `${currentUserId}_goal_${goalId}`;
-        await setDoc(doc(db, 'monzo_pots', potDocId), {
-          ownerUid: currentUserId,
-          potId: potDocId,
-          name: potName,
-          balance: 0,
-          currency: 'GBP',
-          goalAmount: Math.round(estimatedCostValue * 100),
-          goalCurrency: 'GBP',
-          virtual: true,
-          goalLinkedId: goalId,
-          deleted: false,
-          closed: false,
-          updatedAt: serverTimestamp(),
-        }, { merge: true });
-        return potDocId;
+        const potName = refLabel ? `${refLabel} - ${titleLabel}` : titleLabel;
+        const callable = httpsCallable(functions, 'monzoCreatePot');
+        const resp: any = await callable({ name: potName, goalId });
+        const created = resp?.data?.pot || null;
+        return created?.potId || created?.id || null;
       };
 
       let goalIdForPot: string | null = goal?.id || null;
@@ -479,7 +468,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         // UPDATE existing goal
         console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
         await updateDoc(doc(db, 'goals', goal.id), goalData);
-        const createdPotId = await maybeCreateVirtualPot(goal.id, goalRefForPot);
+        const createdPotId = await maybeCreateMonzoPot(goal.id, goalRefForPot);
         if (createdPotId) {
           await updateDoc(doc(db, 'goals', goal.id), { linkedPotId: createdPotId, potId: createdPotId });
         }
@@ -513,7 +502,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         });
 
         goalRefForPot = goalData.ref || goalRefForPot;
-        const createdPotId = await maybeCreateVirtualPot(goalIdForPot, goalRefForPot);
+        const createdPotId = await maybeCreateMonzoPot(goalIdForPot, goalRefForPot);
         if (createdPotId && goalIdForPot) {
           await updateDoc(doc(db, 'goals', goalIdForPot), { linkedPotId: createdPotId, potId: createdPotId });
           setFormData(prev => ({ ...prev, linkedPotId: createdPotId }));

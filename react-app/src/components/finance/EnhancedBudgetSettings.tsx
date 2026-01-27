@@ -578,7 +578,7 @@ const EnhancedBudgetSettings: React.FC = () => {
         if (potId === '__create__') {
             const refLabel = (goal?.ref || goal?.referenceNumber || '').toString().trim();
             const titleLabel = (goal?.title || '').toString().trim();
-            const name = refLabel ? `${refLabel} — ${titleLabel}`.trim() : titleLabel;
+            const name = refLabel ? `${refLabel} - ${titleLabel}`.trim() : titleLabel;
             setCreatePotGoal(goal);
             setCreatePotName(name || 'Goal pot');
             setCreatePotError('');
