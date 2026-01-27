@@ -576,8 +576,11 @@ const EnhancedBudgetSettings: React.FC = () => {
     const handleGoalPotChange = async (goal: any, potId: string) => {
         if (!currentUser) return;
         if (potId === '__create__') {
+            const refLabel = (goal?.ref || goal?.referenceNumber || '').toString().trim();
+            const titleLabel = (goal?.title || '').toString().trim();
+            const name = refLabel ? `${refLabel} — ${titleLabel}`.trim() : titleLabel;
             setCreatePotGoal(goal);
-            setCreatePotName(`${goal.id} ${goal.title || ''}`.trim());
+            setCreatePotName(name || 'Goal pot');
             setCreatePotError('');
             return;
         }
