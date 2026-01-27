@@ -29,7 +29,59 @@
 }
 
 .unified-planner .planner-calendar-wrapper {
-  background: var(--bs-body-bg);
+  background: var(--bs-secondary-bg, #0f172a);
+  color: var(--bs-body-color);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-bottom: 16px;
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-calendar {
+  background: transparent;
+  color: var(--bs-body-color);
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-time-view,
+.unified-planner .planner-calendar-wrapper .rbc-time-view .rbc-time-gutter,
+.unified-planner .planner-calendar-wrapper .rbc-time-view .rbc-day-slot,
+.unified-planner .planner-calendar-wrapper .rbc-time-content {
+  background: rgba(15, 23, 42, 0.9);
+  color: var(--bs-body-color);
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-time-slot {
+  border-top: 1px solid rgba(226, 232, 240, 0.1);
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-time-content .rbc-time-slot {
+  background: rgba(15, 23, 42, 0.85);
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-time-content .rbc-slot-selectable:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-event,
+.unified-planner .planner-calendar-wrapper .rbc-event .rbc-event-label {
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.2), rgba(249, 115, 22, 0.4));
+  border-color: rgba(249, 115, 22, 0.6);
+  color: #fff;
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-time-header {
+  background: rgba(15, 23, 42, 0.85);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.15);
+  color: var(--bs-body-color);
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-toolbar {
+  background: transparent;
+  border: none;
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-btn-group .btn {
+  border-color: rgba(148, 163, 184, 0.3);
+  color: var(--bs-body-color);
 }
 
 .unified-planner .chore-pill {

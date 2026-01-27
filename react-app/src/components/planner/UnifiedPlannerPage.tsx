@@ -1138,19 +1138,6 @@ const UnifiedPlannerPage: React.FC = () => {
                   )}
                   Replan around calendar
                 </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={handleAutoPlan}
-                  disabled={planner.loading || planning}
-                >
-                  {planning ? (
-                    <Spinner size="sm" animation="border" className="me-2" />
-                  ) : (
-                    <Sparkles size={16} className="me-1" />
-                  )}
-                  Auto-plan with AI
-                </Button>
               </div>
             </Card.Header>
             {feedback && (
