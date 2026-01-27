@@ -20,17 +20,19 @@ const {
   toMonthKey,
   normaliseMerchantName,
 } = require('./monzo/shared');
+const { DEFAULT_FINANCE_CATEGORIES, mergeFinanceCategories } = require('./finance/categories');
 const DEFAULT_TIMEZONE = 'Europe/London';
 const {
   buildDailySummaryData,
   buildDataQualitySnapshot,
+  buildFinanceSummary,
   loadSchedulerInputs,
   ensureFirestore,
   resolveTimezone,
 } = require('./lib/reporting');
 // Nightly orchestration helpers (auto-pointing, conversion, priority, calendar)
 const nightlyOrchestration = require('./nightlyOrchestration');
-const { renderDailySummaryEmail, renderDataQualityEmail } = require('./lib/templates');
+const { renderDailySummaryEmail, renderWeeklyFinanceSummaryEmail, renderSpendAnomalyEmail, renderDataQualityEmail } = require('./lib/templates');
 const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('./services/mediaImportController');
 const { aggregateTransactions } = require('./finance/dashboard');
 const { buildAbsoluteUrl, buildEntityPath, buildEntityUrl } = require('./utils/urlHelpers');
@@ -4037,6 +4039,24 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     });
   });
 
+  const aiMappingsSnap = await db.collection('monzo_ai_merchant_categories')
+    .where('ownerUid', '==', uid)
+    .get();
+  const aiMerchantMap = new Map();
+  aiMappingsSnap.forEach((d) => {
+    const data = d.data() || {};
+    const key = String(data.merchantKey || '').trim();
+    if (!key) return;
+    if (!data.aiCategoryKey) return;
+    aiMerchantMap.set(key, {
+      key: data.aiCategoryKey,
+      label: data.aiCategoryLabel || null,
+      bucket: data.aiBucket || null,
+      reduceSuggestion: data.aiReduceSuggestion || null,
+      model: data.aiModel || null,
+    });
+  });
+
   while (true) {
     const params = new URLSearchParams();
     params.set('account_id', accountId);
@@ -4125,19 +4145,19 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
         const m = merchantMap.get(merchantKey);
         docData.userCategoryType = m.type;
         if (m.label) docData.userCategoryLabel = m.label;
-      } else if (merchantName && amount < 0 && !docData.userCategoryType) {
-        // LLM Auto-Categorization for uncategorised spend
-        // We do this inline for now, but in production this might be better as a background trigger
-        // to avoid slowing down the sync loop too much. However, for immediate feedback, we'll try it.
-        // To avoid hitting rate limits or long delays, we'll only do it for "recent" transactions (last 7 days)
-        // or if we are backfilling a small batch.
-        const isRecent = tx.created && (Date.now() - new Date(tx.created).getTime() < 7 * 24 * 60 * 60 * 1000);
-        if (isRecent) {
-          // We will enqueue a background task or just mark it for LLM processing?
-          // Actually, let's add a flag 'needsClassification: true' and use a Firestore trigger or scheduled job.
-          // That is safer than awaiting an LLM call inside a loop.
-          docData.needsClassification = true;
-        }
+      }
+
+      // Apply AI merchant mapping if available
+      if (merchantKey && aiMerchantMap.has(merchantKey)) {
+        const m = aiMerchantMap.get(merchantKey);
+        docData.aiCategoryKey = m.key || null;
+        docData.aiCategoryLabel = m.label || null;
+        docData.aiBucket = m.bucket || null;
+        docData.aiReduceSuggestion = m.reduceSuggestion || null;
+        docData.aiModel = m.model || null;
+        docData.aiLastCategorizedAt = admin.firestore.FieldValue.serverTimestamp();
+      } else if (merchantName && amount < 0 && !docData.aiCategoryKey) {
+        docData.needsAiCategorization = true;
       }
 
       batch.set(docRef, docData, { merge: true });
@@ -4163,85 +4183,463 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
   return { count: total, lastCreated };
 }
 
-// Background Trigger: Classify new Monzo transactions with LLM
+const loadFinanceCategoriesForUser = async (db, uid) => {
+  try {
+    const snap = await db.collection('finance_categories').doc(uid).get();
+    const custom = snap.exists ? (snap.data()?.categories || []) : [];
+    return mergeFinanceCategories(custom);
+  } catch {
+    return DEFAULT_FINANCE_CATEGORIES;
+  }
+};
+
+const buildCategoryLookup = (categories) => {
+  const map = new Map();
+  categories.forEach((c) => {
+    if (!c || !c.key) return;
+    map.set(String(c.key), c);
+  });
+  return map;
+};
+
+const buildCategoryListForPrompt = (categories) => {
+  return categories
+    .map((c) => `${c.key} | ${c.label} | ${c.bucket}`)
+    .join('\n');
+};
+
+const normalizeAiCategoryResult = (result, categoriesMap) => {
+  if (!result || typeof result !== 'object') return null;
+  let key = String(result.categoryKey || result.key || '').trim();
+  if (!key || !categoriesMap.has(key)) {
+    key = categoriesMap.has('uncategorized') ? 'uncategorized' : '';
+  }
+  if (!key || !categoriesMap.has(key)) return null;
+  const category = categoriesMap.get(key);
+  return {
+    key,
+    label: category.label,
+    bucket: category.bucket,
+    reduceSuggestion: result.reduceSuggestion ? String(result.reduceSuggestion).trim() : null,
+    confidence: Number(result.confidence || 0) || null,
+  };
+};
+
+const extractAmountPence = (tx) => {
+  if (Number.isFinite(tx.amountMinor)) return Number(tx.amountMinor);
+  const raw = Number(tx.amount || 0);
+  if (!Number.isFinite(raw)) return 0;
+  if (Math.abs(raw) < 10) return Math.round(raw * 100);
+  return Math.round(raw);
+};
+
+const computePercentile = (values, percentile) => {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(percentile * (sorted.length - 1))));
+  return sorted[idx];
+};
+
+const detectSpendAnomaliesForUser = async (uid, { windowDays = 90, percentile = 0.95 } = {}) => {
+  const db = admin.firestore();
+  const start = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const startTs = admin.firestore.Timestamp.fromDate(start);
+  const snap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', uid)
+    .where('createdAt', '>=', startTs)
+    .get();
+
+  if (snap.empty) return { ok: true, threshold: null, updated: 0, count: 0, newAnomalies: [] };
+
+  const docs = snap.docs.map((d) => ({ ref: d.ref, data: d.data() || {} }));
+  const spendValues = docs
+    .map(({ data }) => extractAmountPence(data))
+    .filter((val) => val < 0)
+    .map((val) => Math.abs(val));
+
+  const threshold = computePercentile(spendValues, percentile);
+  if (!threshold) return { ok: true, threshold: null, updated: 0, count: 0, newAnomalies: [] };
+
+  let updated = 0;
+  const newAnomalies = [];
+  const MAX_BATCH = 400;
+  let batch = db.batch();
+  let ops = 0;
+
+  for (const { ref, data } of docs) {
+    const amt = extractAmountPence(data);
+    const isSpend = amt < 0;
+    const abs = Math.abs(amt);
+    const flag = isSpend && abs >= threshold;
+    const prevFlag = !!data.aiAnomalyFlag;
+    if (flag === prevFlag && (flag ? data.aiAnomalyScore : true)) continue;
+    const update = {
+      aiAnomalyFlag: flag,
+      aiAnomalyScore: flag ? Number((abs / threshold).toFixed(2)) : admin.firestore.FieldValue.delete(),
+      aiAnomalyReason: flag ? `Above 95th percentile spend in last ${windowDays} days` : admin.firestore.FieldValue.delete(),
+      aiAnomalyDetectedAt: flag ? admin.firestore.FieldValue.serverTimestamp() : admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    batch.update(ref, update);
+    ops += 1;
+    updated += 1;
+    if (flag && !prevFlag && newAnomalies.length < 10) {
+      newAnomalies.push({
+        id: ref.id,
+        merchant: data.merchant?.name || data.counterparty?.name || data.description || 'Unknown',
+        amountPence: abs,
+        createdAt: data.createdAt || null,
+        reason: update.aiAnomalyReason,
+      });
+    }
+    if (ops >= MAX_BATCH) {
+      await batch.commit();
+      batch = db.batch();
+      ops = 0;
+    }
+  }
+
+  if (ops > 0) await batch.commit();
+
+  await db.collection('monzo_ai_anomaly_summary').doc(uid).set({
+    ownerUid: uid,
+    windowDays,
+    percentile,
+    thresholdPence: threshold,
+    updatedCount: updated,
+    lastNewAnomalies: newAnomalies.length,
+    computedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { ok: true, threshold, updated, count: spendValues.length, newAnomalies };
+};
+
+// Background Trigger: mark or apply AI categorisation for Monzo transactions
 exports.classifyMonzoTransactions = functionsV2.firestore.onDocumentWritten('monzo_transactions/{docId}', async (event) => {
   const after = event.data?.after?.data();
-  if (!after || !after.needsClassification || after.userCategoryType) return;
+  if (!after) return;
+  if (!after.needsAiCategorization) return;
+  if (after.aiCategoryKey) {
+    await event.data.after.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete(), needsClassification: admin.firestore.FieldValue.delete() });
+    return;
+  }
 
   const uid = after.ownerUid;
   const merchantName = after.merchant?.name || after.counterparty?.name || after.description;
-  const amount = after.amount;
+  const amount = Number(after.amount || 0);
 
-  if (!merchantName) return;
+  if (!uid || !merchantName || !event.data?.after?.ref) return;
 
-  try {
-    const db = admin.firestore();
-
-    // Check if we already have a mapping for this merchant (race condition check)
-    const key = normaliseMerchantName(merchantName);
-    const mappingSnap = await db.collection('merchant_mappings').doc(`${uid}_${key}`).get();
-    if (mappingSnap.exists) {
-      const m = mappingSnap.data();
+  const db = admin.firestore();
+  const merchantKey = normaliseMerchantName(merchantName);
+  const mappingRef = db.collection('monzo_ai_merchant_categories').doc(`${uid}_${merchantKey}`);
+  const mappingSnap = await mappingRef.get();
+  if (mappingSnap.exists) {
+    const m = mappingSnap.data() || {};
+    if (m.aiCategoryKey) {
       await event.data.after.ref.update({
-        userCategoryType: m.categoryType,
-        userCategoryLabel: m.label,
+        aiCategoryKey: m.aiCategoryKey,
+        aiCategoryLabel: m.aiCategoryLabel || null,
+        aiBucket: m.aiBucket || null,
+        aiReduceSuggestion: m.aiReduceSuggestion || null,
+        aiModel: m.aiModel || null,
+        aiLastCategorizedAt: admin.firestore.FieldValue.serverTimestamp(),
+        needsAiCategorization: admin.firestore.FieldValue.delete(),
         needsClassification: admin.firestore.FieldValue.delete(),
       });
+    }
+    return;
+  }
+
+  // Defer LLM heavy lifting to scheduled job unless this is a small, recent batch
+  const isRecent = after.createdAt?.toMillis ? (Date.now() - after.createdAt.toMillis() < 3 * 24 * 60 * 60 * 1000) : false;
+  if (!isRecent) return;
+
+  try {
+    const categories = await loadFinanceCategoriesForUser(db, uid);
+    const categoriesMap = buildCategoryLookup(categories);
+    const categoryList = buildCategoryListForPrompt(categories);
+
+    const system = 'You are a financial categorization assistant. Only choose from the provided categories. Respond with JSON only.';
+    const user = `
+Categorise this transaction using one of the category keys listed below. Return JSON only.
+
+Merchant: "${merchantName}"
+Description: "${after.description || ''}"
+Amount: ${amount} GBP
+Is subscription: ${after.isSubscription ? 'yes' : 'no'}
+
+Categories (key | label | bucket):
+${categoryList}
+
+Rules:
+- Pick exactly one categoryKey from the list.
+- If it is a discretionary purchase, include a short reduceSuggestion (one sentence).
+- If it is mandatory, savings, or income, reduceSuggestion should be null.
+- JSON format: {"categoryKey":"...", "reduceSuggestion":"...", "confidence":0-1}
+`;
+
+    const raw = await callLLMJson({ system, user, purpose: 'monzo_ai_category', userId: uid, expectJson: true, temperature: 0.2 });
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    const normalized = normalizeAiCategoryResult(parsed, categoriesMap);
+    if (!normalized) {
+      await event.data.after.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
       return;
     }
 
-    // Call LLM
-    const prompt = `
-      You are a financial assistant. Categorise this transaction for a personal budget.
-      Merchant: "${merchantName}"
-      Amount: ${amount} GBP
-      
-      Rules:
-      1. Category Type must be one of: 'mandatory', 'optional', 'savings', 'income'.
-      2. Category Label should be a short, descriptive string (e.g., 'Groceries', 'Eating Out', 'Transport').
-      3. 'mandatory' = bills, rent, groceries, transport, essential home items.
-      4. 'optional' = dining out, entertainment, shopping, luxury, coffee.
-      5. 'savings' = transfers to savings accounts or investments.
-      6. 'income' = salary, refunds, dividends.
-      
-      Return JSON only: { "type": "...", "label": "..." }
-    `;
-
-    const response = await callOpenAIChat({
-      system: 'You are a helpful financial categorization engine. Output JSON only.',
-      user: prompt,
-      expectJson: true,
-      temperature: 0.1,
-    });
-
-    const result = JSON.parse(response);
-    const type = (result.type || 'optional').toLowerCase();
-    const label = result.label || 'Uncategorised';
-
-    // Save to transaction
     await event.data.after.ref.update({
-      userCategoryType: type,
-      userCategoryLabel: label,
+      aiCategoryKey: normalized.key,
+      aiCategoryLabel: normalized.label,
+      aiBucket: normalized.bucket,
+      aiReduceSuggestion: normalized.reduceSuggestion || null,
+      aiLastCategorizedAt: admin.firestore.FieldValue.serverTimestamp(),
+      aiModel: 'llm',
+      needsAiCategorization: admin.firestore.FieldValue.delete(),
       needsClassification: admin.firestore.FieldValue.delete(),
-      aiClassified: true,
     });
 
-    // Save to merchant mappings so we don't ask again
-    await db.collection('merchant_mappings').doc(`${uid}_${key}`).set({
+    await mappingRef.set({
       ownerUid: uid,
-      merchantKey: key,
-      label,
-      categoryType: type,
+      merchantKey,
+      aiCategoryKey: normalized.key,
+      aiCategoryLabel: normalized.label,
+      aiBucket: normalized.bucket,
+      aiReduceSuggestion: normalized.reduceSuggestion || null,
+      aiModel: 'llm',
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       source: 'llm_auto',
     }, { merge: true });
-
   } catch (e) {
     console.error('[classifyMonzoTransactions] failed', e);
-    // Remove flag to prevent infinite retries if it's a permanent error, 
-    // but for now we might want to leave it or use a retry count.
-    // We'll delete the flag to be safe.
-    await event.data.after.ref.update({ needsClassification: admin.firestore.FieldValue.delete() });
+    await event.data.after.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+  }
+});
+
+const categorizeMerchantWithLLM = async ({ uid, merchantName, description, amount, isSubscription, categories, categoriesMap }) => {
+  const categoryList = buildCategoryListForPrompt(categories);
+  const system = 'You are a financial categorization assistant. Only choose from the provided categories. Respond with JSON only.';
+  const user = `
+Categorise this transaction using one of the category keys listed below. Return JSON only.
+
+Merchant: "${merchantName}"
+Description: "${description || ''}"
+Amount: ${amount} GBP
+Is subscription: ${isSubscription ? 'yes' : 'no'}
+
+Categories (key | label | bucket):
+${categoryList}
+
+Rules:
+- Pick exactly one categoryKey from the list.
+- If it is a discretionary purchase, include a short reduceSuggestion (one sentence).
+- If it is mandatory, savings, or income, reduceSuggestion should be null.
+- JSON format: {"categoryKey":"...", "reduceSuggestion":"...", "confidence":0-1}
+`;
+
+  const raw = await callLLMJson({ system, user, purpose: 'monzo_ai_category', userId: uid, expectJson: true, temperature: 0.2 });
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  return normalizeAiCategoryResult(parsed, categoriesMap);
+};
+
+const applyAiMappingToTransaction = async (ref, mapping) => {
+  const update = {
+    aiCategoryKey: mapping.key,
+    aiCategoryLabel: mapping.label || null,
+    aiBucket: mapping.bucket || null,
+    aiReduceSuggestion: mapping.reduceSuggestion || null,
+    aiLastCategorizedAt: admin.firestore.FieldValue.serverTimestamp(),
+    aiModel: mapping.model || 'llm',
+    needsAiCategorization: admin.firestore.FieldValue.delete(),
+    needsClassification: admin.firestore.FieldValue.delete(),
+  };
+  await ref.update(update);
+};
+
+exports.monzoAiCategorizationSweep = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+  secrets: [GOOGLE_AI_STUDIO_API_KEY],
+}, async () => {
+  const db = ensureFirestore();
+  const pendingSnap = await db.collection('monzo_transactions')
+    .where('needsAiCategorization', '==', true)
+    .limit(200)
+    .get();
+  if (pendingSnap.empty) return;
+
+  const byUser = new Map();
+  pendingSnap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const uid = data.ownerUid;
+    if (!uid) return;
+    if (!byUser.has(uid)) byUser.set(uid, []);
+    byUser.get(uid).push({ ref: doc.ref, data });
+  });
+
+  for (const [uid, items] of byUser.entries()) {
+    const categories = await loadFinanceCategoriesForUser(db, uid);
+    const categoriesMap = buildCategoryLookup(categories);
+    const merchantCache = new Map();
+
+    for (const item of items) {
+      const data = item.data || {};
+      const merchantName = data.merchant?.name || data.counterparty?.name || data.description;
+      const merchantKey = merchantName ? normaliseMerchantName(merchantName) : null;
+      if (!merchantName || !merchantKey) {
+        await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+        continue;
+      }
+
+      if (merchantCache.has(merchantKey)) {
+        const cached = merchantCache.get(merchantKey);
+        if (cached) {
+          await applyAiMappingToTransaction(item.ref, cached);
+        } else {
+          await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+        }
+        continue;
+      }
+
+      const mappingRef = db.collection('monzo_ai_merchant_categories').doc(`${uid}_${merchantKey}`);
+      const mappingSnap = await mappingRef.get();
+      if (mappingSnap.exists) {
+        const m = mappingSnap.data() || {};
+        if (m.aiCategoryKey) {
+          const mapping = {
+            key: m.aiCategoryKey,
+            label: m.aiCategoryLabel,
+            bucket: m.aiBucket,
+            reduceSuggestion: m.aiReduceSuggestion,
+            model: m.aiModel || 'llm',
+          };
+          merchantCache.set(merchantKey, mapping);
+          await applyAiMappingToTransaction(item.ref, mapping);
+          continue;
+        }
+      }
+
+      try {
+        const normalized = await categorizeMerchantWithLLM({
+          uid,
+          merchantName,
+          description: data.description || '',
+          amount: Number(data.amount || 0),
+          isSubscription: !!data.isSubscription,
+          categories,
+          categoriesMap,
+        });
+        if (!normalized) {
+          merchantCache.set(merchantKey, null);
+          await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+          continue;
+        }
+        const mapping = {
+          key: normalized.key,
+          label: normalized.label,
+          bucket: normalized.bucket,
+          reduceSuggestion: normalized.reduceSuggestion || null,
+          model: 'llm',
+        };
+        merchantCache.set(merchantKey, mapping);
+        await applyAiMappingToTransaction(item.ref, mapping);
+        await mappingRef.set({
+          ownerUid: uid,
+          merchantKey,
+          aiCategoryKey: mapping.key,
+          aiCategoryLabel: mapping.label,
+          aiBucket: mapping.bucket,
+          aiReduceSuggestion: mapping.reduceSuggestion || null,
+          aiModel: 'llm',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          source: 'llm_auto',
+        }, { merge: true });
+      } catch (err) {
+        console.warn('[monzoAiCategorizationSweep] failed', err?.message || err);
+        await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+      }
+    }
+  }
+});
+
+exports.backfillMonzoAiCategorization = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.max(7, Math.min(Number(req.data?.days || 365), 3650));
+  const maxDocs = Math.max(50, Math.min(Number(req.data?.limit || 1000), 5000));
+  const db = admin.firestore();
+  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const startTs = admin.firestore.Timestamp.fromDate(start);
+  const snap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', uid)
+    .where('createdAt', '>=', startTs)
+    .limit(maxDocs)
+    .get();
+
+  let updated = 0;
+  const batch = db.batch();
+  snap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    if (data.aiCategoryKey || data.needsAiCategorization) return;
+    batch.update(doc.ref, { needsAiCategorization: true });
+    updated += 1;
+  });
+  if (updated > 0) await batch.commit();
+  return { ok: true, updated };
+});
+
+exports.monzoSpendAnomalySweep = schedulerV2.onSchedule({
+  schedule: 'every day 02:15',
+  timeZone: 'UTC',
+  memory: '512MiB',
+  secrets: [defineSecret('BREVO_API_KEY')],
+}, async () => {
+  const db = ensureFirestore();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
+  for (const doc of tokens.docs) {
+    const data = doc.data() || {};
+    const uid = data.ownerUid || String(doc.id).replace(/_monzo$/, '');
+    if (!uid) continue;
+    try {
+      const result = await detectSpendAnomaliesForUser(uid, { windowDays: 90, percentile: 0.95 });
+      if (result?.newAnomalies && result.newAnomalies.length) {
+        const profileSnap = await db.collection('profiles').doc(uid).get();
+        const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+        if (profile.email && profile.monzoAnomalyEmailEnabled !== false) {
+          let currency = profile.currency || 'GBP';
+          try {
+            const budgetSnap = await db.collection('monzo_budget_summary').doc(uid).get();
+            if (budgetSnap.exists) {
+              const budget = budgetSnap.data() || {};
+              currency = budget.currency || currency;
+            }
+          } catch { }
+          const html = renderSpendAnomalyEmail({
+            profile,
+            anomalies: result.newAnomalies,
+            currency,
+            metadata: {
+              windowLabel: 'the last 90 days',
+              generatedAt: new Date().toISOString(),
+              timezone: profile.timezone || DEFAULT_TIMEZONE,
+            },
+          });
+          await sendEmail({
+            to: profile.email,
+            subject: 'BOB · Spend Anomaly Alert',
+            html,
+          });
+          await db.collection('monzo_ai_anomaly_summary').doc(uid).set({
+            lastNotifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastNotifiedCount: result.newAnomalies.length,
+          }, { merge: true });
+        }
+      }
+    } catch (err) {
+      console.warn('[monzoSpendAnomalySweep] failed', { uid, error: err?.message || err });
+    }
   }
 });
 
@@ -12277,6 +12675,7 @@ exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_A
 
 const DAILY_SUMMARY_TARGET_MINUTES = 5 * 60; // 05:00 local
 const DATA_QUALITY_TARGET_MINUTES = 5 * 60; // 05:00 local
+const WEEKLY_FINANCE_TARGET_MINUTES = 6 * 60; // 06:00 local
 const DISPATCH_WINDOW_MINUTES = 10;
 
 function shouldTriggerWindow(nowLocal, targetMinutes, alreadySentDayIso) {
@@ -12286,6 +12685,45 @@ function shouldTriggerWindow(nowLocal, targetMinutes, alreadySentDayIso) {
   const minutesSinceMidnight = nowLocal.hour * 60 + nowLocal.minute;
   const diff = Math.abs(minutesSinceMidnight - targetMinutes);
   return { shouldSend: diff <= DISPATCH_WINDOW_MINUTES, dayIso };
+}
+
+function shouldTriggerWeeklyWindow(nowLocal, targetMinutes, alreadySentWeekIso) {
+  if (!nowLocal) return { shouldSend: false, weekIso: null };
+  const weekIso = nowLocal.startOf('week').toISODate();
+  if (alreadySentWeekIso === weekIso) return { shouldSend: false, weekIso };
+  if (nowLocal.weekday !== 1) return { shouldSend: false, weekIso }; // Monday
+  const minutesSinceMidnight = nowLocal.hour * 60 + nowLocal.minute;
+  const diff = Math.abs(minutesSinceMidnight - targetMinutes);
+  return { shouldSend: diff <= DISPATCH_WINDOW_MINUTES, weekIso };
+}
+
+async function buildFinanceCommentary({ summary, userId, windowLabel }) {
+  if (!summary || !summary.transactionCount) return null;
+  const buckets = Object.entries(summary.buckets || {})
+    .filter(([bucket]) => bucket !== 'bank_transfer' && bucket !== 'unknown')
+    .map(([bucket, amount]) => ({ bucket, amountPence: Math.abs(Number(amount || 0)) }))
+    .sort((a, b) => b.amountPence - a.amountPence)
+    .slice(0, 4);
+  const payload = {
+    window: windowLabel,
+    totalSpendPence: summary.totalSpendPence || 0,
+    totalIncomePence: summary.totalIncomePence || 0,
+    buckets,
+    topMerchants: (summary.topMerchants || []).slice(0, 5),
+    anomalies: (summary.anomalies || []).slice(0, 5),
+  };
+
+  const system = 'You are a budgeting assistant. Provide a short, friendly commentary with up to 3 bullet points. Highlight any anomalies and discretionary opportunities. Keep under 500 characters.';
+  const user = `Summarize the spend data for ${windowLabel}. Data (pence): ${JSON.stringify(payload)}`;
+
+  try {
+    const text = await callLLMJson({ system, user, purpose: 'finance_commentary', userId, expectJson: false, temperature: 0.2 });
+    if (!text) return null;
+    return String(text).trim().slice(0, 600);
+  } catch (err) {
+    console.warn('[finance-commentary] failed', err?.message || err);
+    return null;
+  }
 }
 
 async function recordAutomationStatus(db, { userId, automation, dayIso, status, message, runId }) {
@@ -12336,6 +12774,14 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
     summaryData.priorityNarrative = aiFocus;
   }
 
+  if (summaryData.financeDaily && summaryData.financeDaily.transactionCount) {
+    summaryData.financeCommentary = await buildFinanceCommentary({
+      summary: summaryData.financeDaily,
+      userId,
+      windowLabel: summaryData.metadata.dayIso || 'today',
+    });
+  }
+
   if (runContext?.maintenanceSummary) {
     summaryData.maintenance = runContext.maintenanceSummary;
   } else {
@@ -12370,6 +12816,86 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
   });
 
   return { skipped: false, dayIso: summaryData.metadata.dayIso };
+}
+
+async function dispatchWeeklyFinanceSummaryForUser({ db, userId, profile, nowUtc, force = false }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = nowUtc.setZone(coerceZone(zone));
+  const statusSnap = await db.collection('automation_status').doc(`weekly_finance_summary_${userId}`).get();
+  const lastSentWeek = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
+  const { shouldSend, weekIso } = shouldTriggerWeeklyWindow(nowLocal, WEEKLY_FINANCE_TARGET_MINUTES, lastSentWeek);
+  if (!shouldSend && !force) return { skipped: true, reason: 'window_miss', weekIso };
+
+  const anchor = nowLocal.minus({ days: 1 });
+  const weekStart = anchor.startOf('week');
+  const weekEnd = anchor.endOf('week');
+  const startTs = admin.firestore.Timestamp.fromDate(weekStart.toJSDate());
+  const endTs = admin.firestore.Timestamp.fromDate(weekEnd.plus({ days: 1 }).startOf('day').toJSDate());
+
+  const txSnap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', userId)
+    .where('createdAt', '>=', startTs)
+    .where('createdAt', '<', endTs)
+    .orderBy('createdAt', 'desc')
+    .limit(2500)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const transactions = txSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const financeSummary = buildFinanceSummary(transactions);
+
+  let currency = profile?.currency || 'GBP';
+  try {
+    const budgetSnap = await db.collection('monzo_budget_summary').doc(userId).get();
+    if (budgetSnap.exists) {
+      const data = budgetSnap.data() || {};
+      currency = data.currency || currency;
+    }
+  } catch { }
+
+  const windowLabel = `${weekStart.toISODate()} → ${weekEnd.toISODate()}`;
+  const financeCommentary = await buildFinanceCommentary({
+    summary: financeSummary,
+    userId,
+    windowLabel,
+  });
+
+  const payload = {
+    profile,
+    financeSummary,
+    financeCommentary,
+    currency,
+    metadata: {
+      weekIso,
+      windowLabel,
+      timezone: zone,
+      generatedAt: new Date().toISOString(),
+    },
+  };
+
+  const html = renderWeeklyFinanceSummaryEmail(payload);
+  const subject = `Weekly Spend Summary · ${weekStart.toISODate()}`;
+
+  let emailResult = null;
+  if (profile.email) {
+    emailResult = await sendEmail({ to: profile.email, subject, html });
+  }
+
+  await db.collection('weekly_finance_summaries').doc(`${userId}_${weekIso}`).set({
+    userId,
+    ownerUid: userId,
+    weekIso,
+    windowStart: weekStart.toISO(),
+    windowEnd: weekEnd.toISO(),
+    summary: financeSummary,
+    commentary: financeCommentary || null,
+    currency,
+    email: profile.email || null,
+    emailResult: emailResult ? { messageId: emailResult.messageId || null, response: emailResult.response || null } : null,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { skipped: false, weekIso };
 }
 
 async function dispatchDataQualityForUser({ db, userId, profile, nowUtc, force = false }) {
@@ -12472,6 +12998,42 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
       console.error('[data-quality] failed', { userId, error });
       await db.collection('automation_runs').doc(runId).set({ status: 'error', error: error.message || String(error), completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       await recordAutomationStatus(db, { userId, automation: 'data_quality', dayIso: nowUtc.toISODate(), status: 'error', message: error.message || String(error), runId });
+    }
+  }
+});
+
+exports.dispatchWeeklyFinanceSummaryEmail = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    const userId = doc.id;
+    if (profile.weeklyFinanceSummaryEnabled === false) continue;
+    if (!profile.email && profile.weeklyFinanceRequireEmail !== false) continue;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'weekly_finance_summary',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const result = await dispatchWeeklyFinanceSummaryForUser({ db, userId, profile, nowUtc });
+      if (!result.skipped) {
+        await recordAutomationStatus(db, { userId, automation: 'weekly_finance_summary', dayIso: result.weekIso, status: 'success', runId });
+      }
+      await db.collection('automation_runs').doc(runId).set({ status: result.skipped ? 'skipped' : 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    } catch (error) {
+      console.error('[weekly-finance-summary] failed', { userId, error });
+      await db.collection('automation_runs').doc(runId).set({ status: 'error', error: error.message || String(error), completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await recordAutomationStatus(db, { userId, automation: 'weekly_finance_summary', dayIso: nowUtc.toISODate(), status: 'error', message: error.message || String(error), runId });
     }
   }
 });

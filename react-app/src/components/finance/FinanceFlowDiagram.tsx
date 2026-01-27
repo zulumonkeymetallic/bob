@@ -97,13 +97,18 @@ const FinanceFlowDiagram: React.FC = () => {
     const bucketCategoryTotals: Record<string, Record<string, number>> = {};
     const categoryMerchantTotals: Record<string, Record<string, number>> = {};
 
+    const formatNodeLabel = (raw: string) =>
+      String(raw || '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+
     txs.forEach((t: any) => {
       const amount = typeof t.amount === 'number' ? t.amount : 0;
       if (amount >= 0) return; // only spend
-      const bucket = (t.categoryType || 'optional').toLowerCase();
+      const bucket = String(t.aiBucket || t.categoryType || 'optional').toLowerCase();
       if (bucket === 'bank_transfer' || bucket === 'income' || bucket === 'net_salary' || bucket === 'irregular_income') return;
-      const category = (t.categoryKey || t.categoryLabel || 'uncategorised').toLowerCase();
-      const merchant = (t.merchantName || 'merchant').toLowerCase();
+      const category = String(t.aiCategoryKey || t.categoryKey || t.aiCategoryLabel || t.categoryLabel || 'uncategorised');
+      const merchant = String(t.merchantName || 'merchant');
       bucketTotals[bucket] = (bucketTotals[bucket] || 0) + Math.abs(amount);
       if (!bucketCategoryTotals[bucket]) bucketCategoryTotals[bucket] = {};
       bucketCategoryTotals[bucket][category] = (bucketCategoryTotals[bucket][category] || 0) + Math.abs(amount);
@@ -114,19 +119,19 @@ const FinanceFlowDiagram: React.FC = () => {
     const root = addNode('Total Spend');
 
     Object.entries(bucketTotals).forEach(([bucket, val], idx) => {
-      const bucketNode = addNode(bucket.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), palette[idx % palette.length]);
+      const bucketNode = addNode(formatNodeLabel(bucket), palette[idx % palette.length]);
       links.push({ source: root, target: bucketNode, value: val, color: palette[idx % palette.length] });
 
       const catTotals = Object.entries(bucketCategoryTotals[bucket] || {})
         .sort((a, b) => b[1] - a[1]);
       catTotals.forEach(([cat, catVal], cIdx) => {
-        const catNode = addNode(cat, palette[(idx + cIdx) % palette.length]);
+        const catNode = addNode(formatNodeLabel(cat), palette[(idx + cIdx) % palette.length]);
         links.push({ source: bucketNode, target: catNode, value: catVal, color: palette[(idx + cIdx) % palette.length] });
 
         const merchTotals = Object.entries(categoryMerchantTotals[cat] || {})
           .sort((a, b) => b[1] - a[1]);
         merchTotals.forEach(([merchant, merchVal], mIdx) => {
-          const merchNode = addNode(merchant, palette[(idx + cIdx + mIdx) % palette.length]);
+          const merchNode = addNode(formatNodeLabel(merchant), palette[(idx + cIdx + mIdx) % palette.length]);
           links.push({ source: catNode, target: merchNode, value: merchVal, color: palette[(idx + cIdx + mIdx) % palette.length] });
         });
       });
@@ -172,7 +177,7 @@ const FinanceFlowDiagram: React.FC = () => {
   const totalSpend = Math.abs((data.totalSpend || 0) - bankTransfer);
   const distributionData = Object.entries(data.spendByCategory || {})
     .filter(([key]) => key !== 'bank_transfer')
-    .map(([key, value]: [string, any]) => ({ name: key, value: Math.abs(value) }))
+    .map(([key, value]: [string, any]) => ({ name: String(key).replace(/_/g, ' '), value: Math.abs(value) }))
     .sort((a, b) => b.value - a.value);
 
   const trendPoints = (() => {
@@ -194,6 +199,41 @@ const FinanceFlowDiagram: React.FC = () => {
   const trendKeys = Object.keys(data.timeSeriesByBucket || {}).filter(
     (b) => !['bank_transfer', 'income', 'net_salary', 'irregular_income'].includes(b)
   );
+
+  const cashFlowPoints = (() => {
+    const ts = data.timeSeriesByBucket || {};
+    const months = new Set<string>();
+    Object.values(ts).forEach((arr: any) => (arr || []).forEach((p: any) => months.add(p.month)));
+    const sortedMonths = Array.from(months).sort();
+    return sortedMonths.map((month) => {
+      let income = 0;
+      let outgoing = 0;
+      Object.entries(ts).forEach(([bucket, arr]: [string, any]) => {
+        const found = (arr || []).find((p: any) => p.month === month);
+        if (!found) return;
+        const amount = Number(found.amount || 0);
+        const lower = String(bucket || '').toLowerCase();
+        if (['income', 'net_salary', 'irregular_income'].includes(lower)) {
+          income += Math.abs(amount);
+        } else if (!['bank_transfer', 'unknown'].includes(lower)) {
+          outgoing += Math.abs(amount);
+        }
+      });
+      return { month, income, outgoing };
+    });
+  })();
+
+  const cashFlowOption = {
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['Income', 'Outgoing'] },
+    grid: { left: 45, right: 10, top: 30, bottom: 30 },
+    xAxis: { type: 'category', data: cashFlowPoints.map((p) => p.month) },
+    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => formatMoney(v, 0) } },
+    series: [
+      { name: 'Income', type: 'bar', data: cashFlowPoints.map((p) => p.income), color: '#22c55e' },
+      { name: 'Outgoing', type: 'bar', data: cashFlowPoints.map((p) => p.outgoing), color: '#ef4444' },
+    ],
+  };
 
   const trendOption = {
     tooltip: { trigger: 'axis' },
@@ -298,6 +338,43 @@ const FinanceFlowDiagram: React.FC = () => {
               <ReactECharts option={trendOption} style={{ height: '100%' }} />
             </PremiumCard>
           </div>
+        </Col>
+      </Row>
+
+      <Row className="g-4 mt-1">
+        <Col lg={8}>
+          <PremiumCard title="Income vs Outgoing" icon={TrendingUp} height={320}>
+            <div className="small text-muted mb-2">Monthly comparison from Monzo activity.</div>
+            <ReactECharts option={cashFlowOption} style={{ height: '100%' }} />
+          </PremiumCard>
+        </Col>
+        <Col lg={4}>
+          <PremiumCard title="Spend Anomalies" icon={Activity} height={320}>
+            {Array.isArray(data.anomalyTransactions) && data.anomalyTransactions.length ? (
+              <div className="small text-muted overflow-auto" style={{ maxHeight: 240 }}>
+                <table className="table table-sm table-dark table-striped mb-0">
+                  <thead>
+                    <tr>
+                      <th>Merchant</th>
+                      <th className="text-end">Amount</th>
+                      <th>Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.anomalyTransactions.map((tx: any) => (
+                      <tr key={tx.id}>
+                        <td>{tx.merchantName || 'Unknown'}</td>
+                        <td className="text-end">{formatMoney(tx.amount || 0, 0)}</td>
+                        <td className="small">{tx.aiAnomalyReason || 'Anomaly'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-muted small">No anomalies detected in the last 90 days.</div>
+            )}
+          </PremiumCard>
         </Col>
       </Row>
     </div>

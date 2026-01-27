@@ -32,6 +32,64 @@ const GOAL_STATUS_MAP = {
   4: 'deferred',
 };
 
+const extractAmountPence = (tx) => {
+  if (Number.isFinite(tx.amountMinor)) return Number(tx.amountMinor);
+  const raw = Number(tx.amount || 0);
+  if (!Number.isFinite(raw)) return 0;
+  if (Math.abs(raw) < 10) return Math.round(raw * 100);
+  return Math.round(raw);
+};
+
+const resolveFinanceBucket = (tx) => {
+  const raw = tx.aiBucket || tx.userCategoryType || tx.defaultCategoryType || 'unknown';
+  const bucket = String(raw || '').toLowerCase();
+  return bucket === 'optional' ? 'discretionary' : bucket;
+};
+
+const buildFinanceSummary = (transactions = []) => {
+  const summary = {
+    totalSpendPence: 0,
+    totalIncomePence: 0,
+    buckets: {},
+    topMerchants: [],
+    anomalies: [],
+    transactionCount: 0,
+    spendCount: 0,
+    incomeCount: 0,
+  };
+  const merchantTotals = {};
+  transactions.forEach((tx) => {
+    summary.transactionCount += 1;
+    const amount = extractAmountPence(tx);
+    const bucket = resolveFinanceBucket(tx);
+    const isIncome = ['income', 'net_salary', 'irregular_income'].includes(bucket);
+    if (amount < 0 && !isIncome) {
+      summary.totalSpendPence += Math.abs(amount);
+      summary.spendCount += 1;
+    }
+    if (amount > 0 && isIncome) {
+      summary.totalIncomePence += amount;
+      summary.incomeCount += 1;
+    }
+    if (!summary.buckets[bucket]) summary.buckets[bucket] = 0;
+    summary.buckets[bucket] += amount;
+    const merchant = tx.merchant?.name || tx.counterparty?.name || tx.description || 'Unknown';
+    merchantTotals[merchant] = (merchantTotals[merchant] || 0) + Math.abs(amount);
+    if (tx.aiAnomalyFlag) {
+      summary.anomalies.push({
+        merchant,
+        amountPence: Math.abs(amount),
+        reason: tx.aiAnomalyReason || 'Anomaly',
+      });
+    }
+  });
+  summary.topMerchants = Object.entries(merchantTotals)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([merchant, total]) => ({ merchant, totalPence: total }));
+  return summary;
+};
+
 const ensureFirestore = () => {
   if (!admin.apps.length) {
     admin.initializeApp();
@@ -340,6 +398,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     routinesSnap,
     goalsAllSnap,
     sprintsSnap,
+    monzoTxSnap,
   ] = await Promise.all([
     db.collection('tasks').where('ownerUid', '==', userId).get(),
     db.collection('stories').where('ownerUid', '==', userId).get(),
@@ -356,6 +415,14 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     db.collection('routines').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
     db.collection('goals').where('ownerUid', '==', userId).get(),
     db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('monzo_transactions')
+      .where('ownerUid', '==', userId)
+      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(start.toJSDate()))
+      .where('createdAt', '<', admin.firestore.Timestamp.fromDate(end.toJSDate()))
+      .orderBy('createdAt', 'desc')
+      .limit(400)
+      .get()
+      .catch(() => ({ docs: [] })),
   ]);
 
   const taskDocs = toList(tasksSnap);
@@ -368,6 +435,8 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const goalsAll = toList(goalsAllSnap);
   const goalLookup = new Map(goalsAll.map((goal) => [goal.id, goal]));
   const sprints = toList(sprintsSnap);
+  const monzoTransactions = toList(monzoTxSnap);
+  const financeDaily = monzoTransactions.length ? buildFinanceSummary(monzoTransactions) : null;
 
   const resolveActiveSprint = (sprintList) => {
     if (!Array.isArray(sprintList) || !sprintList.length) return null;
@@ -1144,6 +1213,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     worldSummary: worldSummary ? { summary: worldSummary, weather: worldWeather, source: worldSource } : null,
     fitness,
     monzo,
+    financeDaily,
     financeAlerts,
     profile,
     schedulerChanges,
@@ -1459,6 +1529,7 @@ module.exports = {
   loadProfile,
   resolveTimezone,
   buildActivityIndex,
+  buildFinanceSummary,
   buildDailySummaryData,
   buildDataQualitySnapshot,
   loadSchedulerInputs,

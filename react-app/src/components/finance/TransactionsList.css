@@ -62,7 +62,12 @@
 
 .finance-row:hover {
      background: #f8fbff;
- }
+}
+
+.finance-row--anomaly {
+     background: #fff1f2;
+     border-left: 4px solid #ef4444;
+}
 
 .finance-row-group {
      grid-template-columns: 1fr;

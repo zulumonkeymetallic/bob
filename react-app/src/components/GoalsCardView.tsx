@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Card, Badge, Button, Dropdown, Modal, Alert, Toast, ToastContainer, Form } from 'react-bootstrap';
-import { Edit3, Trash2, ChevronDown, Target, Calendar, User, Hash, MessageCircle, ChevronUp, Plus, Clock, CalendarPlus, Wand2, Activity } from 'lucide-react';
+import { Card, Badge, Button, Modal, Alert, Toast, ToastContainer, Form } from 'react-bootstrap';
+import { Edit3, Target, Calendar, User, CalendarPlus, Wand2, Activity } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -488,37 +488,13 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             ? ActivityStreamService.formatTimestamp(latestActivity.timestamp)
             : '';
           const latestActivityUser = latestActivity?.userEmail ? latestActivity.userEmail.split('@')[0] : '';
-          const activityButton = (
-            <Button
-              variant={showDetailed ? 'outline-light' : 'outline-primary'}
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleViewActivityStream(goal, e);
-              }}
-              className={showDetailed ? '' : 'goals-card-activity-button--icon'}
-              style={{
-                fontSize: showDetailed ? '12px' : '0',
-                padding: showDetailed ? '4px 8px' : '6px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: showDetailed ? '4px' : '0'
-              }}
-              aria-label="Open activity stream"
-            >
-              <MessageCircle size={showDetailed ? 12 : 14} />
-              {showDetailed && 'Activity'}
-            </Button>
-          );
-
           return (
             <div key={goal.id} className="goals-card-tile">
               <Card
                 className={`h-100 goals-card goals-card--${showDetailed ? 'comfortable' : 'grid'}`}
                 style={{
                 height: '100%',
-                minHeight: showDetailed ? 320 : 260,
-                maxHeight: showDetailed ? 380 : 320,
+                minHeight: showDetailed ? 300 : 220,
                 border: isSelected ? `3px solid ${themeColor}` : `1px solid ${rgbaCard(0.06)}`,
                 boxShadow: isSelected ? '0 0 0 0 transparent' : '0 10px 24px var(--glass-shadow-color)',
                 borderRadius: showDetailed ? '16px' : '14px',
@@ -569,12 +545,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       fontSize: titleFontSize, 
                       fontWeight: '600',
                       lineHeight: '1.3',
-                      wordBreak: 'break-word',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      display: '-webkit-box',
-                    WebkitLineClamp: 2,
-                    WebkitBoxOrient: 'vertical'
+                      wordBreak: 'break-word'
                   }}>
                       {goal.title}
                     </h5>
@@ -635,85 +606,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     >
                       <CalendarPlus size={14} />
                     </Button>
-                    <Dropdown onClick={(e) => e.stopPropagation()}>
-                      <Dropdown.Toggle 
-                        variant="outline-secondary" 
-                        size="sm"
-                        style={{ border: 'none', padding: '4px 8px' }}
-                      >
-                        <ChevronDown size={16} />
-                      </Dropdown.Toggle>
-                      <Dropdown.Menu style={{ zIndex: 2000 }} popperConfig={{ strategy: 'fixed' }}>
-                        <Dropdown.Item 
-                          onClick={() => setShowEditModal(goal)}
-                        >
-                          <Edit3 size={14} className="me-2" />
-                          Edit Goal
-                        </Dropdown.Item>
-                        <Dropdown.Item 
-                          onClick={() => setShowAddStoryModal(goal.id)}
-                        >
-                          <Plus size={14} className="me-2" />
-                          Add Story
-                        </Dropdown.Item>
-                        <Dropdown.Item 
-                          onClick={() => handleAutoGenerateStories(goal)}
-                          disabled={generatingForGoal === goal.id}
-                        >
-                          {generatingForGoal === goal.id ? (
-                            <>
-                              <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                              Generating Stories...
-                            </>
-                          ) : (
-                            <>Auto-Generate Stories</>
-                          )}
-                        </Dropdown.Item>
-                        <Dropdown.Item 
-                          onClick={() => scheduleGoalTime(goal)}
-                          disabled={isSchedulingGoal === goal.id}
-                        >
-                          <CalendarPlus size={14} className="me-2" />
-                          {isSchedulingGoal === goal.id ? 'Scheduling...' : 'Schedule Time Blocks'}
-                        </Dropdown.Item>
-                        <Dropdown.Divider />
-                        <Dropdown.Header>Change Status</Dropdown.Header>
-                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'New')}>
-                          New
-                        </Dropdown.Item>
-                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Work in Progress')}>
-                          Work in Progress
-                        </Dropdown.Item>
-                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Complete')}>
-                          Complete
-                        </Dropdown.Item>
-                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Blocked')}>
-                          Blocked (Pending Story)
-                        </Dropdown.Item>
-                        <Dropdown.Item onClick={() => handleStatusChange(goal.id, 'Deferred')}>
-                          Deferred
-                        </Dropdown.Item>
-                        <Dropdown.Divider />
-                        <Dropdown.Header>Change Priority</Dropdown.Header>
-                        <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 1)}>
-                          High Priority (1)
-                        </Dropdown.Item>
-                        <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 2)}>
-                          Medium Priority (2)
-                        </Dropdown.Item>
-                        <Dropdown.Item onClick={() => handlePriorityChange(goal.id, 3)}>
-                          Low Priority (3)
-                        </Dropdown.Item>
-                        <Dropdown.Divider />
-                        <Dropdown.Item 
-                          className="text-danger"
-                          onClick={() => setShowDeleteModal(goal.id)}
-                        >
-                          <Trash2 size={14} className="me-2" />
-                          Delete Goal
-                        </Dropdown.Item>
-                      </Dropdown.Menu>
-                    </Dropdown>
                   </div>
                 </div>
 
@@ -963,9 +855,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       })()}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {activityButton}
-                  </div>
+                  <div />
                 </div>
               </Card.Body>
             </Card>

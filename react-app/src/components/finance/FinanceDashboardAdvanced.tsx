@@ -10,7 +10,7 @@ import ReactECharts from 'echarts-for-react';
 import {
     TrendingUp, PieChart as PieIcon,
     Calendar, RefreshCw, Filter, DollarSign,
-    ArrowUpRight, ArrowDownRight, CreditCard, Layers
+    ArrowUpRight, ArrowDownRight, CreditCard, Layers, Activity
 } from 'lucide-react';
 
 const THEME_COLORS = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#C9CBCF', '#FF6384', '#36A2EB', '#FFCE56'];
@@ -197,11 +197,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
     // Local distribution override from transactions to reflect per-transaction overrides
     const localDistribution = ((data.recentTransactions || []) as any[])
         .filter((tx) => {
-            const cat = (tx.userCategoryKey || tx.categoryKey || tx.categoryType || '').toLowerCase();
+            const cat = (tx.aiCategoryKey || tx.userCategoryKey || tx.categoryKey || tx.categoryType || '').toLowerCase();
             return cat && cat !== 'bank_transfer' && cat !== 'unknown';
         })
         .reduce((acc: Record<string, number>, tx: any) => {
-            const label = tx.userCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType || 'Uncategorised';
+            const label = tx.aiCategoryLabel || tx.userCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType || 'Uncategorised';
             const rawAmt = typeof tx.amount === 'number' && Math.abs(tx.amount) < 10 ? tx.amount * 100 : tx.amount;
             const amt = Math.abs(rawAmt || 0) / 100;
             acc[label] = (acc[label] || 0) + amt;
@@ -234,8 +234,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const filteredRecentTransactions = (data.recentTransactions || []).filter(
         (tx: any) => {
-            const cat = (tx.categoryKey || tx.categoryType || '').toLowerCase();
-            return cat !== 'bank_transfer' && cat !== 'unknown';
+            const bucket = (tx.aiBucket || tx.categoryType || '').toLowerCase();
+            return bucket !== 'bank_transfer' && bucket !== 'unknown';
         }
     ).map((tx: any) => {
         // Normalize amount if in minor units
@@ -381,6 +381,37 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                 </tbody>
                             </table>
                         </div>
+                    </PremiumCard>
+                </Col>
+            </Row>
+
+            <Row className="mt-4">
+                <Col>
+                    <PremiumCard title="Spend Anomalies" icon={Activity}>
+                        {Array.isArray(data?.anomalyTransactions) && data.anomalyTransactions.length ? (
+                            <div className="table-responsive">
+                                <table className="table table-hover align-middle mb-0" style={{ color: colors.text }}>
+                                    <thead>
+                                        <tr style={{ color: colors.textMuted, borderBottom: `1px solid ${colors.grid}` }}>
+                                            <th>Merchant</th>
+                                            <th>Reason</th>
+                                            <th className="text-end">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {data.anomalyTransactions.map((tx: any) => (
+                                            <tr key={tx.id} style={{ borderColor: colors.grid }}>
+                                                <td>{tx.merchantName || 'Unknown'}</td>
+                                                <td className="small text-muted">{tx.aiAnomalyReason || 'Anomaly'}</td>
+                                                <td className="text-end fw-bold">{formatCurrency(Math.abs(tx.amount || 0))}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div className="text-muted small">No anomalies detected in the last 90 days.</div>
+                        )}
                     </PremiumCard>
                 </Col>
             </Row>

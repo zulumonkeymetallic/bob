@@ -49,6 +49,16 @@ function summariseTransactions(transactions) {
   const pendingClassification = [];
   let pendingCount = 0;
 
+  const mapAiBucket = (bucket) => {
+    const raw = String(bucket || '').toLowerCase();
+    if (!raw) return null;
+    if (raw === 'discretionary') return 'optional';
+    if (raw.includes('saving') || raw === 'investment') return 'savings';
+    if (raw === 'debt_repayment') return 'mandatory';
+    if (raw === 'net_salary' || raw === 'irregular_income') return 'income';
+    return raw;
+  };
+
   for (const doc of transactions) {
     const data = doc.data() || {};
     const amount = parseAmount(data);
@@ -57,13 +67,15 @@ function summariseTransactions(transactions) {
     const raw = data.raw || {};
     const inferredType = inferDefaultCategoryType(raw);
     const fallbackType = amount >= 0 ? 'income' : 'optional';
+    const aiBucket = mapAiBucket(data.aiBucket);
     const categoryType = coerceCategoryType(
-      data.userCategoryType || data.categoryType || data.defaultCategoryType || inferredType,
+      aiBucket || data.userCategoryType || data.categoryType || data.defaultCategoryType || inferredType,
       fallbackType
     );
 
     const categoryLabel = String(
-      data.userCategoryLabel
+      data.aiCategoryLabel
+      || data.userCategoryLabel
       || data.userCategory
       || data.defaultCategoryLabel
       || inferDefaultCategoryLabel(raw)
@@ -118,7 +130,7 @@ function summariseTransactions(transactions) {
       const mKey = createdISO ? toMonthKey(createdISO) : null;
       if (mKey) merchantEntry.months.add(mKey);
       merchantEntry.amounts.push(absoluteAmount);
-      if (!data.userCategoryType) {
+      if (!data.aiBucket && !data.userCategoryType) {
         pendingCount += 1;
         if (pendingClassification.length < 25) {
           pendingClassification.push({

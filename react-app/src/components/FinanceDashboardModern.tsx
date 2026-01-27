@@ -24,6 +24,8 @@ interface TransactionRow {
     createdISO: string | null;
     userCategoryType?: string | null;
     userCategoryLabel?: string | null;
+    aiBucket?: string | null;
+    aiCategoryLabel?: string | null;
     merchantName?: string | null;
     merchantLogo?: string | null;
     potName?: string | null;
@@ -148,14 +150,16 @@ const FinanceDashboardModern: React.FC = () => {
                 const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
                 const potName = potId ? pots[potId]?.name || null : null;
                 const amount = typeof data.amount === 'number' && Math.abs(data.amount) < 10 ? data.amount * 100 : data.amount;
-                const type = data.userCategoryType || data.defaultCategoryType || null;
+                const type = data.aiBucket || data.userCategoryType || data.defaultCategoryType || null;
                 return {
                     transactionId: data.transactionId,
                     description: data.description,
                     amount,
                     createdISO: data.createdISO,
                     userCategoryType: type,
-                    userCategoryLabel: data.userCategoryLabel || data.defaultCategoryLabel,
+                    userCategoryLabel: data.aiCategoryLabel || data.userCategoryLabel || data.defaultCategoryLabel,
+                    aiBucket: data.aiBucket || null,
+                    aiCategoryLabel: data.aiCategoryLabel || null,
                     merchantName: data.merchant?.name,
                     merchantLogo: data.merchant?.logo,
                     potName,
@@ -392,7 +396,7 @@ const FinanceDashboardModern: React.FC = () => {
 
     const filteredTransactions = useMemo(
         () => transactions.filter((t) => {
-            const cat = (t.userCategoryType || '').toLowerCase();
+            const cat = (t.aiBucket || t.userCategoryType || '').toLowerCase();
             return cat !== 'bank_transfer' && cat !== 'unknown';
         }),
         [transactions]

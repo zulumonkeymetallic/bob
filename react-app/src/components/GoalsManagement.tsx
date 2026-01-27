@@ -113,7 +113,15 @@ const GoalsManagement: React.FC = () => {
     }
     // Restore sprint scoping when back on current year
     if (!applyActiveSprintFilter) setApplyActiveSprintFilter(true);
-    if (selectedSprintId === '' && activeSprintId) {
+    const hasSavedPreference = (() => {
+      try {
+        const saved = localStorage.getItem('bob_selected_sprint');
+        return saved !== null && saved !== undefined;
+      } catch {
+        return false;
+      }
+    })();
+    if (selectedSprintId === '' && activeSprintId && !hasSavedPreference) {
       setSelectedSprintId(activeSprintId);
     }
   }, [filterYear, applyActiveSprintFilter, selectedSprintId, setSelectedSprintId, activeSprintId]);

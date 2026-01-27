@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Form, Button, Table, Badge, Row, Col, InputGroup, Alert, Accordion, Spinner } from 'react-bootstrap';
+import { Card, Form, Button, Table, Badge, Row, Col, InputGroup, Alert, Accordion, Spinner, Collapse } from 'react-bootstrap';
 import { db } from '../../firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
@@ -17,6 +17,15 @@ import { functions } from '../../firebase';
 
 type BudgetMode = 'percentage' | 'fixed';
 
+type DebtItem = {
+    id: string;
+    name: string;
+    balancePence: number;
+    apr: number;
+    minPaymentPence: number;
+    potId?: string | null;
+};
+
 type BudgetData = {
     mode: BudgetMode;
     monthlyIncome: number; // in pounds
@@ -26,6 +35,8 @@ type BudgetData = {
     transferDay?: number | null;
     autoTransferEnabled?: boolean;
     goalAllocations?: Record<string, number>; // percent of net salary per goal
+    debts?: DebtItem[];
+    snowballExtra?: number;
     updatedAt?: number;
 };
 
@@ -40,11 +51,14 @@ const EnhancedBudgetSettings: React.FC = () => {
     const [bucketPotMap, setBucketPotMap] = useState<Record<string, string>>({});
     const [transferDay, setTransferDay] = useState<number | null>(1);
     const [autoTransferEnabled, setAutoTransferEnabled] = useState<boolean>(false);
+    const [showTransferPlan, setShowTransferPlan] = useState<boolean>(false);
     const [saved, setSaved] = useState<string>('');
     const [loading, setLoading] = useState(true);
     const [goals, setGoals] = useState<any[]>([]);
     const [goalAllocation, setGoalAllocation] = useState<number>(20); // Default 20% for goals
     const [goalAllocations, setGoalAllocations] = useState<Record<string, number>>({});
+    const [debts, setDebts] = useState<DebtItem[]>([]);
+    const [snowballExtra, setSnowballExtra] = useState<number>(0);
     const [customCategories, setCustomCategories] = useState<CategoryItem[]>([]);
     const [legacyBudgetLoaded, setLegacyBudgetLoaded] = useState(false);
     const [categorySpend, setCategorySpend] = useState<Record<string, { d30: number; d90: number; ytd: number }>>({});
@@ -125,6 +139,17 @@ const EnhancedBudgetSettings: React.FC = () => {
                     // Load goal allocation if saved, otherwise default
                     if ((data as any).goalAllocation) setGoalAllocation((data as any).goalAllocation);
                     if (data.goalAllocations) setGoalAllocations(data.goalAllocations);
+                    if (Array.isArray(data.debts)) {
+                        setDebts(data.debts.map((d: any) => ({
+                            id: d.id || `debt_${Date.now()}`,
+                            name: d.name || '',
+                            balancePence: Number(d.balancePence || 0),
+                            apr: Number(d.apr || 0),
+                            minPaymentPence: Number(d.minPaymentPence || 0),
+                            potId: d.potId || '',
+                        })));
+                    }
+                    if (Number.isFinite(data.snowballExtra)) setSnowballExtra(Number(data.snowballExtra));
                 } else {
                     // Initialize defaults from category definitions
                     const initialBudgets: Record<string, { percent?: number; amount?: number }> = {};
@@ -210,6 +235,8 @@ const EnhancedBudgetSettings: React.FC = () => {
                 goalAllocations,
                 transferDay,
                 autoTransferEnabled,
+                debts,
+                snowballExtra,
                 updatedAt: Date.now()
             });
 
@@ -417,6 +444,37 @@ const EnhancedBudgetSettings: React.FC = () => {
         return items;
     }, [bucketTotals, bucketPotMap, pots, filteredGoals, goalAllocations, goalAllocation, goals.length, safeMonthlyIncome]);
 
+    const transferTotalPence = plannedTransfers.reduce((sum, item) => sum + (Number(item.amountPence) || 0), 0);
+
+    const addDebt = () => {
+        const id = `debt_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        setDebts((prev) => ([
+            ...prev,
+            { id, name: '', balancePence: 0, apr: 0, minPaymentPence: 0, potId: '' }
+        ]));
+    };
+
+    const updateDebt = (id: string, patch: Partial<DebtItem>) => {
+        setDebts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+    };
+
+    const removeDebt = (id: string) => {
+        setDebts((prev) => prev.filter((d) => d.id !== id));
+    };
+
+    const snowballPlan = useMemo(() => {
+        if (!debts.length) return [];
+        const extraPence = Math.max(0, Math.round((Number(snowballExtra) || 0) * 100));
+        const ordered = [...debts].sort((a, b) => (a.balancePence || 0) - (b.balancePence || 0));
+        return ordered.map((debt, idx) => {
+            const minPay = Number(debt.minPaymentPence || 0);
+            const allocation = minPay + (idx === 0 ? extraPence : 0);
+            return { ...debt, allocationPence: allocation };
+        });
+    }, [debts, snowballExtra]);
+
+    const snowballTotalPence = snowballPlan.reduce((sum, debt) => sum + (Number((debt as any).allocationPence) || 0), 0);
+
     // Add goals to grand total
     grandTotal.percent += goalTotal.percent;
     grandTotal.amount += goalTotal.amount;
@@ -514,67 +572,204 @@ const EnhancedBudgetSettings: React.FC = () => {
 
             <Card className="mb-3">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                    <span>Transfer plan (pots + goals)</span>
-                    <Form.Check
-                        type="switch"
-                        id="auto-transfer-toggle"
-                        label="Enable auto-transfer"
-                        checked={autoTransferEnabled}
-                        onChange={(e) => setAutoTransferEnabled(e.target.checked)}
-                    />
+                    <div className="d-flex flex-column">
+                        <span>Transfer plan (pots + goals)</span>
+                        <small className="text-muted">Total: £{(transferTotalPence / 100).toFixed(2)}</small>
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                        <Button size="sm" variant="outline-secondary" onClick={() => setShowTransferPlan((v) => !v)}>
+                            {showTransferPlan ? 'Hide' : 'Show'}
+                        </Button>
+                        <Form.Check
+                            type="switch"
+                            id="auto-transfer-toggle"
+                            label="Enable auto-transfer"
+                            checked={autoTransferEnabled}
+                            onChange={(e) => setAutoTransferEnabled(e.target.checked)}
+                        />
+                    </div>
+                </Card.Header>
+                <Collapse in={showTransferPlan}>
+                    <div>
+                        <Card.Body>
+                            <Alert variant="light" className="small mb-3">
+                                This plan combines bucket allocations with the Goals & Savings widget. Linking a goal to a pot
+                                <strong className="ms-1">does not create a new Monzo pot</strong> — it simply references an existing pot.
+                            </Alert>
+                            <Row className="g-3 align-items-end mb-3">
+                                <Col md={4}>
+                                    <Form.Label>Transfer day of month</Form.Label>
+                                    <Form.Control
+                                        type="number"
+                                        min="1"
+                                        max="28"
+                                        value={transferDay ?? ''}
+                                        onChange={(e) => setTransferDay(parseInt(e.target.value || '1', 10))}
+                                    />
+                                    <Form.Text className="text-muted">Use 28 or earlier to avoid short months.</Form.Text>
+                                </Col>
+                                <Col md={4}>
+                                    <Button variant="outline-primary" onClick={() => setSaved('Simulation: no money moved')}>
+                                        Simulate transfers (dry run)
+                                    </Button>
+                                </Col>
+                                <Col md={4}>
+                                    <Form.Check
+                                        type="switch"
+                                        id="show-income-percent"
+                                        label="Show % of monthly income"
+                                        checked
+                                        disabled
+                                    />
+                                    <Form.Text className="text-muted">Percentages are calculated from the net income field above.</Form.Text>
+                                </Col>
+                            </Row>
+                            {plannedTransfers.length === 0 ? (
+                                <p className="text-muted mb-0">No pots mapped yet. Link buckets/goals to pots to build a plan.</p>
+                            ) : (
+                                <Table size="sm" hover>
+                                    <thead>
+                                        <tr>
+                                            <th>Item</th>
+                                            <th>Pot</th>
+                                            <th className="text-end">Monthly amount</th>
+                                            <th className="text-end">% of income</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {plannedTransfers.map((t, idx) => (
+                                            <tr key={`${t.label}-${idx}`}>
+                                                <td>{t.label}</td>
+                                                <td>{t.potName}</td>
+                                                <td className="text-end">£{(t.amountPence / 100).toFixed(2)}</td>
+                                                <td className="text-end text-muted small">
+                                                    {(safeMonthlyIncome > 0 ? (t.amountPence / (safeMonthlyIncome * 100) * 100) : 0).toFixed(2)}%
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </Table>
+                            )}
+                        </Card.Body>
+                    </div>
+                </Collapse>
+            </Card>
+
+            <Card className="mb-3">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                    <div className="d-flex flex-column">
+                        <span>Debt Snowball (dry run)</span>
+                        <small className="text-muted">Planned total: £{(snowballTotalPence / 100).toFixed(2)}</small>
+                    </div>
+                    <Button size="sm" variant="outline-primary" onClick={addDebt}>
+                        + Add debt
+                    </Button>
                 </Card.Header>
                 <Card.Body>
                     <Row className="g-3 align-items-end mb-3">
                         <Col md={4}>
-                            <Form.Label>Transfer day of month</Form.Label>
-                            <Form.Control
-                                type="number"
-                                min="1"
-                                max="28"
-                                value={transferDay ?? ''}
-                                onChange={(e) => setTransferDay(parseInt(e.target.value || '1', 10))}
-                            />
-                            <Form.Text className="text-muted">Use 28 or earlier to avoid short months.</Form.Text>
+                            <Form.Label>Extra snowball budget (monthly)</Form.Label>
+                            <InputGroup>
+                                <InputGroup.Text>£</InputGroup.Text>
+                                <Form.Control
+                                    type="number"
+                                    min="0"
+                                    step="10"
+                                    value={snowballExtra}
+                                    onChange={(e) => setSnowballExtra(parseFloat(e.target.value) || 0)}
+                                />
+                            </InputGroup>
+                            <Form.Text className="text-muted">This extra is applied to the smallest balance first.</Form.Text>
                         </Col>
-                        <Col md={4}>
-                            <Button variant="outline-primary" onClick={() => setSaved('Simulation: no money moved')}>
-                                Simulate transfers (dry run)
-                            </Button>
-                        </Col>
-                        <Col md={4}>
-                            <Form.Check
-                                type="switch"
-                                id="show-income-percent"
-                                label="Show % of monthly income"
-                                checked
-                                disabled
-                            />
-                            <Form.Text className="text-muted">Percentages are calculated from the net income field above.</Form.Text>
+                        <Col md={8}>
+                            <Alert variant="light" className="mb-0 small">
+                                Snowball transfers are a preview only for now — no money is moved automatically.
+                            </Alert>
                         </Col>
                     </Row>
-                    {plannedTransfers.length === 0 ? (
-                        <p className="text-muted mb-0">No pots mapped yet. Link buckets/goals to pots to build a plan.</p>
+
+                    {debts.length === 0 ? (
+                        <p className="text-muted mb-0">Add debts to see a snowball plan.</p>
                     ) : (
-                        <Table size="sm" hover>
+                        <Table size="sm" hover responsive>
                             <thead>
                                 <tr>
-                                    <th>Item</th>
+                                    <th style={{ width: 60 }}>Priority</th>
+                                    <th>Debt</th>
+                                    <th className="text-end">Balance</th>
+                                    <th className="text-end">APR %</th>
+                                    <th className="text-end">Min / mo</th>
                                     <th>Pot</th>
-                                    <th className="text-end">Monthly amount</th>
-                                    <th className="text-end">% of income</th>
+                                    <th className="text-end">Planned</th>
+                                    <th />
                                 </tr>
                             </thead>
                             <tbody>
-                                {plannedTransfers.map((t, idx) => (
-                                    <tr key={`${t.label}-${idx}`}>
-                                        <td>{t.label}</td>
-                                        <td>{t.potName}</td>
-                                        <td className="text-end">£{(t.amountPence / 100).toFixed(2)}</td>
-                                        <td className="text-end text-muted small">
-                                            {(safeMonthlyIncome > 0 ? (t.amountPence / (safeMonthlyIncome * 100) * 100) : 0).toFixed(2)}%
-                                        </td>
-                                    </tr>
-                                ))}
+                                {debts.map((debt) => {
+                                    const plan = snowballPlan.find((p: any) => p.id === debt.id);
+                                    const priority = plan ? snowballPlan.findIndex((p: any) => p.id === debt.id) + 1 : '-';
+                                    return (
+                                        <tr key={debt.id}>
+                                            <td>{priority}</td>
+                                            <td>
+                                                <Form.Control
+                                                    size="sm"
+                                                    placeholder="Credit card"
+                                                    value={debt.name}
+                                                    onChange={(e) => updateDebt(debt.id, { name: e.target.value })}
+                                                />
+                                            </td>
+                                            <td className="text-end">
+                                                <InputGroup size="sm">
+                                                    <InputGroup.Text>£</InputGroup.Text>
+                                                    <Form.Control
+                                                        type="number"
+                                                        min="0"
+                                                        value={(debt.balancePence || 0) / 100}
+                                                        onChange={(e) => updateDebt(debt.id, { balancePence: Math.round((parseFloat(e.target.value) || 0) * 100) })}
+                                                    />
+                                                </InputGroup>
+                                            </td>
+                                            <td className="text-end">
+                                                <Form.Control
+                                                    size="sm"
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.1"
+                                                    value={debt.apr}
+                                                    onChange={(e) => updateDebt(debt.id, { apr: parseFloat(e.target.value) || 0 })}
+                                                />
+                                            </td>
+                                            <td className="text-end">
+                                                <InputGroup size="sm">
+                                                    <InputGroup.Text>£</InputGroup.Text>
+                                                    <Form.Control
+                                                        type="number"
+                                                        min="0"
+                                                        value={(debt.minPaymentPence || 0) / 100}
+                                                        onChange={(e) => updateDebt(debt.id, { minPaymentPence: Math.round((parseFloat(e.target.value) || 0) * 100) })}
+                                                    />
+                                                </InputGroup>
+                                            </td>
+                                            <td>
+                                                <Form.Select
+                                                    size="sm"
+                                                    value={debt.potId || ''}
+                                                    onChange={(e) => updateDebt(debt.id, { potId: e.target.value })}
+                                                >
+                                                    <option value="">No pot linked</option>
+                                                    {pots.map((p) => (
+                                                        <option key={p.id} value={p.id}>{p.name}</option>
+                                                    ))}
+                                                </Form.Select>
+                                            </td>
+                                            <td className="text-end">£{(((plan as any)?.allocationPence || 0) / 100).toFixed(2)}</td>
+                                            <td className="text-end">
+                                                <Button size="sm" variant="outline-danger" onClick={() => removeDebt(debt.id)}>Remove</Button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </Table>
                     )}
@@ -726,6 +921,9 @@ const EnhancedBudgetSettings: React.FC = () => {
                             </Alert>
                         </Col>
                     </Row>
+                    <Alert variant="light" className="small">
+                        Goal pot links use existing Monzo pots. Create pots in Monzo first, then link them here.
+                    </Alert>
 
                     <h6 className="mt-4 mb-2">Active Goals</h6>
                     <div className="d-flex flex-wrap gap-2 mb-2">
