@@ -78,7 +78,7 @@ const MobileChecklistView: React.FC = () => {
                     const text = renderBriefText(line);
                     if (!text) return null;
                     return <li key={idx}>{text}</li>;
-                  ))}
+                  })}
                 </ul>
               )}
               {briefWeatherSummary && (
@@ -95,7 +95,7 @@ const MobileChecklistView: React.FC = () => {
                       const text = renderBriefText(item);
                       if (!text) return null;
                       return <li key={idx}>{text}</li>;
-                    ))}
+                    })}
                   </ul>
                 </div>
               )}
