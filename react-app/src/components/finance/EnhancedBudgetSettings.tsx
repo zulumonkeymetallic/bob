@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Form, Button, Table, Badge, Row, Col, InputGroup, Alert, Accordion, Spinner, Collapse } from 'react-bootstrap';
+import { Card, Form, Button, Table, Badge, Row, Col, InputGroup, Alert, Accordion, Spinner, Collapse, Modal } from 'react-bootstrap';
 import { db } from '../../firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSidebar } from '../../contexts/SidebarContext';
 import {
     DEFAULT_CATEGORIES,
     FinanceCategory,
@@ -14,6 +15,8 @@ import {
 } from '../../utils/financeCategories';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../../firebase';
+import { Activity, Edit3 } from 'lucide-react';
+import EditGoalModal from '../EditGoalModal';
 
 type BudgetMode = 'percentage' | 'fixed';
 
@@ -51,7 +54,6 @@ const EnhancedBudgetSettings: React.FC = () => {
     const [bucketPotMap, setBucketPotMap] = useState<Record<string, string>>({});
     const [transferDay, setTransferDay] = useState<number | null>(1);
     const [autoTransferEnabled, setAutoTransferEnabled] = useState<boolean>(false);
-    const [showTransferPlan, setShowTransferPlan] = useState<boolean>(false);
     const [saved, setSaved] = useState<string>('');
     const [loading, setLoading] = useState(true);
     const [goals, setGoals] = useState<any[]>([]);
@@ -62,9 +64,20 @@ const EnhancedBudgetSettings: React.FC = () => {
     const [customCategories, setCustomCategories] = useState<CategoryItem[]>([]);
     const [legacyBudgetLoaded, setLegacyBudgetLoaded] = useState(false);
     const [categorySpend, setCategorySpend] = useState<Record<string, { d30: number; d90: number; ytd: number }>>({});
-    const [pots, setPots] = useState<Array<{ id: string; name: string }>>([]);
+    const [pots, setPots] = useState<Array<{ id: string; name: string; balance?: number; currency?: string }>>([]);
     const [goalFilter, setGoalFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
     const [goalTargetFilter, setGoalTargetFilter] = useState<'all' | 'hasTarget' | 'noTarget'>('all');
+    const [showGoalsSection, setShowGoalsSection] = useState(true);
+    const [showLinkedGoalsOnly, setShowLinkedGoalsOnly] = useState(true);
+    const [goalSortKey, setGoalSortKey] = useState<'title' | 'target' | 'targetYear' | 'pot' | 'balance' | 'pct' | 'percent' | 'monthly'>('targetYear');
+    const [goalSortDir, setGoalSortDir] = useState<'asc' | 'desc'>('asc');
+    const [showEditGoal, setShowEditGoal] = useState<any | null>(null);
+    const [createPotGoal, setCreatePotGoal] = useState<any | null>(null);
+    const [createPotName, setCreatePotName] = useState('');
+    const [createPotBusy, setCreatePotBusy] = useState(false);
+    const [createPotError, setCreatePotError] = useState('');
+    const [potLinkSaving, setPotLinkSaving] = useState<string | null>(null);
+    const { showSidebar } = useSidebar();
 
     // Load budget data
     useEffect(() => {
@@ -212,7 +225,14 @@ const EnhancedBudgetSettings: React.FC = () => {
                     const potsRef = collection(db, 'monzo_pots');
                     const potsSnap = await getDocs(query(potsRef, where('ownerUid', '==', currentUser.uid)));
                     const potList = potsSnap.docs
-                        .map((d) => ({ id: (d.data() as any).potId || d.id, name: (d.data() as any).name || d.id, deleted: (d.data() as any).deleted, closed: (d.data() as any).closed }))
+                        .map((d) => ({
+                            id: (d.data() as any).potId || d.id,
+                            name: (d.data() as any).name || d.id,
+                            balance: Number((d.data() as any).balance || 0),
+                            currency: (d.data() as any).currency || 'GBP',
+                            deleted: (d.data() as any).deleted,
+                            closed: (d.data() as any).closed
+                        }))
                         .filter((p) => !p.deleted && !p.closed);
                     setPots(potList);
                 } catch (err) {
@@ -425,35 +445,90 @@ const EnhancedBudgetSettings: React.FC = () => {
         return goals.filter((g) => {
             const linked = !!(g.linkedPotId || g.potId);
             const hasTarget = !!(g.endDate || g.targetDate || g.targetTime);
+            if (showLinkedGoalsOnly && !linked) return false;
             if (goalFilter === 'linked' && !linked) return false;
             if (goalFilter === 'unlinked' && linked) return false;
             if (goalTargetFilter === 'hasTarget' && !hasTarget) return false;
             if (goalTargetFilter === 'noTarget' && hasTarget) return false;
             return true;
         });
-    }, [goals, goalFilter, goalTargetFilter]);
+    }, [goals, goalFilter, goalTargetFilter, showLinkedGoalsOnly]);
 
-    const plannedTransfers = useMemo(() => {
-        const items: Array<{ label: string; potName: string; amountPence: number }> = [];
-        Object.entries(bucketTotals).forEach(([bucket, total]) => {
-            if (!total) return;
-            const potId = bucketPotMap[bucket];
-            if (!potId) return;
-            const potName = pots.find(p => p.id === potId)?.name || potId;
-            items.push({ label: `${BUCKET_LABELS[bucket as CategoryBucket]}`, potName, amountPence: total.amount });
-        });
-        filteredGoals.forEach((g) => {
-            const percent = goalAllocations[g.id] != null ? Number(goalAllocations[g.id]) : goalAllocation / Math.max(goals.length, 1);
-            if (!percent || percent <= 0) return;
-            const potId = (g.linkedPotId || g.potId || '').toString();
-            const potName = potId ? (pots.find(p => p.id === potId)?.name || potId) : 'No pot linked';
-            const amountPence = calculateBudgetAmount(percent, safeMonthlyIncome);
-            items.push({ label: `Goal: ${g.title}`, potName, amountPence });
-        });
-        return items;
-    }, [bucketTotals, bucketPotMap, pots, filteredGoals, goalAllocations, goalAllocation, goals.length, safeMonthlyIncome]);
+    const resolveGoalTargetYear = (goal: any) => {
+        const targetDate = goal.endDate || goal.targetDate || goal.targetTime || null;
+        if (!targetDate) return null;
+        const dt = new Date(targetDate);
+        if (Number.isNaN(dt.getTime())) return null;
+        return dt.getFullYear();
+    };
 
-    const transferTotalPence = plannedTransfers.reduce((sum, item) => sum + (Number(item.amountPence) || 0), 0);
+    const resolvePotForGoal = (goal: any) => {
+        const potId = goal.linkedPotId || goal.potId || '';
+        if (!potId) return { potId: '', potName: '', potBalance: 0, potCurrency: currency };
+        const pot = pots.find((p) => p.id === potId);
+        return {
+            potId,
+            potName: pot?.name || potId,
+            potBalance: Number(pot?.balance || 0),
+            potCurrency: pot?.currency || currency,
+        };
+    };
+
+    const sortedGoals = useMemo(() => {
+        const rows = filteredGoals.map((g) => {
+            const targetAmount = Number(g.estimatedCost || g.targetAmount || 0);
+            const targetYear = resolveGoalTargetYear(g);
+            const { potId, potName, potBalance, potCurrency } = resolvePotForGoal(g);
+            const percentToTarget = targetAmount > 0 ? Math.min(100, (potBalance / 100 / targetAmount) * 100) : 0;
+            const percent = goalAllocations[g.id] != null ? goalAllocations[g.id] : 0;
+            const monthlyPence = percent > 0 ? calculateBudgetAmount(percent, safeMonthlyIncome) : 0;
+            return {
+                ...g,
+                targetAmount,
+                targetYear,
+                potId,
+                potName,
+                potBalance,
+                potCurrency,
+                percentToTarget,
+                percent,
+                monthlyPence,
+            };
+        });
+
+        const dir = goalSortDir === 'asc' ? 1 : -1;
+        return rows.sort((a, b) => {
+            const compare = (va: any, vb: any) => {
+                if (va == null && vb == null) return 0;
+                if (va == null) return 1;
+                if (vb == null) return -1;
+                if (typeof va === 'string' && typeof vb === 'string') return va.localeCompare(vb);
+                return va > vb ? 1 : va < vb ? -1 : 0;
+            };
+            switch (goalSortKey) {
+                case 'title':
+                    return dir * compare(a.title || '', b.title || '');
+                case 'target':
+                    return dir * compare(a.targetAmount, b.targetAmount);
+                case 'targetYear':
+                    return dir * compare(a.targetYear, b.targetYear);
+                case 'pot':
+                    return dir * compare(a.potName || '', b.potName || '');
+                case 'balance':
+                    return dir * compare(a.potBalance, b.potBalance);
+                case 'pct':
+                    return dir * compare(a.percentToTarget, b.percentToTarget);
+                case 'percent':
+                    return dir * compare(a.percent, b.percent);
+                case 'monthly':
+                    return dir * compare(a.monthlyPence, b.monthlyPence);
+                default:
+                    return 0;
+            }
+        });
+    }, [filteredGoals, goalAllocations, goalSortDir, goalSortKey, safeMonthlyIncome, pots, currency]);
+
+    
 
     const addDebt = () => {
         const id = `debt_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
@@ -483,6 +558,77 @@ const EnhancedBudgetSettings: React.FC = () => {
     }, [debts, snowballExtra]);
 
     const snowballTotalPence = snowballPlan.reduce((sum, debt) => sum + (Number((debt as any).allocationPence) || 0), 0);
+
+    const formatCurrency = (value: number, curr = currency) => {
+        const pounds = (Number(value) || 0) / 100;
+        return pounds.toLocaleString('en-GB', { style: 'currency', currency: curr || 'GBP' });
+    };
+
+    const handleSortGoals = (key: typeof goalSortKey) => {
+        if (goalSortKey === key) {
+            setGoalSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+        } else {
+            setGoalSortKey(key);
+            setGoalSortDir(key === 'targetYear' ? 'asc' : 'desc');
+        }
+    };
+
+    const handleGoalPotChange = async (goal: any, potId: string) => {
+        if (!currentUser) return;
+        if (potId === '__create__') {
+            setCreatePotGoal(goal);
+            setCreatePotName(`${goal.id} ${goal.title || ''}`.trim());
+            setCreatePotError('');
+            return;
+        }
+        try {
+            setPotLinkSaving(goal.id);
+            await updateDoc(doc(db, 'goals', goal.id), {
+                potId: potId || null,
+                linkedPotId: potId || null,
+                updatedAt: Date.now(),
+            });
+            setGoals((prev) => prev.map((g) => (g.id === goal.id ? { ...g, potId, linkedPotId: potId } : g)));
+        } catch (error) {
+            console.error('Failed to update goal pot link', error);
+            setSaved('Error saving');
+        } finally {
+            setPotLinkSaving(null);
+        }
+    };
+
+    const handleCreatePot = async () => {
+        if (!createPotGoal || !createPotName.trim()) return;
+        setCreatePotBusy(true);
+        setCreatePotError('');
+        try {
+            const callable = httpsCallable(functions, 'monzoCreatePot');
+            const resp: any = await callable({ name: createPotName.trim(), goalId: createPotGoal.id });
+            const created = resp?.data?.pot || null;
+            if (!created?.potId && !created?.id) throw new Error('Create pot failed');
+            const potId = created.potId || created.id;
+            setPots((prev) => {
+                const next = [...prev];
+                if (!next.find((p) => p.id === potId)) {
+                    next.push({
+                        id: potId,
+                        name: created.name || createPotName.trim(),
+                        balance: created.balance || 0,
+                        currency: created.currency || currency,
+                    });
+                }
+                return next;
+            });
+            setGoals((prev) => prev.map((g) => (g.id === createPotGoal.id ? { ...g, potId, linkedPotId: potId } : g)));
+            setCreatePotGoal(null);
+            setCreatePotName('');
+        } catch (error: any) {
+            console.error('Create pot failed', error);
+            setCreatePotError(error?.message || 'Failed to create pot. Connect Monzo and try again.');
+        } finally {
+            setCreatePotBusy(false);
+        }
+    };
 
     // Add goals to grand total
     grandTotal.percent += goalTotal.percent;
@@ -579,90 +725,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                 </Card.Body>
             </Card>
 
-            <Card className="mb-3">
-                <Card.Header className="d-flex justify-content-between align-items-center">
-                    <div className="d-flex flex-column">
-                        <span>Transfer plan (pots + goals)</span>
-                        <small className="text-muted">Total: £{(transferTotalPence / 100).toFixed(2)}</small>
-                    </div>
-                    <div className="d-flex align-items-center gap-2">
-                        <Button size="sm" variant="outline-secondary" onClick={() => setShowTransferPlan((v) => !v)}>
-                            {showTransferPlan ? 'Hide' : 'Show'}
-                        </Button>
-                        <Form.Check
-                            type="switch"
-                            id="auto-transfer-toggle"
-                            label="Enable auto-transfer"
-                            checked={autoTransferEnabled}
-                            onChange={(e) => setAutoTransferEnabled(e.target.checked)}
-                        />
-                    </div>
-                </Card.Header>
-                <Collapse in={showTransferPlan}>
-                    <div>
-                        <Card.Body>
-                            <Alert variant="light" className="small mb-3">
-                                This plan combines bucket allocations with the Goals & Savings widget. Linking a goal to a pot
-                                <strong className="ms-1">does not create a new Monzo pot</strong> — it simply references an existing pot.
-                            </Alert>
-                            <Row className="g-3 align-items-end mb-3">
-                                <Col md={4}>
-                                    <Form.Label>Transfer day of month</Form.Label>
-                                    <Form.Control
-                                        type="number"
-                                        min="1"
-                                        max="28"
-                                        value={transferDay ?? ''}
-                                        onChange={(e) => setTransferDay(parseInt(e.target.value || '1', 10))}
-                                    />
-                                    <Form.Text className="text-muted">Use 28 or earlier to avoid short months.</Form.Text>
-                                </Col>
-                                <Col md={4}>
-                                    <Button variant="outline-primary" onClick={() => setSaved('Simulation: no money moved')}>
-                                        Simulate transfers (dry run)
-                                    </Button>
-                                </Col>
-                                <Col md={4}>
-                                    <Form.Check
-                                        type="switch"
-                                        id="show-income-percent"
-                                        label="Show % of monthly income"
-                                        checked
-                                        disabled
-                                    />
-                                    <Form.Text className="text-muted">Percentages are calculated from the net income field above.</Form.Text>
-                                </Col>
-                            </Row>
-                            {plannedTransfers.length === 0 ? (
-                                <p className="text-muted mb-0">No pots mapped yet. Link buckets/goals to pots to build a plan.</p>
-                            ) : (
-                                <Table size="sm" hover>
-                                    <thead>
-                                        <tr>
-                                            <th>Item</th>
-                                            <th>Pot</th>
-                                            <th className="text-end">Monthly amount</th>
-                                            <th className="text-end">% of income</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {plannedTransfers.map((t, idx) => (
-                                            <tr key={`${t.label}-${idx}`}>
-                                                <td>{t.label}</td>
-                                                <td>{t.potName}</td>
-                                                <td className="text-end">£{(t.amountPence / 100).toFixed(2)}</td>
-                                                <td className="text-end text-muted small">
-                                                    {(safeMonthlyIncome > 0 ? (t.amountPence / (safeMonthlyIncome * 100) * 100) : 0).toFixed(2)}%
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </Table>
-                            )}
-                        </Card.Body>
-                    </div>
-                </Collapse>
-            </Card>
+
 
             <Card className="mb-3">
                 <Card.Header className="d-flex justify-content-between align-items-center">
@@ -903,108 +966,213 @@ const EnhancedBudgetSettings: React.FC = () => {
 
             <Card className="mt-4">
                 <Card.Header className="bg-success text-white d-flex justify-content-between align-items-center">
-                    <span>Goals & Savings (Populated from Goals)</span>
+                    <div className="d-flex align-items-center gap-2">
+                        <span>Goals & Savings (Populated from Goals)</span>
+                        <Button
+                            size="sm"
+                            variant="link"
+                            className="text-white text-decoration-none"
+                            onClick={() => setShowGoalsSection((prev) => !prev)}
+                        >
+                            {showGoalsSection ? '▼' : '▲'}
+                        </Button>
+                    </div>
                     <span>{goalAllocation}% • £{(goalTotal.amount / 100).toFixed(2)}</span>
                 </Card.Header>
-                <Card.Body>
-                    <Row className="align-items-center mb-3">
-                        <Col md={6}>
-                            <Form.Label>Percentage of Net Salary towards Goals</Form.Label>
-                            <InputGroup>
-                                <Form.Control
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    value={goalAllocation}
-                                    onChange={(e) => setGoalAllocation(parseFloat(e.target.value) || 0)}
-                                />
-                                <InputGroup.Text>%</InputGroup.Text>
-                            </InputGroup>
-                            <Form.Text className="text-muted">
-                                This amount is distributed across your active goals.
-                            </Form.Text>
-                        </Col>
-                        <Col md={6}>
-                            <Alert variant="success" className="mb-0 py-2">
-                                <strong>Monthly Contribution:</strong> £{(goalTotal.amount / 100).toFixed(2)}
+                <Collapse in={showGoalsSection}>
+                    <div>
+                        <Card.Body>
+                            <Row className="align-items-center mb-3">
+                                <Col md={6}>
+                                    <Form.Label>Percentage of Net Salary towards Goals</Form.Label>
+                                    <InputGroup>
+                                        <Form.Control
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            value={goalAllocation}
+                                            onChange={(e) => setGoalAllocation(parseFloat(e.target.value) || 0)}
+                                        />
+                                        <InputGroup.Text>%</InputGroup.Text>
+                                    </InputGroup>
+                                    <Form.Text className="text-muted">
+                                        This amount is distributed across your active goals.
+                                    </Form.Text>
+                                </Col>
+                                <Col md={6}>
+                                    <Alert variant="success" className="mb-0 py-2">
+                                        <strong>Monthly Contribution:</strong> £{(goalTotal.amount / 100).toFixed(2)}
+                                    </Alert>
+                                </Col>
+                            </Row>
+                            <Alert variant="light" className="small">
+                                Goal pot links use existing Monzo pots. Create a pot here if needed (Monzo must be connected).
                             </Alert>
-                        </Col>
-                    </Row>
-                    <Alert variant="light" className="small">
-                        Goal pot links use existing Monzo pots. Create pots in Monzo first, then link them here.
-                    </Alert>
 
-                    <h6 className="mt-4 mb-2">Active Goals</h6>
-                    <div className="d-flex flex-wrap gap-2 mb-2">
-                        <Form.Select size="sm" style={{ maxWidth: 180 }} value={goalFilter} onChange={(e) => setGoalFilter(e.target.value as any)}>
-                            <option value="all">All goals</option>
-                            <option value="linked">Linked pot</option>
-                            <option value="unlinked">No pot link</option>
-                        </Form.Select>
-                        <Form.Select size="sm" style={{ maxWidth: 200 }} value={goalTargetFilter} onChange={(e) => setGoalTargetFilter(e.target.value as any)}>
-                            <option value="all">Any target</option>
-                            <option value="hasTarget">Has target date</option>
-                            <option value="noTarget">No target date</option>
-                        </Form.Select>
-                    </div>
-                    {filteredGoals.length === 0 ? (
-                        <p className="text-muted">No active goals found. Create goals to see them here.</p>
-                    ) : (
-                        <Table size="sm" hover>
-                            <thead>
-                                <tr>
-                                    <th>Goal</th>
-                                    <th>Target</th>
-                                    <th>Linked Pot</th>
-                                    <th style={{ width: 140 }}>Net Salary %</th>
-                                    <th className="text-end">Monthly</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredGoals.map(g => {
-                                    const potId = g.linkedPotId || g.potId;
-                                    const potName = potId ? (pots.find(p => p.id === potId)?.name || potId) : null;
-                                    const percent = goalAllocations[g.id] != null ? goalAllocations[g.id] : 0;
-                                    const monthlyPence = percent > 0 ? calculateBudgetAmount(percent, safeMonthlyIncome) : 0;
-                                    const targetDate = g.endDate || g.targetDate || g.targetTime;
-                                    const targetLabel = targetDate ? new Date(targetDate).toISOString().slice(0, 10) : 'Not set';
-                                    return (
-                                        <tr key={g.id}>
-                                            <td>{g.title}</td>
-                                            <td>{targetLabel}</td>
-                                            <td>
-                                                {potName ? (
-                                                    <Badge bg="success">{potName}</Badge>
-                                                ) : (
-                                                    <Badge bg="secondary">Not Linked</Badge>
-                                                )}
-                                            </td>
-                                            <td>
-                                                <InputGroup size="sm">
-                                                    <Form.Control
-                                                        type="number"
-                                                        min="0"
-                                                        max="100"
-                                                        value={percent}
-                                                        onChange={(e) => {
-                                                            const val = parseFloat(e.target.value) || 0;
-                                                            setGoalAllocations(prev => ({ ...prev, [g.id]: val }));
-                                                        }}
-                                                    />
-                                                    <InputGroup.Text>%</InputGroup.Text>
-                                                </InputGroup>
-                                            </td>
-                                            <td className="text-end text-muted small">
-                                                £{(monthlyPence / 100).toFixed(2)}
-                                            </td>
+                            <Row className="g-3 align-items-end mb-3">
+                                <Col md={4}>
+                                    <Form.Label>Transfer day of month</Form.Label>
+                                    <Form.Control
+                                        type="number"
+                                        min="1"
+                                        max="28"
+                                        value={transferDay ?? ''}
+                                        onChange={(e) => setTransferDay(parseInt(e.target.value || '1', 10))}
+                                    />
+                                    <Form.Text className="text-muted">Use 28 or earlier to avoid short months.</Form.Text>
+                                </Col>
+                                <Col md={4}>
+                                    <Form.Check
+                                        type="switch"
+                                        id="auto-transfer-toggle"
+                                        label="Enable auto-transfer"
+                                        checked={autoTransferEnabled}
+                                        onChange={(e) => setAutoTransferEnabled(e.target.checked)}
+                                    />
+                                    <Form.Text className="text-muted">Dry-run only until transfers are enabled.</Form.Text>
+                                </Col>
+                                <Col md={4}>
+                                    <Button variant="outline-primary" onClick={() => setSaved('Simulation: no money moved')}>
+                                        Simulate transfers (dry run)
+                                    </Button>
+                                </Col>
+                            </Row>
+
+                            <div className="d-flex flex-wrap gap-2 mb-2 align-items-center">
+                                <Form.Check
+                                    type="switch"
+                                    id="linked-only-toggle"
+                                    label="Show linked goals only"
+                                    checked={showLinkedGoalsOnly}
+                                    onChange={(e) => setShowLinkedGoalsOnly(e.target.checked)}
+                                />
+                                <Form.Select size="sm" style={{ maxWidth: 180 }} value={goalFilter} onChange={(e) => setGoalFilter(e.target.value as any)}>
+                                    <option value="all">All goals</option>
+                                    <option value="linked">Linked pot</option>
+                                    <option value="unlinked">No pot link</option>
+                                </Form.Select>
+                                <Form.Select size="sm" style={{ maxWidth: 200 }} value={goalTargetFilter} onChange={(e) => setGoalTargetFilter(e.target.value as any)}>
+                                    <option value="all">Any target</option>
+                                    <option value="hasTarget">Has target date</option>
+                                    <option value="noTarget">No target date</option>
+                                </Form.Select>
+                            </div>
+
+                            {sortedGoals.length === 0 ? (
+                                <p className="text-muted">No active goals found. Create goals to see them here.</p>
+                            ) : (
+                                <Table size="sm" hover responsive>
+                                    <thead>
+                                        <tr>
+                                            <th role="button" onClick={() => handleSortGoals('title')}>Goal</th>
+                                            <th role="button" onClick={() => handleSortGoals('target')}>Target</th>
+                                            <th role="button" onClick={() => handleSortGoals('targetYear')}>Year</th>
+                                            <th role="button" onClick={() => handleSortGoals('pot')}>Linked Pot</th>
+                                            <th className="text-end" role="button" onClick={() => handleSortGoals('balance')}>Pot Balance</th>
+                                            <th className="text-end" role="button" onClick={() => handleSortGoals('pct')}>% to Target</th>
+                                            <th className="text-end" role="button" onClick={() => handleSortGoals('percent')}>Net Salary %</th>
+                                            <th className="text-end" role="button" onClick={() => handleSortGoals('monthly')}>Monthly</th>
+                                            <th className="text-end">Actions</th>
                                         </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </Table>
-                    )}
-                </Card.Body>
+                                    </thead>
+                                    <tbody>
+                                        {sortedGoals.map((g: any) => (
+                                            <tr key={g.id}>
+                                                <td className="text-truncate" style={{ maxWidth: 220 }}>{g.title}</td>
+                                                <td>{g.targetAmount ? formatCurrency(g.targetAmount * 100, currency) : '—'}</td>
+                                                <td>{g.targetYear || '—'}</td>
+                                                <td>
+                                                    <Form.Select
+                                                        size="sm"
+                                                        value={g.potId || ''}
+                                                        onChange={(e) => handleGoalPotChange(g, e.target.value)}
+                                                        disabled={potLinkSaving === g.id}
+                                                    >
+                                                        <option value="">No pot linked</option>
+                                                        {pots.map((p) => (
+                                                            <option key={p.id} value={p.id}>
+                                                                {p.name} ({formatCurrency(p.balance || 0, p.currency)})
+                                                            </option>
+                                                        ))}
+                                                        <option value="__create__">Create new pot…</option>
+                                                    </Form.Select>
+                                                </td>
+                                                <td className="text-end">{g.potId ? formatCurrency(g.potBalance || 0, g.potCurrency) : '—'}</td>
+                                                <td className="text-end">{g.targetAmount ? `${g.percentToTarget.toFixed(1)}%` : '—'}</td>
+                                                <td className="text-end">
+                                                    <InputGroup size="sm" className="justify-content-end">
+                                                        <Form.Control
+                                                            type="number"
+                                                            min="0"
+                                                            max="100"
+                                                            value={g.percent}
+                                                            onChange={(e) => {
+                                                                const val = parseFloat(e.target.value) || 0;
+                                                                setGoalAllocations(prev => ({ ...prev, [g.id]: val }));
+                                                            }}
+                                                            style={{ maxWidth: 80 }}
+                                                        />
+                                                        <InputGroup.Text>%</InputGroup.Text>
+                                                    </InputGroup>
+                                                </td>
+                                                <td className="text-end text-muted small">{formatCurrency(g.monthlyPence || 0, currency)}</td>
+                                                <td className="text-end">
+                                                    <Button
+                                                        variant="link"
+                                                        size="sm"
+                                                        className="p-0 me-2"
+                                                        title="View activity stream"
+                                                        onClick={() => showSidebar(g, 'goal')}
+                                                    >
+                                                        <Activity size={14} />
+                                                    </Button>
+                                                    <Button
+                                                        variant="link"
+                                                        size="sm"
+                                                        className="p-0"
+                                                        title="Edit goal"
+                                                        onClick={() => setShowEditGoal(g)}
+                                                    >
+                                                        <Edit3 size={14} />
+                                                    </Button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </Table>
+                            )}
+                        </Card.Body>
+                    </div>
+                </Collapse>
             </Card>
+
+            <EditGoalModal
+                goal={showEditGoal}
+                show={!!showEditGoal}
+                onClose={() => setShowEditGoal(null)}
+            />
+
+            <Modal show={!!createPotGoal} onHide={() => setCreatePotGoal(null)} centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>Create Monzo Pot</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    <Form.Label>Pot name</Form.Label>
+                    <Form.Control
+                        value={createPotName}
+                        onChange={(e) => setCreatePotName(e.target.value)}
+                        placeholder="e.g. Goal ST-XXXX"
+                    />
+                    <Form.Text className="text-muted">This pot will be linked to the selected goal.</Form.Text>
+                    {createPotError && <Alert variant="danger" className="mt-3 mb-0">{createPotError}</Alert>}
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setCreatePotGoal(null)}>Cancel</Button>
+                    <Button variant="primary" onClick={handleCreatePot} disabled={createPotBusy || !createPotName.trim()}>
+                        {createPotBusy ? 'Creating...' : 'Create Pot'}
+                    </Button>
+                </Modal.Footer>
+            </Modal>
 
         </div>
     );

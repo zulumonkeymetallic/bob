@@ -2580,6 +2580,76 @@ exports.monzoListAccounts = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CL
   return { ok: true, count: accounts.length, accounts };
 });
 
+// ===== Monzo: create pot (callable)
+exports.monzoCreatePot = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const name = String(req?.data?.name || '').trim();
+  const goalId = String(req?.data?.goalId || '').trim();
+  if (!name) throw new httpsV2.HttpsError('invalid-argument', 'Pot name required');
+
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+  const db = admin.firestore();
+  const accountsSnap = await db.collection('monzo_accounts').where('ownerUid', '==', uid).limit(1).get();
+  if (accountsSnap.empty) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Monzo account not found. Connect Monzo and sync accounts.');
+  }
+  const account = accountsSnap.docs[0].data() || {};
+  const accountId = account.accountId || account.account?.id || account.id;
+  if (!accountId) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Monzo account missing accountId');
+  }
+
+  let pot;
+  try {
+    pot = await fetchJson('https://api.monzo.com/pots', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, account_id: accountId }),
+    });
+  } catch (error) {
+    const message = error?.message || String(error);
+    await recordIntegrationLog(uid, 'monzo', 'error', 'Create pot failed', { name, error: message });
+    throw new httpsV2.HttpsError('internal', `Create pot failed: ${message}`);
+  }
+
+  const potId = pot?.id || pot?.pot_id || null;
+  if (!potId) {
+    throw new httpsV2.HttpsError('internal', 'Create pot failed: missing pot id');
+  }
+
+  const docRef = db.collection('monzo_pots').doc(`${uid}_${potId}`);
+  const docData = {
+    ownerUid: uid,
+    potId,
+    name: pot.name || name,
+    balance: pot.balance || 0,
+    currency: pot.currency || 'GBP',
+    accountId: pot.current_account_id || accountId,
+    goalAmount: pot.goal_amount || null,
+    goalCurrency: pot.goal_currency || pot.currency || null,
+    roundUpEnabled: pot.round_up?.enabled || false,
+    deleted: !!pot.deleted,
+    raw: pot,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (pot.created) {
+    docData.potCreatedAt = admin.firestore.Timestamp.fromDate(new Date(pot.created));
+    docData.potCreatedISO = pot.created;
+  }
+  await docRef.set(docData, { merge: true });
+
+  if (goalId) {
+    await db.collection('goals').doc(goalId).set({
+      potId,
+      linkedPotId: potId,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  return { ok: true, pot: { id: potId, potId, name: docData.name, balance: docData.balance, currency: docData.currency } };
+});
+
 // ===== Monzo: sync transactions for account
 exports.monzoSyncTransactions = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
