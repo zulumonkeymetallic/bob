@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar, Collapse } from 'react-bootstrap';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar, Collapse, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import { Target, BookOpen, TrendingUp, ListChecks } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -8,12 +8,10 @@ import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, get
 import { db } from '../firebase';
 import { Story, Task, Sprint, Goal } from '../types';
 import { isStatus } from '../utils/statusHelpers';
-import SprintSelector from './SprintSelector';
 import { useSprint } from '../contexts/SprintContext';
 import ChecklistPanel from './ChecklistPanel';
 import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
-import CompactSprintMetrics from './CompactSprintMetrics';
 import ThemeBreakdown from './ThemeBreakdown';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
@@ -23,12 +21,19 @@ import StatCard from './common/StatCard';
 import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import '../styles/Dashboard.css';
 
 interface DashboardStats {
   activeGoals: number;
   goalsDueSoon: number;
   activeStories: number;
   storyCompletion: number;
+  totalGoals: number;
+  doneGoals: number;
+  goalCompletion: number;
+  totalStoryPoints: number;
+  doneStoryPoints: number;
+  storyPointsCompletion: number;
   pendingTasks: number;
   completedToday: number;
   upcomingDeadlines: number;
@@ -78,6 +83,12 @@ const Dashboard: React.FC = () => {
     goalsDueSoon: 0,
     activeStories: 0,
     storyCompletion: 0,
+    totalGoals: 0,
+    doneGoals: 0,
+    goalCompletion: 0,
+    totalStoryPoints: 0,
+    doneStoryPoints: 0,
+    storyPointsCompletion: 0,
     pendingTasks: 0,
     completedToday: 0,
     upcomingDeadlines: 0,
@@ -105,10 +116,14 @@ const Dashboard: React.FC = () => {
   const [sprintTasks, setSprintTasks] = useState<Task[]>([]);
   const [sprintGoals, setSprintGoals] = useState<Goal[]>([]);
   const [goalsList, setGoalsList] = useState<Goal[]>([]);
+  const [potsById, setPotsById] = useState<Record<string, { name: string; balance: number; currency: string }>>({});
   const [dailySummaryLines, setDailySummaryLines] = useState<string[]>([]);
   const [dailySummarySource, setDailySummarySource] = useState<string | null>(null);
   const [prioritySource, setPrioritySource] = useState<string | null>(null);
   const [metricsCollapsed, setMetricsCollapsed] = useState<boolean>(true);
+  const [capacityData, setCapacityData] = useState<any | null>(null);
+  const [capacityLoading, setCapacityLoading] = useState(false);
+  const [capacityError, setCapacityError] = useState<string | null>(null);
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -125,6 +140,12 @@ const Dashboard: React.FC = () => {
       if (!Number.isNaN(parsed)) return new Date(parsed);
     }
     return null;
+  }, []);
+
+  const formatPotBalance = useCallback((value: number, currency = 'GBP') => {
+    const minor = Number(value || 0);
+    const pounds = minor / 100;
+    return pounds.toLocaleString('en-GB', { style: 'currency', currency });
   }, []);
 
   const loadDailySummary = useCallback(async () => {
@@ -254,6 +275,12 @@ const Dashboard: React.FC = () => {
       limit(8)
     );
 
+    const storiesSummaryQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
@@ -288,6 +315,32 @@ const Dashboard: React.FC = () => {
       }));
     });
 
+    const unsubscribeStorySummary = onSnapshot(storiesSummaryQuery, (snapshot) => {
+      let totalPoints = 0;
+      let donePoints = 0;
+      let totalStories = 0;
+      let doneStories = 0;
+      snapshot.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const points = Number(data.points || 0) || 0;
+        totalPoints += points;
+        totalStories += 1;
+        if (isStatus(data.status, 'done')) {
+          donePoints += points;
+          doneStories += 1;
+        }
+      });
+      const percent = totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : 0;
+      setStats(prev => ({
+        ...prev,
+        totalStoryPoints: totalPoints,
+        doneStoryPoints: donePoints,
+        storyPointsCompletion: percent,
+        activeStories: totalStories - doneStories,
+        storyCompletion: totalStories > 0 ? Math.round((doneStories / totalStories) * 100) : 0,
+      }));
+    });
+
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
       const goalData = snapshot.docs.map((docSnap) => {
         const data = docSnap.data();
@@ -300,6 +353,7 @@ const Dashboard: React.FC = () => {
       });
       setGoalsList(goalData);
       const activeGoals = goalData.filter(goal => !isStatus(goal.status, 'Complete')).length;
+      const doneGoals = goalData.filter(goal => isStatus(goal.status, 'Complete')).length;
       const now = new Date();
       const soon = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
       const dueSoon = goalData.filter(goal => {
@@ -310,6 +364,9 @@ const Dashboard: React.FC = () => {
         ...prev,
         activeGoals,
         goalsDueSoon: dueSoon,
+        totalGoals: goalData.length,
+        doneGoals,
+        goalCompletion: goalData.length > 0 ? Math.round((doneGoals / goalData.length) * 100) : 0,
       }));
     });
 
@@ -356,6 +413,25 @@ const Dashboard: React.FC = () => {
       }));
     });
 
+    const potsQuery = query(
+      collection(db, 'monzo_pots'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsubscribePots = onSnapshot(potsQuery, (snapshot) => {
+      const map: Record<string, { name: string; balance: number; currency: string }> = {};
+      snapshot.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const id = data.potId || docSnap.id;
+        if (!id) return;
+        map[String(id)] = {
+          name: data.name || id,
+          balance: Number(data.balance || 0),
+          currency: data.currency || 'GBP',
+        };
+      });
+      setPotsById(map);
+    });
+
     const loadAdditionalData = async () => {
       if (!currentUser) return;
       try {
@@ -379,8 +455,10 @@ const Dashboard: React.FC = () => {
 
     return () => {
       unsubscribeStories();
+      unsubscribeStorySummary();
       unsubscribeGoals();
       unsubscribeTasks();
+      unsubscribePots();
     };
   }, [currentUser, currentPersona, selectedSprintId, refreshToken, decodeToDate]);
 
@@ -404,6 +482,26 @@ const Dashboard: React.FC = () => {
   }, [currentUser]);
 
   const unscheduledSummary = unscheduledToday.slice(0, 3);
+  const potGoalLinks = useMemo(() => {
+    const map: Record<string, { potId: string; potName: string; balance: number; currency: string; goals: Goal[] }> = {};
+    goalsList.forEach((goal) => {
+      const potId = (goal as any).linkedPotId || (goal as any).potId || null;
+      if (!potId) return;
+      const potInfo = potsById[potId];
+      const potName = potInfo?.name || potId;
+      if (!map[potId]) {
+        map[potId] = {
+          potId,
+          potName,
+          balance: potInfo?.balance || 0,
+          currency: potInfo?.currency || 'GBP',
+          goals: [],
+        };
+      }
+      map[potId].goals.push(goal);
+    });
+    return Object.values(map);
+  }, [goalsList, potsById]);
 
   const loadLLMPriority = async () => {
     if (!currentUser) return;
@@ -670,9 +768,33 @@ const Dashboard: React.FC = () => {
     };
   }, [currentUser, currentPersona, selectedSprintId]);
 
-  if (!currentUser) {
-    return <div>Please sign in to view your dashboard.</div>;
-  }
+  useEffect(() => {
+    if (!currentUser?.uid || !selectedSprintId) {
+      setCapacityData(null);
+      return;
+    }
+    let active = true;
+    setCapacityLoading(true);
+    setCapacityError(null);
+    const fetchCapacity = async () => {
+      try {
+        const calculateCapacity = httpsCallable(functions, 'calculateSprintCapacity');
+        const result = await calculateCapacity({ sprintId: selectedSprintId });
+        if (!active) return;
+        setCapacityData(result.data);
+      } catch (err: any) {
+        if (!active) return;
+        console.warn('capacity fetch failed', err);
+        setCapacityError(err?.message || 'Failed to load capacity data.');
+        setCapacityData(null);
+      } finally {
+        if (!active) return;
+        setCapacityLoading(false);
+      }
+    };
+    fetchCapacity();
+    return () => { active = false; };
+  }, [currentUser?.uid, selectedSprintId]);
 
   const sprintProgress = stats.sprintTasksTotal > 0
     ? Math.min(100, Math.round((stats.sprintTasksDone / stats.sprintTasksTotal) * 100))
@@ -702,6 +824,69 @@ const Dashboard: React.FC = () => {
   ];
 
   const selectedSprint = selectedSprintId ? (sprintsById[selectedSprintId] ?? null) : (sprints[0] ?? null);
+  const capacitySummary = capacityData ? {
+    total: Number(capacityData.totalCapacityHours ?? 0),
+    allocated: Number(capacityData.allocatedHours ?? 0),
+    free: Number(capacityData.freeCapacityHours ?? 0),
+    utilization: capacityData.utilization ? Math.min(150, Math.round(capacityData.utilization * 100)) : 0,
+    scheduled: Number(capacityData.scheduledHours ?? 0),
+  } : null;
+  const capacityUtilVariant = (utilization: number) => {
+    if (utilization > 100) return 'danger';
+    if (utilization > 80) return 'warning';
+    return 'success';
+  };
+
+  const sprintSummaryMetrics = useMemo(() => {
+    if (!selectedSprint) return null;
+    const now = new Date();
+    const startDate = new Date(selectedSprint.startDate);
+    const endDate = new Date(selectedSprint.endDate);
+    const hasStarted = now >= startDate;
+    const hasEnded = now > endDate;
+    const daysLeft = Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    const daysUntilStart = Math.max(0, Math.ceil((startDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+
+    const sprintStoryIds = new Set(sprintStories.map((story) => story.id));
+    const sprintStoryTasks = sprintTasks.filter((task) => (
+      task.parentType === 'story' && task.parentId && sprintStoryIds.has(task.parentId)
+    ));
+
+    const totalStories = sprintStories.length;
+    const completedStories = sprintStories.filter((story) => story.status === 4).length;
+    const totalTasks = sprintStoryTasks.length;
+    const completedTasks = sprintStoryTasks.filter((task) => task.status === 2).length;
+
+    const totalPoints = sprintStories.reduce((sum, story) => sum + (story.points || 0), 0);
+    const completedPoints = sprintStories
+      .filter((story) => story.status === 4)
+      .reduce((sum, story) => sum + (story.points || 0), 0);
+
+    const progress = totalPoints > 0
+      ? Math.round((completedPoints / totalPoints) * 100)
+      : (totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0);
+
+    const timeLabel = hasEnded
+      ? 'Ended'
+      : hasStarted
+        ? `${daysLeft}d left`
+        : `${daysUntilStart}d to start`;
+
+    return {
+      timeLabel,
+      totalStories,
+      completedStories,
+      totalTasks,
+      completedTasks,
+      progress,
+      completedPoints,
+      totalPoints
+    };
+  }, [selectedSprint, sprintStories, sprintTasks]);
+
+  if (!currentUser) {
+    return <div>Please sign in to view your dashboard.</div>;
+  }
 
   return (
     <Container fluid className="p-4">
@@ -711,11 +896,42 @@ const Dashboard: React.FC = () => {
             <div>
               <div className="d-flex align-items-center gap-3 flex-wrap">
                 <h2 className="mb-0">Dashboard</h2>
-                <SprintSelector
-                  selectedSprintId={selectedSprintId}
-                  onSprintChange={(sprintId: string) => setSelectedSprintId(sprintId)}
-                />
-                <CompactSprintMetrics selectedSprintId={selectedSprintId} />
+                <div className="d-flex align-items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => navigate('/metrics/progress')}
+                    style={{
+                      border: '1px solid var(--bs-border-color, #dee2e6)',
+                      backgroundColor: 'var(--bs-body-bg)',
+                      color: 'var(--bs-body-color)',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <div className="text-muted" style={{ fontSize: 10 }}>Story Points</div>
+                    <div className="fw-semibold" style={{ fontSize: 12 }}>
+                      {stats.doneStoryPoints}/{stats.totalStoryPoints} pts
+                      {stats.totalStoryPoints > 0 ? ` · ${stats.storyPointsCompletion}%` : ' · 0%'}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => navigate('/metrics/progress')}
+                    style={{
+                      border: '1px solid var(--bs-border-color, #dee2e6)',
+                      backgroundColor: 'var(--bs-body-bg)',
+                      color: 'var(--bs-body-color)',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <div className="text-muted" style={{ fontSize: 10 }}>Goals</div>
+                    <div className="fw-semibold" style={{ fontSize: 12 }}>
+                      {stats.doneGoals}/{stats.totalGoals}
+                      {stats.totalGoals > 0 ? ` · ${stats.goalCompletion}%` : ' · 0%'}
+                    </div>
+                  </button>
+                </div>
                 {stats.tasksUnlinked > 0 && (
                   <Badge bg="warning" text="dark" pill>
                     {stats.tasksUnlinked} unlinked tasks
@@ -740,7 +956,7 @@ const Dashboard: React.FC = () => {
             <Col xl={12}>
               <Card className="shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                  <div className="fw-semibold">Sprint Metrics</div>
+                  <div className="fw-semibold">Key Metrics</div>
                   <Button
                     size="sm"
                     variant="link"
@@ -750,9 +966,113 @@ const Dashboard: React.FC = () => {
                     {metricsCollapsed ? 'Expand' : 'Collapse'}
                   </Button>
                 </Card.Header>
+                <Card.Body className="pt-3 pb-2">
+                  {!hasSelectedSprint && (
+                    <div className="text-muted small">Select a sprint to see capacity.</div>
+                  )}
+                  {hasSelectedSprint && capacityLoading && (
+                    <div className="text-muted small">Loading capacity…</div>
+                  )}
+                  {hasSelectedSprint && capacityError && (
+                    <div className="text-danger small">{capacityError}</div>
+                  )}
+                  {hasSelectedSprint && capacitySummary && (
+                    <Row className="g-2 dashboard-inline-row dashboard-key-metrics">
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-total-tooltip">
+                                  16h/day (24h − 8h sleep) minus work blocks in the sprint. If no work block, defaults to 8h weekdays.
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Total capacity</div>
+                            </OverlayTrigger>
+                            <div className="fw-semibold">{capacitySummary.total.toFixed(1)}h</div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-allocated-tooltip">
+                                  Story estimates/points allocated to this sprint.
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Allocated</div>
+                            </OverlayTrigger>
+                            <div className="fw-semibold">{capacitySummary.allocated.toFixed(1)}h</div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-free-tooltip">
+                                  Remaining capacity after subtracting allocated story hours.
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Free</div>
+                            </OverlayTrigger>
+                            <div className={`fw-semibold ${capacitySummary.free < 0 ? 'text-danger' : 'text-success'}`}>
+                              {capacitySummary.free.toFixed(1)}h
+                            </div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-utilization-tooltip">
+                                  Allocated hours ÷ total capacity.
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Utilization</div>
+                            </OverlayTrigger>
+                            <div className={`fw-semibold text-${capacityUtilVariant(capacitySummary.utilization)}`}>
+                              {capacitySummary.utilization}%
+                            </div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col xs={6} md={4} xl={2}>
+                        <Card className="h-100 border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <OverlayTrigger
+                              placement="bottom"
+                              overlay={(
+                                <Tooltip id="capacity-scheduled-tooltip">
+                                  Calendar blocks linked to sprint stories/tasks (excludes chores/routines and external calendars).
+                                </Tooltip>
+                              )}
+                            >
+                              <div className="text-muted small" style={{ cursor: 'help' }}>Scheduled</div>
+                            </OverlayTrigger>
+                            <div className="fw-semibold">{capacitySummary.scheduled.toFixed(1)}h</div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
+                  )}
+                </Card.Body>
                 <Collapse in={!metricsCollapsed}>
                   <div>
-                    <Card.Body>
+                    <div className="px-3 pb-3">
                       {selectedSprint ? (
                         <SprintMetricsPanel
                           sprint={selectedSprint}
@@ -771,9 +1091,51 @@ const Dashboard: React.FC = () => {
                           </Button>
                         </div>
                       )}
-                    </Card.Body>
+                    </div>
                   </div>
                 </Collapse>
+              </Card>
+            </Col>
+          </Row>
+
+          <Row className="g-3 mb-4">
+            <Col xl={12}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <span className="fw-semibold">Pot Balances (Linked Goals)</span>
+                  <Button variant="link" size="sm" className="text-decoration-none" onClick={() => navigate('/finance')}>
+                    View finance
+                  </Button>
+                </Card.Header>
+                <Card.Body>
+                  {potGoalLinks.length === 0 ? (
+                    <div className="text-muted small">No goals are linked to Monzo pots yet.</div>
+                  ) : (
+                    <Row className="g-3">
+                      {potGoalLinks.map((pot) => (
+                        <Col key={pot.potId} xs={12} md={6} xl={4}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-3">
+                              <div className="d-flex justify-content-between align-items-start mb-2">
+                                <div className="fw-semibold text-truncate">{pot.potName}</div>
+                                <div className="fw-semibold">{formatPotBalance(pot.balance, pot.currency)}</div>
+                              </div>
+                              <div className="text-muted small mb-2">{pot.goals.length} linked goal{pot.goals.length === 1 ? '' : 's'}</div>
+                              <ul className="mb-0 small">
+                                {pot.goals.slice(0, 4).map((goal) => (
+                                  <li key={goal.id} className="text-truncate">{goal.title || 'Untitled goal'}</li>
+                                ))}
+                                {pot.goals.length > 4 && (
+                                  <li className="text-muted">+{pot.goals.length - 4} more</li>
+                                )}
+                              </ul>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
+                  )}
+                </Card.Body>
               </Card>
             </Col>
           </Row>
@@ -799,6 +1161,49 @@ const Dashboard: React.FC = () => {
                           <li key={idx}>{line}</li>
                         ))}
                       </ul>
+                    </div>
+                  )}
+                  {selectedSprint && sprintSummaryMetrics && (
+                    <div className="mb-3">
+                      <div className="fw-semibold mb-2">Sprint Snapshot</div>
+                      <Row className="g-2 dashboard-inline-row">
+                        <Col xs={6} md={3}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2 text-center">
+                              <div className="text-muted small">Time</div>
+                              <div className="fw-semibold">{sprintSummaryMetrics.timeLabel}</div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={3}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2 text-center">
+                              <div className="text-muted small">Stories</div>
+                              <div className="fw-semibold">
+                                {sprintSummaryMetrics.completedStories}/{sprintSummaryMetrics.totalStories}
+                              </div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={3}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2 text-center">
+                              <div className="text-muted small">Tasks</div>
+                              <div className="fw-semibold">
+                                {sprintSummaryMetrics.completedTasks}/{sprintSummaryMetrics.totalTasks}
+                              </div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={3}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2 text-center">
+                              <div className="text-muted small">Progress</div>
+                              <div className="fw-semibold">{sprintSummaryMetrics.progress}%</div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      </Row>
                     </div>
                   )}
                   {unscheduledToday.length > 0 && (

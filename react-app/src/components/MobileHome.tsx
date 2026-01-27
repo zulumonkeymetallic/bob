@@ -8,6 +8,7 @@ import { Goal, Story, Task, Sprint as SprintType } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper, StoryStatus } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
+import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 
 type TabKey = 'overview' | 'tasks' | 'stories' | 'goals';
 
@@ -25,11 +26,34 @@ const MobileHome: React.FC = () => {
   const [noteModal, setNoteModal] = useState<{ type: 'task'|'story'|'goal'; id: string; show: boolean } | null>(null);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+  const briefWeatherSummary = extractWeatherSummary(summary?.dailyBrief?.weather);
+  const briefWeatherTemp = extractWeatherTemp(summary?.dailyBrief?.weather);
+  const worldWeatherLine = formatWeatherLine(summary?.worldSummary?.weather);
+  const renderBriefText = (value: any): string => {
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    if (!value || typeof value !== 'object') return '';
+    return (
+      value.title ||
+      value.headline ||
+      value.summary ||
+      value.text ||
+      ''
+    );
+  };
 
   // Mobile override: if no explicit sprint is selected, prefer the active sprint
   useEffect(() => {
     if (!sprints || !sprints.length) return;
-    if (selectedSprintId) return;
+    if (selectedSprintId !== undefined && selectedSprintId !== null && selectedSprintId !== '') return;
+    const hasSavedPreference = (() => {
+      try {
+        const saved = localStorage.getItem('bob_selected_sprint');
+        return saved !== null && saved !== undefined;
+      } catch {
+        return false;
+      }
+    })();
+    if (hasSavedPreference) return;
     const active = sprints.find(s => (s.status ?? 0) === 1) || sprints[0];
     if (active?.id) setSelectedSprintId(active.id);
   }, [sprints, selectedSprintId, setSelectedSprintId]);
@@ -197,24 +221,28 @@ const MobileHome: React.FC = () => {
               <>
                 {Array.isArray(summary.dailyBrief.lines) && summary.dailyBrief.lines.length > 0 && (
                   <ul className="mb-2 small">
-                    {summary.dailyBrief.lines.slice(0, 4).map((line: string, idx: number) => (
-                      <li key={idx}>{line}</li>
-                    ))}
+                    {summary.dailyBrief.lines.slice(0, 4).map((line: any, idx: number) => {
+                      const text = renderBriefText(line);
+                      if (!text) return null;
+                      return <li key={idx}>{text}</li>;
+                    })}
                   </ul>
                 )}
-                {summary.dailyBrief.weather?.summary && (
+                {briefWeatherSummary && (
                   <div className="text-muted small mb-1">
-                    Weather: {summary.dailyBrief.weather.summary}
-                    {summary.dailyBrief.weather.temp ? ` (${summary.dailyBrief.weather.temp})` : ''}
+                    Weather: {briefWeatherSummary}
+                    {briefWeatherTemp ? ` (${briefWeatherTemp})` : ''}
                   </div>
                 )}
                 {Array.isArray(summary.dailyBrief.news) && summary.dailyBrief.news.length > 0 && (
                   <div className="mt-2">
                     <div className="fw-semibold" style={{ fontSize: 14 }}>News</div>
                     <ul className="mb-0 small">
-                      {summary.dailyBrief.news.slice(0, 3).map((item: string, idx: number) => (
-                        <li key={idx}>{item}</li>
-                      ))}
+                      {summary.dailyBrief.news.slice(0, 3).map((item: any, idx: number) => {
+                        const text = renderBriefText(item);
+                        if (!text) return null;
+                        return <li key={idx}>{text}</li>;
+                      })}
                     </ul>
                   </div>
                 )}
@@ -313,11 +341,11 @@ const MobileHome: React.FC = () => {
                 <strong>World & Weather</strong>
               </Card.Header>
               <Card.Body>
-                {summary.worldSummary.summary && (
-                  <div className="mb-2" style={{ fontSize: 14 }}>{summary.worldSummary.summary}</div>
+                {renderBriefText(summary.worldSummary.summary) && (
+                  <div className="mb-2" style={{ fontSize: 14 }}>{renderBriefText(summary.worldSummary.summary)}</div>
                 )}
-                {summary.worldSummary.weather && (
-                  <div className="text-muted" style={{ fontSize: 13 }}>{summary.worldSummary.weather}</div>
+                {worldWeatherLine && (
+                  <div className="text-muted" style={{ fontSize: 13 }}>{worldWeatherLine}</div>
                 )}
               </Card.Body>
             </Card>

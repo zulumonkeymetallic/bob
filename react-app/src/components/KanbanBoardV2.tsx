@@ -19,6 +19,7 @@ interface KanbanBoardV2Props {
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
     showDescriptions?: boolean;
+    showLatestNotes?: boolean;
     dueFilter?: 'all' | 'today' | 'overdue';
     sortByAi?: boolean;
 }
@@ -30,6 +31,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     onItemSelect,
     onEdit,
     showDescriptions = false,
+    showLatestNotes = false,
     dueFilter = 'all',
     sortByAi = true
 }) => {
@@ -42,6 +44,9 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const [tasks, setTasks] = useState<Task[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
+    const [latestNotesById, setLatestNotesById] = useState<Record<string, string>>({});
+    const [steamByAppId, setSteamByAppId] = useState<Record<string, any>>({});
+    const [steamLastSyncAt, setSteamLastSyncAt] = useState<any>(null);
 
     // Data fetching
     useEffect(() => {
@@ -128,6 +133,42 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         };
     }, [currentUser, currentPersona, sprintId]);
 
+    useEffect(() => {
+        if (!currentUser) {
+            setSteamByAppId({});
+            setSteamLastSyncAt(null);
+            return;
+        }
+
+        const steamQuery = query(
+            collection(db, 'steam'),
+            where('ownerUid', '==', currentUser.uid)
+        );
+
+        const unsubSteam = onSnapshot(steamQuery, (snap) => {
+            const map: Record<string, any> = {};
+            snap.docs.forEach((docSnap) => {
+                const data = docSnap.data() as any;
+                const appId = data.appid ?? data.steamAppId ?? data.externalId;
+                if (appId != null) {
+                    map[String(appId)] = { id: docSnap.id, ...data };
+                }
+            });
+            setSteamByAppId(map);
+        });
+
+        const profileRef = doc(db, 'profiles', currentUser.uid);
+        const unsubProfile = onSnapshot(profileRef, (snap) => {
+            const data = snap.data() as any;
+            setSteamLastSyncAt(data?.steamLastSyncAt ?? null);
+        });
+
+        return () => {
+            unsubSteam();
+            unsubProfile();
+        };
+    }, [currentUser]);
+
     // Drag and Drop Monitor
     useEffect(() => {
         return monitorForElements({
@@ -190,6 +231,17 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             },
         });
     }, [stories, tasks, trackFieldChange, sprintId]);
+
+    const getSteamAppId = (story: Story) => {
+        const meta = (story as any)?.metadata || {};
+        return meta.steamAppId ?? meta.appId ?? meta.steamId ?? (story as any).externalId ?? null;
+    };
+
+    const isSteamStory = (story: Story) => {
+        const source = String((story as any).source || '').toLowerCase();
+        const entry = String((story as any).entry_method || '').toLowerCase();
+        return source === 'steam' || entry.includes('steam') || !!getSteamAppId(story);
+    };
 
     // Filtering and Grouping
     const filteredStories = useMemo(() => {
@@ -267,6 +319,55 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         }
         return result;
     }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter]);
+
+    const visibleEntityIds = useMemo(() => {
+        const ids = new Set<string>();
+        filteredStories.forEach((story) => ids.add(story.id));
+        filteredTasks.forEach((task) => ids.add(task.id));
+        return ids;
+    }, [filteredStories, filteredTasks]);
+
+    useEffect(() => {
+        if (!showLatestNotes) {
+            setLatestNotesById({});
+            return;
+        }
+        const uid = currentUser?.uid;
+        if (!uid || visibleEntityIds.size === 0) {
+            setLatestNotesById({});
+            return;
+        }
+
+        const queryLimit = Math.min(500, Math.max(50, visibleEntityIds.size * 3));
+        const notesQuery = query(
+            collection(db, 'activity_stream'),
+            where('ownerUid', '==', uid),
+            where('activityType', '==', 'note_added'),
+            orderBy('timestamp', 'desc'),
+            limit(queryLimit)
+        );
+
+        return onSnapshot(
+            notesQuery,
+            (snapshot) => {
+                const next: Record<string, string> = {};
+                snapshot.docs.forEach((docSnap) => {
+                    const data = docSnap.data() as any;
+                    const entityId = data.entityId || data.storyId || data.taskId;
+                    if (!entityId || !visibleEntityIds.has(entityId)) return;
+                    if (data.userId && data.userId !== uid) return;
+                    const noteContent = typeof data.noteContent === 'string' ? data.noteContent.trim() : '';
+                    if (!noteContent) return;
+                    if (!next[entityId]) next[entityId] = noteContent;
+                });
+                setLatestNotesById(next);
+            },
+            (error) => {
+                console.warn('[KanbanBoardV2] latest notes query error', error?.message || error);
+                setLatestNotesById({});
+            }
+        );
+    }, [showLatestNotes, currentUser?.uid, visibleEntityIds]);
 
     // Helper to determine column for an item
     const getColumnForStatus = (status: string | number): 'backlog' | 'in-progress' | 'done' => {
@@ -391,6 +492,27 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                             }
                         }
 
+                        let steamMeta: { playtimeMinutes?: number; lastPlayedAt?: number; lastSyncAt?: any; appId?: string | number } | undefined;
+                        if (type === 'story' && isSteamStory(item as Story)) {
+                            const appId = getSteamAppId(item as Story);
+                            if (appId != null) {
+                                const steamEntry = steamByAppId[String(appId)];
+                                if (steamEntry) {
+                                    steamMeta = {
+                                        appId,
+                                        playtimeMinutes: steamEntry.playtime_forever ?? steamEntry.playtimeForever ?? steamEntry.playtime ?? null,
+                                        lastPlayedAt: steamEntry.rtime_last_played ? steamEntry.rtime_last_played * 1000 : (steamEntry.last_played ? steamEntry.last_played * 1000 : null),
+                                        lastSyncAt: steamLastSyncAt ?? steamEntry.updatedAt ?? null
+                                    };
+                                } else {
+                                    steamMeta = {
+                                        appId,
+                                        lastSyncAt: steamLastSyncAt ?? null
+                                    };
+                                }
+                            }
+                        }
+
                         return (
                             <KanbanCardV2
                                 key={item.id}
@@ -401,6 +523,9 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 taskCount={type === 'story' ? tasks.filter(t => t.parentId === item.id).length : 0}
                                 onItemSelect={onItemSelect}
                                 showDescription={showDescriptions}
+                                showLatestNote={showLatestNotes}
+                                latestNote={latestNotesById[item.id]}
+                                steamMeta={steamMeta}
                                 onEdit={() => onEdit?.(item, type)}
                             />
                         );

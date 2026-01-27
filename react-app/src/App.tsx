@@ -11,6 +11,7 @@ import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import WeeklyThemePlanner from './components/planner/WeeklyThemePlanner';
 import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
 import ApprovalsCenter from './components/planner/ApprovalsCenter';
+import ThemeProgressDashboard from './components/ThemeProgressDashboard';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
@@ -18,6 +19,7 @@ import PersonalListsManagement from './components/PersonalListsManagement';
 import GamesBacklog from './components/GamesBacklog';
 import BooksBacklog from './components/BooksBacklog';
 import ShowsBacklog from './components/ShowsBacklog';
+import VideosBacklog from './components/VideosBacklog';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
@@ -31,7 +33,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
 import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider, usePersona } from './contexts/PersonaContext';
-import { SprintProvider } from './contexts/SprintContext';
+import { SprintProvider, useSprint } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 
 // Import theme-aware styles
@@ -100,6 +102,9 @@ import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import AdvancedOverview from './components/AdvancedOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
 import CapacityDashboard from './components/CapacityDashboard';
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { db } from './firebase';
+import type { Goal, Story } from './types';
 
 
 // Lazy-loaded heavy routes
@@ -128,6 +133,7 @@ function AppContent() {
   const navigate = useNavigate();
   const deviceInfo = useDeviceInfo();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
@@ -139,9 +145,49 @@ function AppContent() {
   };
 
   // Data for the global sidebar
-  const [goals, setGoals] = useState([]);
-  const [stories, setStories] = useState([]);
-  const [sprints, setSprints] = useState([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setGoals([]);
+      setStories([]);
+      return;
+    }
+
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
+
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
+
+    const unsubGoals = onSnapshot(
+      goalsQuery,
+      (snap) => setGoals(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Goal)),
+      (err) => console.warn('[global-sidebar] goals snapshot error', err?.message || err)
+    );
+
+    const unsubStories = onSnapshot(
+      storiesQuery,
+      (snap) => setStories(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Story)),
+      (err) => console.warn('[global-sidebar] stories snapshot error', err?.message || err)
+    );
+
+    return () => {
+      unsubGoals();
+      unsubStories();
+    };
+  }, [currentUser?.uid, currentPersona]);
 
   // 🖱️ Initialize global click tracking service
   useEffect(() => {
@@ -238,7 +284,9 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/overview/advanced" element={<AdvancedOverview />} />
+            <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
+            <Route path="/metrics" element={<AdvancedOverview />} />
+            <Route path="/overview/advanced" element={<Navigate to="/metrics" replace />} />
             <Route
               path="/tasks"
               element={<QueryDeepLinkGate paramKey="taskId" pathPrefix="/tasks" fallback={<TaskListView />} />}
@@ -252,6 +300,7 @@ function AppContent() {
             <Route path="/games-backlog" element={<GamesBacklog />} />
             <Route path="/books-backlog" element={<BooksBacklog />} />
             <Route path="/shows-backlog" element={<ShowsBacklog />} />
+            <Route path="/videos-backlog" element={<VideosBacklog />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
             {/* Legacy sprint routes - redirect to consolidated */}
             <Route path="/kanban" element={<Navigate to="/sprints/kanban" replace />} />

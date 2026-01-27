@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -67,6 +67,7 @@ interface ModernStoriesTableProps {
   onStoryAdd: (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
   onStorySelect?: (story: Story) => void; // New prop for story selection
   onEditStory?: (story: Story) => void; // New prop for story editing
+  highlightStoryId?: string;
   goalId?: string; // Made optional for full stories table
   enableInlineTasks?: boolean; // Only show green caret + inline tasks when true
   onStoryReorder?: (activeId: string, overId: string) => Promise<void>;
@@ -345,6 +346,7 @@ interface SortableRowProps {
   onEditStory?: (story: Story) => void;
   onToggleExpand?: (storyId: string) => void;
   isExpanded?: boolean;
+  isHighlighted?: boolean;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({ 
@@ -358,7 +360,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStorySelect,
   onEditStory,
   onToggleExpand,
-  isExpanded
+  isExpanded,
+  isHighlighted
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { showSidebar } = useSidebar();
@@ -383,6 +386,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
     // View tracking should only happen on explicit user interactions
   }, [story.id]); // Only re-run when story ID changes
 
+  const baseRowColor = isHighlighted ? '#eff6ff' : themeVars.card as string;
+  const hoverRowColor = isHighlighted ? '#dbeafe' : rgbaCard(0.08);
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -707,8 +712,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
       ref={setNodeRef}
       style={{
         ...style,
-        backgroundColor: themeVars.card as string,
+        backgroundColor: baseRowColor,
         borderBottom: `1px solid ${themeVars.border}`,
+        boxShadow: isHighlighted ? 'inset 0 0 0 2px #2563eb' : undefined,
         transition: 'background-color 0.15s ease',
         cursor: onStorySelect ? 'pointer' : 'default',
       }}
@@ -727,12 +733,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }}
       onMouseEnter={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+          e.currentTarget.style.backgroundColor = hoverRowColor;
         }
       }}
       onMouseLeave={(e) => {
         if (!isDragging) {
-          e.currentTarget.style.backgroundColor = themeVars.card as string;
+          e.currentTarget.style.backgroundColor = baseRowColor;
         }
       }}
     >
@@ -915,6 +921,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onStoryAdd,
   onStorySelect,
   onEditStory,
+  highlightStoryId,
   goalId,
   enableInlineTasks = false,
   onStoryReorder,
@@ -923,6 +930,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { selectedSprintId, sprints } = useSprint();
+  const navigate = useNavigate();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
   const [configExpanded, setConfigExpanded] = useState({
@@ -1312,31 +1320,34 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
         gap: '12px',
         alignItems: 'end'
       }}>
-        {/* Search Input */}
-        <div>
-          <label style={{ 
-            display: 'block', 
-            fontSize: '12px', 
-            fontWeight: '500', 
-            color: 'var(--text)', 
-            marginBottom: '4px' 
-          }}>
-            Search Stories
-          </label>
-          <input
-            type="text"
-            placeholder="Search title, description, ref..."
-            value={filters.search}
-            onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-            style={{
-              width: '100%',
-              padding: '6px 10px',
-              fontSize: '14px',
-              border: '1px solid var(--line)',
-              borderRadius: '4px',
-              backgroundColor: 'var(--panel)',
-            }}
-          />
+        {/* Search + KPI Summary */}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 220px', minWidth: '220px' }}>
+            <label style={{ 
+              display: 'block', 
+              fontSize: '12px', 
+              fontWeight: '500', 
+              color: 'var(--text)', 
+              marginBottom: '4px' 
+            }}>
+              Search Stories
+            </label>
+            <input
+              type="text"
+              placeholder="Search title, description, ref..."
+              value={filters.search}
+              onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
+              style={{
+                width: '100%',
+                padding: '6px 10px',
+                fontSize: '14px',
+                border: '1px solid var(--line)',
+                borderRadius: '4px',
+                backgroundColor: 'var(--panel)',
+              }}
+            />
+          </div>
+
         </div>
 
         {/* Status Filter */}
@@ -1607,6 +1618,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         onEditStory={onEditStory}
                         onToggleExpand={handleToggleExpand}
                         isExpanded={expandedStoryId === story.id}
+                        isHighlighted={highlightStoryId === story.id}
                       />
                       {enableInlineTasks && expandedStoryId === story.id && (
                         <tr>

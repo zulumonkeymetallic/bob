@@ -539,7 +539,9 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
 
       // Step 1: insert minimal to avoid validation edge-cases (no color, no extended props)
       const createResponse = await calendar.events.insert({ calendarId: 'primary', resource: minimalEvent });
-      eventId = createResponse.data.id;
+      const createdEvent = createResponse?.data || {};
+      eventId = createdEvent.id;
+      let gcalHtmlLink = createdEvent.htmlLink || null;
       debugLogs.push({ step: 'insert_minimal_ok', eventId });
 
       // In test mode, stop after minimal insert so we can validate the API path
@@ -605,7 +607,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
       try {
-        await calendar.events.patch({ calendarId: 'primary', eventId, resource: fullEvent });
+        const patchResponse = await calendar.events.patch({ calendarId: 'primary', eventId, resource: fullEvent });
+        if (patchResponse?.data?.htmlLink) gcalHtmlLink = patchResponse.data.htmlLink;
         debugLogs.push({ step: 'patch_full_ok', eventId });
       } catch (patchErr) {
         const patchErrDetail = patchErr?.response?.data || patchErr?.errors || patchErr?.message || String(patchErr);
@@ -624,11 +627,13 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         console.warn('GCal patch failed after insert', patchErrDetail);
       }
 
-      await admin.firestore().collection('calendar_blocks').doc(blockId).update({
+      const updatePayload = {
         googleEventId: eventId,
         status: 'applied',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (gcalHtmlLink) updatePayload.externalLink = gcalHtmlLink;
+      await admin.firestore().collection('calendar_blocks').doc(blockId).update(updatePayload);
       await logCalendarIntegration(uid, {
         action: 'push',
         direction: action,
@@ -875,8 +880,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         source: eventSource,
         extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
-      await calendar.events.update({ calendarId: 'primary', eventId: block.googleEventId, resource: updateEvent });
-      await admin.firestore().collection('calendar_blocks').doc(blockId).update({ updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      const updateResponse = await calendar.events.update({ calendarId: 'primary', eventId: block.googleEventId, resource: updateEvent });
+      const updatePayload = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+      if (updateResponse?.data?.htmlLink) updatePayload.externalLink = updateResponse.data.htmlLink;
+      await admin.firestore().collection('calendar_blocks').doc(blockId).update(updatePayload);
       eventId = block.googleEventId;
       await logCalendarIntegration(uid, {
         action: 'push',

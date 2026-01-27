@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Form, Button, Table, Badge, Row, Col, InputGroup, Alert, Accordion, Spinner } from 'react-bootstrap';
+import { Card, Form, Button, Table, Badge, Row, Col, InputGroup, Alert, Accordion, Spinner, Collapse, Modal } from 'react-bootstrap';
 import { db } from '../../firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSidebar } from '../../contexts/SidebarContext';
 import {
     DEFAULT_CATEGORIES,
     FinanceCategory,
@@ -14,8 +15,19 @@ import {
 } from '../../utils/financeCategories';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../../firebase';
+import { Activity, Edit3 } from 'lucide-react';
+import EditGoalModal from '../EditGoalModal';
 
 type BudgetMode = 'percentage' | 'fixed';
+
+type DebtItem = {
+    id: string;
+    name: string;
+    balancePence: number;
+    apr: number;
+    minPaymentPence: number;
+    potId?: string | null;
+};
 
 type BudgetData = {
     mode: BudgetMode;
@@ -26,6 +38,8 @@ type BudgetData = {
     transferDay?: number | null;
     autoTransferEnabled?: boolean;
     goalAllocations?: Record<string, number>; // percent of net salary per goal
+    debts?: DebtItem[];
+    snowballExtra?: number;
     updatedAt?: number;
 };
 
@@ -45,12 +59,25 @@ const EnhancedBudgetSettings: React.FC = () => {
     const [goals, setGoals] = useState<any[]>([]);
     const [goalAllocation, setGoalAllocation] = useState<number>(20); // Default 20% for goals
     const [goalAllocations, setGoalAllocations] = useState<Record<string, number>>({});
+    const [debts, setDebts] = useState<DebtItem[]>([]);
+    const [snowballExtra, setSnowballExtra] = useState<number>(0);
     const [customCategories, setCustomCategories] = useState<CategoryItem[]>([]);
     const [legacyBudgetLoaded, setLegacyBudgetLoaded] = useState(false);
     const [categorySpend, setCategorySpend] = useState<Record<string, { d30: number; d90: number; ytd: number }>>({});
-    const [pots, setPots] = useState<Array<{ id: string; name: string }>>([]);
+    const [pots, setPots] = useState<Array<{ id: string; name: string; balance?: number; currency?: string }>>([]);
     const [goalFilter, setGoalFilter] = useState<'all' | 'linked' | 'unlinked'>('all');
     const [goalTargetFilter, setGoalTargetFilter] = useState<'all' | 'hasTarget' | 'noTarget'>('all');
+    const [showGoalsSection, setShowGoalsSection] = useState(true);
+    const [showLinkedGoalsOnly, setShowLinkedGoalsOnly] = useState(true);
+    const [goalSortKey, setGoalSortKey] = useState<'title' | 'target' | 'targetYear' | 'pot' | 'balance' | 'pct' | 'percent' | 'monthly'>('targetYear');
+    const [goalSortDir, setGoalSortDir] = useState<'asc' | 'desc'>('asc');
+    const [showEditGoal, setShowEditGoal] = useState<any | null>(null);
+    const [createPotGoal, setCreatePotGoal] = useState<any | null>(null);
+    const [createPotName, setCreatePotName] = useState('');
+    const [createPotBusy, setCreatePotBusy] = useState(false);
+    const [createPotError, setCreatePotError] = useState('');
+    const [potLinkSaving, setPotLinkSaving] = useState<string | null>(null);
+    const { showSidebar } = useSidebar();
 
     // Load budget data
     useEffect(() => {
@@ -70,17 +97,26 @@ const EnhancedBudgetSettings: React.FC = () => {
                     const agg: Record<string, { d30: number; d90: number; ytd: number }> = {};
                     const today = new Date();
                     const daysAgo = (iso: string) => Math.round((today.getTime() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24));
+                    const normalizeSpend = (value: any) => {
+                        const num = Number(value) || 0;
+                        const abs = Math.abs(num);
+                        if (abs > 10000) return num / 100;
+                        return num;
+                    };
                     // YTD
                     Object.entries(spendByCategory).forEach(([key, val]) => {
                         if (key === 'bank_transfer' || key === 'unknown') return;
-                        agg[key] = { d30: 0, d90: 0, ytd: Math.abs(Number(val) || 0) / 100 };
+                        agg[key] = { d30: 0, d90: 0, ytd: Math.abs(normalizeSpend(val)) };
                     });
                     // Rolling windows from time series
                     Object.entries(timeSeriesByCategory || {}).forEach(([key, entries]: any) => {
                         if (key === 'bank_transfer' || key === 'unknown') return;
-                        entries.forEach((row: any) => {
-                            const age = daysAgo(row.month + '-01');
-                            const amt = Math.abs(row.amount || 0) / 100;
+                        const rows = Array.isArray(entries)
+                            ? entries
+                            : Object.entries(entries || {}).map(([month, amount]) => ({ month, amount }));
+                        rows.forEach((row: any) => {
+                            const age = daysAgo(`${row.month}-01`);
+                            const amt = Math.abs(normalizeSpend(row.amount || 0));
                             if (!agg[key]) agg[key] = { d30: 0, d90: 0, ytd: 0 };
                             if (age <= 30) agg[key].d30 += amt;
                             if (age <= 90) agg[key].d90 += amt;
@@ -125,6 +161,17 @@ const EnhancedBudgetSettings: React.FC = () => {
                     // Load goal allocation if saved, otherwise default
                     if ((data as any).goalAllocation) setGoalAllocation((data as any).goalAllocation);
                     if (data.goalAllocations) setGoalAllocations(data.goalAllocations);
+                    if (Array.isArray(data.debts)) {
+                        setDebts(data.debts.map((d: any) => ({
+                            id: d.id || `debt_${Date.now()}`,
+                            name: d.name || '',
+                            balancePence: Number(d.balancePence || 0),
+                            apr: Number(d.apr || 0),
+                            minPaymentPence: Number(d.minPaymentPence || 0),
+                            potId: d.potId || '',
+                        })));
+                    }
+                    if (Number.isFinite(data.snowballExtra)) setSnowballExtra(Number(data.snowballExtra));
                 } else {
                     // Initialize defaults from category definitions
                     const initialBudgets: Record<string, { percent?: number; amount?: number }> = {};
@@ -178,7 +225,14 @@ const EnhancedBudgetSettings: React.FC = () => {
                     const potsRef = collection(db, 'monzo_pots');
                     const potsSnap = await getDocs(query(potsRef, where('ownerUid', '==', currentUser.uid)));
                     const potList = potsSnap.docs
-                        .map((d) => ({ id: (d.data() as any).potId || d.id, name: (d.data() as any).name || d.id, deleted: (d.data() as any).deleted, closed: (d.data() as any).closed }))
+                        .map((d) => ({
+                            id: (d.data() as any).potId || d.id,
+                            name: (d.data() as any).name || d.id,
+                            balance: Number((d.data() as any).balance || 0),
+                            currency: (d.data() as any).currency || 'GBP',
+                            deleted: (d.data() as any).deleted,
+                            closed: (d.data() as any).closed
+                        }))
                         .filter((p) => !p.deleted && !p.closed);
                     setPots(potList);
                 } catch (err) {
@@ -210,6 +264,8 @@ const EnhancedBudgetSettings: React.FC = () => {
                 goalAllocations,
                 transferDay,
                 autoTransferEnabled,
+                debts,
+                snowballExtra,
                 updatedAt: Date.now()
             });
 
@@ -224,7 +280,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                     : (val.amount || 0) / 100; // pounds
                 byCategory[normalizedKey] = Number.isFinite(derived) ? Number(derived.toFixed(2)) : 0;
             });
-            await setDoc(legacyRef, { byCategory, currency, monthlyIncome, ownerUid: currentUser.uid, updatedAt: Date.now() }, { merge: true });
+            await setDoc(legacyRef, { byCategory, currency, monthlyIncome, bucketPotMap, ownerUid: currentUser.uid, updatedAt: Date.now() }, { merge: true });
 
             setSaved('Saved');
             setTimeout(() => setSaved(''), 2000);
@@ -389,33 +445,193 @@ const EnhancedBudgetSettings: React.FC = () => {
         return goals.filter((g) => {
             const linked = !!(g.linkedPotId || g.potId);
             const hasTarget = !!(g.endDate || g.targetDate || g.targetTime);
+            if (showLinkedGoalsOnly && !linked) return false;
             if (goalFilter === 'linked' && !linked) return false;
             if (goalFilter === 'unlinked' && linked) return false;
             if (goalTargetFilter === 'hasTarget' && !hasTarget) return false;
             if (goalTargetFilter === 'noTarget' && hasTarget) return false;
             return true;
         });
-    }, [goals, goalFilter, goalTargetFilter]);
+    }, [goals, goalFilter, goalTargetFilter, showLinkedGoalsOnly]);
 
-    const plannedTransfers = useMemo(() => {
-        const items: Array<{ label: string; potName: string; amountPence: number }> = [];
-        Object.entries(bucketTotals).forEach(([bucket, total]) => {
-            if (!total) return;
-            const potId = bucketPotMap[bucket];
-            if (!potId) return;
-            const potName = pots.find(p => p.id === potId)?.name || potId;
-            items.push({ label: `${BUCKET_LABELS[bucket as CategoryBucket]}`, potName, amountPence: total.amount });
+    const resolveGoalTargetYear = (goal: any) => {
+        const targetDate = goal.endDate || goal.targetDate || goal.targetTime || null;
+        if (!targetDate) return null;
+        const dt = new Date(targetDate);
+        if (Number.isNaN(dt.getTime())) return null;
+        return dt.getFullYear();
+    };
+
+    const resolvePotForGoal = (goal: any) => {
+        const potId = goal.linkedPotId || goal.potId || '';
+        if (!potId) return { potId: '', potName: '', potBalance: 0, potCurrency: currency };
+        const pot = pots.find((p) => p.id === potId);
+        return {
+            potId,
+            potName: pot?.name || potId,
+            potBalance: Number(pot?.balance || 0),
+            potCurrency: pot?.currency || currency,
+        };
+    };
+
+    const sortedGoals = useMemo(() => {
+        const rows = filteredGoals.map((g) => {
+            const targetAmount = Number(g.estimatedCost || g.targetAmount || 0);
+            const targetYear = resolveGoalTargetYear(g);
+            const { potId, potName, potBalance, potCurrency } = resolvePotForGoal(g);
+            const percentToTarget = targetAmount > 0 ? Math.min(100, (potBalance / 100 / targetAmount) * 100) : 0;
+            const percent = goalAllocations[g.id] != null ? goalAllocations[g.id] : 0;
+            const monthlyPence = percent > 0 ? calculateBudgetAmount(percent, safeMonthlyIncome) : 0;
+            return {
+                ...g,
+                targetAmount,
+                targetYear,
+                potId,
+                potName,
+                potBalance,
+                potCurrency,
+                percentToTarget,
+                percent,
+                monthlyPence,
+            };
         });
-        filteredGoals.forEach((g) => {
-            const percent = goalAllocations[g.id] != null ? Number(goalAllocations[g.id]) : goalAllocation / Math.max(goals.length, 1);
-            if (!percent || percent <= 0) return;
-            const potId = (g.linkedPotId || g.potId || '').toString();
-            const potName = potId ? (pots.find(p => p.id === potId)?.name || potId) : 'No pot linked';
-            const amountPence = calculateBudgetAmount(percent, safeMonthlyIncome);
-            items.push({ label: `Goal: ${g.title}`, potName, amountPence });
+
+        const dir = goalSortDir === 'asc' ? 1 : -1;
+        return rows.sort((a, b) => {
+            const compare = (va: any, vb: any) => {
+                if (va == null && vb == null) return 0;
+                if (va == null) return 1;
+                if (vb == null) return -1;
+                if (typeof va === 'string' && typeof vb === 'string') return va.localeCompare(vb);
+                return va > vb ? 1 : va < vb ? -1 : 0;
+            };
+            switch (goalSortKey) {
+                case 'title':
+                    return dir * compare(a.title || '', b.title || '');
+                case 'target':
+                    return dir * compare(a.targetAmount, b.targetAmount);
+                case 'targetYear':
+                    return dir * compare(a.targetYear, b.targetYear);
+                case 'pot':
+                    return dir * compare(a.potName || '', b.potName || '');
+                case 'balance':
+                    return dir * compare(a.potBalance, b.potBalance);
+                case 'pct':
+                    return dir * compare(a.percentToTarget, b.percentToTarget);
+                case 'percent':
+                    return dir * compare(a.percent, b.percent);
+                case 'monthly':
+                    return dir * compare(a.monthlyPence, b.monthlyPence);
+                default:
+                    return 0;
+            }
         });
-        return items;
-    }, [bucketTotals, bucketPotMap, pots, filteredGoals, goalAllocations, goalAllocation, goals.length, safeMonthlyIncome]);
+    }, [filteredGoals, goalAllocations, goalSortDir, goalSortKey, safeMonthlyIncome, pots, currency]);
+
+    
+
+    const addDebt = () => {
+        const id = `debt_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        setDebts((prev) => ([
+            ...prev,
+            { id, name: '', balancePence: 0, apr: 0, minPaymentPence: 0, potId: '' }
+        ]));
+    };
+
+    const updateDebt = (id: string, patch: Partial<DebtItem>) => {
+        setDebts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+    };
+
+    const removeDebt = (id: string) => {
+        setDebts((prev) => prev.filter((d) => d.id !== id));
+    };
+
+    const snowballPlan = useMemo(() => {
+        if (!debts.length) return [];
+        const extraPence = Math.max(0, Math.round((Number(snowballExtra) || 0) * 100));
+        const ordered = [...debts].sort((a, b) => (a.balancePence || 0) - (b.balancePence || 0));
+        return ordered.map((debt, idx) => {
+            const minPay = Number(debt.minPaymentPence || 0);
+            const allocation = minPay + (idx === 0 ? extraPence : 0);
+            return { ...debt, allocationPence: allocation };
+        });
+    }, [debts, snowballExtra]);
+
+    const snowballTotalPence = snowballPlan.reduce((sum, debt) => sum + (Number((debt as any).allocationPence) || 0), 0);
+
+    const formatCurrency = (value: number, curr = currency) => {
+        const pounds = (Number(value) || 0) / 100;
+        return pounds.toLocaleString('en-GB', { style: 'currency', currency: curr || 'GBP' });
+    };
+
+    const handleSortGoals = (key: typeof goalSortKey) => {
+        if (goalSortKey === key) {
+            setGoalSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+        } else {
+            setGoalSortKey(key);
+            setGoalSortDir(key === 'targetYear' ? 'asc' : 'desc');
+        }
+    };
+
+    const handleGoalPotChange = async (goal: any, potId: string) => {
+        if (!currentUser) return;
+        if (potId === '__create__') {
+            const refLabel = (goal?.ref || goal?.referenceNumber || '').toString().trim();
+            const titleLabel = (goal?.title || '').toString().trim();
+            const name = refLabel ? `${refLabel} - ${titleLabel}`.trim() : titleLabel;
+            setCreatePotGoal(goal);
+            setCreatePotName(name || 'Goal pot');
+            setCreatePotError('');
+            return;
+        }
+        try {
+            setPotLinkSaving(goal.id);
+            await updateDoc(doc(db, 'goals', goal.id), {
+                potId: potId || null,
+                linkedPotId: potId || null,
+                updatedAt: Date.now(),
+            });
+            setGoals((prev) => prev.map((g) => (g.id === goal.id ? { ...g, potId, linkedPotId: potId } : g)));
+        } catch (error) {
+            console.error('Failed to update goal pot link', error);
+            setSaved('Error saving');
+        } finally {
+            setPotLinkSaving(null);
+        }
+    };
+
+    const handleCreatePot = async () => {
+        if (!createPotGoal || !createPotName.trim()) return;
+        setCreatePotBusy(true);
+        setCreatePotError('');
+        try {
+            const callable = httpsCallable(functions, 'monzoCreatePot');
+            const resp: any = await callable({ name: createPotName.trim(), goalId: createPotGoal.id });
+            const created = resp?.data?.pot || null;
+            if (!created?.potId && !created?.id) throw new Error('Create pot failed');
+            const potId = created.potId || created.id;
+            setPots((prev) => {
+                const next = [...prev];
+                if (!next.find((p) => p.id === potId)) {
+                    next.push({
+                        id: potId,
+                        name: created.name || createPotName.trim(),
+                        balance: created.balance || 0,
+                        currency: created.currency || currency,
+                    });
+                }
+                return next;
+            });
+            setGoals((prev) => prev.map((g) => (g.id === createPotGoal.id ? { ...g, potId, linkedPotId: potId } : g)));
+            setCreatePotGoal(null);
+            setCreatePotName('');
+        } catch (error: any) {
+            console.error('Create pot failed', error);
+            setCreatePotError(error?.message || 'Failed to create pot. Connect Monzo and try again.');
+        } finally {
+            setCreatePotBusy(false);
+        }
+    };
 
     // Add goals to grand total
     grandTotal.percent += goalTotal.percent;
@@ -512,69 +728,123 @@ const EnhancedBudgetSettings: React.FC = () => {
                 </Card.Body>
             </Card>
 
+
+
             <Card className="mb-3">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                    <span>Transfer plan (pots + goals)</span>
-                    <Form.Check
-                        type="switch"
-                        id="auto-transfer-toggle"
-                        label="Enable auto-transfer"
-                        checked={autoTransferEnabled}
-                        onChange={(e) => setAutoTransferEnabled(e.target.checked)}
-                    />
+                    <div className="d-flex flex-column">
+                        <span>Debt Snowball (dry run)</span>
+                        <small className="text-muted">Planned total: £{(snowballTotalPence / 100).toFixed(2)}</small>
+                    </div>
+                    <Button size="sm" variant="outline-primary" onClick={addDebt}>
+                        + Add debt
+                    </Button>
                 </Card.Header>
                 <Card.Body>
                     <Row className="g-3 align-items-end mb-3">
                         <Col md={4}>
-                            <Form.Label>Transfer day of month</Form.Label>
-                            <Form.Control
-                                type="number"
-                                min="1"
-                                max="28"
-                                value={transferDay ?? ''}
-                                onChange={(e) => setTransferDay(parseInt(e.target.value || '1', 10))}
-                            />
-                            <Form.Text className="text-muted">Use 28 or earlier to avoid short months.</Form.Text>
+                            <Form.Label>Extra snowball budget (monthly)</Form.Label>
+                            <InputGroup>
+                                <InputGroup.Text>£</InputGroup.Text>
+                                <Form.Control
+                                    type="number"
+                                    min="0"
+                                    step="10"
+                                    value={snowballExtra}
+                                    onChange={(e) => setSnowballExtra(parseFloat(e.target.value) || 0)}
+                                />
+                            </InputGroup>
+                            <Form.Text className="text-muted">This extra is applied to the smallest balance first.</Form.Text>
                         </Col>
-                        <Col md={4}>
-                            <Button variant="outline-primary" onClick={() => setSaved('Simulation: no money moved')}>
-                                Simulate transfers (dry run)
-                            </Button>
-                        </Col>
-                        <Col md={4}>
-                            <Form.Check
-                                type="switch"
-                                id="show-income-percent"
-                                label="Show % of monthly income"
-                                checked
-                                disabled
-                            />
-                            <Form.Text className="text-muted">Percentages are calculated from the net income field above.</Form.Text>
+                        <Col md={8}>
+                            <Alert variant="light" className="mb-0 small">
+                                Snowball transfers are a preview only for now — no money is moved automatically.
+                            </Alert>
                         </Col>
                     </Row>
-                    {plannedTransfers.length === 0 ? (
-                        <p className="text-muted mb-0">No pots mapped yet. Link buckets/goals to pots to build a plan.</p>
+
+                    {debts.length === 0 ? (
+                        <p className="text-muted mb-0">Add debts to see a snowball plan.</p>
                     ) : (
-                        <Table size="sm" hover>
+                        <Table size="sm" hover responsive>
                             <thead>
                                 <tr>
-                                    <th>Item</th>
+                                    <th style={{ width: 60 }}>Priority</th>
+                                    <th>Debt</th>
+                                    <th className="text-end">Balance</th>
+                                    <th className="text-end">APR %</th>
+                                    <th className="text-end">Min / mo</th>
                                     <th>Pot</th>
-                                    <th className="text-end">Monthly amount</th>
-                                    <th className="text-end">% of income</th>
+                                    <th className="text-end">Planned</th>
+                                    <th />
                                 </tr>
                             </thead>
                             <tbody>
-                                {plannedTransfers.map((t, idx) => (
-                                    <tr key={`${t.label}-${idx}`}>
-                                        <td>{t.label}</td>
-                                        <td>{t.potName}</td>
-                                        <td className="text-end">£{(t.amountPence / 100).toFixed(2)}</td>
-                                        <td className="text-end text-muted small">
-                                            {(safeMonthlyIncome > 0 ? (t.amountPence / (safeMonthlyIncome * 100) * 100) : 0).toFixed(2)}%
-                                        </td>
-                                    </tr>
-                                ))}
+                                {debts.map((debt) => {
+                                    const plan = snowballPlan.find((p: any) => p.id === debt.id);
+                                    const priority = plan ? snowballPlan.findIndex((p: any) => p.id === debt.id) + 1 : '-';
+                                    return (
+                                        <tr key={debt.id}>
+                                            <td>{priority}</td>
+                                            <td>
+                                                <Form.Control
+                                                    size="sm"
+                                                    placeholder="Credit card"
+                                                    value={debt.name}
+                                                    onChange={(e) => updateDebt(debt.id, { name: e.target.value })}
+                                                />
+                                            </td>
+                                            <td className="text-end">
+                                                <InputGroup size="sm">
+                                                    <InputGroup.Text>£</InputGroup.Text>
+                                                    <Form.Control
+                                                        type="number"
+                                                        min="0"
+                                                        value={(debt.balancePence || 0) / 100}
+                                                        onChange={(e) => updateDebt(debt.id, { balancePence: Math.round((parseFloat(e.target.value) || 0) * 100) })}
+                                                    />
+                                                </InputGroup>
+                                            </td>
+                                            <td className="text-end">
+                                                <Form.Control
+                                                    size="sm"
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.1"
+                                                    value={debt.apr}
+                                                    onChange={(e) => updateDebt(debt.id, { apr: parseFloat(e.target.value) || 0 })}
+                                                />
+                                            </td>
+                                            <td className="text-end">
+                                                <InputGroup size="sm">
+                                                    <InputGroup.Text>£</InputGroup.Text>
+                                                    <Form.Control
+                                                        type="number"
+                                                        min="0"
+                                                        value={(debt.minPaymentPence || 0) / 100}
+                                                        onChange={(e) => updateDebt(debt.id, { minPaymentPence: Math.round((parseFloat(e.target.value) || 0) * 100) })}
+                                                    />
+                                                </InputGroup>
+                                            </td>
+                                            <td>
+                                                <Form.Select
+                                                    size="sm"
+                                                    value={debt.potId || ''}
+                                                    onChange={(e) => updateDebt(debt.id, { potId: e.target.value })}
+                                                >
+                                                    <option value="">No pot linked</option>
+                                                    {pots.map((p) => (
+                                                        <option key={p.id} value={p.id}>{p.name}</option>
+                                                    ))}
+                                                </Form.Select>
+                                            </td>
+                                            <td className="text-end">£{(((plan as any)?.allocationPence || 0) / 100).toFixed(2)}</td>
+                                            <td className="text-end">
+                                                <Button size="sm" variant="outline-danger" onClick={() => removeDebt(debt.id)}>Remove</Button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </Table>
                     )}
@@ -649,7 +919,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                                                     <td>{cat.label}</td>
                                                     <td>
                                                         {mode === 'percentage' ? (
-                                                            <InputGroup size="sm">
+                                                            <InputGroup size="sm" className="flex-nowrap">
                                                                 <Form.Control
                                                                     type="number"
                                                                     min="0"
@@ -660,7 +930,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                                                                     placeholder="0"
                                                                     style={{ minWidth: 110 }}
                                                                 />
-                                                                <InputGroup.Text>%</InputGroup.Text>
+                                                                <InputGroup.Text className="px-2">%</InputGroup.Text>
                                                             </InputGroup>
                                                         ) : (
                                                             <InputGroup size="sm">
@@ -699,105 +969,213 @@ const EnhancedBudgetSettings: React.FC = () => {
 
             <Card className="mt-4">
                 <Card.Header className="bg-success text-white d-flex justify-content-between align-items-center">
-                    <span>Goals & Savings (Populated from Goals)</span>
+                    <div className="d-flex align-items-center gap-2">
+                        <span>Goals & Savings (Populated from Goals)</span>
+                        <Button
+                            size="sm"
+                            variant="link"
+                            className="text-white text-decoration-none"
+                            onClick={() => setShowGoalsSection((prev) => !prev)}
+                        >
+                            {showGoalsSection ? '▼' : '▲'}
+                        </Button>
+                    </div>
                     <span>{goalAllocation}% • £{(goalTotal.amount / 100).toFixed(2)}</span>
                 </Card.Header>
-                <Card.Body>
-                    <Row className="align-items-center mb-3">
-                        <Col md={6}>
-                            <Form.Label>Percentage of Net Salary towards Goals</Form.Label>
-                            <InputGroup>
-                                <Form.Control
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    value={goalAllocation}
-                                    onChange={(e) => setGoalAllocation(parseFloat(e.target.value) || 0)}
-                                />
-                                <InputGroup.Text>%</InputGroup.Text>
-                            </InputGroup>
-                            <Form.Text className="text-muted">
-                                This amount is distributed across your active goals.
-                            </Form.Text>
-                        </Col>
-                        <Col md={6}>
-                            <Alert variant="success" className="mb-0 py-2">
-                                <strong>Monthly Contribution:</strong> £{(goalTotal.amount / 100).toFixed(2)}
+                <Collapse in={showGoalsSection}>
+                    <div>
+                        <Card.Body>
+                            <Row className="align-items-center mb-3">
+                                <Col md={6}>
+                                    <Form.Label>Percentage of Net Salary towards Goals</Form.Label>
+                                    <InputGroup>
+                                        <Form.Control
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            value={goalAllocation}
+                                            onChange={(e) => setGoalAllocation(parseFloat(e.target.value) || 0)}
+                                        />
+                                        <InputGroup.Text>%</InputGroup.Text>
+                                    </InputGroup>
+                                    <Form.Text className="text-muted">
+                                        This amount is distributed across your active goals.
+                                    </Form.Text>
+                                </Col>
+                                <Col md={6}>
+                                    <Alert variant="success" className="mb-0 py-2">
+                                        <strong>Monthly Contribution:</strong> £{(goalTotal.amount / 100).toFixed(2)}
+                                    </Alert>
+                                </Col>
+                            </Row>
+                            <Alert variant="light" className="small">
+                                Goal pot links use existing Monzo pots. Create a pot here if needed (Monzo must be connected).
                             </Alert>
-                        </Col>
-                    </Row>
 
-                    <h6 className="mt-4 mb-2">Active Goals</h6>
-                    <div className="d-flex flex-wrap gap-2 mb-2">
-                        <Form.Select size="sm" style={{ maxWidth: 180 }} value={goalFilter} onChange={(e) => setGoalFilter(e.target.value as any)}>
-                            <option value="all">All goals</option>
-                            <option value="linked">Linked pot</option>
-                            <option value="unlinked">No pot link</option>
-                        </Form.Select>
-                        <Form.Select size="sm" style={{ maxWidth: 200 }} value={goalTargetFilter} onChange={(e) => setGoalTargetFilter(e.target.value as any)}>
-                            <option value="all">Any target</option>
-                            <option value="hasTarget">Has target date</option>
-                            <option value="noTarget">No target date</option>
-                        </Form.Select>
-                    </div>
-                    {filteredGoals.length === 0 ? (
-                        <p className="text-muted">No active goals found. Create goals to see them here.</p>
-                    ) : (
-                        <Table size="sm" hover>
-                            <thead>
-                                <tr>
-                                    <th>Goal</th>
-                                    <th>Target</th>
-                                    <th>Linked Pot</th>
-                                    <th style={{ width: 140 }}>Net Salary %</th>
-                                    <th className="text-end">Monthly</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredGoals.map(g => {
-                                    const potId = g.linkedPotId || g.potId;
-                                    const potName = potId ? (pots.find(p => p.id === potId)?.name || potId) : null;
-                                    const percent = goalAllocations[g.id] != null ? goalAllocations[g.id] : 0;
-                                    const monthlyPence = percent > 0 ? calculateBudgetAmount(percent, safeMonthlyIncome) : 0;
-                                    const targetDate = g.endDate || g.targetDate || g.targetTime;
-                                    const targetLabel = targetDate ? new Date(targetDate).toISOString().slice(0, 10) : 'Not set';
-                                    return (
-                                        <tr key={g.id}>
-                                            <td>{g.title}</td>
-                                            <td>{targetLabel}</td>
-                                            <td>
-                                                {potName ? (
-                                                    <Badge bg="success">{potName}</Badge>
-                                                ) : (
-                                                    <Badge bg="secondary">Not Linked</Badge>
-                                                )}
-                                            </td>
-                                            <td>
-                                                <InputGroup size="sm">
-                                                    <Form.Control
-                                                        type="number"
-                                                        min="0"
-                                                        max="100"
-                                                        value={percent}
-                                                        onChange={(e) => {
-                                                            const val = parseFloat(e.target.value) || 0;
-                                                            setGoalAllocations(prev => ({ ...prev, [g.id]: val }));
-                                                        }}
-                                                    />
-                                                    <InputGroup.Text>%</InputGroup.Text>
-                                                </InputGroup>
-                                            </td>
-                                            <td className="text-end text-muted small">
-                                                £{(monthlyPence / 100).toFixed(2)}
-                                            </td>
+                            <Row className="g-3 align-items-end mb-3">
+                                <Col md={4}>
+                                    <Form.Label>Transfer day of month</Form.Label>
+                                    <Form.Control
+                                        type="number"
+                                        min="1"
+                                        max="28"
+                                        value={transferDay ?? ''}
+                                        onChange={(e) => setTransferDay(parseInt(e.target.value || '1', 10))}
+                                    />
+                                    <Form.Text className="text-muted">Use 28 or earlier to avoid short months.</Form.Text>
+                                </Col>
+                                <Col md={4}>
+                                    <Form.Check
+                                        type="switch"
+                                        id="auto-transfer-toggle"
+                                        label="Enable auto-transfer"
+                                        checked={autoTransferEnabled}
+                                        onChange={(e) => setAutoTransferEnabled(e.target.checked)}
+                                    />
+                                    <Form.Text className="text-muted">Dry-run only until transfers are enabled.</Form.Text>
+                                </Col>
+                                <Col md={4}>
+                                    <Button variant="outline-primary" onClick={() => setSaved('Simulation: no money moved')}>
+                                        Simulate transfers (dry run)
+                                    </Button>
+                                </Col>
+                            </Row>
+
+                            <div className="d-flex flex-wrap gap-2 mb-2 align-items-center">
+                                <Form.Check
+                                    type="switch"
+                                    id="linked-only-toggle"
+                                    label="Show linked goals only"
+                                    checked={showLinkedGoalsOnly}
+                                    onChange={(e) => setShowLinkedGoalsOnly(e.target.checked)}
+                                />
+                                <Form.Select size="sm" style={{ maxWidth: 180 }} value={goalFilter} onChange={(e) => setGoalFilter(e.target.value as any)}>
+                                    <option value="all">All goals</option>
+                                    <option value="linked">Linked pot</option>
+                                    <option value="unlinked">No pot link</option>
+                                </Form.Select>
+                                <Form.Select size="sm" style={{ maxWidth: 200 }} value={goalTargetFilter} onChange={(e) => setGoalTargetFilter(e.target.value as any)}>
+                                    <option value="all">Any target</option>
+                                    <option value="hasTarget">Has target date</option>
+                                    <option value="noTarget">No target date</option>
+                                </Form.Select>
+                            </div>
+
+                            {sortedGoals.length === 0 ? (
+                                <p className="text-muted">No active goals found. Create goals to see them here.</p>
+                            ) : (
+                                <Table size="sm" hover responsive>
+                                    <thead>
+                                        <tr>
+                                            <th role="button" onClick={() => handleSortGoals('title')}>Goal</th>
+                                            <th role="button" onClick={() => handleSortGoals('target')}>Target</th>
+                                            <th role="button" onClick={() => handleSortGoals('targetYear')}>Year</th>
+                                            <th role="button" onClick={() => handleSortGoals('pot')}>Linked Pot</th>
+                                            <th className="text-end" role="button" onClick={() => handleSortGoals('balance')}>Pot Balance</th>
+                                            <th className="text-end" role="button" onClick={() => handleSortGoals('pct')}>% to Target</th>
+                                            <th className="text-end" role="button" onClick={() => handleSortGoals('percent')}>Net Salary %</th>
+                                            <th className="text-end" role="button" onClick={() => handleSortGoals('monthly')}>Monthly</th>
+                                            <th className="text-end">Actions</th>
                                         </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </Table>
-                    )}
-                </Card.Body>
+                                    </thead>
+                                    <tbody>
+                                        {sortedGoals.map((g: any) => (
+                                            <tr key={g.id}>
+                                                <td className="text-truncate" style={{ maxWidth: 220 }}>{g.title}</td>
+                                                <td>{g.targetAmount ? formatCurrency(g.targetAmount * 100, currency) : '—'}</td>
+                                                <td>{g.targetYear || '—'}</td>
+                                                <td>
+                                                    <Form.Select
+                                                        size="sm"
+                                                        value={g.potId || ''}
+                                                        onChange={(e) => handleGoalPotChange(g, e.target.value)}
+                                                        disabled={potLinkSaving === g.id}
+                                                    >
+                                                        <option value="">No pot linked</option>
+                                                        {pots.map((p) => (
+                                                            <option key={p.id} value={p.id}>
+                                                                {p.name} ({formatCurrency(p.balance || 0, p.currency)})
+                                                            </option>
+                                                        ))}
+                                                        <option value="__create__">Create new pot…</option>
+                                                    </Form.Select>
+                                                </td>
+                                                <td className="text-end">{g.potId ? formatCurrency(g.potBalance || 0, g.potCurrency) : '—'}</td>
+                                                <td className="text-end">{g.targetAmount ? `${g.percentToTarget.toFixed(1)}%` : '—'}</td>
+                                                <td className="text-end">
+                                                    <InputGroup size="sm" className="justify-content-end">
+                                                        <Form.Control
+                                                            type="number"
+                                                            min="0"
+                                                            max="100"
+                                                            value={g.percent}
+                                                            onChange={(e) => {
+                                                                const val = parseFloat(e.target.value) || 0;
+                                                                setGoalAllocations(prev => ({ ...prev, [g.id]: val }));
+                                                            }}
+                                                            style={{ maxWidth: 80 }}
+                                                        />
+                                                        <InputGroup.Text>%</InputGroup.Text>
+                                                    </InputGroup>
+                                                </td>
+                                                <td className="text-end text-muted small">{formatCurrency(g.monthlyPence || 0, currency)}</td>
+                                                <td className="text-end">
+                                                    <Button
+                                                        variant="link"
+                                                        size="sm"
+                                                        className="p-0 me-2"
+                                                        title="View activity stream"
+                                                        onClick={() => showSidebar(g, 'goal')}
+                                                    >
+                                                        <Activity size={14} />
+                                                    </Button>
+                                                    <Button
+                                                        variant="link"
+                                                        size="sm"
+                                                        className="p-0"
+                                                        title="Edit goal"
+                                                        onClick={() => setShowEditGoal(g)}
+                                                    >
+                                                        <Edit3 size={14} />
+                                                    </Button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </Table>
+                            )}
+                        </Card.Body>
+                    </div>
+                </Collapse>
             </Card>
+
+            <EditGoalModal
+                goal={showEditGoal}
+                show={!!showEditGoal}
+                onClose={() => setShowEditGoal(null)}
+            />
+
+            <Modal show={!!createPotGoal} onHide={() => setCreatePotGoal(null)} centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>Create Monzo Pot</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    <Form.Label>Pot name</Form.Label>
+                    <Form.Control
+                        value={createPotName}
+                        onChange={(e) => setCreatePotName(e.target.value)}
+                        placeholder="e.g. Goal ST-XXXX"
+                    />
+                    <Form.Text className="text-muted">This pot will be linked to the selected goal.</Form.Text>
+                    {createPotError && <Alert variant="danger" className="mt-3 mb-0">{createPotError}</Alert>}
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setCreatePotGoal(null)}>Cancel</Button>
+                    <Button variant="primary" onClick={handleCreatePot} disabled={createPotBusy || !createPotName.trim()}>
+                        {createPotBusy ? 'Creating...' : 'Create Pot'}
+                    </Button>
+                </Modal.Footer>
+            </Modal>
 
         </div>
     );

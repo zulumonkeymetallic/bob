@@ -65,7 +65,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Overview', path: '/dashboard', icon: 'home' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
-        { label: 'Command Center', path: '/overview/advanced', icon: 'tachometer-alt' },
+        { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
       ]
     },
     // Health
@@ -104,7 +104,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'book',
       items: [
         { label: 'Stories List', path: '/stories', icon: 'list' },
-        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' }
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
       ]
     },
     {
@@ -113,7 +114,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
         { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
-        { label: 'Books', path: '/books-backlog', icon: 'book' }
+        { label: 'Books', path: '/books-backlog', icon: 'book' },
+        { label: 'Videos', path: '/videos-backlog', icon: 'video' }
       ]
     },
     {

@@ -3,6 +3,7 @@ import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/f
 import ChecklistPanel from './ChecklistPanel';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
+import { extractWeatherSummary, extractWeatherTemp } from '../utils/weatherFormat';
 
 const MobileChecklistView: React.FC = () => {
   const { currentUser } = useAuth();
@@ -42,6 +43,19 @@ const MobileChecklistView: React.FC = () => {
   const briefing = summary?.dailyBriefing || null;
   const dailyBrief = summary?.dailyBrief || null;
   const dailyChecklist = summary?.dailyChecklist || null;
+  const briefWeatherSummary = extractWeatherSummary(dailyBrief?.weather);
+  const briefWeatherTemp = extractWeatherTemp(dailyBrief?.weather);
+  const renderBriefText = (value: any): string => {
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    if (!value || typeof value !== 'object') return '';
+    return (
+      value.title ||
+      value.headline ||
+      value.summary ||
+      value.text ||
+      ''
+    );
+  };
 
   return (
     <div className="container py-3" style={{ maxWidth: 720 }}>
@@ -60,24 +74,28 @@ const MobileChecklistView: React.FC = () => {
             <>
               {Array.isArray(dailyBrief.lines) && dailyBrief.lines.length > 0 && (
                 <ul className="mb-2 small">
-                  {dailyBrief.lines.slice(0, 4).map((line: string, idx: number) => (
-                    <li key={idx}>{line}</li>
-                  ))}
+                  {dailyBrief.lines.slice(0, 4).map((line: any, idx: number) => {
+                    const text = renderBriefText(line);
+                    if (!text) return null;
+                    return <li key={idx}>{text}</li>;
+                  })}
                 </ul>
               )}
-              {dailyBrief.weather?.summary && (
+              {briefWeatherSummary && (
                 <div className="text-muted small mb-1">
-                  Weather: {dailyBrief.weather.summary}
-                  {dailyBrief.weather.temp ? ` (${dailyBrief.weather.temp})` : ''}
+                  Weather: {briefWeatherSummary}
+                  {briefWeatherTemp ? ` (${briefWeatherTemp})` : ''}
                 </div>
               )}
               {Array.isArray(dailyBrief.news) && dailyBrief.news.length > 0 && (
                 <div className="mt-2">
                   <div className="fw-semibold" style={{ fontSize: 14 }}>News</div>
                   <ul className="mb-0 small">
-                    {dailyBrief.news.slice(0, 3).map((item: string, idx: number) => (
-                      <li key={idx}>{item}</li>
-                    ))}
+                    {dailyBrief.news.slice(0, 3).map((item: any, idx: number) => {
+                      const text = renderBriefText(item);
+                      if (!text) return null;
+                      return <li key={idx}>{text}</li>;
+                    })}
                   </ul>
                 </div>
               )}

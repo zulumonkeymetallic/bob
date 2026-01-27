@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Row, Col, ProgressBar, Badge, Tab, Tabs, Alert, Button } from 'react-bootstrap';
 import {
   PieChart,
@@ -18,10 +18,13 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { Activity, Target, Zap, TrendingUp, DollarSign, Calendar, CheckCircle, Heart } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { functions } from '../firebase';
+import { db, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
+import { collection, getDocs, limit, orderBy, query, where } from 'firebase/firestore';
 import { PremiumCard } from './common/PremiumCard';
 
 const toDate = (value: any): Date | null => {
@@ -37,8 +40,10 @@ const formatCurrency = (pence: number) =>
 
 const AdvancedOverview: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
+  const navigate = useNavigate();
 
   const [key, setKey] = useState('summary');
   const [loading, setLoading] = useState(true);
@@ -47,6 +52,12 @@ const AdvancedOverview: React.FC = () => {
   const [summary, setSummary] = useState<any | null>(null);
   const [finance, setFinance] = useState<any | null>(null);
   const [capacity, setCapacity] = useState<any | null>(null);
+  const [velocityData, setVelocityData] = useState<any[]>([]);
+  const [velocityLoading, setVelocityLoading] = useState(false);
+  const [velocityError, setVelocityError] = useState('');
+  const budgetRef = useRef<HTMLDivElement | null>(null);
+  const capacityRef = useRef<HTMLDivElement | null>(null);
+  const financeRef = useRef<HTMLDivElement | null>(null);
 
   const colors = {
     bg: isDark ? '#1e1e2f' : '#f4f5f7',
@@ -60,6 +71,13 @@ const AdvancedOverview: React.FC = () => {
     danger: '#fd5d93',
     grid: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)',
     chartColors: ['#e14eca', '#00f2c3', '#1d8cf8', '#ff8d72', '#fd5d93', '#a78bfa'],
+  };
+  const velocityPlanColor = isDark ? 'rgba(255,255,255,0.2)' : 'rgba(30,41,59,0.15)';
+
+  const isStoryDone = (status: any) => {
+    if (typeof status === 'number') return status >= 4;
+    const str = String(status || '').toLowerCase();
+    return ['done', 'complete', 'completed', 'closed', 'archived'].some((s) => str.includes(s));
   };
 
   const loadData = async () => {
@@ -108,6 +126,92 @@ const AdvancedOverview: React.FC = () => {
     if (!currentUser) return;
     loadData();
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setVelocityData([]);
+      return;
+    }
+    let cancelled = false;
+    const loadVelocity = async () => {
+      setVelocityLoading(true);
+      setVelocityError('');
+      try {
+        const sprintSnap = await getDocs(
+          query(
+            collection(db, 'sprints'),
+            where('ownerUid', '==', currentUser.uid),
+            orderBy('endDate', 'desc'),
+            limit(8)
+          )
+        );
+        const sprintsAll = sprintSnap.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...(docSnap.data() as any)
+        }));
+        if (!sprintsAll.length) {
+          if (!cancelled) setVelocityData([]);
+          return;
+        }
+        const sprints = sprintsAll;
+        const sprintIds = sprints.map((s) => s.id);
+        if (!sprintIds.length) {
+          if (!cancelled) setVelocityData([]);
+          return;
+        }
+        const storySnap = await getDocs(
+          query(
+            collection(db, 'stories'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            where('sprintId', 'in', sprintIds)
+          )
+        );
+        const bySprint = new Map<string, { completedPoints: number; totalPoints: number; completedStories: number; totalStories: number }>();
+        sprintIds.forEach((id) => {
+          bySprint.set(id, { completedPoints: 0, totalPoints: 0, completedStories: 0, totalStories: 0 });
+        });
+        storySnap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const sprintId = data.sprintId;
+          if (!sprintId || !bySprint.has(sprintId)) return;
+          const points = Number(data.points || 0) || 0;
+          const row = bySprint.get(sprintId)!;
+          row.totalPoints += points;
+          row.totalStories += 1;
+          if (isStoryDone(data.status)) {
+            row.completedPoints += points;
+            row.completedStories += 1;
+          }
+        });
+        const data = [...sprints]
+          .reverse()
+          .map((s) => {
+            const row = bySprint.get(s.id) || { completedPoints: 0, totalPoints: 0, completedStories: 0, totalStories: 0 };
+            return {
+              sprint: s.name || s.ref || `Sprint ${String(s.id).slice(0, 4)}`,
+              completedPoints: row.completedPoints,
+              totalPoints: row.totalPoints,
+              completedStories: row.completedStories,
+              totalStories: row.totalStories
+            };
+          });
+        if (!cancelled) setVelocityData(data);
+      } catch (err) {
+        console.warn('Failed to load sprint velocity', err);
+        if (!cancelled) {
+          setVelocityError('Unable to load sprint velocity.');
+          setVelocityData([]);
+        }
+      } finally {
+        if (!cancelled) setVelocityLoading(false);
+      }
+    };
+    loadVelocity();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, currentPersona]);
 
   const handleRefresh = () => {
     setRefreshing(true);
@@ -219,15 +323,26 @@ const AdvancedOverview: React.FC = () => {
   const totalSpend = Math.abs(finance?.totalSpend || 0) / 100;
   const fitnessScore = summary?.fitness?.fitnessScore || null;
   const lastWorkout = summary?.fitness?.lastWorkout || null;
+  const topTheme = themeBreakdown[0];
+  const topGoal = goalBreakdown[0];
 
-  if (!currentUser) return <Alert variant="warning" className="m-3">Sign in to view the overview.</Alert>;
-  if (loading && !summary) return <div className="p-5 text-center" style={{ color: colors.text }}>Loading Command Center...</div>;
+  const openTab = (nextKey: string, ref?: React.RefObject<HTMLDivElement>) => {
+    setKey(nextKey);
+    if (ref?.current) {
+      setTimeout(() => {
+        ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 80);
+    }
+  };
+
+  if (!currentUser) return <Alert variant="warning" className="m-3">Sign in to view metrics.</Alert>;
+  if (loading && !summary) return <div className="p-5 text-center" style={{ color: colors.text }}>Loading Metrics...</div>;
 
   return (
     <div style={{ backgroundColor: colors.bg, minHeight: '100vh', padding: '2rem', transition: 'background-color 0.3s' }}>
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
-          <h2 className="fw-bold mb-0" style={{ color: colors.text }}>Command Center</h2>
+          <h2 className="fw-bold mb-0" style={{ color: colors.text }}>Metrics</h2>
           <p className="text-muted mb-0">
             Snapshot powered by Firestore + Functions. Monzo last updated: {monzoUpdated ? monzoUpdated.toLocaleString() : 'unknown'}.
           </p>
@@ -248,7 +363,7 @@ const AdvancedOverview: React.FC = () => {
       {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
 
       <Tabs
-        id="command-center-tabs"
+        id="metrics-tabs"
         activeKey={key}
         onSelect={(k) => setKey(k || 'summary')}
         className="mb-4 custom-tabs"
@@ -256,41 +371,112 @@ const AdvancedOverview: React.FC = () => {
       >
         <Tab eventKey="summary" title="Summary">
           <Row className="g-4 mb-4">
-            <Col md={3}>
-              <PremiumCard title="Sprint Status" icon={Zap}>
-                <h3 className="fw-bold mb-1" style={{ color: colors.warning }}>{Math.round(sprintPercent)}%</h3>
-                <small className="text-muted d-block mb-2">
-                  {sprintName} • {sprintCompleted}/{sprintTotal} stories{typeof sprintDaysLeft === 'number' ? ` • ${sprintDaysLeft} days left` : ''}
-                </small>
-                <ProgressBar now={sprintPercent} variant="warning" style={{ height: '6px', backgroundColor: colors.grid }} />
-              </PremiumCard>
+            <Col md={4} xl={2}>
+              <button
+                type="button"
+                className="btn p-0 text-start w-100"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+                onClick={() => navigate('/sprints/capacity')}
+                aria-label="Open sprint metrics"
+              >
+                <PremiumCard title="Sprint Metrics" icon={Zap}>
+                  <h3 className="fw-bold mb-1" style={{ color: colors.warning }}>{Math.round(sprintPercent)}%</h3>
+                  <small className="text-muted d-block mb-2">
+                    {sprintName} • {sprintCompleted}/{sprintTotal} stories{typeof sprintDaysLeft === 'number' ? ` • ${sprintDaysLeft} days left` : ''}
+                  </small>
+                  <ProgressBar now={sprintPercent} variant="warning" style={{ height: '6px', backgroundColor: colors.grid }} />
+                </PremiumCard>
+              </button>
             </Col>
-            <Col md={3}>
-              <PremiumCard title="Capacity" icon={Calendar}>
-                <h3 className="fw-bold mb-1" style={{ color: colors.success }}>{capacitySummary.free.toFixed(1)}h free</h3>
-                <small className="text-muted d-block mb-1">Allocated {capacitySummary.allocated.toFixed(1)}h / {capacitySummary.total.toFixed(1)}h</small>
-                <small className="text-muted d-block mb-2">Scheduled {capacitySummary.scheduled.toFixed(1)}h this sprint</small>
-                <ProgressBar now={capacitySummary.utilization} variant="success" style={{ height: '6px', backgroundColor: colors.grid }} />
-              </PremiumCard>
+            <Col md={4} xl={2}>
+              <button
+                type="button"
+                className="btn p-0 text-start w-100"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+                onClick={() => openTab('capacity', capacityRef)}
+                aria-label="Open capacity metrics"
+              >
+                <PremiumCard title="Capacity" icon={Calendar}>
+                  <h3 className="fw-bold mb-1" style={{ color: colors.success }}>{capacitySummary.free.toFixed(1)}h free</h3>
+                  <small className="text-muted d-block mb-1">Allocated {capacitySummary.allocated.toFixed(1)}h / {capacitySummary.total.toFixed(1)}h</small>
+                  <small className="text-muted d-block mb-2">Utilization {capacitySummary.utilization}%</small>
+                  <ProgressBar now={capacitySummary.utilization} variant="success" style={{ height: '6px', backgroundColor: colors.grid }} />
+                </PremiumCard>
+              </button>
             </Col>
-            <Col md={3}>
-              <PremiumCard title="Budget Burn" icon={DollarSign}>
-                <h3 className="fw-bold mb-1" style={{ color: colors.info }}>{formatCurrency(totalSpend)}</h3>
-                <small className="text-muted d-block mb-2">
-                  Discretionary {discretionarySpend ? formatCurrency(discretionarySpend * 100) : '—'} • Subscriptions {subscriptionSpend ? formatCurrency(subscriptionSpend * 100) : '—'}
-                </small>
-                <ProgressBar now={Math.min(100, totalSpend ? (discretionarySpend ? (discretionarySpend / totalSpend) * 100 : 0) : 0)} variant="info" style={{ height: '6px', backgroundColor: colors.grid }} />
-              </PremiumCard>
+            <Col md={4} xl={2}>
+              <button
+                type="button"
+                className="btn p-0 text-start w-100"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+                onClick={() => openTab('summary', budgetRef)}
+                aria-label="Open budget charts"
+              >
+                <PremiumCard title="Budget Burn" icon={DollarSign}>
+                  <h3 className="fw-bold mb-1" style={{ color: colors.info }}>{formatCurrency(totalSpend)}</h3>
+                  <small className="text-muted d-block mb-2">
+                    Discretionary {discretionarySpend ? formatCurrency(discretionarySpend * 100) : '—'} • Subscriptions {subscriptionSpend ? formatCurrency(subscriptionSpend * 100) : '—'}
+                  </small>
+                  <ProgressBar now={Math.min(100, totalSpend ? (discretionarySpend ? (discretionarySpend / totalSpend) * 100 : 0) : 0)} variant="info" style={{ height: '6px', backgroundColor: colors.grid }} />
+                </PremiumCard>
+              </button>
             </Col>
-            <Col md={3}>
-              <PremiumCard title="Goals" icon={Target}>
-                <h3 className="fw-bold mb-1" style={{ color: colors.primary }}>{goalsDone}/{goalsTotal || '—'}</h3>
-                <small className="text-muted d-block mb-2">Completion {Math.round(goalCompletion)}%</small>
-                <ProgressBar now={goalCompletion} variant="primary" style={{ height: '6px', backgroundColor: colors.grid }} />
-              </PremiumCard>
+            <Col md={4} xl={2}>
+              <button
+                type="button"
+                className="btn p-0 text-start w-100"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+                onClick={() => navigate('/metrics/progress')}
+                aria-label="Open progress by goal"
+              >
+                <PremiumCard title="Goal Progress" icon={Target}>
+                  <h3 className="fw-bold mb-1" style={{ color: colors.primary }}>{goalsDone}/{goalsTotal || '—'}</h3>
+                  <small className="text-muted d-block mb-2">Completion {Math.round(goalCompletion)}%</small>
+                  <ProgressBar now={goalCompletion} variant="primary" style={{ height: '6px', backgroundColor: colors.grid }} />
+                </PremiumCard>
+              </button>
+            </Col>
+            <Col md={4} xl={2}>
+              <button
+                type="button"
+                className="btn p-0 text-start w-100"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+                onClick={() => navigate('/metrics/progress')}
+                aria-label="Open progress by theme"
+              >
+                <PremiumCard title="Theme Progress" icon={Activity}>
+                  <h3 className="fw-bold mb-1" style={{ color: colors.secondary }}>
+                    {topTheme?.hours ? `${topTheme.hours.toFixed(1)}h` : '—'}
+                  </h3>
+                  <small className="text-muted d-block mb-2">
+                    Top theme {topTheme?.theme || '—'} · {themeBreakdown.length} themes
+                  </small>
+                  <div className="text-muted small">
+                    {topGoal ? `Top goal: ${topGoal.name}` : 'Open progress view'}
+                  </div>
+                </PremiumCard>
+              </button>
+            </Col>
+            <Col md={4} xl={2}>
+              <button
+                type="button"
+                className="btn p-0 text-start w-100"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+                onClick={() => openTab('finance', financeRef)}
+                aria-label="Open finance metrics"
+              >
+                <PremiumCard title="Finance" icon={DollarSign}>
+                  <h3 className="fw-bold mb-1" style={{ color: colors.info }}>{formatCurrency(totalSpend)}</h3>
+                  <small className="text-muted d-block mb-2">Spend tracking & category trends</small>
+                  <div className="text-muted small">
+                    {spendByBucketData[0]?.name ? `Top bucket: ${spendByBucketData[0].name}` : 'Open finance charts'}
+                  </div>
+                </PremiumCard>
+              </button>
             </Col>
           </Row>
 
+          <div ref={budgetRef} />
           <Row className="g-4 mb-4">
             <Col md={6}>
               <PremiumCard title="Spend by Bucket" icon={DollarSign} height={320}>
@@ -326,6 +512,35 @@ const AdvancedOverview: React.FC = () => {
                       <Line type="monotone" dataKey="ideal" name="Ideal" stroke={colors.textMuted} strokeDasharray="5 5" />
                       <Line type="monotone" dataKey="actual" name="Actual" stroke={colors.primary} strokeWidth={2} dot={false} />
                     </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </PremiumCard>
+            </Col>
+          </Row>
+
+          <Row className="g-4 mb-4">
+            <Col md={12}>
+              <PremiumCard title="Sprint Velocity (last 8 sprints)" icon={Zap} height={280}>
+                {velocityLoading && (
+                  <div className="text-muted small">Loading sprint velocity…</div>
+                )}
+                {!velocityLoading && velocityError && (
+                  <div className="text-danger small">{velocityError}</div>
+                )}
+                {!velocityLoading && !velocityError && velocityData.length === 0 && (
+                  <div className="text-muted small">No sprint history available.</div>
+                )}
+                {!velocityLoading && !velocityError && velocityData.length > 0 && (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={velocityData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={colors.grid} />
+                      <XAxis dataKey="sprint" stroke={colors.textMuted} tick={{ fontSize: 12 }} />
+                      <YAxis stroke={colors.textMuted} />
+                      <Tooltip contentStyle={{ backgroundColor: colors.bg, border: 'none', color: colors.text, borderRadius: '8px' }} />
+                      <Legend />
+                      <Bar dataKey="totalPoints" name="Planned pts" fill={velocityPlanColor} radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="completedPoints" name="Completed pts" fill={colors.success} radius={[4, 4, 0, 0]} />
+                    </BarChart>
                   </ResponsiveContainer>
                 )}
               </PremiumCard>
@@ -382,7 +597,8 @@ const AdvancedOverview: React.FC = () => {
           )}
         </Tab>
 
-        <Tab eventKey="wealth" title="Wealth">
+        <Tab eventKey="finance" title="Finance">
+          <div ref={financeRef} />
           <Row className="g-4 mb-4">
             <Col md={6}>
               <PremiumCard title="Category Momentum" icon={TrendingUp} height={340}>
@@ -441,6 +657,7 @@ const AdvancedOverview: React.FC = () => {
         </Tab>
 
         <Tab eventKey="capacity" title="Capacity">
+          <div ref={capacityRef} />
           <Row className="g-4 mb-4">
             <Col md={6}>
               <PremiumCard title="Goal Allocation" icon={Target} height={360}>

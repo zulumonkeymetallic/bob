@@ -21,6 +21,7 @@ export type ActivityType =
   | 'sprint_changed'
   | 'priority_changed'
   | 'task_to_story_conversion'
+  | 'story_status_from_reminder'
   | 'automation_event'
   | 'automation_alert'
   | 'automation_activity';
@@ -32,7 +33,7 @@ export interface ActivityEntry {
   activityType: ActivityType;
   userId: string;
   userEmail?: string;
-  timestamp: Timestamp;
+  timestamp: Timestamp | Date | number;
 
   // For field changes
   fieldName?: string;
@@ -289,7 +290,8 @@ export class ActivityStreamService {
     entityId: string,
     entityType: 'task' | 'story' | 'goal',
     callback: (activities: ActivityEntry[]) => void,
-    userId?: string
+    userId?: string,
+    limit: number = 50
   ): () => void {
     if (!userId) {
       console.warn('ActivityStreamService.subscribeToActivityStreamAny called without userId, skipping listener', { entityId });
@@ -307,9 +309,12 @@ export class ActivityStreamService {
 
     const unsubs: (() => void)[] = [];
     const state: Record<string, ActivityEntry> = {};
-    const normalizeTimestamp = (val: any): Timestamp | undefined => {
+    const normalizeTimestamp = (val: any): Timestamp | Date | undefined => {
       if (!val) return undefined;
-      if ((val as any).toDate) return val as Timestamp;
+      if (typeof val?.toDate === 'function') return val as Timestamp;
+      if (val instanceof Date) return val;
+      if (typeof val === 'number') return new Date(val);
+      if (typeof val?.seconds === 'number') return new Date(val.seconds * 1000);
       return undefined;
     };
 
@@ -328,8 +333,10 @@ export class ActivityStreamService {
       fields: string[];
       orderField: string;
       defaultType: ActivityType;
+      idPrefix?: string;
     }[] = [
-      { name: 'activity_stream', fields, orderField: 'timestamp', defaultType: 'updated' },
+      { name: 'activity_stream', fields, orderField: 'timestamp', defaultType: 'updated', idPrefix: 'activity_stream' },
+      { name: 'activity_stream', fields, orderField: 'createdAt', defaultType: 'updated', idPrefix: 'activity_stream' },
       { name: 'automation_events', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_event' },
       { name: 'automation_alerts', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_alert' },
       { name: 'activity', fields: ['entityId'], orderField: 'createdAt', defaultType: 'automation_activity' }
@@ -342,14 +349,15 @@ export class ActivityStreamService {
           where('ownerUid', '==', userId),
           where(field, '==', entityId),
           orderBy(source.orderField, 'desc'),
-          fslimit(50)
+          fslimit(limit)
         );
         const unsub = onSnapshot(
           q,
           (snapshot) => {
             snapshot.docs.forEach((doc) => {
               const data = doc.data() as any;
-              const id = `${source.name}:${doc.id}`;
+              const idPrefix = source.idPrefix ?? source.name;
+              const id = `${idPrefix}:${doc.id}`;
               const activityType =
                 (data.activityType as ActivityType) ||
                 (data.type as ActivityType) ||
@@ -357,13 +365,20 @@ export class ActivityStreamService {
               const timestamp =
                 normalizeTimestamp(data[source.orderField]) ||
                 normalizeTimestamp(data.timestamp) ||
-                normalizeTimestamp(data.createdAt);
-              const description =
+                normalizeTimestamp(data.createdAt) ||
+                Timestamp.now();
+              let description =
                 data.description ||
                 data.message ||
                 data.reason ||
                 (data.action ? `Integration: ${data.action}${data.title ? ` · ${data.title}` : ''}` : '') ||
                 `${activityType} via ${source.name}`;
+              if (activityType === 'story_status_from_reminder') {
+                const meta = data.metadata || {};
+                const prev = meta.previousStatus ?? meta.previous_status ?? '';
+                const next = meta.newStatus ?? meta.new_status ?? '';
+                description = `Story status updated from reminder${prev !== '' || next !== '' ? ` (${prev} → ${next})` : ''}`;
+              }
               state[id] = {
                 id,
                 entityId,
@@ -371,7 +386,7 @@ export class ActivityStreamService {
                 activityType,
                 userId: (data.userId as string) || userId,
                 userEmail: data.userEmail,
-                timestamp: timestamp || (serverTimestamp() as any),
+                timestamp,
                 fieldName: data.fieldName,
                 oldValue: data.oldValue,
                 newValue: data.newValue,
@@ -436,6 +451,7 @@ export class ActivityStreamService {
       case 'status_changed': return '🔄';
       case 'sprint_changed': return '🏃';
       case 'priority_changed': return '⚡';
+      case 'story_status_from_reminder': return '✅';
       default: return '📋';
     }
   }
@@ -465,10 +481,21 @@ export class ActivityStreamService {
   }
 
   // Utility to format timestamp
-  static formatTimestamp(timestamp: Timestamp): string {
+  static formatTimestamp(timestamp: Timestamp | Date | number | null | undefined): string {
     if (!timestamp) return 'Unknown time';
 
-    const date = timestamp.toDate();
+    let date: Date | null = null;
+    if (typeof (timestamp as any)?.toDate === 'function') {
+      date = (timestamp as Timestamp).toDate();
+    } else if (timestamp instanceof Date) {
+      date = timestamp;
+    } else if (typeof timestamp === 'number') {
+      date = new Date(timestamp);
+    } else if (typeof (timestamp as any)?.seconds === 'number') {
+      date = new Date((timestamp as any).seconds * 1000);
+    }
+
+    if (!date || Number.isNaN(date.getTime())) return 'Unknown time';
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));

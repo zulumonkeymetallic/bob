@@ -1137,46 +1137,54 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       />
                     ))}
                   </SortableContext>
+                  {onTaskCreate && (
+                    <tr>
+                      <td
+                        colSpan={columns.filter(col => col.visible).length + 2}
+                        style={{
+                          padding: '12px',
+                          textAlign: 'center',
+                          borderTop: `1px dashed ${themeVars.border}`,
+                          backgroundColor: themeVars.card as string
+                        }}
+                      >
+                        <button
+                          onClick={() => {
+                            setEditingTask(null);
+                            setEditForm({ title: '', description: '', priority: 2, status: 0 as any, tags: [] });
+                            setStorySearch('');
+                            setShowEditModal(true);
+                          }}
+                          style={{
+                            color: themeVars.brand as string,
+                            backgroundColor: 'transparent',
+                            border: `1px dashed ${themeVars.brand}`,
+                            borderRadius: '8px',
+                            padding: '6px 12px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = rgbaCard(0.12);
+                            e.currentTarget.style.borderColor = themeVars.brand as string;
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                            e.currentTarget.style.borderColor = themeVars.brand as string;
+                          }}
+                          title="Add Task"
+                        >
+                          + Add Task
+                        </button>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </DndContext>
           </div>
-
-          {/* Optional: Add Task button */}
-          {onTaskCreate && (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '16px' }}>
-              <button
-                onClick={() => {
-                  setEditingTask(null);
-                  setEditForm({ title: '', description: '', priority: 2, status: 0 as any, tags: [] });
-                  setStorySearch('');
-                  setShowEditModal(true);
-                }}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '10px 16px',
-                  border: `2px dashed ${themeVars.brand}`,
-                  background: 'transparent',
-                  color: themeVars.brand as string,
-                  borderRadius: 8,
-                  cursor: 'pointer',
-                  fontWeight: 600
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = rgbaCard(0.03);
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
-                }}
-                title="Add Task"
-              >
-                <span style={{ fontSize: 18, lineHeight: 1 }}>+</span>
-                Add Task
-              </button>
-            </div>
-          )}
 
           {/* Configuration Panel */}
           <div style={{

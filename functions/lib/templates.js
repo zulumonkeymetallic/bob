@@ -33,6 +33,28 @@ const formatCurrency = (value, currency = 'GBP') => {
   return `${currency} ${rounded}`;
 };
 
+const formatPence = (pence, currency = 'GBP') => {
+  const num = Number(pence);
+  if (!Number.isFinite(num)) return null;
+  return formatCurrency(num / 100, currency);
+};
+
+const FINANCE_BUCKET_LABELS = {
+  mandatory: 'Mandatory',
+  discretionary: 'Discretionary',
+  optional: 'Discretionary',
+  savings: 'Savings',
+  short_saving: 'Short-term Saving',
+  long_saving: 'Long-term Saving',
+  investment: 'Investment',
+  debt_repayment: 'Debt Repayment',
+  income: 'Income',
+  net_salary: 'Net Salary',
+  irregular_income: 'Irregular Income',
+  bank_transfer: 'Transfers',
+  unknown: 'Uncategorised',
+};
+
 const renderTaskHierarchyRows = (hierarchy) => {
   const rows = [];
   hierarchy.forEach((themeNode) => {
@@ -282,6 +304,94 @@ const renderSchedule = (blocks) => {
   return `<ul style="padding-left:20px;">${items}</ul>`;
 };
 
+const renderPlannerOutput = (summary, blocks) => {
+  if (!summary || !Array.isArray(blocks) || !blocks.length) {
+    return '<p style="color:#6b7280;">No AI planner blocks were created for today.</p>';
+  }
+
+  const themeRows = summary.byTheme && summary.byTheme.length
+    ? summary.byTheme
+      .map((row) => `
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(row.theme || 'General')}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(formatNumber(row.hours || 0, 1) || '0.0')} h</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(row.count || 0)}</td>
+        </tr>
+      `).join('\n')
+    : '<tr><td colspan="3" style="padding:8px;color:#6b7280;text-align:center;">No theme breakdown available.</td></tr>';
+
+  const maxRows = 12;
+  const blockRows = blocks.slice(0, maxRows).map((block) => {
+    const timeLabel = [block.startDisplay, block.endDisplay].filter(Boolean).join(' – ');
+    const goal = block.linkedGoal;
+    const story = block.linkedStory;
+    const task = block.linkedTask;
+    const entity = task || story || null;
+    const goalLabel = goal
+      ? `${escape(goal.title || 'Goal')}${goal.ref ? ` (${escape(goal.ref)})` : ''}`
+      : '—';
+    const goalLink = goal?.deepLink
+      ? `<a href="${escape(goal.deepLink)}" style="color:#2563eb;">${goalLabel}</a>`
+      : goalLabel;
+    const entityLabel = entity
+      ? `${escape(entity.ref || '')}${entity.ref ? ' — ' : ''}${escape(block.title || '')}`
+      : escape(block.title || '');
+    const entityLink = entity?.deepLink
+      ? `<a href="${escape(entity.deepLink)}" style="color:#2563eb;">${entityLabel}</a>`
+      : entityLabel || '—';
+    const bobLink = block.deepLink
+      ? `<a href="${escape(block.deepLink)}" style="color:#2563eb;">BOB</a>`
+      : '';
+    const gcalLink = block.googleLink
+      ? `<a href="${escape(block.googleLink)}" style="color:#2563eb;">GCal</a>`
+      : '';
+    const links = [bobLink, gcalLink].filter(Boolean).join(' · ') || '—';
+    return `
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(timeLabel || '')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${escape(block.theme || 'General')}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${goalLink}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${entityLink}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">${links}</td>
+      </tr>
+    `;
+  }).join('\n');
+
+  const truncatedNote = blocks.length > maxRows
+    ? `<div style="margin-top:8px;color:#6b7280;font-size:12px;">Showing ${maxRows} of ${blocks.length} planner blocks.</div>`
+    : '';
+
+  return `
+    <div style="margin-bottom:12px;color:#111827;">
+      <strong>${escape(summary.totalBlocks || 0)}</strong> blocks •
+      <strong>${escape(formatNumber(summary.totalHours || 0, 1) || '0.0')} h</strong> scheduled by the planner today.
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Theme</th>
+          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Hours</th>
+          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Blocks</th>
+        </tr>
+      </thead>
+      <tbody>${themeRows}</tbody>
+    </table>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Time</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Theme</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Goal</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Story/Task</th>
+          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e5e7eb;">Links</th>
+        </tr>
+      </thead>
+      <tbody>${blockRows}</tbody>
+    </table>
+    ${truncatedNote}
+  `;
+};
+
 const renderKpiSummary = (kpis) => {
   if (!kpis) return '<p style="color:#6b7280;">No KPI metrics available.</p>';
   const cards = [];
@@ -416,6 +526,81 @@ const renderMonzo = (monzo) => {
     return '<p style="color:#6b7280;">No recent Monzo activity.</p>';
   }
   return `<ul style="padding-left:20px;">${parts.join('')}</ul>`;
+};
+
+const renderFinanceSummary = (summary, currency = 'GBP') => {
+  if (!summary || !summary.transactionCount) {
+    return '<p style="color:#6b7280;">No Monzo transactions captured for this period.</p>';
+  }
+
+  const spent = formatPence(summary.totalSpendPence || 0, currency) || '£0.00';
+  const income = formatPence(summary.totalIncomePence || 0, currency) || '£0.00';
+  const bucketRows = Object.entries(summary.buckets || {})
+    .filter(([bucket]) => bucket !== 'bank_transfer' && bucket !== 'unknown')
+    .map(([bucket, amount]) => ({
+      bucket,
+      label: FINANCE_BUCKET_LABELS[bucket] || bucket,
+      amount: Math.abs(Number(amount || 0)),
+    }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 6);
+  const bucketHtml = bucketRows.length
+    ? `
+      <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;">
+        <thead>
+          <tr style="background:#f3f4f6;text-align:left;">
+            <th style="padding:6px;border-bottom:1px solid #e5e7eb;">Bucket</th>
+            <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${bucketRows.map((row) => `
+            <tr>
+              <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${escape(row.label)}</td>
+              <td style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(formatPence(row.amount, currency) || '')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `
+    : '<p style="color:#6b7280;margin:6px 0 0;">No bucket totals yet.</p>';
+
+  const topMerchants = Array.isArray(summary.topMerchants) ? summary.topMerchants : [];
+  const merchantHtml = topMerchants.length
+    ? `
+      <ul style="padding-left:18px;margin:8px 0 0;">
+        ${topMerchants.map((m) => `
+          <li>${escape(m.merchant || 'Unknown')} — ${escape(formatPence(m.totalPence || 0, currency) || '')}</li>
+        `).join('')}
+      </ul>
+    `
+    : '<p style="color:#6b7280;margin:6px 0 0;">No merchant totals yet.</p>';
+
+  const anomalies = Array.isArray(summary.anomalies) ? summary.anomalies : [];
+  const anomalyHtml = anomalies.length
+    ? `
+      <ul style="padding-left:18px;margin:8px 0 0;">
+        ${anomalies.slice(0, 5).map((a) => `
+          <li>${escape(a.merchant || 'Unknown')} — ${escape(formatPence(a.amountPence || 0, currency) || '')} <span style="color:#6b7280;">(${escape(a.reason || 'Anomaly')})</span></li>
+        `).join('')}
+      </ul>
+    `
+    : '<p style="color:#6b7280;margin:6px 0 0;">No anomalies detected.</p>';
+
+  return `
+    <div>
+      <p style="margin:0 0 6px;">
+        <strong>Total spent:</strong> ${escape(spent)} •
+        <strong style="margin-left:8px;">Income:</strong> ${escape(income)}
+      </p>
+      <p style="margin:0;color:#6b7280;font-size:12px;">${summary.transactionCount} transactions · ${summary.spendCount} spend · ${summary.incomeCount} income</p>
+      ${bucketHtml}
+      <h4 style="margin:12px 0 4px;font-size:14px;color:#111827;">Top Merchants</h4>
+      ${merchantHtml}
+      <h4 style="margin:12px 0 4px;font-size:14px;color:#111827;">Spend Anomalies</h4>
+      ${anomalyHtml}
+    </div>
+  `;
 };
 
 const renderChecklist = (checklist) => {
@@ -726,6 +911,14 @@ const renderDailySummaryEmail = (data) => {
         ${renderKpiSummary(data.kpis)}
       </section>
 
+      ${data.financeDaily ? `
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Daily Spend Summary</h2>
+        ${renderFinanceSummary(data.financeDaily, data.monzo?.currency || 'GBP')}
+        ${data.financeCommentary ? `<div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:10px;color:#334155;font-size:13px;">${escape(data.financeCommentary)}</div>` : ''}
+      </section>
+      ` : ''}
+
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Daily Brief</h2>
         ${renderBriefing(data.dailyBrief)}
@@ -746,8 +939,99 @@ const renderDailySummaryEmail = (data) => {
         ${renderSchedule(data.calendarBlocks || [])}
       </section>
 
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">AI Planner Output</h2>
+        ${renderPlannerOutput(data.plannerSummary, data.plannerBlocks || [])}
+      </section>
+
       <footer style="margin-top:24px;text-align:center;color:#6b7280;font-size:12px;">
         <p>Generated at ${escape(data.metadata.generatedAt || '')} (${escape(data.metadata.timezone || '')}).</p>
+      </footer>
+    </div>
+  </body>
+</html>
+  `;
+};
+
+const renderWeeklyFinanceSummaryEmail = (data) => {
+  const profileName = data.profile?.displayName || data.profile?.name || data.profile?.email || 'BOB Member';
+  const windowLabel = data.metadata?.windowLabel || data.metadata?.weekLabel || data.metadata?.weekIso || 'this week';
+  return `
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Weekly Spend Summary</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#111827;">
+    <div style="max-width:640px;margin:0 auto;padding:24px;">
+      <header style="text-align:center;padding:24px;border-radius:12px;background:linear-gradient(135deg,#0ea5e9,#22c55e);color:#fff;">
+        <h1 style="margin:0;font-size:24px;">Weekly Spend Snapshot</h1>
+        <p style="margin:8px 0 0;">Hi ${escape(profileName)} — here’s your summary for ${escape(windowLabel)}.</p>
+      </header>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Weekly Spend Summary</h2>
+        ${renderFinanceSummary(data.financeSummary, data.currency || data.monzo?.currency || 'GBP')}
+        ${data.financeCommentary ? `<div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:10px;color:#334155;font-size:13px;">${escape(data.financeCommentary)}</div>` : ''}
+      </section>
+
+      <footer style="margin-top:24px;text-align:center;color:#6b7280;font-size:12px;">
+        <p>Generated at ${escape(data.metadata?.generatedAt || '')} (${escape(data.metadata?.timezone || '')}).</p>
+      </footer>
+    </div>
+  </body>
+</html>
+  `;
+};
+
+const renderSpendAnomalyEmail = ({ profile, anomalies = [], currency = 'GBP', metadata = {} }) => {
+  const profileName = profile?.displayName || profile?.name || profile?.email || 'BOB Member';
+  const windowLabel = metadata.windowLabel || 'recent activity';
+  const rows = anomalies.slice(0, 10).map((a) => {
+    const amount = formatPence(a.amountPence || 0, currency) || '£0.00';
+    return `
+      <tr>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${escape(a.merchant || 'Unknown')}</td>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(amount)}</td>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${escape(a.reason || 'Anomaly')}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spend Anomaly Alert</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#111827;">
+    <div style="max-width:640px;margin:0 auto;padding:24px;">
+      <header style="padding:20px;border-radius:12px;background:#ef4444;color:#fff;text-align:center;">
+        <h1 style="margin:0;font-size:22px;">Spend Anomaly Alert</h1>
+        <p style="margin:8px 0 0;">Hi ${escape(profileName)} — we spotted unusually high spend in ${escape(windowLabel)}.</p>
+      </header>
+
+      <section style="margin-top:20px;background:#fff;border-radius:12px;padding:16px;border:1px solid #e5e7eb;">
+        <table role="presentation" style="width:100%;border-collapse:collapse;font-size:14px;">
+          <thead>
+            <tr style="background:#f3f4f6;text-align:left;">
+              <th style="padding:6px;border-bottom:1px solid #e5e7eb;">Merchant</th>
+              <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">Amount</th>
+              <th style="padding:6px;border-bottom:1px solid #e5e7eb;">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      </section>
+
+      <footer style="margin-top:20px;text-align:center;color:#6b7280;font-size:12px;">
+        <p>Generated at ${escape(metadata.generatedAt || '')} (${escape(metadata.timezone || '')}).</p>
       </footer>
     </div>
   </body>
@@ -915,5 +1199,7 @@ const renderSprintBacklog = (pendingStories) => {
 
 module.exports = {
   renderDailySummaryEmail,
+  renderWeeklyFinanceSummaryEmail,
+  renderSpendAnomalyEmail,
   renderDataQualityEmail,
 };

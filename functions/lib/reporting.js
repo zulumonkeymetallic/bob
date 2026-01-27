@@ -32,6 +32,64 @@ const GOAL_STATUS_MAP = {
   4: 'deferred',
 };
 
+const extractAmountPence = (tx) => {
+  if (Number.isFinite(tx.amountMinor)) return Number(tx.amountMinor);
+  const raw = Number(tx.amount || 0);
+  if (!Number.isFinite(raw)) return 0;
+  if (Math.abs(raw) < 10) return Math.round(raw * 100);
+  return Math.round(raw);
+};
+
+const resolveFinanceBucket = (tx) => {
+  const raw = tx.aiBucket || tx.userCategoryType || tx.defaultCategoryType || 'unknown';
+  const bucket = String(raw || '').toLowerCase();
+  return bucket === 'optional' ? 'discretionary' : bucket;
+};
+
+const buildFinanceSummary = (transactions = []) => {
+  const summary = {
+    totalSpendPence: 0,
+    totalIncomePence: 0,
+    buckets: {},
+    topMerchants: [],
+    anomalies: [],
+    transactionCount: 0,
+    spendCount: 0,
+    incomeCount: 0,
+  };
+  const merchantTotals = {};
+  transactions.forEach((tx) => {
+    summary.transactionCount += 1;
+    const amount = extractAmountPence(tx);
+    const bucket = resolveFinanceBucket(tx);
+    const isIncome = ['income', 'net_salary', 'irregular_income'].includes(bucket);
+    if (amount < 0 && !isIncome) {
+      summary.totalSpendPence += Math.abs(amount);
+      summary.spendCount += 1;
+    }
+    if (amount > 0 && isIncome) {
+      summary.totalIncomePence += amount;
+      summary.incomeCount += 1;
+    }
+    if (!summary.buckets[bucket]) summary.buckets[bucket] = 0;
+    summary.buckets[bucket] += amount;
+    const merchant = tx.merchant?.name || tx.counterparty?.name || tx.description || 'Unknown';
+    merchantTotals[merchant] = (merchantTotals[merchant] || 0) + Math.abs(amount);
+    if (tx.aiAnomalyFlag) {
+      summary.anomalies.push({
+        merchant,
+        amountPence: Math.abs(amount),
+        reason: tx.aiAnomalyReason || 'Anomaly',
+      });
+    }
+  });
+  summary.topMerchants = Object.entries(merchantTotals)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([merchant, total]) => ({ merchant, totalPence: total }));
+  return summary;
+};
+
 const ensureFirestore = () => {
   if (!admin.apps.length) {
     admin.initializeApp();
@@ -303,6 +361,27 @@ const makeDeepLink = (type, refOrId) => {
   return buildAbsoluteUrl(`${base}/${encodeURIComponent(refOrId)}`);
 };
 
+const buildGoogleEventLink = (eventId) => {
+  if (!eventId) return null;
+  try {
+    return `https://calendar.google.com/calendar/u/0/r/eventedit/${encodeURIComponent(String(eventId))}`;
+  } catch {
+    return null;
+  }
+};
+
+const isAiPlannerBlock = (block) => {
+  if (!block) return false;
+  const source = String(block.source || '').toLowerCase();
+  if (source === 'gcal' || source === 'google_calendar') return false;
+  if (block.aiGenerated === true || block.isAiGenerated === true || block.createdBy === 'ai') return true;
+  const entryMethod = String(block.entry_method || block.entryMethod || '').toLowerCase();
+  if (entryMethod.includes('calendar_ai')) return true;
+  const sourceType = String(block.sourceType || block.source || '').toLowerCase();
+  if (sourceType.includes('allocation')) return true;
+  return false;
+};
+
 const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-GB' }) => {
   const zone = coerceZone(timezone || DEFAULT_TIMEZONE);
   const { start, end } = computeDayWindow({ day, timezone: zone });
@@ -319,6 +398,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     routinesSnap,
     goalsAllSnap,
     sprintsSnap,
+    monzoTxSnap,
   ] = await Promise.all([
     db.collection('tasks').where('ownerUid', '==', userId).get(),
     db.collection('stories').where('ownerUid', '==', userId).get(),
@@ -335,6 +415,14 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     db.collection('routines').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
     db.collection('goals').where('ownerUid', '==', userId).get(),
     db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('monzo_transactions')
+      .where('ownerUid', '==', userId)
+      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(start.toJSDate()))
+      .where('createdAt', '<', admin.firestore.Timestamp.fromDate(end.toJSDate()))
+      .orderBy('createdAt', 'desc')
+      .limit(400)
+      .get()
+      .catch(() => ({ docs: [] })),
   ]);
 
   const taskDocs = toList(tasksSnap);
@@ -347,6 +435,8 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const goalsAll = toList(goalsAllSnap);
   const goalLookup = new Map(goalsAll.map((goal) => [goal.id, goal]));
   const sprints = toList(sprintsSnap);
+  const monzoTransactions = toList(monzoTxSnap);
+  const financeDaily = monzoTransactions.length ? buildFinanceSummary(monzoTransactions) : null;
 
   const resolveActiveSprint = (sprintList) => {
     if (!Array.isArray(sprintList) || !sprintList.length) return null;
@@ -640,6 +730,17 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       const endDt = toDateTime(block.end || block.endAt, { zone });
       const story = block.storyId ? storiesById.get(block.storyId) : null;
       const task = block.taskId ? tasksById.get(block.taskId) : null;
+      const goalId = block.goalId || task?.goalId || story?.goalId || null;
+      const goal = goalId ? goalsById.get(goalId) : null;
+      const goalRef = goal ? ensureGoalReference(goal) : null;
+      const deepLink = block.deepLink || block.linkUrl || block.url || null;
+      const entryMethod = block.entry_method || block.entryMethod || null;
+      const sourceType = block.sourceType || block.source || null;
+      const aiGenerated = block.aiGenerated === true || block.isAiGenerated === true || block.createdBy === 'ai';
+      const googleEventId = block.googleEventId || null;
+      const externalLink = block.externalLink || block.htmlLink || null;
+      const googleLink = externalLink || buildGoogleEventLink(googleEventId);
+      const aiPlanner = isAiPlannerBlock(block);
       return {
         id: block.id,
         title: block.title || block.note || block.category || 'Block',
@@ -650,7 +751,16 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
         endDisplay: endDt ? formatDateTime(endDt, { locale }) : null,
         linkedStory: story ? { id: story.id, ref: ensureStoryReference(story), deepLink: makeDeepLink('story', ensureStoryReference(story)) } : null,
         linkedTask: task ? { id: task.id, ref: ensureTaskReference(task), deepLink: makeDeepLink('task', ensureTaskReference(task)) } : null,
+        linkedGoal: goal ? { id: goal.id, ref: goalRef, title: goal.title || goal.name || 'Goal', deepLink: makeDeepLink('goal', goalRef) } : null,
         allocatedMinutes: startDt && endDt ? Math.round(endDt.diff(startDt, 'minutes').minutes) : null,
+        aiGenerated,
+        entryMethod,
+        sourceType,
+        deepLink,
+        googleEventId,
+        googleLink,
+        externalLink,
+        isAiPlanner: aiPlanner,
       };
     })
     .filter((block) => {
@@ -659,6 +769,51 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       return blockStartMs >= start.minus({ minutes: 1 }).toMillis() && blockStartMs <= end.plus({ hours: 16 }).toMillis();
     })
     .sort((a, b) => (a.startIso || '').localeCompare(b.startIso || ''));
+
+  const plannerBlocks = calendarBlocks
+    .filter((block) => block.isAiPlanner)
+    .map((block) => ({
+      id: block.id,
+      title: block.title,
+      theme: block.theme || 'General',
+      startDisplay: block.startDisplay,
+      endDisplay: block.endDisplay,
+      durationMinutes: block.allocatedMinutes || 0,
+      linkedGoal: block.linkedGoal || null,
+      linkedStory: block.linkedStory || null,
+      linkedTask: block.linkedTask || null,
+      deepLink: block.deepLink || null,
+      googleLink: block.googleLink || null,
+    }));
+
+  const plannerSummary = (() => {
+    if (!plannerBlocks.length) return null;
+    const themeTotals = new Map();
+    let totalMinutes = 0;
+    plannerBlocks.forEach((block) => {
+      const minutes = Number(block.durationMinutes || 0) || 0;
+      totalMinutes += minutes;
+      const themeKey = block.theme || 'General';
+      const entry = themeTotals.get(themeKey) || { theme: themeKey, minutes: 0, count: 0 };
+      entry.minutes += minutes;
+      entry.count += 1;
+      themeTotals.set(themeKey, entry);
+    });
+    const byTheme = Array.from(themeTotals.values())
+      .map((entry) => ({
+        theme: entry.theme,
+        minutes: entry.minutes,
+        hours: Math.round((entry.minutes / 60) * 10) / 10,
+        count: entry.count,
+      }))
+      .sort((a, b) => b.minutes - a.minutes);
+    return {
+      totalBlocks: plannerBlocks.length,
+      totalMinutes,
+      totalHours: Math.round((totalMinutes / 60) * 10) / 10,
+      byTheme,
+    };
+  })();
 
   const reminders = toList(remindersSnap)
     .filter((reminder) => (reminder.status || 'open') !== 'done')
@@ -1048,6 +1203,8 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     storiesToStart,
     activeWorkItems,
     calendarBlocks,
+    plannerSummary,
+    plannerBlocks,
     reminders,
     choresDue: dueChores,
     routinesDue: dueRoutines,
@@ -1056,6 +1213,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     worldSummary: worldSummary ? { summary: worldSummary, weather: worldWeather, source: worldSource } : null,
     fitness,
     monzo,
+    financeDaily,
     financeAlerts,
     profile,
     schedulerChanges,
@@ -1371,6 +1529,7 @@ module.exports = {
   loadProfile,
   resolveTimezone,
   buildActivityIndex,
+  buildFinanceSummary,
   buildDailySummaryData,
   buildDataQualitySnapshot,
   loadSchedulerInputs,

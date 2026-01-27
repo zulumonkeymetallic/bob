@@ -41,13 +41,34 @@ function parseAmount(data) {
   return 0;
 }
 
-function summariseTransactions(transactions) {
+function summariseTransactions(transactions, potIndex = new Map()) {
   const totals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
   const monthlyMap = new Map();
   const categoryTotals = new Map();
   const merchantTotals = new Map();
+  const allMerchantTotals = new Map();
   const pendingClassification = [];
   let pendingCount = 0;
+
+  const mapAiBucket = (bucket) => {
+    const raw = String(bucket || '').toLowerCase();
+    if (!raw) return null;
+    if (raw === 'discretionary') return 'optional';
+    if (raw.includes('saving') || raw === 'investment') return 'savings';
+    if (raw === 'debt_repayment') return 'mandatory';
+    if (raw === 'net_salary' || raw === 'irregular_income') return 'income';
+    return raw;
+  };
+
+  const resolvePotTransfer = (data) => {
+    const metadata = data.metadata || {};
+    const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
+    if (!potId) return null;
+    const pot = potIndex.get(String(potId).toLowerCase());
+    const potName = pot?.name || pot?.title || potId;
+    const isToPot = !!metadata.destination_pot_id || (!metadata.source_pot_id && parseAmount(data) < 0);
+    return { potId, potName, direction: isToPot ? 'to' : 'from' };
+  };
 
   for (const doc of transactions) {
     const data = doc.data() || {};
@@ -57,17 +78,22 @@ function summariseTransactions(transactions) {
     const raw = data.raw || {};
     const inferredType = inferDefaultCategoryType(raw);
     const fallbackType = amount >= 0 ? 'income' : 'optional';
+    const aiBucket = mapAiBucket(data.aiBucket);
+    const potTransfer = resolvePotTransfer(data);
     const categoryType = coerceCategoryType(
-      data.userCategoryType || data.categoryType || data.defaultCategoryType || inferredType,
+      potTransfer ? 'bank_transfer' : (aiBucket || data.userCategoryType || data.categoryType || data.defaultCategoryType || inferredType),
       fallbackType
     );
 
-    const categoryLabel = String(
-      data.userCategoryLabel
-      || data.userCategory
-      || data.defaultCategoryLabel
-      || inferDefaultCategoryLabel(raw)
-    );
+    const categoryLabel = potTransfer
+      ? `Transfer ${potTransfer.direction === 'to' ? 'to' : 'from'} ${potTransfer.potName}`
+      : String(
+        data.aiCategoryLabel
+        || data.userCategoryLabel
+        || data.userCategory
+        || data.defaultCategoryLabel
+        || inferDefaultCategoryLabel(raw)
+      );
 
     if (categoryType === 'bank_transfer') continue;
 
@@ -92,9 +118,10 @@ function summariseTransactions(transactions) {
     categoryEntry.count += 1;
 
     const isSpend = amount < 0;
+    const merchantName = potTransfer?.potName || data.merchant?.name || data.counterparty?.name || data.description || categoryLabel;
+    const merchantKey = normaliseMerchantName(merchantName || data.transactionId || data.id || 'merchant');
+
     if (isSpend && categoryType !== 'bank_transfer') {
-      const merchantName = data.merchant?.name || data.counterparty?.name || data.description || categoryLabel;
-      const merchantKey = normaliseMerchantName(merchantName || data.transactionId || data.id || 'merchant');
       if (!merchantTotals.has(merchantKey)) {
         merchantTotals.set(merchantKey, {
           merchantKey,
@@ -105,6 +132,7 @@ function summariseTransactions(transactions) {
           lastTransactionISO: null,
           months: new Set(),
           amounts: [],
+          isTransfer: false,
         });
       }
       const merchantEntry = merchantTotals.get(merchantKey);
@@ -118,7 +146,30 @@ function summariseTransactions(transactions) {
       const mKey = createdISO ? toMonthKey(createdISO) : null;
       if (mKey) merchantEntry.months.add(mKey);
       merchantEntry.amounts.push(absoluteAmount);
-      if (!data.userCategoryType) {
+
+      if (!allMerchantTotals.has(merchantKey)) {
+        allMerchantTotals.set(merchantKey, {
+          merchantKey,
+          merchantName,
+          totalSpend: 0,
+          transactions: 0,
+          byCategory: {},
+          lastTransactionISO: null,
+          months: new Set(),
+          amounts: [],
+          isTransfer: false,
+        });
+      }
+      const allEntry = allMerchantTotals.get(merchantKey);
+      allEntry.totalSpend += absoluteAmount;
+      allEntry.transactions += 1;
+      allEntry.byCategory[categoryType] = (allEntry.byCategory[categoryType] || 0) + absoluteAmount;
+      if (createdISO && (!allEntry.lastTransactionISO || createdISO > allEntry.lastTransactionISO)) {
+        allEntry.lastTransactionISO = createdISO;
+      }
+      if (mKey) allEntry.months.add(mKey);
+      allEntry.amounts.push(absoluteAmount);
+      if (!data.aiBucket && !data.userCategoryType) {
         pendingCount += 1;
         if (pendingClassification.length < 25) {
           pendingClassification.push({
@@ -132,6 +183,31 @@ function summariseTransactions(transactions) {
           });
         }
       }
+    } else if (potTransfer) {
+      if (!allMerchantTotals.has(merchantKey)) {
+        allMerchantTotals.set(merchantKey, {
+          merchantKey,
+          merchantName,
+          totalSpend: 0,
+          transactions: 0,
+          byCategory: {},
+          lastTransactionISO: null,
+          months: new Set(),
+          amounts: [],
+          isTransfer: true,
+        });
+      }
+      const merchantEntry = allMerchantTotals.get(merchantKey);
+      merchantEntry.totalSpend += absoluteAmount;
+      merchantEntry.transactions += 1;
+      merchantEntry.byCategory.bank_transfer = (merchantEntry.byCategory.bank_transfer || 0) + absoluteAmount;
+      const createdISO = data.createdISO || null;
+      if (createdISO && (!merchantEntry.lastTransactionISO || createdISO > merchantEntry.lastTransactionISO)) {
+        merchantEntry.lastTransactionISO = createdISO;
+      }
+      const mKey = createdISO ? toMonthKey(createdISO) : null;
+      if (mKey) merchantEntry.months.add(mKey);
+      merchantEntry.amounts.push(absoluteAmount);
     }
   }
 
@@ -185,6 +261,32 @@ function summariseTransactions(transactions) {
     .sort((a, b) => b.totalSpend - a.totalSpend)
     .slice(0, 50);
 
+  const allMerchants = Array.from(allMerchantTotals.values())
+    .map((entry) => {
+      const monthCount = entry.months.size;
+      const amounts = entry.amounts || [];
+      const mean = amounts.length ? amounts.reduce((a, b) => a + b, 0) / amounts.length : 0;
+      const variance = amounts.length ? amounts.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / amounts.length : 0;
+      const std = Math.sqrt(variance);
+      const cv = mean > 0 ? std / mean : 0;
+      const isRecurring = monthCount >= 2 && cv <= 0.25;
+      const topCategory = Object.entries(entry.byCategory)
+        .sort((a, b) => b[1] - a[1])[0];
+      return {
+        merchantKey: entry.merchantKey,
+        merchantName: entry.merchantName || 'Merchant',
+        totalSpend: entry.totalSpend,
+        transactions: entry.transactions,
+        primaryCategoryType: topCategory ? topCategory[0] : 'bank_transfer',
+        lastTransactionISO: entry.lastTransactionISO,
+        months: monthCount,
+        isRecurring,
+        avgAmount: mean,
+        isTransfer: entry.isTransfer || false,
+      };
+    })
+    .sort((a, b) => b.totalSpend - a.totalSpend);
+
   const netCashflow = totals.income - (totals.mandatory + totals.optional + totals.savings);
 
   return {
@@ -193,6 +295,7 @@ function summariseTransactions(transactions) {
     monthly,
     spendTimeline,
     merchantSummary,
+    allMerchants,
     pendingClassification,
     pendingCount,
     netCashflow,
@@ -387,7 +490,15 @@ async function computeMonzoAnalytics(uidOrDb, maybeUid) {
     }
   }
 
-  const aggregation = summariseTransactions(txSnap.docs);
+  const potIndex = new Map();
+  potSnap.docs.forEach((d) => {
+    const pot = d.data() || {};
+    const idKey = String(pot.potId || d.id || '').toLowerCase();
+    if (idKey) potIndex.set(idKey, pot);
+    if (pot.name) potIndex.set(String(pot.name).toLowerCase(), pot);
+  });
+
+  const aggregation = summariseTransactions(txSnap.docs, potIndex);
 
   // Calculate average monthly savings
   const months = Object.values(aggregation.monthly);
@@ -405,6 +516,7 @@ async function computeMonzoAnalytics(uidOrDb, maybeUid) {
     monthly: aggregation.monthly,
     spendTimeline: aggregation.spendTimeline,
     merchantSummary: aggregation.merchantSummary,
+    allMerchants: aggregation.allMerchants,
     recurringMerchants: aggregation.merchantSummary.filter((m) => m.isRecurring).slice(0, 50),
     pendingClassification: aggregation.pendingClassification,
     pendingCount: aggregation.pendingCount,
