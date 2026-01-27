@@ -84,17 +84,26 @@ const EnhancedBudgetSettings: React.FC = () => {
                     const agg: Record<string, { d30: number; d90: number; ytd: number }> = {};
                     const today = new Date();
                     const daysAgo = (iso: string) => Math.round((today.getTime() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24));
+                    const normalizeSpend = (value: any) => {
+                        const num = Number(value) || 0;
+                        const abs = Math.abs(num);
+                        if (abs > 10000) return num / 100;
+                        return num;
+                    };
                     // YTD
                     Object.entries(spendByCategory).forEach(([key, val]) => {
                         if (key === 'bank_transfer' || key === 'unknown') return;
-                        agg[key] = { d30: 0, d90: 0, ytd: Math.abs(Number(val) || 0) / 100 };
+                        agg[key] = { d30: 0, d90: 0, ytd: Math.abs(normalizeSpend(val)) };
                     });
                     // Rolling windows from time series
                     Object.entries(timeSeriesByCategory || {}).forEach(([key, entries]: any) => {
                         if (key === 'bank_transfer' || key === 'unknown') return;
-                        entries.forEach((row: any) => {
-                            const age = daysAgo(row.month + '-01');
-                            const amt = Math.abs(row.amount || 0) / 100;
+                        const rows = Array.isArray(entries)
+                            ? entries
+                            : Object.entries(entries || {}).map(([month, amount]) => ({ month, amount }));
+                        rows.forEach((row: any) => {
+                            const age = daysAgo(`${row.month}-01`);
+                            const amt = Math.abs(normalizeSpend(row.amount || 0));
                             if (!agg[key]) agg[key] = { d30: 0, d90: 0, ytd: 0 };
                             if (age <= 30) agg[key].d30 += amt;
                             if (age <= 90) agg[key].d90 += amt;
@@ -251,7 +260,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                     : (val.amount || 0) / 100; // pounds
                 byCategory[normalizedKey] = Number.isFinite(derived) ? Number(derived.toFixed(2)) : 0;
             });
-            await setDoc(legacyRef, { byCategory, currency, monthlyIncome, ownerUid: currentUser.uid, updatedAt: Date.now() }, { merge: true });
+            await setDoc(legacyRef, { byCategory, currency, monthlyIncome, bucketPotMap, ownerUid: currentUser.uid, updatedAt: Date.now() }, { merge: true });
 
             setSaved('Saved');
             setTimeout(() => setSaved(''), 2000);
@@ -844,7 +853,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                                                     <td>{cat.label}</td>
                                                     <td>
                                                         {mode === 'percentage' ? (
-                                                            <InputGroup size="sm">
+                                                            <InputGroup size="sm" className="flex-nowrap">
                                                                 <Form.Control
                                                                     type="number"
                                                                     min="0"
@@ -855,7 +864,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                                                                     placeholder="0"
                                                                     style={{ minWidth: 110 }}
                                                                 />
-                                                                <InputGroup.Text>%</InputGroup.Text>
+                                                                <InputGroup.Text className="px-2">%</InputGroup.Text>
                                                             </InputGroup>
                                                         ) : (
                                                             <InputGroup size="sm">
