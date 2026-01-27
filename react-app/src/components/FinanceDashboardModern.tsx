@@ -143,23 +143,25 @@ const FinanceDashboardModern: React.FC = () => {
 
         const unsubSummary = onSnapshot(summaryRef, (snap) => setSummary(snap.data() as BudgetSummaryDoc));
         const unsubAlignment = onSnapshot(alignmentRef, (snap) => setAlignment(snap.data() as GoalAlignmentDoc));
-        const unsubTx = onSnapshot(txQuery, (snap) => {
+            const unsubTx = onSnapshot(txQuery, (snap) => {
             setTransactions(snap.docs.map(d => {
                 const data = d.data();
                 const metadata = (data.metadata || {}) as Record<string, any>;
                 const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
                 const potName = potId ? pots[potId]?.name || null : null;
                 const amount = typeof data.amount === 'number' && Math.abs(data.amount) < 10 ? data.amount * 100 : data.amount;
-                const type = data.aiBucket || data.userCategoryType || data.defaultCategoryType || null;
+                const isTransferToPot = Boolean(metadata.destination_pot_id) || (!metadata.source_pot_id && amount < 0);
+                const potLabel = potName ? `Transfer ${isTransferToPot ? 'to' : 'from'} ${potName}` : null;
+                const type = potId ? 'bank_transfer' : (data.aiBucket || data.userCategoryType || data.defaultCategoryType || null);
                 return {
                     transactionId: data.transactionId,
                     description: data.description,
                     amount,
                     createdISO: data.createdISO,
                     userCategoryType: type,
-                    userCategoryLabel: data.aiCategoryLabel || data.userCategoryLabel || data.defaultCategoryLabel,
-                    aiBucket: data.aiBucket || null,
-                    aiCategoryLabel: data.aiCategoryLabel || null,
+                    userCategoryLabel: potLabel || data.aiCategoryLabel || data.userCategoryLabel || data.defaultCategoryLabel,
+                    aiBucket: potId ? 'bank_transfer' : (data.aiBucket || null),
+                    aiCategoryLabel: potLabel || data.aiCategoryLabel || null,
                     merchantName: data.merchant?.name,
                     merchantLogo: data.merchant?.logo,
                     potName,

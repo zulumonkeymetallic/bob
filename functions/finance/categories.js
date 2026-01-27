@@ -66,6 +66,7 @@ const DEFAULT_FINANCE_CATEGORIES = [
   { key: 'bank_transfer', label: 'Bank Transfer', bucket: 'bank_transfer' },
   { key: 'monzo_transfer', label: 'Monzo Transfer', bucket: 'bank_transfer' },
   { key: 'banking_fee', label: 'Banking Fee', bucket: 'bank_transfer' },
+  { key: 'pot_transfer', label: 'Pot Transfer', bucket: 'bank_transfer' },
   { key: 'pot_transfer_snowball', label: 'Pot Transfer - Snowball', bucket: 'bank_transfer' },
   { key: 'pot_transfer_investment', label: 'Pot Transfer - Investment', bucket: 'bank_transfer' },
   { key: 'unknown', label: 'Unknown', bucket: 'unknown' },

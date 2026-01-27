@@ -53,19 +53,21 @@ function aggregateTransactions(transactions, startDate, endDate) {
     // Normalize dates
     const start = startDate ? new Date(startDate) : null;
     const end = endDate ? new Date(endDate) : null;
-    const endBoundary = end ? new Date(end.getTime() + 24 * 60 * 60 * 1000) : null; // inclusive of end date
+  const endBoundary = end ? new Date(end.getTime() + 24 * 60 * 60 * 1000) : null; // inclusive of end date
 
-    transactions.forEach((tx) => {
-        const txDate = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt);
+  transactions.forEach((tx) => {
+    const txDate = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt);
+    const metadata = tx.metadata || {};
+    const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
 
-        // Apply date filter
-        if (start && txDate < start) return;
-        if (endBoundary && txDate >= endBoundary) return;
+    // Apply date filter
+    if (start && txDate < start) return;
+    if (endBoundary && txDate >= endBoundary) return;
 
         const minor = Number.isFinite(tx.amountMinor) ? tx.amountMinor : null;
         const rawAmount = typeof tx.amount === 'number' ? tx.amount : 0;
         const amount = minor !== null ? minor / 100 : (Math.abs(rawAmount) < 10 ? rawAmount * 100 : rawAmount);
-        const bucketRaw = tx.aiBucket || tx.userCategoryType || tx.defaultCategoryType || 'unspecified';
+        const bucketRaw = potId ? 'bank_transfer' : (tx.aiBucket || tx.userCategoryType || tx.defaultCategoryType || 'unspecified');
         const bucket = String(bucketRaw).toLowerCase();
         const bucketNormalized = bucket === 'optional' ? 'discretionary' : bucket;
 
@@ -222,6 +224,8 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
                 const metadata = t.metadata || {};
                 const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
                 const pot = potId ? potsMap[potId] : null;
+                const isTransferToPot = !!metadata.destination_pot_id || (!metadata.source_pot_id && t.amount < 0);
+                const potTransferLabel = pot ? `${isTransferToPot ? 'Transfer to' : 'Transfer from'} ${pot.name}` : null;
                 const minor = Number.isFinite(t.amountMinor) ? t.amountMinor : null;
                 const rawAmount = typeof t.amount === 'number' ? t.amount : 0;
                 const amount = minor !== null ? minor / 100 : (Math.abs(rawAmount) < 10 ? rawAmount * 100 : rawAmount);
@@ -230,11 +234,11 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
                     merchantName: t.merchantName || t.description,
                     amount,
                     categoryKey: t.userCategoryKey,
-                    categoryLabel: t.userCategoryLabel,
-                    categoryType: t.userCategoryType || t.defaultCategoryType || null,
+                    categoryLabel: potTransferLabel || t.userCategoryLabel,
+                    categoryType: potId ? 'bank_transfer' : (t.userCategoryType || t.defaultCategoryType || null),
                     aiCategoryKey: t.aiCategoryKey || null,
-                    aiCategoryLabel: t.aiCategoryLabel || null,
-                    aiBucket: t.aiBucket || null,
+                    aiCategoryLabel: potTransferLabel || t.aiCategoryLabel || null,
+                    aiBucket: potId ? 'bank_transfer' : (t.aiBucket || null),
                     aiReduceSuggestion: t.aiReduceSuggestion || null,
                     aiAnomalyFlag: !!t.aiAnomalyFlag,
                     aiAnomalyReason: t.aiAnomalyReason || null,

@@ -33,6 +33,9 @@ type TxRow = {
   potId?: string | null;
   potName?: string | null;
   displayDescription?: string | null;
+  displayCategoryLabel?: string | null;
+  displayBucket?: string | null;
+  isPotTransfer?: boolean;
 };
 
 type DisplayRow =
@@ -223,14 +226,27 @@ const TransactionsList: React.FC = () => {
     const enriched = rows.map((r) => {
       const pot = r.potId ? pots[r.potId] : undefined;
       const potName = pot ? pot.name : undefined;
+      const meta = r.metadata || {};
+      const isPotTransfer = Boolean(r.potId);
+      const isTransferToPot = Boolean(meta.destination_pot_id) || (!meta.source_pot_id && r.amount < 0);
+      const transferLabel = potName ? `Transfer ${isTransferToPot ? 'to' : 'from'} ${potName}` : null;
       const displayDescription =
-        potName && (r.description || '').startsWith('pot_') ? `Transfer to ${potName}` : r.description;
-      return pot ? { ...r, potName, displayDescription } : { ...r, displayDescription };
+        transferLabel && (r.description || '').startsWith('pot_') ? transferLabel : r.description;
+      const displayCategoryLabel = transferLabel || r.aiCategoryLabel || r.userCategoryLabel || null;
+      const displayBucket = isPotTransfer ? 'bank_transfer' : (r.aiBucket || r.userCategoryType || r.defaultCategoryType || null);
+      return {
+        ...r,
+        potName,
+        displayDescription,
+        displayCategoryLabel,
+        displayBucket,
+        isPotTransfer,
+      };
     });
 
     const subset = enriched.filter((r) => {
       if (bucketFilter !== 'all') {
-        const rawBucket = r.aiBucket || r.userCategoryType || (r.userCategoryKey ? r.defaultCategoryType : 'optional');
+        const rawBucket = r.displayBucket || r.aiBucket || r.userCategoryType || (r.userCategoryKey ? r.defaultCategoryType : 'optional');
         const bucket = rawBucket === 'discretionary' ? 'optional' : rawBucket;
         if (bucket !== bucketFilter) return false;
       }
@@ -240,7 +256,7 @@ const TransactionsList: React.FC = () => {
       if (potFilter !== 'all' && (r.potId || '') !== potFilter) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${r.description || ''} ${r.merchant || ''} ${r.userCategoryLabel || ''} ${r.aiCategoryLabel || ''} ${r.aiReduceSuggestion || ''} ${r.potName || ''}`.toLowerCase();
+        const hay = `${r.description || ''} ${r.merchant || ''} ${r.userCategoryLabel || ''} ${r.aiCategoryLabel || ''} ${r.displayCategoryLabel || ''} ${r.aiReduceSuggestion || ''} ${r.potName || ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       if (merchantFilter.trim() && !(r.merchant || '').toLowerCase().includes(merchantFilter.toLowerCase())) return false;
@@ -658,8 +674,8 @@ const TransactionsList: React.FC = () => {
                       );
                     }
                     const tx = item.row;
-                    const selectedKey = categorySelection[tx.id] ?? tx.userCategoryKey ?? '';
-                    const effectiveCategory = categorySelection[tx.id] || tx.userCategoryKey || '';
+                    const selectedKey = categorySelection[tx.id] ?? tx.userCategoryKey ?? (tx.isPotTransfer ? 'pot_transfer' : '');
+                    const effectiveCategory = categorySelection[tx.id] || tx.userCategoryKey || (tx.isPotTransfer ? 'pot_transfer' : '');
                     const hasCategory = Boolean(effectiveCategory);
                     const created = tx.createdISO ? new Date(tx.createdISO) : null;
                     const dateLabel = created ? created.toLocaleDateString() : '—';
@@ -702,7 +718,7 @@ const TransactionsList: React.FC = () => {
                             <div className="finance-chip subtle">
                               {bucketLabelFromCategory(
                                 selectedKey || tx.aiCategoryKey || tx.userCategoryKey,
-                                tx.aiBucket || tx.userCategoryType || tx.defaultCategoryType
+                                tx.displayBucket || tx.aiBucket || tx.userCategoryType || tx.defaultCategoryType
                               )}
                             </div>
                           </div>
@@ -714,8 +730,8 @@ const TransactionsList: React.FC = () => {
                         )}
                         {visibleColumns.includes('aiCategory') && (
                           <div className="finance-cell">
-                            <div className="finance-label">{tx.aiCategoryLabel || tx.aiCategoryKey || '—'}</div>
-                            <div className="finance-subtext">{tx.aiBucket || 'Unassigned'}</div>
+                            <div className="finance-label">{tx.displayCategoryLabel || tx.aiCategoryLabel || tx.aiCategoryKey || '—'}</div>
+                            <div className="finance-subtext">{tx.displayBucket || tx.aiBucket || 'Unassigned'}</div>
                           </div>
                         )}
                         {visibleColumns.includes('aiSuggestion') && (

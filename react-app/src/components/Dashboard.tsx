@@ -116,6 +116,7 @@ const Dashboard: React.FC = () => {
   const [sprintTasks, setSprintTasks] = useState<Task[]>([]);
   const [sprintGoals, setSprintGoals] = useState<Goal[]>([]);
   const [goalsList, setGoalsList] = useState<Goal[]>([]);
+  const [potsById, setPotsById] = useState<Record<string, { name: string; balance: number; currency: string }>>({});
   const [dailySummaryLines, setDailySummaryLines] = useState<string[]>([]);
   const [dailySummarySource, setDailySummarySource] = useState<string | null>(null);
   const [prioritySource, setPrioritySource] = useState<string | null>(null);
@@ -139,6 +140,12 @@ const Dashboard: React.FC = () => {
       if (!Number.isNaN(parsed)) return new Date(parsed);
     }
     return null;
+  }, []);
+
+  const formatPotBalance = useCallback((value: number, currency = 'GBP') => {
+    const minor = Number(value || 0);
+    const pounds = minor / 100;
+    return pounds.toLocaleString('en-GB', { style: 'currency', currency });
   }, []);
 
   const loadDailySummary = useCallback(async () => {
@@ -406,6 +413,25 @@ const Dashboard: React.FC = () => {
       }));
     });
 
+    const potsQuery = query(
+      collection(db, 'monzo_pots'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsubscribePots = onSnapshot(potsQuery, (snapshot) => {
+      const map: Record<string, { name: string; balance: number; currency: string }> = {};
+      snapshot.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const id = data.potId || docSnap.id;
+        if (!id) return;
+        map[String(id)] = {
+          name: data.name || id,
+          balance: Number(data.balance || 0),
+          currency: data.currency || 'GBP',
+        };
+      });
+      setPotsById(map);
+    });
+
     const loadAdditionalData = async () => {
       if (!currentUser) return;
       try {
@@ -432,6 +458,7 @@ const Dashboard: React.FC = () => {
       unsubscribeStorySummary();
       unsubscribeGoals();
       unsubscribeTasks();
+      unsubscribePots();
     };
   }, [currentUser, currentPersona, selectedSprintId, refreshToken, decodeToDate]);
 
@@ -455,6 +482,26 @@ const Dashboard: React.FC = () => {
   }, [currentUser]);
 
   const unscheduledSummary = unscheduledToday.slice(0, 3);
+  const potGoalLinks = useMemo(() => {
+    const map: Record<string, { potId: string; potName: string; balance: number; currency: string; goals: Goal[] }> = {};
+    goalsList.forEach((goal) => {
+      const potId = (goal as any).linkedPotId || (goal as any).potId || null;
+      if (!potId) return;
+      const potInfo = potsById[potId];
+      const potName = potInfo?.name || potId;
+      if (!map[potId]) {
+        map[potId] = {
+          potId,
+          potName,
+          balance: potInfo?.balance || 0,
+          currency: potInfo?.currency || 'GBP',
+          goals: [],
+        };
+      }
+      map[potId].goals.push(goal);
+    });
+    return Object.values(map);
+  }, [goalsList, potsById]);
 
   const loadLLMPriority = async () => {
     if (!currentUser) return;
@@ -1047,6 +1094,48 @@ const Dashboard: React.FC = () => {
                     </div>
                   </div>
                 </Collapse>
+              </Card>
+            </Col>
+          </Row>
+
+          <Row className="g-3 mb-4">
+            <Col xl={12}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Header className="d-flex justify-content-between align-items-center">
+                  <span className="fw-semibold">Pot Balances (Linked Goals)</span>
+                  <Button variant="link" size="sm" className="text-decoration-none" onClick={() => navigate('/finance')}>
+                    View finance
+                  </Button>
+                </Card.Header>
+                <Card.Body>
+                  {potGoalLinks.length === 0 ? (
+                    <div className="text-muted small">No goals are linked to Monzo pots yet.</div>
+                  ) : (
+                    <Row className="g-3">
+                      {potGoalLinks.map((pot) => (
+                        <Col key={pot.potId} xs={12} md={6} xl={4}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-3">
+                              <div className="d-flex justify-content-between align-items-start mb-2">
+                                <div className="fw-semibold text-truncate">{pot.potName}</div>
+                                <div className="fw-semibold">{formatPotBalance(pot.balance, pot.currency)}</div>
+                              </div>
+                              <div className="text-muted small mb-2">{pot.goals.length} linked goal{pot.goals.length === 1 ? '' : 's'}</div>
+                              <ul className="mb-0 small">
+                                {pot.goals.slice(0, 4).map((goal) => (
+                                  <li key={goal.id} className="text-truncate">{goal.title || 'Untitled goal'}</li>
+                                ))}
+                                {pot.goals.length > 4 && (
+                                  <li className="text-muted">+{pot.goals.length - 4} more</li>
+                                )}
+                              </ul>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
+                  )}
+                </Card.Body>
               </Card>
             </Col>
           </Row>

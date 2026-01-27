@@ -1,8 +1,8 @@
 .goals-card-grid {
   display: grid;
   gap: 16px;
-  align-items: stretch;
-  grid-auto-rows: 1fr;
+  align-items: start;
+  grid-auto-rows: auto;
 }
 
 .goals-card-grid--grid {
@@ -44,7 +44,7 @@
 .goals-card-tile {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  min-height: 0;
 }
 
 .goals-card {
@@ -53,11 +53,11 @@
 }
 
 .goals-card--grid {
-  min-height: 150px;
+  min-height: 0;
 }
 
 .goals-card--comfortable {
-  min-height: 280px;
+  min-height: 0;
 }
 
 .goals-card--grid .goals-card-progress {

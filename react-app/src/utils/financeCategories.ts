@@ -197,6 +197,7 @@ export const DEFAULT_CATEGORIES: FinanceCategory[] = [
     { key: 'bank_transfer', label: 'Bank Transfer', bucket: 'bank_transfer', isDefault: true },
     { key: 'monzo_transfer', label: 'Monzo Transfer', bucket: 'bank_transfer', isDefault: true },
     { key: 'banking_fee', label: 'Banking Fee', bucket: 'bank_transfer', isDefault: true },
+    { key: 'pot_transfer', label: 'Pot Transfer', bucket: 'bank_transfer', isDefault: true },
     { key: 'pot_transfer_snowball', label: 'Pot Transfer - Snowball', bucket: 'bank_transfer', isDefault: true },
     { key: 'pot_transfer_investment', label: 'Pot Transfer - Investment', bucket: 'bank_transfer', isDefault: true },
 
