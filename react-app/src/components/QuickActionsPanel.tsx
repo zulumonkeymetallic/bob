@@ -223,6 +223,11 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
               entityData.sprintId = linkedStory.sprintId;
             }
           }
+        } else {
+          // For tasks without a parent story, default to General theme
+          entityData.theme = 0;
+          entityData.parentType = 'story'; // Still maintain structure even if no parent
+          entityData.parentId = '';
         }
 
         // Set due date

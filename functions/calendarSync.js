@@ -1,7 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { google } = require('googleapis');
-const { loadThemesForUser, mapThemeIdToLabel, getGoogleColorForThemeId } = require('./services/themeManager');
+const { loadThemesForUser, mapThemeIdToLabel, mapThemeLabelToId, getGoogleColorForThemeId } = require('./services/themeManager');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -10,6 +10,79 @@ const GCAL_FUTURE_DAYS = 90;
 const ALLOWED_ROUTINE_TYPES = new Set(['chore', 'routine', 'habit']);
 const TASK_TABLE_LIMIT = 12;
 const MAX_PRIVATE_TASK_REFS = 6;
+
+// Legacy numeric theme index mapping (1-based order in DEFAULT_THEMES)
+const NUMERIC_THEME_MAP = {
+  1: 'Health & Fitness',
+  2: 'Career & Professional',
+  3: 'Finance & Wealth',
+  4: 'Learning & Education',
+  5: 'Family & Relationships',
+  6: 'Hobbies & Interests',
+  7: 'Travel & Adventure',
+  8: 'Home & Living',
+  9: 'Spiritual & Personal Growth',
+  10: 'Chores',
+  11: 'Routine',
+  12: 'Dev Tasks',
+  13: 'Work (Main Gig)',
+  14: 'Sleep',
+  15: 'Random',
+  16: 'Side Gig',
+};
+
+async function resolveThemeLabelForBlock(block, uid, themes) {
+  let themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || null);
+
+  // Parse numeric theme (legacy/numeric scale 1-15)
+  // If mapThemeIdToLabel returns a number or if themeLabel is numeric
+  if (Number.isFinite(Number(themeLabel)) || Number.isFinite(Number(block.theme))) {
+    const val = Number(themeLabel) || Number(block.theme);
+    if (NUMERIC_THEME_MAP[val]) {
+      themeLabel = NUMERIC_THEME_MAP[val];
+    }
+  }
+
+  let goalId = block.goalId || null;
+
+  // Try linked story for theme/goal
+  if (!themeLabel && block.storyId) {
+    try {
+      const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+      if (s.exists) {
+        const sd = s.data() || {};
+        themeLabel = sd.theme || themeLabel;
+        goalId = goalId || sd.goalId || null;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Try linked task for theme/goal
+  if (!themeLabel && block.taskId) {
+    try {
+      const t = await admin.firestore().collection('tasks').doc(String(block.taskId)).get();
+      if (t.exists) {
+        const td = t.data() || {};
+        themeLabel = td.theme || themeLabel;
+        goalId = goalId || td.goalId || null;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Fallback to goal theme if present
+  if (!themeLabel && goalId) {
+    try {
+      const g = await admin.firestore().collection('goals').doc(String(goalId)).get();
+      if (g.exists) {
+        const gd = g.data() || {};
+        themeLabel = gd.theme || gd.themeLabel || themeLabel;
+        if (!block.theme_id && gd.themeId) block.theme_id = gd.themeId;
+      }
+    } catch { /* ignore */ }
+  }
+
+  return themeLabel || 'General';
+}
 
 function toMillis(value) {
   if (value === null || value === undefined) return 0;
@@ -102,9 +175,9 @@ function normalizeTaskStatus(status) {
 function normalizeTaskPriority(priority) {
   if (typeof priority === 'number') {
     if (priority === 4) return 'Critical';
-    if (priority === 3) return 'Low';
+    if (priority === 3) return 'High';
     if (priority === 2) return 'Medium';
-    if (priority === 1) return 'High';
+    if (priority === 1) return 'Low';
     if (priority === 0) return 'None';
     return 'Unknown';
   }
@@ -155,9 +228,9 @@ function buildLinkedTasksTable(tasks) {
   const priorityRank = (priority) => {
     if (typeof priority === 'number') {
       if (priority === 4) return 0;
-      if (priority === 1) return 1;
+      if (priority === 3) return 1;
       if (priority === 2) return 2;
-      if (priority === 3) return 3;
+      if (priority === 1) return 3;
       return 4;
     }
     const raw = String(priority || '').toLowerCase();
@@ -346,7 +419,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
 
     if (action === 'create') {
       const themes = await loadThemesForUser(uid);
-      const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
+      const themeLabel = await resolveThemeLabelForBlock(block, uid, themes);
       const activityName = block.title || block.category || 'BOB Block';
       const refPart = block.storyRef || block.taskRef || '';
       const summaryParts = [];
@@ -602,7 +675,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         description: enrichedDesc || 'BOB calendar block',
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
-        colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
+        colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel, themes),
         source: eventSource,
         extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
@@ -649,7 +722,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
     else if (action === 'update') {
       if (!block.googleEventId) throw new Error('Block not synced to Google');
       const themes = await loadThemesForUser(uid);
-      const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
+      const themeLabel = await resolveThemeLabelForBlock(block, uid, themes);
       const activityName = block.title || block.category || 'BOB Block';
       const refPart = block.storyRef || block.taskRef || '';
       const summaryParts = [];
@@ -876,7 +949,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         description: enrichedDesc2 || 'BOB calendar block',
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
-        colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
+        colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel, themes),
         source: eventSource,
         extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
@@ -997,17 +1070,17 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
       const source = String(before.source || before.entry_method || '').toLowerCase();
       const isExternal = source === 'gcal' || source === 'google_calendar';
       if (isExternal) {
-      await logCalendarIntegration(before.ownerUid, {
-        action: 'push',
-        direction: 'delete',
-        status: 'skipped',
-        blockId,
-        blockTitle: before.title || null,
-        eventId: before.googleEventId,
-        reason: 'skip_delete_external_gcal_block',
-      });
-      return;
-    }
+        await logCalendarIntegration(before.ownerUid, {
+          action: 'push',
+          direction: 'delete',
+          status: 'skipped',
+          blockId,
+          blockTitle: before.title || null,
+          eventId: before.googleEventId,
+          reason: 'skip_delete_external_gcal_block',
+        });
+        return;
+      }
       await syncBlockToGoogle(blockId, 'delete', before.ownerUid, before);
     }
     return;
@@ -1601,15 +1674,9 @@ exports.syncCalendarTestInsert = functions.https.onCall(async (data, context) =>
 });
 
 // Helper function to get Google Calendar color for themes
-function getColorForTheme(theme) {
-  const colorMap = {
-    'Health': '11', // Green
-    'Growth': '9',  // Blue
-    'Wealth': '5',  // Yellow
-    'Tribe': '3',   // Purple
-    'Home': '6'     // Orange
-  };
-  return colorMap[theme] || '1'; // Default to blue
+function getColorForTheme(theme, themes) {
+  const themeId = mapThemeLabelToId(theme, themes);
+  return getGoogleColorForThemeId(themeId, themes);
 }
 
 // Scheduled function to sync calendar blocks (runs every hour)

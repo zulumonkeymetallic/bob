@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap';
-import { Clock, Target, CheckCircle, AlertTriangle, TrendingUp } from 'lucide-react';
+import { Clock, Target, CheckCircle, AlertTriangle, TrendingUp, BookOpen } from 'lucide-react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Sprint, Story, Task } from '../types';
+import { Sprint, Story, Task, Goal } from '../types';
 
 interface CompactSprintMetricsProps {
   selectedSprintId?: string;
@@ -20,6 +20,7 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
   const [sprint, setSprint] = useState<Sprint | null>(null);
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -132,6 +133,24 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     return () => unsubscribe();
   }, [currentUser, currentPersona, resolvedSprintId]);
 
+  // Load goals for overall progress metrics
+  useEffect(() => {
+    if (!currentUser) { setGoals([]); return; }
+
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona || 'personal')
+    );
+
+    const unsubscribe = onSnapshot(goalsQuery, (snapshot) => {
+      const goalData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Goal[];
+      setGoals(goalData);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, currentPersona]);
+
   const [capacity, setCapacity] = useState<{ total: number; used: number; remaining: number } | null>(null);
 
   // Load calendar blocks for capacity planning
@@ -180,6 +199,14 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       const completedTasks = tasks.filter(t => t.status === 2).length;
       const totalPoints = stories.reduce((sum, s) => sum + (s.points || 0), 0);
       const completedPoints = stories.filter(s => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+      const standaloneTasksCount = tasks.filter(t => !t.parentId || t.parentType !== 'story').length;
+
+      // Calculate overall progress metrics for non-sprint view
+      const allGoals = goals.length;
+      const doneGoals = goals.filter(g => g.status === 2).length;
+      const goalCompletion = allGoals > 0 ? Math.round((doneGoals / allGoals) * 100) : 0;
+      const overallStoryCompletion = totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0;
+      const pointsCompletion = totalPoints > 0 ? Math.round((completedPoints / totalPoints) * 100) : 0;
 
       return {
         hasStarted: true,
@@ -190,12 +217,20 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
         completedStories,
         totalTasks,
         completedTasks,
-        storyProgress: totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0,
+        storyProgress: overallStoryCompletion,
         storiesWithOpenTasks: 0,
-        standaloneTasksCount: tasks.filter(t => !t.parentId || t.parentType !== 'story').length,
+        standaloneTasksCount,
         sprint: null,
-        capacity: null
-      } as any;
+        capacity: null,
+        // Overall metrics
+        allGoals,
+        doneGoals,
+        goalCompletion,
+        overallStoryCompletion,
+        pointsCompletion,
+        allStoryPoints: totalPoints,
+        allDoneStoryPoints: completedPoints
+      };
     }
 
     const now = new Date();
@@ -230,6 +265,7 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     const standaloneTasks = tasks.filter(task =>
       !task.parentType || task.parentType !== 'story' || !task.parentId
     );
+    const standaloneTasksCount = standaloneTasks.length;
 
     // Combined task metrics (story-linked tasks are primary for sprint context)
     const sprintTasks = storyLinkedTasks;
@@ -250,6 +286,19 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
 
     const storiesWithOpenTasks = storiesBlockedByTasks.length;
 
+    // Calculate overall progress metrics
+    const allGoals = goals.length;
+    const doneGoals = goals.filter(g => g.status === 2).length; // 2 = Complete
+    const goalCompletion = allGoals > 0 ? Math.round((doneGoals / allGoals) * 100) : 0;
+    
+    const allStories = stories.length;
+    const allDoneStories = stories.filter(s => s.status === 4).length;
+    const overallStoryCompletion = allStories > 0 ? Math.round((allDoneStories / allStories) * 100) : 0;
+    
+    const allStoryPoints = stories.reduce((sum, s) => sum + (s.points || 0), 0);
+    const allDoneStoryPoints = stories.filter(s => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+    const pointsCompletion = allStoryPoints > 0 ? Math.round((allDoneStoryPoints / allStoryPoints) * 100) : 0;
+
     return {
       hasStarted,
       hasEnded,
@@ -261,11 +310,19 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       completedTasks,
       storyProgress,
       storiesWithOpenTasks,
-      standaloneTasksCount: standaloneTasks.length,
+      standaloneTasksCount,
       sprint,
-      capacity
+      capacity,
+      // Overall metrics
+      allGoals,
+      doneGoals,
+      goalCompletion,
+      overallStoryCompletion,
+      pointsCompletion,
+      allStoryPoints,
+      allDoneStoryPoints
     };
-  }, [sprint, stories, tasks, selectedSprintId, resolvedSprintId, capacity]);
+  }, [sprint, stories, tasks, goals, selectedSprintId, resolvedSprintId, capacity]);
 
   if (loading) return null;
 
@@ -289,7 +346,15 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     storyProgress,
     storiesWithOpenTasks,
     standaloneTasksCount,
-    capacity: metricCapacity
+    capacity: metricCapacity,
+    // Overall metrics
+    allGoals = 0,
+    doneGoals = 0,
+    goalCompletion = 0,
+    overallStoryCompletion = 0,
+    pointsCompletion = 0,
+    allStoryPoints = 0,
+    allDoneStoryPoints = 0
   } = metrics;
 
   const getProgressVariant = (progress: number) => {
@@ -317,6 +382,29 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
 
   return (
     <div className={`d-flex align-items-center gap-2 ${className}`}>
+      {/* Overall Progress */}
+      <OverlayTrigger
+        placement="bottom"
+        overlay={
+          <Tooltip>
+            <div>Overall Progress Breakdown:</div>
+            <div>• Stories: {overallStoryCompletion}% ({allDoneStoryPoints}/{allStoryPoints} pts)</div>
+            <div>• Goals: {goalCompletion}% ({doneGoals}/{allGoals} complete)</div>
+            <div className="mt-1 text-muted">Click to view detailed metrics</div>
+          </Tooltip>
+        }
+      >
+        <Badge 
+          bg={getProgressVariant(Math.round((overallStoryCompletion + goalCompletion) / 2))} 
+          className="d-flex align-items-center"
+          style={{ cursor: 'pointer' }}
+          onClick={() => window.location.href = '/metrics/progress'}
+        >
+          <BookOpen size={14} className="me-1" />
+          {Math.round((overallStoryCompletion + goalCompletion) / 2)}%
+        </Badge>
+      </OverlayTrigger>
+
       {/* Sprint Status & Days */}
       <OverlayTrigger
         placement="bottom"

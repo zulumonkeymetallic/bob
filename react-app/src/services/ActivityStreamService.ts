@@ -22,6 +22,8 @@ export type ActivityType =
   | 'priority_changed'
   | 'task_to_story_conversion'
   | 'story_status_from_reminder'
+  | 'scheduler_due_date_adjustment'
+  | 'ai_due_date_adjustment'
   | 'automation_event'
   | 'automation_alert'
   | 'automation_activity';
@@ -255,6 +257,7 @@ export class ActivityStreamService {
           'task_to_story_conversion',
           'ai_priority_score',
           'ai_due_date_adjustment',
+          'scheduler_due_date_adjustment',
           'calendar_insertion',
           'calendar_reschedule',
           'automation_event',

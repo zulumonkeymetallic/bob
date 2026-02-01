@@ -37,13 +37,14 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
 
   const now = Date.now();
   const isSprintComplete = (s: Sprint) => {
-    const ended = typeof s.endDate === 'number' && s.endDate > 0 ? s.endDate < now : false;
-    const statusComplete = s.status === 2;
-    return statusComplete || ended;
+    // Only consider a sprint complete if its status is explicitly 2 (Complete)
+    // Don't auto-complete based on end date - let user manually close via workflow
+    return s.status === 2;
   };
-  const isSprintActive = (s: Sprint) => s.status === 1 && !isSprintComplete(s);
-  const isSprintPlanned = (s: Sprint) => s.status === 0 && !isSprintComplete(s);
+  const isSprintActive = (s: Sprint) => s.status === 1;
+  const isSprintPlanned = (s: Sprint) => s.status === 0;
   const isSprintCancelled = (s: Sprint) => s.status === 3;
+  const isSprintOverdue = (s: Sprint) => s.status === 1 && s.endDate && s.endDate < now;
 
   const getSprintStatusLabel = (s: Sprint) => {
     if (s.status === 0) return 'PLANNED';
@@ -160,7 +161,11 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         ) : (
           sprints
             .filter((sprint) => {
-              // Hide completed sprints unless currently selected
+              // Always show active sprints (status 1) even if end date has passed
+              if (sprint.status === 1) return true;
+              // Show planned sprints (status 0)
+              if (sprint.status === 0) return true;
+              // Show completed sprints only if currently selected
               if (isSprintComplete(sprint) && sprint.id !== effectiveSelectedId) return false;
               return true;
             })
@@ -171,19 +176,28 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
                 onClick={() => handleSprintChange(sprint.id)}
               >
                 <div>
-                  <strong>{sprint.name}</strong>
+                  <div className="d-flex align-items-center justify-content-between">
+                    <strong>{sprint.name}</strong>
+                    {isSprintOverdue(sprint) && (
+                      <span className="text-warning ms-2" title="Sprint is overdue and should be closed">
+                        ⚠️
+                      </span>
+                    )}
+                  </div>
                   <div className="d-flex justify-content-between align-items-center mt-1">
                     <small className="text-muted">
                       {new Date(sprint.startDate).toLocaleDateString()} -
                       {new Date(sprint.endDate).toLocaleDateString()}
                     </small>
                     <span className={`badge ${
+                      isSprintOverdue(sprint) ? 'bg-warning text-dark' :
                       isSprintActive(sprint) ? 'bg-success' :
                       isSprintPlanned(sprint) ? 'bg-warning' :
                       isSprintCancelled(sprint) ? 'bg-danger' :
                       isSprintComplete(sprint) ? 'bg-secondary' : 'bg-secondary'
                     }`}>
-                      {isSprintActive(sprint) ? 'ACTIVE' :
+                      {isSprintOverdue(sprint) ? 'OVERDUE' :
+                        isSprintActive(sprint) ? 'ACTIVE' :
                         isSprintPlanned(sprint) ? 'PLANNED' :
                         isSprintCancelled(sprint) ? 'CANCELLED' :
                         isSprintComplete(sprint) ? 'COMPLETE' : getSprintStatusLabel(sprint)}

@@ -89,6 +89,8 @@ const TaskListView: React.FC = () => {
             description: x.description || '',
             status: x.status,
             priority: x.priority ?? 2,
+            aiCriticalityScore: x.aiCriticalityScore ?? null,
+            aiCriticalityReason: x.aiCriticalityReason || null,
             effort: x.effort ?? 'M',
             estimateMin: x.estimateMin ?? 0,
             dueDate: x.dueDate || null,

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
@@ -28,6 +29,7 @@ import EditStoryModal from './EditStoryModal';
 
 const SprintPlanner: React.FC = () => {
     const { currentUser } = useAuth();
+    const { currentPersona } = usePersona();
     const { sprints } = useSprint();
     const [stories, setStories] = useState<Story[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
@@ -251,6 +253,7 @@ const SprintPlanner: React.FC = () => {
                 startDate: newSprint.startDate,
                 endDate: newSprint.endDate,
                 ownerUid: currentUser.uid,
+                persona: currentPersona,
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
             });

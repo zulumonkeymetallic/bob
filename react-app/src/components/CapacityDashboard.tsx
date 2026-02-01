@@ -95,6 +95,10 @@ const CapacityDashboard: React.FC = () => {
 
     const themeLabels = data ? Object.keys(data.scheduledByTheme || data.breakdownByTheme || {}) : [];
     const themeValues = data ? Object.values(data.scheduledByTheme || data.breakdownByTheme || {}) : [];
+    const plannedCapacity = data?.plannedCapacityHours ?? data?.totalCapacityHours ?? 0;
+    const plannedFree = data?.plannedFreeHours ?? Math.max(0, plannedCapacity - (data?.scheduledHours ?? 0));
+    const plannerWeeks = data?.sprintWeeks ?? 0;
+    const plannedUtilPercent = Math.min(100, Math.round((data?.plannedUtilization ?? 0) * 100));
 
     const themeChartData = {
         labels: themeLabels,
@@ -185,6 +189,38 @@ const CapacityDashboard: React.FC = () => {
                             </Card>
                         </Col>
                     </Row>
+
+                    {plannedCapacity > 0 && (
+                        <Row className="mb-4">
+                            <Col md={4}>
+                                <Card className="text-center h-100">
+                                    <Card.Body>
+                                        <h6 className="text-muted">Planned Capacity</h6>
+                                        <h3>{plannedCapacity.toFixed(1)} h</h3>
+                                        <small>Weekly plan × {plannerWeeks} wk</small>
+                                    </Card.Body>
+                                </Card>
+                            </Col>
+                            <Col md={4}>
+                                <Card className="text-center h-100">
+                                    <Card.Body>
+                                        <h6 className="text-muted">Planner Utilization</h6>
+                                        <h3>{plannedUtilPercent}%</h3>
+                                        <small>{(data.weeklyPlannerHours ?? 0).toFixed(1)} h per week</small>
+                                    </Card.Body>
+                                </Card>
+                            </Col>
+                            <Col md={4}>
+                                <Card className="text-center h-100">
+                                    <Card.Body>
+                                        <h6 className="text-muted">Planned Free</h6>
+                                        <h3>{plannedFree.toFixed(1)} h</h3>
+                                        <small>Difference vs scheduled hours</small>
+                                    </Card.Body>
+                                </Card>
+                            </Col>
+                        </Row>
+                    )}
 
                     {/* Progress Section */}
                     <Row className="mb-4">

@@ -3,6 +3,7 @@ import { Card, Button, Badge, Form, Row, Col } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, User, Target, BookOpen, Clock, AlertCircle, Hash } from 'lucide-react';
 import { Story, Goal, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
+import { normalizePriorityValue } from '../utils/priorityUtils';
 import { themeVars, domainThemePrimaryVar } from '../utils/themeVars';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
@@ -53,15 +54,22 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   };
 
   React.useEffect(() => {
-    if (item) {
-      if (type === 'task') {
-        const task = item as Task;
-        setEditForm({ ...task, estimatedHours: deriveEstimatedHours(task) });
-      } else {
-        setEditForm({ ...item });
-      }
-      setIsEditing(false);
+    if (!item) return;
+    if (type === 'task') {
+      const task = item as Task;
+      const fallbackPriority =
+        task.aiCriticalityScore != null && Number.isFinite(Number(task.aiCriticalityScore)) && task.aiCriticalityScore >= 90
+          ? 4
+          : undefined;
+      setEditForm({
+        ...task,
+        estimatedHours: deriveEstimatedHours(task),
+        priority: normalizePriorityValue(task.priority ?? fallbackPriority),
+      });
+    } else {
+      setEditForm({ ...item });
     }
+    setIsEditing(false);
   }, [item, type]);
 
   if (!isVisible || !item || !type) {
@@ -98,6 +106,16 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   const story = type === 'task' ? getStoryForTask(item.id) : null;
   const themeColor = goal?.theme ? themeColors[goal.theme] : (themeVars.muted as string);
   const derivedEstimatedHours = type === 'task' ? deriveEstimatedHours(item as Task) : undefined;
+  const aiScoreValue = type === 'task' && item ? Number(((item as Task).aiCriticalityScore ?? null)) : null;
+  const formattedAiScore = aiScoreValue != null && Number.isFinite(aiScoreValue) ? Math.round(aiScoreValue) : null;
+  const storyMetadata = type === 'story' && item ? (item as Story).metadata : null;
+  const storyAiRaw = storyMetadata ? (storyMetadata.aiScore ?? storyMetadata.aiCriticalityScore ?? null) : null;
+  const storyAiScore = storyAiRaw != null && Number.isFinite(Number(storyAiRaw)) ? Number(storyAiRaw) : null;
+  const entityAiScore = type === 'task' ? aiScoreValue : storyAiScore;
+  const derivedPriorityFromAi = entityAiScore != null && entityAiScore >= 90 ? 4 : undefined;
+  const rawPriorityValue = item ? (item.priority ?? derivedPriorityFromAi ?? 0) : derivedPriorityFromAi ?? 0;
+  const normalizedPriorityForDisplay = normalizePriorityValue(rawPriorityValue);
+  const priorityBadge = getPriorityBadge(normalizedPriorityForDisplay);
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return 'Not set';
@@ -274,7 +292,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                 <option value={2}>Done</option>
               </Form.Select>
             ) : (
-              <Badge 
+              <Badge
                 bg={isStatus(item.status, 'done') ? 'success' : isStatus(item.status, 'in-progress') ? 'primary' : 'secondary'}
                 style={{ fontSize: '12px', padding: '6px 12px' }}
               >
@@ -288,29 +306,23 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
             </label>
             {isEditing ? (
               <Form.Select
-                value={editForm.priority || ''}
-                onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })}
+                size="sm"
+                value={String(editForm.priority ?? '')}
+                onChange={(e) => setEditForm({ ...editForm, priority: Number(e.target.value) })}
+                style={{ fontSize: '13px' }}
               >
-                {type === 'story' ? (
-                  <>
-                    <option value="P1">P1 - High</option>
-                    <option value="P2">P2 - Medium</option>
-                    <option value="P3">P3 - Low</option>
-                  </>
-                ) : (
-                  <>
-                    <option value="high">High</option>
-                    <option value="med">Medium</option>
-                    <option value="low">Low</option>
-                  </>
-                )}
+                <option value="">None</option>
+                <option value={4}>Critical</option>
+                <option value={3}>High</option>
+                <option value={2}>Medium</option>
+                <option value={1}>Low</option>
               </Form.Select>
             ) : (
-              <Badge 
-                bg={getPriorityBadge(item.priority).bg}
+              <Badge
+                bg={priorityBadge.bg}
                 style={{ fontSize: '12px', padding: '6px 12px' }}
               >
-                {getPriorityBadge(item.priority).text}
+                {priorityBadge.text}
               </Badge>
             )}
           </Col>
@@ -377,9 +389,9 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Target size={16} color={themeColor} />
                   <span style={{ color: themeVars.text as string, fontWeight: '500' }}>{goal.title}</span>
-                  <Badge 
-                    style={{ 
-                      backgroundColor: themeColor, 
+                  <Badge
+                    style={{
+                      backgroundColor: themeColor,
                       color: themeVars.onAccent as string,
                       fontSize: '10px'
                     }}
@@ -512,7 +524,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
           <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text as string, marginBottom: '12px' }}>
             Metadata
           </h6>
-          
+
           <div style={{ fontSize: '13px', color: themeVars.muted as string, lineHeight: '1.6' }}>
             <div style={{ marginBottom: '8px' }}>
               <strong>ID:</strong> <code style={{ fontSize: '11px' }}>{item.id}</code>
@@ -534,6 +546,21 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                 <div style={{ marginBottom: '8px' }}>
                   <strong>Sync State:</strong> {(item as Task).syncState}
                 </div>
+                <div style={{ marginBottom: '8px' }}>
+                  <strong>Points:</strong> {(item as Task).points ?? '—'}
+                </div>
+                {(item as Task).aiCriticalityScore != null && (
+                  <>
+                    <div style={{ marginBottom: '8px' }}>
+                      <strong>AI Score:</strong> {formattedAiScore ?? (item as Task).aiCriticalityScore}
+                    </div>
+                    {(item as Task).aiCriticalityReason && (
+                      <div style={{ marginBottom: '8px' }}>
+                        <strong>AI Rationale:</strong> {(item as Task).aiCriticalityReason}
+                      </div>
+                    )}
+                  </>
+                )}
               </>
             )}
           </div>

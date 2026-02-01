@@ -17,6 +17,7 @@ const BOB_CLI_ACCESS = defineSecret('BOB_CLI_ACCESS');
 const THEME_RULES = [
   { match: ['growth'], slots: [{ days: [1, 2, 3, 4, 5], start: 7, end: 9, label: 'Growth AM' }, { days: [1, 2, 3, 4, 5], start: 17, end: 19, label: 'Growth PM' }] },
   { match: ['finance', 'wealth'], slots: [{ days: [1, 2, 3, 4, 5], start: 18, end: 21, label: 'Wealth weekday evening' }, { days: [6, 7], start: 9, end: 12, label: 'Wealth weekend AM' }, { days: [6, 7], start: 13, end: 17, label: 'Wealth weekend PM' }] },
+  { match: ['side gig', 'side-gig', 'sidegig'], slots: [{ days: [1, 2, 3, 4, 5], start: 18, end: 22, label: 'Side gig evenings' }, { days: [6, 7], start: 10, end: 16, label: 'Side gig weekend' }] },
   { match: ['hobby', 'hobbies'], slots: [{ days: [1, 2, 3, 4, 5, 6, 7], start: 18, end: 22, label: 'Hobbies evenings' }] },
   { match: ['game', 'gaming', 'tv'], slots: [{ days: [5, 6], start: 19, end: 23, label: 'Gaming/TV Fri/Sat evening' }] },
   { match: ['health'], slots: [{ days: [1, 2, 3, 4, 5], start: 6, end: 20, label: 'Health focus' }] },
@@ -211,9 +212,9 @@ function normalizeUserPriority(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number') {
     if (value === 4) return 'critical';
-    if (value === 1) return 'high';
+    if (value === 3) return 'high';
     if (value === 2) return 'medium';
-    if (value === 3) return 'low';
+    if (value === 1) return 'low';
     return null;
   }
   const normalized = String(value).trim().toLowerCase();
@@ -228,7 +229,7 @@ function normalizeUserPriority(value) {
 function priorityBoostFor(level) {
   switch (level) {
     case 'critical':
-      return { boost: 20, label: 'Critical' };
+      return { boost: 500, label: 'Critical' };
     case 'high':
       return { boost: 12, label: 'High' };
     case 'medium':
@@ -257,9 +258,30 @@ function buildCriticalityReason({ dueDateMs, goalDueMs, theme, points }) {
   return reasons.join(' · ');
 }
 
+const normalizeStatusValue = (value) => String(value ?? '').trim().toLowerCase();
+const parseStatusNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const parsed = Number(String(value).trim());
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const isTaskDoneStatus = (status) => {
+  const num = parseStatusNumber(status);
+  if (num != null) return num === 2;
+  const normalized = normalizeStatusValue(status);
+  return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
+};
+
+const isStoryDoneStatus = (status) => {
+  const num = parseStatusNumber(status);
+  if (num != null) return num >= 4;
+  const normalized = normalizeStatusValue(status);
+  return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
+};
+
 function clampStoryStatus(status) {
-  if (status === 'done' || status === 4 || status === 'completed') return 4;
-  return 0; // default active
+  return isStoryDoneStatus(status) ? 4 : 0;
 }
 
 function hasRecurrence(entity) {
@@ -306,6 +328,7 @@ const THEME_LABELS = {
   12: 'Work (Main Gig)',
   13: 'Sleep',
   14: 'Random',
+  15: 'Side Gig',
 };
 function resolveThemeLabel(theme) {
   if (theme == null) return null;
@@ -320,6 +343,7 @@ function resolveThemeLabel(theme) {
   if (lower.includes('career') || lower.includes('professional')) return 'Career & Professional';
   if (lower.includes('growth')) return 'Spiritual & Personal Growth';
   if (lower.includes('hobby')) return 'Hobbies & Interests';
+  if (lower.includes('side gig') || lower.includes('side-gig') || lower.includes('sidegig')) return 'Side Gig';
   if (lower.includes('game') || lower.includes('gaming') || lower.includes('tv')) return 'Hobbies & Interests';
   if (lower.includes('health')) return 'Health & Fitness';
   if (lower.includes('learn')) return 'Learning & Education';
@@ -367,14 +391,24 @@ async function materializePlannerThemeBlocks({
 }) {
   const results = { created: 0, skipped: 0, total: 0 };
   const allocations = Array.isArray(themeAllocations) ? themeAllocations : [];
+  const isWorkShiftTheme = (value) => {
+    if (value == null) return false;
+    if (typeof value === 'number' && Number.isFinite(value)) return value === 12;
+    const raw = String(value).trim().toLowerCase();
+    if (!raw) return false;
+    if (raw === '12') return true;
+    if (raw.includes('main gig')) return true;
+    if (raw.includes('work shift')) return true;
+    if (raw === 'work' || raw.startsWith('work ') || raw.endsWith(' work') || raw.includes('work (')) return true;
+    return false;
+  };
   const healthAllocations = allocations.filter((alloc) => {
     const themeName = String(alloc?.theme || '').toLowerCase();
     const subTheme = String(alloc?.subTheme || '').trim();
     return themeName.includes('health') && subTheme;
   });
   const workShiftAllocations = allocations.filter((alloc) => {
-    const themeName = String(alloc?.theme || '').toLowerCase();
-    return themeName.includes('work shift');
+    return isWorkShiftTheme(alloc?.theme) || isWorkShiftTheme(alloc?.subTheme);
   });
 
   if (!healthAllocations.length && !workShiftAllocations.length) return results;
@@ -432,7 +466,7 @@ async function materializePlannerThemeBlocks({
 
     const rawLabel = kind === 'health'
       ? String(alloc.subTheme || '').trim()
-      : String(alloc.subTheme || alloc.theme || 'Work Shift').trim();
+      : String(alloc.subTheme || alloc.theme || 'Work (Main Gig)').trim();
     if (!rawLabel) return;
     results.total += 1;
 
@@ -448,14 +482,14 @@ async function materializePlannerThemeBlocks({
       return;
     }
 
-    const themeLabel = alloc.theme || (kind === 'health' ? 'Health & Fitness' : 'Work Shift');
+    const themeLabel = alloc.theme || (kind === 'health' ? 'Health & Fitness' : 'Work (Main Gig)');
     const payload = {
       ownerUid: userId,
       start: startMs,
       end: endMs,
       title: rawLabel,
       theme: themeLabel,
-      category: kind === 'health' ? 'Fitness' : 'Work Shift',
+      category: kind === 'health' ? 'Fitness' : 'Work (Main Gig)',
       subTheme: kind === 'health' ? rawLabel : null,
       entityType: kind === 'health' ? 'health' : 'work_shift',
       sourceType: kind === 'health' ? 'health_allocation' : 'work_shift_allocation',
@@ -497,6 +531,7 @@ async function replanExistingBlocksForUser({
   existingBlocks,
   reason = 'calendar_replan',
   days = 7,
+  allowInsertion = false,
 }) {
   if (!userId) return { rescheduled: 0, blocked: 0, totalMovable: 0, busy: [], capCounts: new Map() };
   const store = db || ensureFirestore();
@@ -572,6 +607,7 @@ async function replanExistingBlocksForUser({
   });
 
   const busy = [];
+  const mainGigBlocks = []; // Track main gig planner blocks separately  
   const capCounts = new Map();
   const addBusy = (startMs, endMs) => {
     if (!startMs || !endMs) return;
@@ -589,6 +625,16 @@ async function replanExistingBlocksForUser({
     const endMs = toMillis(block.end);
     if (!startMs || !endMs) return;
     addBusy(startMs, endMs);
+    
+    // Track main gig blocks separately to prevent task/story placement
+    const blockTheme = block.theme || block.category || '';
+    const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
+                          String(blockTheme).toLowerCase().includes('main gig') ||
+                          block.entityType === 'work_shift';
+    if (isMainGigBlock) {
+      mainGigBlocks.push({ start: startMs, end: endMs, theme: blockTheme });
+    }
+    
     const entityType = String(block.entityType || '').toLowerCase();
     if (block.storyId || block.taskId || ['story', 'task'].includes(entityType)) {
       addCap(startMs);
@@ -630,6 +676,13 @@ async function replanExistingBlocksForUser({
 
       const slots = pickSlots(themeLabel, day);
       for (const slot of slots) {
+        // Skip main gig blocks for tasks/stories
+        const isMainGigSlot = slot.label && 
+          (slot.label.toLowerCase().includes('main gig') || 
+           slot.label.toLowerCase().includes('work') ||
+           slot.label.toLowerCase().includes('theme block: work'));
+        if (isMainGigSlot) continue;
+        
         const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
         if (!slotDays.includes(day.weekday)) continue;
         const slotStart = day.set({
@@ -673,6 +726,7 @@ async function replanExistingBlocksForUser({
 
   let rescheduled = 0;
   let blocked = 0;
+  let created = 0;
   for (const block of sortedMovable) {
     const startMs = toMillis(block.start);
     const endMs = toMillis(block.end);
@@ -731,15 +785,20 @@ async function replanExistingBlocksForUser({
     }
   }
 
+  // Optional insertion of new entries (tasks/stories) into free slots
+  // Insertion during replan is currently disabled to avoid duplicate planner logic; created remains 0.
+
   return {
     rescheduled,
     blocked,
+    created,
     totalMovable: movableBlocks.length,
     busy,
     capCounts,
     windowStart: windowStartDt.toISO(),
     windowEnd: windowEndDt.toISO(),
     timezone: zone,
+    gcalLinks: [],
   };
 }
 
@@ -818,6 +877,7 @@ exports.runAutoPointing = onSchedule({
   timeZone: 'Europe/London',
   secrets: [GOOGLE_AI_STUDIO_API_KEY],
   memory: '512MiB',
+  region: 'europe-west2',
 }, runAutoPointingJob);
 
 // ===== 02:00 Bi-directional conversion
@@ -980,6 +1040,7 @@ exports.runAutoConversions = onSchedule({
   timeZone: 'Europe/London',
   secrets: [GOOGLE_AI_STUDIO_API_KEY],
   memory: '512MiB',
+  region: 'europe-west2',
 }, runAutoConversionsJob);
 
 // ===== 03:00 Prioritisation (0-100) + To-do promotion
@@ -1186,6 +1247,11 @@ async function runPriorityScoringJob() {
         }
         return entity.theme || null;
       })();
+      const isHobbyTheme = (() => {
+        if (effectiveTheme === 6) return true; // Hobbies & Interests theme id
+        const t = String(effectiveTheme || '').toLowerCase();
+        return t.includes('hobby') || t.includes('hobbies');
+      })();
 
       const ageDays = createdMs ? (Date.now() - createdMs) / 86400000 : null;
       const storyMetaForTask = entityType === 'task' && entity.storyId ? (storyMetaMap.get(entity.storyId) || {}) : {};
@@ -1211,6 +1277,10 @@ async function runPriorityScoringJob() {
         bonus += 15;
         bonusReasons.push('Aged > 90 days and unlinked');
       }
+      if (isHobbyTheme) {
+        bonus -= 25;
+        bonusReasons.push('Hobbies downweighted');
+      }
 
       const baseScore = computeCriticalityScore({
         dueDateMs: dueMs,
@@ -1222,7 +1292,11 @@ async function runPriorityScoringJob() {
       const textSignal = textSignals.get(ref.id);
       const textScore = textSignal ? clampTextScore(textSignal.score) : 0;
       const textReason = textSignal?.reason ? `Text signal: ${textSignal.reason} (+${textScore})` : '';
-      const score = Math.min(100, baseScore + bonus + textScore);
+      let score = Math.min(100, baseScore + bonus + textScore);
+      if (isHobbyTheme) {
+        // Hard cap hobby items below other themes
+        score = Math.min(score, 45);
+      }
       const reason = buildCriticalityReason({
         dueDateMs: dueMs,
         goalDueMs: goal?.dueDateMs || null,
@@ -1396,24 +1470,32 @@ async function runPriorityScoringJob() {
       focusTasks = sortedTasks.slice(0, Math.min(5, sortedTasks.length));
     }
 
-    // Align due dates for focus tasks to today when safe
-    const todayEnd = DateTime.now().endOf('day').toMillis();
-    for (const task of focusTasks) {
+    // Align due dates for top focus tasks (top 3) to today or next day depending on time
+    const nowLocal = DateTime.now();
+    const todayEnd = nowLocal.endOf('day').toMillis();
+    const tomorrowEnd = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
+    const eveningCutoffHour = 17; // after 5pm, push to next day
+    for (let idx = 0; idx < focusTasks.length; idx += 1) {
+      if (idx >= 3) break; // only adjust top 3
+      const task = focusTasks[idx];
       if (isTaskLocked(task.data)) continue;
       const dueMs = toDateTime(task.data.dueDate, { defaultValue: null })?.toMillis() || null;
-      const shouldMoveToToday = !dueMs || dueMs > todayEnd;
-      if (!shouldMoveToToday) continue;
+      const targetDue = (nowLocal.hour >= eveningCutoffHour) ? tomorrowEnd : todayEnd;
+      const shouldMove = !dueMs || dueMs > targetDue;
+      if (!shouldMove) continue;
       const detailedReason = [
-        'AI focus for today',
+        'AI focus (top 3)',
         `score=${task.score}`,
         task.reason ? `why=${task.reason}` : null,
       ].filter(Boolean).join(' | ');
       await task.refObj.set({
-        dueDate: todayEnd,
-        priority: 'high',
-        iosPriority: '!!',
+        dueDate: targetDue,
+        priority: 4, // critical
+        iosPriority: '!!!',
         aiDueDateSetAt: admin.firestore.FieldValue.serverTimestamp(),
         dueDateReason: detailedReason,
+        aiFlaggedTop: true,
+        aiPriorityRank: idx + 1,
         syncState: 'dirty',
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
@@ -1422,8 +1504,8 @@ async function runPriorityScoringJob() {
         entityId: task.id,
         entityType: 'task',
         activityType: 'ai_due_date_adjustment',
-        description: `Moved due date to today based on score ${task.score}/100 (${task.reason || 'priority'})`,
-        metadata: { score: task.score, reason: task.reason || 'focus_today', run: '03:00_priority', newDueDate: todayEnd },
+        description: `Moved due date to ${nowLocal.hour >= eveningCutoffHour ? 'tomorrow' : 'today'} (top ${idx + 1}/3 focus task) · score ${task.score}/100`,
+        metadata: { score: task.score, reason: task.reason || 'focus_top3', run: '03:00_priority_top3', rank: idx + 1, newDueDate: targetDue },
       }));
     }
 
@@ -1504,6 +1586,7 @@ exports.runPriorityScoring = onSchedule({
   timeZone: 'Europe/London',
   secrets: [GOOGLE_AI_STUDIO_API_KEY],
   memory: '512MiB',
+  region: 'europe-west2',
 }, runPriorityScoringJob);
 
 // ===== 05:30 Calendar insertion respecting theme windows and busy time
@@ -1534,30 +1617,30 @@ async function runCalendarPlannerJob() {
     const sprintMetaMap = new Map();
     const activeSprintIds = new Set();
     try {
-    const goalsSnap = await db.collection('goals').where('ownerUid', '==', userId).get();
-    goalsSnap.docs.forEach((d) => {
-      const gd = d.data() || {};
-      goalMetaMap.set(d.id, { theme: gd.theme || null, tags: gd.tags || [], title: gd.title || '' });
-    });
-    const sprintSnap = await db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] }));
-    sprintSnap.docs.forEach((d) => {
-      const sd = d.data() || {};
-      const status = String(sd.status || '').toLowerCase();
-      const startMs = sd.startDate || sd.start || null;
-      const endMs = sd.endDate || sd.end || null;
-      const nowMs = Date.now();
-      const isActiveStatus = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status);
-      const inWindow = startMs && endMs ? (nowMs >= toMillis(startMs) && nowMs <= toMillis(endMs)) : false;
-      if (isActiveStatus || inWindow) {
-        activeSprintIds.add(d.id);
-      }
-      sprintMetaMap.set(d.id, {
-        status: sd.status,
-        start: sd.startDate || sd.start || null,
-        end: sd.endDate || sd.end || null,
-        name: sd.name || sd.title || d.id,
+      const goalsSnap = await db.collection('goals').where('ownerUid', '==', userId).get();
+      goalsSnap.docs.forEach((d) => {
+        const gd = d.data() || {};
+        goalMetaMap.set(d.id, { theme: gd.theme || null, tags: gd.tags || [], title: gd.title || '' });
       });
-    });
+      const sprintSnap = await db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] }));
+      sprintSnap.docs.forEach((d) => {
+        const sd = d.data() || {};
+        const status = String(sd.status || '').toLowerCase();
+        const startMs = sd.startDate || sd.start || null;
+        const endMs = sd.endDate || sd.end || null;
+        const nowMs = Date.now();
+        const isActiveStatus = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status);
+        const inWindow = startMs && endMs ? (nowMs >= toMillis(startMs) && nowMs <= toMillis(endMs)) : false;
+        if (isActiveStatus || inWindow) {
+          activeSprintIds.add(d.id);
+        }
+        sprintMetaMap.set(d.id, {
+          status: sd.status,
+          start: sd.startDate || sd.start || null,
+          end: sd.endDate || sd.end || null,
+          name: sd.name || sd.title || d.id,
+        });
+      });
     } catch { /* ignore */ }
 
     let storiesSnap = { docs: [] };
@@ -1617,151 +1700,182 @@ async function runCalendarPlannerJob() {
     }
 
     const busy = rescheduleResult.busy || [];
-    const capCounts = rescheduleResult.capCounts || new Map();
+    const scoreWithBonus = (priority, base) => (Number(priority) >= 4 ? Number(base || 0) + 500 : Number(base || 0));
 
-    const candidates = [];
-    for (const storyDoc of storiesSnap.docs) {
-      const story = storyDoc.data() || {};
-      if (clampStoryStatus(story.status) === 4) continue;
-      if (!story.sprintId || !activeSprintIds.has(story.sprintId)) continue; // only current sprint
-      const goalMeta = story.goalId ? goalMetaMap.get(story.goalId) || {} : {};
-      const sprintMeta = story.sprintId ? sprintMetaMap.get(story.sprintId) : null;
-      const theme = resolveThemeLabel(story.theme || goalMeta.theme || null);
-      const points = story.points || 1;
-      const durationMinutes = Math.max(60, Math.min(240, points * 60));
-      const score = story.aiCriticalityScore ?? 0;
-      const aiReason = (story.aiCriticalityReason || story.dueDateReason || '').toString().trim();
-      const reasonSuffix = aiReason ? ` – ${aiReason}` : '';
-      const titlePrefix = story.ref ? `${story.ref}: ` : '';
-      candidates.push({
-        kind: 'story',
-        id: storyDoc.id,
-        title: `${titlePrefix}${story.title || 'Story block'}`,
-        score,
-        aiReason,
-        theme,
-        goalId: story.goalId || null,
-        sprintId: story.sprintId || null,
-        durationMinutes,
-        deepLink: buildEntityUrl('story', storyDoc.id, story.ref || null),
-        rationaleBase: `Story priority ${score}/100${reasonSuffix}${sprintMeta ? ` · In sprint ${sprintMeta.name || story.sprintId}` : ''}`,
-        storyRef: story.ref || null,
+    // Build sprint map for gating and metadata
+    const sprintMap = new Map();
+    sprintMetaMap.forEach((val, key) => sprintMap.set(key, val));
+
+    const openStories = storiesSnap.docs
+      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+      .filter((s) => !isStoryDoneStatus(s.status) && s.sprintId && activeSprintIds.has(s.sprintId));
+
+    const openTasks = tasksSnap.docs
+      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+      .filter((t) => {
+        return !isTaskDoneStatus(t.status) && !t.deleted && t.sprintId && activeSprintIds.has(t.sprintId);
       });
+
+    const topStories = openStories
+      .map((s) => ({ ...s, aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore) }))
+      .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
+      .slice(0, 3);
+
+    const topTasks = openTasks
+      .map((t) => ({ ...t, aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore) }))
+      .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
+      .slice(0, 3);
+
+    const topIds = new Set([
+      ...topStories.map((s) => `story:${s.id}`),
+      ...topTasks.map((t) => `task:${t.id}`),
+    ]);
+
+    // Remove AI blocks that are no longer in the top set, but preserve planner blocks
+    const remainingBlocks = [];
+    for (const block of existingBlocks) {
+      const isAi = block.aiGenerated === true || block.createdBy === 'ai';
+      const isPlannerBlock = block.source === 'theme_allocation' || 
+                            block.sourceType === 'health_allocation' || 
+                            block.sourceType === 'work_shift_allocation';
+      const key = block.storyId ? `story:${block.storyId}` : block.taskId ? `task:${block.taskId}` : null;
+      
+      // Only delete AI-generated task/story blocks that are no longer in top set
+      // Always preserve user-defined planner blocks
+      if (isAi && !isPlannerBlock && key && !topIds.has(key)) {
+        await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
+      } else {
+        remainingBlocks.push(block);
+      }
     }
 
-    for (const taskDoc of tasksSnap.docs) {
-      const task = taskDoc.data() || {};
-      const status = String(task.status || '').toLowerCase();
-      if (['done', 'complete', 'completed'].includes(status) || task.deleted) continue;
-      if (!task.sprintId || !activeSprintIds.has(task.sprintId)) continue; // only current sprint tasks
-      const estimateMinutes = task.estimateMin
-        || (Number.isFinite(Number(task.estimatedHours)) ? Number(task.estimatedHours) * 60 : null)
-        || (Number.isFinite(Number(task.points)) ? Number(task.points) * 60 : null);
-      const durationMinutes = clampTaskPoints(task.points) > 4 || (estimateMinutes && estimateMinutes > 240)
-        ? Math.max(120, Math.min(360, estimateMinutes || (task.points || 5) * 60))
-        : null;
-      if (!durationMinutes) continue; // only long tasks for this phase
-      const goalMeta = task.goalId ? goalMetaMap.get(task.goalId) || {} : {};
-      const theme = resolveThemeLabel(task.theme || goalMeta.theme || null);
-      const ref = task.ref || task.reference || task.displayId || null;
-      const score = task.aiCriticalityScore ?? task.priority ?? 50;
-      const aiReason = (task.aiCriticalityReason || task.dueDateReason || task.priorityReason || '').toString().trim();
-      const reasonSuffix = aiReason ? ` – ${aiReason}` : '';
-      candidates.push({
-        kind: 'task',
-        id: taskDoc.id,
-        title: `${ref ? `${ref}: ` : ''}${task.title || 'Task block'}`,
-        score,
-        aiReason,
-        theme,
-        goalId: task.goalId || null,
-        storyId: task.storyId || null,
-        durationMinutes,
-        deepLink: buildEntityUrl('task', taskDoc.id, task.ref || task.reference || task.referenceNumber || null),
-        rationaleBase: `Task priority ${score}/100${reasonSuffix}`,
-        taskRef: ref,
-      });
-    }
+    const busyMap = [];
+    const mainGigBlocks = []; // Track main gig planner blocks separately
+    remainingBlocks.forEach((b) => {
+      if (b.start && b.end) {
+        busyMap.push({ start: b.start, end: b.end });
+        
+        // Track main gig blocks separately to prevent task/story placement
+        const blockTheme = b.theme || b.category || '';
+        const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
+                              String(blockTheme).toLowerCase().includes('main gig') ||
+                              b.entityType === 'work_shift';
+        if (isMainGigBlock) {
+          mainGigBlocks.push({ start: b.start, end: b.end, theme: blockTheme });
+        }
+      }
+    });
 
-    // Sort by score descending to fill the 7-day window
-    candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
+    const placeEntry = async (candidate, kind) => {
+      const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
+      const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
+      const sprintEnd = sprint?.end ? toMillis(sprint.end) : null;
 
-    for (const candidate of candidates) {
-      let remainingMinutes = candidate.durationMinutes;
-      let placedCount = 0;
-      for (let offset = 0; offset < 7 && remainingMinutes > 0; offset++) {
+      const durationMinutesRaw = kind === 'task'
+        ? (Number(candidate.points) * 60) || Number(candidate.estimateMin) || 60
+        : (Number(candidate.points) * 60) || 90;
+      const durationMinutes = Math.min(kind === 'task' ? 180 : 240, Math.max(kind === 'task' ? 30 : 60, durationMinutesRaw || 60));
+      const durationMs = durationMinutes * 60000;
+
+      for (let offset = 0; offset < 7; offset++) {
         const day = windowStart.plus({ days: offset });
-        const dayKey = toDayKey(day);
-        if ((capCounts.get(dayKey) || 0) >= 3) continue; // cap applies only to story/task blocks
+        const dayStartMs = day.toMillis();
+        const dayEndMs = day.endOf('day').toMillis();
+        if ((sprintStart && dayEndMs < sprintStart) || (sprintEnd && dayStartMs > sprintEnd)) continue;
 
-        const slots = pickSlots(candidate.theme, day);
+        const slots = pickSlots(candidate.theme || candidate.goal || null, day);
         for (const slot of slots) {
+          // Skip main gig blocks for tasks/stories
+          const isMainGigSlot = slot.label && 
+            (slot.label.toLowerCase().includes('main gig') || 
+             slot.label.toLowerCase().includes('work') ||
+             slot.label.toLowerCase().includes('theme block: work'));
+          if (isMainGigSlot) continue;
+          
           const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
           if (!slotDays.includes(day.weekday)) continue;
-          const start = day.set({ hour: Math.floor(slot.start), minute: Math.round((slot.start % 1) * 60), second: 0, millisecond: 0 });
-          const end = day.set({ hour: Math.floor(slot.end), minute: Math.round((slot.end % 1) * 60), second: 0, millisecond: 0 });
-          const slotInterval = Interval.fromDateTimes(start, end);
-          const slotLength = slotInterval.length('minutes');
-          if (slotLength < 15) continue;
+          const slotStart = day.set({ hour: Math.floor(slot.start), minute: Math.round((slot.start % 1) * 60), second: 0, millisecond: 0 });
+          const slotEnd = day.set({ hour: Math.floor(slot.end), minute: Math.round((slot.end % 1) * 60), second: 0, millisecond: 0 });
+          if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
+          if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
+          if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
 
-          // carve out sleep/work quiet windows
-          const sleepInterval = Interval.fromDateTimes(day.set({ hour: 22, minute: 0 }), day.plus({ days: 1 }).set({ hour: 5, minute: 0 }));
-          if (slotInterval.overlaps(sleepInterval)) continue;
+          const overlaps = busyMap
+            .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
+            .sort((a, b) => a.start - b.start);
+          let cursor = slotStart.toMillis();
+          for (const o of overlaps) {
+            if (o.start - cursor >= durationMs) break;
+            cursor = Math.max(cursor, o.end);
+            if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+          }
+          if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
 
-          const blockMinutes = Math.min(remainingMinutes, slotLength);
-          const candidateEnd = start.plus({ minutes: blockMinutes });
-          const candidateInterval = Interval.fromDateTimes(start, candidateEnd);
-          if (candidateEnd > end) continue;
-          if (hasOverlap({ start, end: candidateEnd }, busy)) continue;
+          // CRITICAL: Never place tasks/stories in main gig blocks, even high priority ones
+          const proposedStart = cursor;
+          const proposedEnd = cursor + durationMs;
+          const conflictsWithMainGig = mainGigBlocks.some((mgBlock) => 
+            mgBlock.end > proposedStart && mgBlock.start < proposedEnd
+          );
+          if (conflictsWithMainGig) {
+            console.log(`[calendar-planner] Skipping main gig block for ${kind} ${candidate.title}`);
+            continue; // Skip this slot, find another
+          }
 
           const blockRef = db.collection('calendar_blocks').doc();
-          const rationale = `${candidate.rationaleBase} · ${slot.label || 'Preferred window'} · Not done (current sprint)`;
           const payload = {
             ownerUid: userId,
-            start: start.toMillis(),
-            end: candidateEnd.toMillis(),
-            title: candidate.title,
-            entityType: candidate.kind === 'story' ? 'story' : 'task',
+            start: cursor,
+            end: cursor + durationMs,
+            title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
+            entityType: kind,
+            taskId: kind === 'task' ? candidate.id : null,
+            storyId: kind === 'story' ? candidate.id : null,
+            sprintId: candidate.sprintId || null,
             theme: candidate.theme || null,
+            goalId: candidate.goalId || null,
             status: 'planned',
             aiGenerated: true,
-            rationale,
-            aiScore: candidate.score ?? null,
-            aiReason: candidate.aiReason || null,
-            deepLink: candidate.deepLink,
-            placementReason: rationale,
+            aiScore: candidate.aiScore || null,
+            aiReason: candidate.aiCriticalityReason || null,
+            placementReason: 'Nightly planner: top priority item',
+            deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           };
-          if (candidate.kind === 'story') {
-            payload.storyId = candidate.id;
-            payload.goalId = candidate.goalId || null;
-            payload.sprintId = candidate.sprintId || null;
-            payload.storyRef = candidate.storyRef || null;
-          } else {
-            payload.taskId = candidate.id;
-            payload.goalId = candidate.goalId || null;
-            payload.storyId = candidate.storyId || null;
-            payload.taskRef = candidate.taskRef || null;
-          }
-
           await blockRef.set(payload);
-          busy.push({ start: payload.start, end: payload.end });
-          capCounts.set(dayKey, (capCounts.get(dayKey) || 0) + 1);
-          placedCount += 1;
-          remainingMinutes = Math.max(0, remainingMinutes - blockMinutes);
-
+          busyMap.push({ start: payload.start, end: payload.end });
           await db.collection('activity_stream').add(activityPayload({
             ownerUid: userId,
             entityId: candidate.id,
-            entityType: candidate.kind === 'story' ? 'story' : 'task',
+            entityType: kind,
             activityType: 'calendar_insertion',
-            description: `Calendar block created (${day.toISODate()} ${start.toFormat('HH:mm')}–${candidateEnd.toFormat('HH:mm')})`,
-            metadata: { blockId: blockRef.id, reason: rationale, theme: candidate.theme || null, goalId: candidate.goalId || null },
+            description: `Calendar block created (${day.toISODate()} ${slotStart.toFormat('HH:mm')}–${slotEnd.toFormat('HH:mm')})`,
+            metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
           }));
-          if (remainingMinutes <= 0) break;
+          return { created: 1 };
         }
       }
+      return { created: 0, blocked: 1 };
+    };
+
+    // Avoid duplicating if already covered
+    const covered = new Set();
+    remainingBlocks.forEach((b) => {
+      if (b.taskId) covered.add(`task:${b.taskId}`);
+      if (b.storyId) covered.add(`story:${b.storyId}`);
+    });
+
+    for (const s of topStories) {
+      const key = `story:${s.id}`;
+      if (covered.has(key)) continue;
+      await placeEntry(s, 'story');
+    }
+
+    for (const t of topTasks) {
+      const key = `task:${t.id}`;
+      if (covered.has(key)) continue;
+      await placeEntry(t, 'task');
     }
   }
 }
@@ -1772,12 +1886,15 @@ exports.runCalendarPlanner = onSchedule({
   secrets: [GOOGLE_AI_STUDIO_API_KEY],
   memory: '1GiB',
   timeoutSeconds: 540,
+  region: 'europe-west2',
 }, runCalendarPlannerJob);
 
 exports.materializeFitnessBlocksNow = onCall({
   timeZone: 'Europe/London',
   memory: '512MiB',
   timeoutSeconds: 120,
+  region: 'europe-west2',
+  invoker: 'public',
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
@@ -1824,6 +1941,8 @@ exports.replanCalendarNow = onCall({
   timeZone: 'Europe/London',
   memory: '512MiB',
   timeoutSeconds: 120,
+  region: 'europe-west2',
+  invoker: 'public',
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
@@ -1849,17 +1968,258 @@ exports.replanCalendarNow = onCall({
     .catch(() => ({ docs: [] }));
   const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
-  const result = await replanExistingBlocksForUser({
+  await materializePlannerThemeBlocks({
     db,
     userId: uid,
-    profile,
     windowStart,
     windowEnd,
     themeAllocations,
     existingBlocks,
-    reason: 'manual_calendar_replan',
-    days,
   });
+
+  // Load sprints for sprint window gating
+  const sprintsSnap = await db.collection('sprints')
+    .where('ownerUid', '==', uid)
+    .get()
+    .catch(() => ({ docs: [] }));
+  const sprintMap = new Map();
+  sprintsSnap.docs.forEach((d) => {
+    const data = d.data() || {};
+    sprintMap.set(d.id, {
+      start: data.startDate || data.start || null,
+      end: data.endDate || data.end || null,
+      status: data.status,
+    });
+  });
+
+  // Fetch open stories/tasks in active/planning sprints
+  const activeSprintIds = Array.from(sprintMap.entries())
+    .filter(([id, s]) => {
+      const status = String(s.status || '').toLowerCase();
+      return status === 'active' || status === 'planning' || status === '1' || status === '0';
+    })
+    .map(([id]) => id);
+
+  let storiesSnap = { docs: [] };
+  try {
+    if (activeSprintIds.length > 0 && activeSprintIds.length <= 10) {
+      storiesSnap = await db.collection('stories')
+        .where('ownerUid', '==', uid)
+        .where('sprintId', 'in', activeSprintIds)
+        .get();
+    } else if (activeSprintIds.length > 10) {
+      storiesSnap = await db.collection('stories')
+        .where('ownerUid', '==', uid)
+        .get();
+    }
+  } catch {
+    storiesSnap = { docs: [] };
+  }
+
+  const tasksSnap = await db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const scoreWithBonus = (priority, base) => (Number(priority) >= 4 ? Number(base || 0) + 500 : Number(base || 0));
+  const openStories = storiesSnap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((s) => !isStoryDoneStatus(s.status) && activeSprintIds.length > 0 && activeSprintIds.includes(s.sprintId));
+  const openTasks = tasksSnap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((t) => !isTaskDoneStatus(t.status))
+    .filter((t) => !t.sprintId || activeSprintIds.includes(t.sprintId));
+
+  const topStories = openStories
+    .map((s) => ({
+      ...s,
+      aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore),
+    }))
+    .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
+    .slice(0, 3);
+
+  const topTasks = openTasks
+    .map((t) => ({
+      ...t,
+      aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore),
+    }))
+    .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
+    .slice(0, 3);
+
+  const topIds = new Set([
+    ...topStories.map((s) => `story:${s.id}`),
+    ...topTasks.map((t) => `task:${t.id}`),
+  ]);
+
+  // Build busy map and prune non-top AI entries
+  const remainingBlocks = [];
+  let replaced = 0;
+  for (const block of existingBlocks) {
+    const isAi = block.aiGenerated === true || block.createdBy === 'ai';
+    const key = block.storyId ? `story:${block.storyId}` : block.taskId ? `task:${block.taskId}` : null;
+    if (isAi && key && !topIds.has(key)) {
+      await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
+      replaced += 1;
+    } else {
+      remainingBlocks.push(block);
+    }
+  }
+
+  const busy = [];
+  const mainGigBlocks = []; // Track main gig planner blocks separately
+  const addBusy = (start, end) => {
+    if (start && end) busy.push({ start, end });
+  };
+  remainingBlocks.forEach((b) => {
+    addBusy(b.start, b.end);
+    
+    // Track main gig blocks separately to prevent task/story placement
+    const blockTheme = b.theme || b.category || '';
+    const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
+                          String(blockTheme).toLowerCase().includes('main gig') ||
+                          b.entityType === 'work_shift';
+    if (isMainGigBlock) {
+      mainGigBlocks.push({ start: b.start, end: b.end, theme: blockTheme });
+    }
+  });
+
+  const { pickSlots } = buildPickSlots(themeAllocations);
+
+  const placeEntry = async (candidate, kind) => {
+    const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
+    const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
+    const sprintEnd = sprint?.end ? toMillis(sprint.end) : null;
+
+    const durationMinutesRaw = kind === 'task'
+      ? (Number(candidate.points) * 60) || Number(candidate.estimateMin) || 60
+      : (Number(candidate.points) * 60) || 90;
+    const durationMinutes = Math.min(kind === 'task' ? 180 : 240, Math.max(kind === 'task' ? 30 : 60, durationMinutesRaw || 60));
+    const durationMs = durationMinutes * 60000;
+
+    for (let offset = 0; offset < days; offset++) {
+      const day = windowStart.plus({ days: offset });
+      const dayStartMs = day.toMillis();
+      const dayEndMs = day.endOf('day').toMillis();
+      if ((sprintStart && dayEndMs < sprintStart) || (sprintEnd && dayStartMs > sprintEnd)) continue;
+
+      const slots = pickSlots(candidate.theme || candidate.goal || null, day);
+      for (const slot of slots) {
+        // Skip main gig blocks for tasks/stories
+        const isMainGigSlot = slot.label && 
+          (slot.label.toLowerCase().includes('main gig') || 
+           slot.label.toLowerCase().includes('work') ||
+           slot.label.toLowerCase().includes('theme block: work'));
+        if (isMainGigSlot) continue;
+        
+        const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
+        if (!slotDays.includes(day.weekday)) continue;
+        const slotStart = day.set({ hour: Math.floor(slot.start), minute: Math.round((slot.start % 1) * 60), second: 0, millisecond: 0 });
+        const slotEnd = day.set({ hour: Math.floor(slot.end), minute: Math.round((slot.end % 1) * 60), second: 0, millisecond: 0 });
+        if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
+        if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
+        if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
+
+        const overlaps = busy.filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis()).sort((a, b) => a.start - b.start);
+        let cursor = slotStart.toMillis();
+        for (const o of overlaps) {
+          if (o.start - cursor >= durationMs) break;
+          cursor = Math.max(cursor, o.end);
+          if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+        }
+        if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
+
+        // CRITICAL: Never place tasks/stories in main gig blocks, even high priority ones
+        const proposedStart = cursor;
+        const proposedEnd = cursor + durationMs;
+        const conflictsWithMainGig = mainGigBlocks.some((mgBlock) => 
+          mgBlock.end > proposedStart && mgBlock.start < proposedEnd
+        );
+        if (conflictsWithMainGig) {
+          console.log(`[replan-calendar] Skipping main gig block for ${kind} ${candidate.title}`);
+          continue; // Skip this slot, find another
+        }
+
+        const blockRef = db.collection('calendar_blocks').doc();
+        const payload = {
+          ownerUid: uid,
+          start: cursor,
+          end: cursor + durationMs,
+          title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
+          entityType: kind,
+          taskId: kind === 'task' ? candidate.id : null,
+          storyId: kind === 'story' ? candidate.id : null,
+          sprintId: candidate.sprintId || null,
+          theme: candidate.theme || null,
+          goalId: candidate.goalId || null,
+          status: 'planned',
+          aiGenerated: true,
+          aiScore: candidate.aiScore || null,
+          aiReason: candidate.aiCriticalityReason || null,
+          placementReason: 'Replan: top priority item',
+          deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        await blockRef.set(payload);
+        busy.push({ start: payload.start, end: payload.end });
+        return { created: 1, gcalLink: payload.gcalEventUrl || null };
+      }
+    }
+    return { created: 0, blocked: 1 };
+  };
+
+  let created = 0;
+  let blocked = 0;
+  let gcalLinks = [];
+
+  const alreadyCovered = new Set();
+  remainingBlocks.forEach((b) => {
+    if (b.taskId) alreadyCovered.add(`task:${b.taskId}`);
+    if (b.storyId) alreadyCovered.add(`story:${b.storyId}`);
+  });
+
+  for (const s of topStories) {
+    const key = `story:${s.id}`;
+    if (alreadyCovered.has(key)) continue;
+    const res = await placeEntry(s, 'story');
+    created += res.created || 0;
+    blocked += res.blocked || 0;
+    if (res.gcalLink) gcalLinks.push(res.gcalLink);
+  }
+
+  for (const t of topTasks) {
+    const key = `task:${t.id}`;
+    if (alreadyCovered.has(key)) continue;
+    const res = await placeEntry(t, 'task');
+    created += res.created || 0;
+    blocked += res.blocked || 0;
+    if (res.gcalLink) gcalLinks.push(res.gcalLink);
+  }
+
+  const result = {
+    created,
+    blocked,
+    rescheduled: 0,
+    replaced,
+    gcalLinks,
+  };
+
+  try {
+    await db.collection('planner_stats').doc(uid).set({
+      lastRunAt: Date.now(),
+      source: 'replan',
+      windowDays: days,
+      created: result.created || 0,
+      blocked: result.blocked || 0,
+      rescheduled: result.rescheduled || 0,
+      replaced: result.replaced || 0,
+      totalMovable: result.totalMovable || 0,
+      gcalLinksCount: Array.isArray(result.gcalLinks) ? result.gcalLinks.length : 0,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (err) {
+    console.warn('[replanCalendarNow] planner_stats write failed', err?.message || err);
+  }
 
   return {
     ok: true,
@@ -1873,6 +2233,8 @@ exports.runNightlyChainNow = onCall({
   memory: '1GiB',
   timeoutSeconds: 540,
   secrets: [BOB_CLI_ACCESS],
+  region: 'europe-west2',
+  invoker: 'public',
 }, async (req) => {
   const cliKey = BOB_CLI_ACCESS.value();
   const key = req.rawRequest?.get('x-api-key') || req.rawRequest?.query?.key;
@@ -1904,6 +2266,7 @@ exports.runNightlyChainNowHttp = https.onRequest({
   memory: '1GiB',
   timeoutSeconds: 540,
   secrets: [BOB_CLI_ACCESS],
+  region: 'europe-west2',
 }, async (req, res) => {
   const cliKey = BOB_CLI_ACCESS.value();
   const key = req.get('x-api-key') || req.query.key;

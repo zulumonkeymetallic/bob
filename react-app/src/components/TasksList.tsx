@@ -80,7 +80,7 @@ const TasksList: React.FC = () => {
     effort: 'M' as 'S' | 'M' | 'L',
     parentType: 'story' as 'story' | 'project',
     parentId: '',
-    theme: 1, // Default to Health & Fitness
+    theme: 0, // Default to General for unlinked tasks
     status: 'planned' as 'planned' | 'in_progress' | 'done',
     estimatedHours: 1,
     points: 1
@@ -470,7 +470,7 @@ const TasksList: React.FC = () => {
         effort: 'M',
         parentType: currentPersona === 'personal' ? 'story' : 'project',
         parentId: '',
-        theme: 1, // Default to Health & Fitness
+        theme: 0, // Default to General for unlinked tasks
         status: 'planned',
         estimatedHours: 1,
         points: 1

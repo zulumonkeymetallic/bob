@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar, Collapse, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, ListChecks } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, ListChecks, Wallet } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc } from 'firebase/firestore';
@@ -106,6 +106,7 @@ const Dashboard: React.FC = () => {
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
+  const [plannerStats, setPlannerStats] = useState<any | null>(null);
   const [remindersDueToday, setRemindersDueToday] = useState<ReminderItem[]>([]);
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
@@ -768,6 +769,19 @@ const Dashboard: React.FC = () => {
     };
   }, [currentUser, currentPersona, selectedSprintId]);
 
+  // Planner stats snapshot
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setPlannerStats(null);
+      return;
+    }
+    const ref = doc(db, 'planner_stats', currentUser.uid);
+    const unsub = onSnapshot(ref, (snap) => {
+      setPlannerStats(snap.exists() ? snap.data() : null);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
   useEffect(() => {
     if (!currentUser?.uid || !selectedSprintId) {
       setCapacityData(null);
@@ -837,6 +851,22 @@ const Dashboard: React.FC = () => {
     return 'success';
   };
 
+  const financeSummary = useMemo(() => {
+    const spent = monzoSummary?.totals?.spent;
+    const budget = monzoSummary?.totals?.budget;
+    if (spent == null || budget == null) return '£0 spent';
+    const remaining = budget - spent;
+    return `£${(spent / 100).toFixed(0)} spent · £${(remaining / 100).toFixed(0)} left`;
+  }, [monzoSummary]);
+
+  const plannerSummary = useMemo(() => {
+    if (!plannerStats) return 'Not yet run';
+    const when = plannerStats.lastRunAt
+      ? new Date(plannerStats.lastRunAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+      : 'Unknown time';
+    return `${when} · +${plannerStats.created || 0} created · ${plannerStats.replaced || 0} replaced · ${plannerStats.blocked || 0} blocked`;
+  }, [plannerStats]);
+
   const sprintSummaryMetrics = useMemo(() => {
     if (!selectedSprint) return null;
     const now = new Date();
@@ -883,6 +913,14 @@ const Dashboard: React.FC = () => {
       totalPoints
     };
   }, [selectedSprint, sprintStories, sprintTasks]);
+
+  const sprintSummary = useMemo(() => {
+    if (!selectedSprint || !sprintSummaryMetrics) return { label: 'Select sprint', detail: '' };
+    return {
+      label: `${sprintSummaryMetrics.progress}% · ${sprintSummaryMetrics.timeLabel}`,
+      detail: `${sprintSummaryMetrics.completedStories}/${sprintSummaryMetrics.totalStories} stories · ${sprintSummaryMetrics.completedPoints}/${sprintSummaryMetrics.totalPoints} pts`
+    };
+  }, [selectedSprint, sprintSummaryMetrics]);
 
   if (!currentUser) {
     return <div>Please sign in to view your dashboard.</div>;
@@ -931,6 +969,22 @@ const Dashboard: React.FC = () => {
                       {stats.totalGoals > 0 ? ` · ${stats.goalCompletion}%` : ' · 0%'}
                     </div>
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{
+                      border: '1px solid var(--bs-border-color, #dee2e6)',
+                      backgroundColor: 'var(--bs-body-bg)',
+                      color: 'var(--bs-body-color)',
+                      textAlign: 'left'
+                    }}
+                    disabled
+                  >
+                    <div className="text-muted" style={{ fontSize: 10 }}>AI Planning</div>
+                    <div className="fw-semibold" style={{ fontSize: 12 }}>
+                      {plannerSummary}
+                    </div>
+                  </button>
                 </div>
                 {stats.tasksUnlinked > 0 && (
                   <Badge bg="warning" text="dark" pill>
@@ -967,15 +1021,136 @@ const Dashboard: React.FC = () => {
                   </Button>
                 </Card.Header>
                 <Card.Body className="pt-3 pb-2">
-                  {!hasSelectedSprint && (
-                    <div className="text-muted small">Select a sprint to see capacity.</div>
-                  )}
-                  {hasSelectedSprint && capacityLoading && (
-                    <div className="text-muted small">Loading capacity…</div>
-                  )}
-                  {hasSelectedSprint && capacityError && (
-                    <div className="text-danger small">{capacityError}</div>
-                  )}
+                  <Row className="g-3 mb-3">
+                    {/* Finance Group */}
+                    <Col xs={12} sm={6} lg={3}>
+                      <div 
+                        className="d-flex align-items-center gap-2 px-3 py-2 rounded border h-100" 
+                        style={{ 
+                          background: 'var(--bs-body-bg)', 
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onClick={() => navigate('/finance/dashboard')}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-primary-bg-subtle)';
+                          e.currentTarget.style.borderColor = 'var(--bs-primary)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                        }}
+                      >
+                        <Wallet size={16} className="text-info" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Finance</div>
+                          <div className="fw-semibold">
+                            {financeSummary}
+                          </div>
+                        </div>
+                      </div>
+                    </Col>
+
+                    {/* Capacity Group */}
+                    <Col xs={12} sm={6} lg={3}>
+                      <div 
+                        className="d-flex align-items-center gap-2 px-3 py-2 rounded border h-100" 
+                        style={{ 
+                          background: 'var(--bs-body-bg)', 
+                          cursor: hasSelectedSprint ? 'pointer' : 'default',
+                          transition: 'all 0.2s ease',
+                          opacity: hasSelectedSprint ? 1 : 0.6
+                        }}
+                        onClick={hasSelectedSprint ? () => navigate('/capacity') : undefined}
+                        onMouseEnter={(e) => {
+                          if (hasSelectedSprint) {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-primary-bg-subtle)';
+                            e.currentTarget.style.borderColor = 'var(--bs-primary)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (hasSelectedSprint) {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                          }
+                        }}
+                      >
+                        <Target size={16} className="text-primary" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Capacity</div>
+                          <div className="fw-semibold">
+                            {hasSelectedSprint && capacitySummary ? `${capacitySummary.utilization}% · ${capacitySummary.free.toFixed(1)}h free` : 'Select sprint'}
+                          </div>
+                        </div>
+                      </div>
+                    </Col>
+
+                    {/* Sprint Progress Group */}
+                    <Col xs={12} sm={6} lg={3}>
+                      <div 
+                        className="d-flex align-items-center gap-2 px-3 py-2 rounded border h-100" 
+                        style={{ 
+                          background: 'var(--bs-body-bg)', 
+                          cursor: selectedSprint ? 'pointer' : 'default',
+                          transition: 'all 0.2s ease',
+                          opacity: selectedSprint ? 1 : 0.6
+                        }}
+                        onClick={selectedSprint ? () => navigate('/sprints/management') : undefined}
+                        onMouseEnter={(e) => {
+                          if (selectedSprint) {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-success-bg-subtle)';
+                            e.currentTarget.style.borderColor = 'var(--bs-success)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (selectedSprint) {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                          }
+                        }}
+                      >
+                        <TrendingUp size={16} className="text-success" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Sprint Progress</div>
+                          <div className="fw-semibold">
+                            {sprintSummary.label}
+                          </div>
+                          {sprintSummary.detail && <div className="text-muted small">{sprintSummary.detail}</div>}
+                        </div>
+                      </div>
+                    </Col>
+
+                    {/* Overall Progress Group */}
+                    <Col xs={12} sm={6} lg={3}>
+                      <div 
+                        className="d-flex align-items-center gap-2 px-3 py-2 rounded border h-100" 
+                        style={{ 
+                          background: 'var(--bs-body-bg)', 
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onClick={() => navigate('/metrics/progress')}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
+                          e.currentTarget.style.borderColor = 'var(--bs-warning)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                        }}
+                      >
+                        <BookOpen size={16} className="text-warning" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Overall Progress</div>
+                          <div className="fw-semibold">
+                            {stats.storyPointsCompletion || 0}% pts · {stats.goalCompletion || 0}% goals
+                          </div>
+                          <div className="text-muted small">AI {plannerSummary}</div>
+                        </div>
+                      </div>
+                    </Col>
+                  </Row>
+
                   {hasSelectedSprint && capacitySummary && (
                     <Row className="g-2 dashboard-inline-row dashboard-key-metrics">
                       <Col xs={6} md={4} xl={2}>
@@ -1094,48 +1269,6 @@ const Dashboard: React.FC = () => {
                     </div>
                   </div>
                 </Collapse>
-              </Card>
-            </Col>
-          </Row>
-
-          <Row className="g-3 mb-4">
-            <Col xl={12}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Pot Balances (Linked Goals)</span>
-                  <Button variant="link" size="sm" className="text-decoration-none" onClick={() => navigate('/finance')}>
-                    View finance
-                  </Button>
-                </Card.Header>
-                <Card.Body>
-                  {potGoalLinks.length === 0 ? (
-                    <div className="text-muted small">No goals are linked to Monzo pots yet.</div>
-                  ) : (
-                    <Row className="g-3">
-                      {potGoalLinks.map((pot) => (
-                        <Col key={pot.potId} xs={12} md={6} xl={4}>
-                          <Card className="h-100 border-0 shadow-sm">
-                            <Card.Body className="p-3">
-                              <div className="d-flex justify-content-between align-items-start mb-2">
-                                <div className="fw-semibold text-truncate">{pot.potName}</div>
-                                <div className="fw-semibold">{formatPotBalance(pot.balance, pot.currency)}</div>
-                              </div>
-                              <div className="text-muted small mb-2">{pot.goals.length} linked goal{pot.goals.length === 1 ? '' : 's'}</div>
-                              <ul className="mb-0 small">
-                                {pot.goals.slice(0, 4).map((goal) => (
-                                  <li key={goal.id} className="text-truncate">{goal.title || 'Untitled goal'}</li>
-                                ))}
-                                {pot.goals.length > 4 && (
-                                  <li className="text-muted">+{pot.goals.length - 4} more</li>
-                                )}
-                              </ul>
-                            </Card.Body>
-                          </Card>
-                        </Col>
-                      ))}
-                    </Row>
-                  )}
-                </Card.Body>
               </Card>
             </Col>
           </Row>

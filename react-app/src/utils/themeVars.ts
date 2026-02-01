@@ -18,8 +18,22 @@ export const themeVars = {
 // Helper to create rgba using the card RGB triplet
 export const rgbaCard = (alpha: number) => `rgba(var(--card-rgb), ${alpha})`;
 
-// Domain theme helpers (Health/Growth/Wealth/Tribe/Home)
-const normalizeDomain = (name: string) => name.toLowerCase().trim();
+// Domain theme helpers (maps extended theme labels to base CSS keys)
+const normalizeDomain = (name: string) => {
+  const raw = String(name || '').toLowerCase().trim();
+  if (!raw) return 'growth';
+  if (raw.includes('side gig') || raw.includes('side-gig') || raw.includes('sidegig')) return 'sidegig';
+  if (raw.includes('work')) return 'work';
+  if (raw.includes('health') || raw.includes('fitness')) return 'health';
+  if (raw.includes('wealth') || raw.includes('finance')) return 'wealth';
+  if (raw.includes('tribe') || raw.includes('family') || raw.includes('relationship')) return 'tribe';
+  if (raw.includes('home')) return 'home';
+  if (raw.includes('sleep')) return 'sleep';
+  if (raw.includes('random')) return 'random';
+  if (raw.includes('rest') || raw.includes('recovery')) return 'sleep';
+  if (raw.includes('spirit') || raw.includes('growth') || raw.includes('learn') || raw.includes('education') || raw.includes('hobby') || raw.includes('travel') || raw.includes('adventure')) return 'growth';
+  return raw.replace(/[^a-z0-9]/g, '') || 'growth';
+};
 
 export const domainThemePrimaryVar = (name: string) => {
   const key = normalizeDomain(name);

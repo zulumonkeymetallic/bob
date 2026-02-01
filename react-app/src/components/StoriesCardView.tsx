@@ -6,13 +6,13 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal } from '../types';
-import { getStatusName } from '../utils/statusHelpers';
+import { getStatusName, getPriorityColor } from '../utils/statusHelpers';
 import { themeVars } from '../utils/themeVars';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceMigration } from '../config/migration';
-import { ChoiceHelper } from '../config/choices';
+import { priorityLabel } from '../utils/storyCardFormatting';
 
 interface StoriesCardViewProps {
   stories: Story[];
@@ -135,6 +135,8 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
           const parentGoal = getGoalForStory(story.goalId);
           const themeColor = getThemeColorForStory(story);
           const aiScore = Number((story as any).aiCriticalityScore ?? NaN);
+          const storyPriorityText = priorityLabel(story.priority, `P${story.priority ?? 3}`);
+          const storyPriorityVariant = getPriorityColor(story.priority);
           
           return (
             <Col md={6} lg={4} key={story.id} className="mb-4">
@@ -212,13 +214,12 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                           {getStoryStatusName(story.status)}
                         </Badge>
                         <Badge 
+                          bg={storyPriorityVariant}
                           style={{ 
-                            backgroundColor: story.priority === 1 ? 'var(--red)' : story.priority === 2 ? 'var(--orange)' : 'var(--muted)',
-                            color: 'var(--on-accent)',
                             fontSize: '12px'
                           }}
                         >
-                          P{story.priority}
+                          {storyPriorityText}
                         </Badge>
                         {Number.isFinite(aiScore) && (
                           <Badge
@@ -261,6 +262,9 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                         </Dropdown.Item>
                         <Dropdown.Divider />
                         <Dropdown.Header>Change Priority</Dropdown.Header>
+                        <Dropdown.Item onClick={() => handlePriorityChange(story.id, 4)}>
+                          Critical Priority (4)
+                        </Dropdown.Item>
                         <Dropdown.Item onClick={() => handlePriorityChange(story.id, 1)}>
                           High Priority (1)
                         </Dropdown.Item>

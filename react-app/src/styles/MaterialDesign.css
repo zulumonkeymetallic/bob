@@ -332,6 +332,7 @@
 .theme-health { --theme-color: #ff5722; }
 .theme-wealth { --theme-color: #ff9800; }
 .theme-work { --theme-color: #2196f3; }
+.theme-sidegig { --theme-color: #14b8a6; }
 .theme-learning { --theme-color: #9c27b0; }
 .theme-relationships { --theme-color: #e91e63; }
 .theme-creativity { --theme-color: #673ab7; }
@@ -724,6 +725,7 @@
 .md-chip.tribe { background: rgba(33, 150, 243, 0.12); color: #2196f3; }
 .md-chip.home { background: rgba(121, 85, 72, 0.12); color: #795548; }
 .md-chip.work { background: rgba(37, 99, 235, 0.12); color: #2563eb; }
+.md-chip.sidegig { background: rgba(20, 184, 166, 0.12); color: #14b8a6; }
 .md-chip.sleep { background: rgba(99, 102, 241, 0.12); color: #6366f1; }
 .md-chip.random { background: rgba(100, 116, 139, 0.12); color: #64748b; }
 

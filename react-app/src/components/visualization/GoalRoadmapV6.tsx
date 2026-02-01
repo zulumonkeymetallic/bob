@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Gantt } from '@svar-ui/react-gantt';
 import '@svar-ui/react-gantt/all.css';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { Star, Search, Edit3, Wand2, CalendarClock, Activity } from 'lucide-react';
+import { Star, Search, Edit3, Wand2, CalendarClock, Activity, Maximize2, Minimize2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { db, functions } from '../../firebase';
@@ -33,6 +33,10 @@ interface GanttTask {
   financePct?: number;
   hasFinance?: boolean;
   currency?: string;
+  budgetTarget?: number;
+  budgetActual?: number;
+  budgetCurrency?: string;
+  allocatedHours?: number;
   goalRef?: Goal;
   onEdit?: (goal: Goal) => void;
   onSchedule?: (goal: Goal) => void;
@@ -42,10 +46,17 @@ interface GanttTask {
   titleSize?: number;
   showDetails?: boolean;
   showChips?: boolean;
+  rowIndex?: number;
+  rowSpacing?: number;
+  viewLevel?: 'year' | 'quarter' | 'month' | 'week';
+  isCritical?: boolean;
+  progressSummary?: string;
 }
 
 const DAY_MS = 86400000;
 const MILESTONE_THRESHOLD_DAYS = 14;
+const PROGRESS_SHOW_MIN_ZOOM = 45;
+const PROGRESS_HIDE_AFTER_ZOOM = 75;
 
 function toMillis(val: any): number | undefined {
   if (val === undefined || val === null) return undefined;
@@ -66,67 +77,157 @@ function toMillis(val: any): number | undefined {
 const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
   const label = data.labelText || data.text;
   const titleSize = data.titleSize || 12;
-  const showDetails = data.showDetails !== false;
-  const showChips = !!data.showChips && showDetails;
+  const storyTotal = data.storyPoints ?? 0;
+  const storyDone = data.donePoints ?? 0;
+  const hasStoryProgress = storyTotal > 0;
+  const storyProgress = hasStoryProgress ? Math.min(Math.round((storyDone / storyTotal) * 100), 100) : 0;
+  const hasBudgetProgress =
+    typeof data.budgetTarget === 'number' &&
+    data.budgetTarget > 0 &&
+    typeof data.budgetActual === 'number';
+  const budgetProgress = hasBudgetProgress
+    ? Math.min(Math.round((data.budgetActual! / data.budgetTarget!) * 100), 100)
+    : Math.min(Math.max(data.financePct ?? 0, 0), 100);
+  const budgetCurrency = data.budgetCurrency || data.currency || '';
+  const budgetLabel =
+    hasBudgetProgress && typeof data.budgetActual === 'number'
+      ? `${budgetCurrency} ${data.budgetActual.toFixed(1)} / ${data.budgetTarget?.toFixed(1)}`
+      : undefined;
+  const viewLevel = data.viewLevel ?? 'week';
+  const zoomPct = data.uiScale ?? 0;
+
+  const progressInfoParts: string[] = [];
+  if (hasStoryProgress) {
+    progressInfoParts.push(`Story ${storyDone}/${storyTotal} pts (${storyProgress}%)`);
+  }
+  if (hasBudgetProgress) {
+    progressInfoParts.push(`Budget ${budgetProgress}%`);
+  } else if (data.hasFinance && data.financePct !== undefined) {
+    progressInfoParts.push(`Budget ${Math.min(Math.max(data.financePct, 0), 100)}%`);
+  }
+  const tooltipLabel =
+    progressInfoParts.length ? `${label} — ${progressInfoParts.join(' · ')}` : label;
+  const progressSummary = progressInfoParts.join(' · ');
+  const showProgressContent = Boolean(progressInfoParts.length);
+  const finalProgressSummary =
+    (!showProgressContent && !progressSummary)
+      ? ''
+      : data.progressSummary && showProgressContent
+        ? `${data.progressSummary} · ${progressSummary}`
+        : progressSummary;
+  const isCriticalMilestone = Boolean(data.isMilestone && data.isCritical);
+
+  const accentBackground = `linear-gradient(180deg, ${data.themeColor || '#2563eb'}14, ${data.themeColor || '#2563eb'}2e)`;
+  const rowSpacingFallback = viewLevel === 'year' ? 140 : viewLevel === 'quarter' ? 110 : viewLevel === 'month' ? 90 : 80;
+  const rowSpacing = data.rowSpacing ?? rowSpacingFallback;
+  const rowOffset = (data.rowIndex ?? 0) * rowSpacing;
+  const taskShellStyle = {
+    transform: `translateY(${rowOffset}px)`,
+    zIndex: 10 + (data.rowIndex ?? 0),
+  };
 
   if (data.isMilestone) {
     return (
-      <div className="grv6-task-shell grv6-milestone-shell" title={label}>
-        <div
-          className="grv6-task-label-outside grv6-milestone-label"
-          style={{ color: data.themeColor, fontSize: `${Math.max(10, titleSize - 2)}px` }}
-        >
-          {label}
+      <div className="grv6-task-shell grv6-milestone-shell" title={tooltipLabel} style={taskShellStyle}>
+        <div className="grv6-milestone-row">
+          <div
+            className="grv6-milestone"
+            style={{ backgroundColor: data.themeColor }}
+          >
+            <Star size={16} fill="#fff" strokeWidth={1.5} />
+          </div>
+          <div className={`grv6-milestone-meta ${isCriticalMilestone ? 'critical' : ''}`}>
+            <div
+              className="grv6-milestone-label"
+              style={{ color: data.themeColor, fontSize: `${Math.max(10, titleSize)}px`, fontWeight: 600 }}
+            >
+              {label}
+            </div>
+            <div className="grv6-milestone-actions">
+              <button
+                className="grv6-icon-btn grv6-milestone-icon-btn"
+                title="Edit goal"
+                onClick={(e) => { e.stopPropagation(); data.goalRef && data.onEdit?.(data.goalRef); }}
+              >
+                <Edit3 size={12} />
+              </button>
+              <button
+                className="grv6-icon-btn grv6-milestone-icon-btn"
+                title="AI schedule time blocks"
+                onClick={(e) => { e.stopPropagation(); data.goalRef && data.onSchedule?.(data.goalRef); }}
+              >
+                <CalendarClock size={12} />
+              </button>
+              <button
+                className="grv6-icon-btn grv6-milestone-icon-btn"
+                title="Generate stories"
+                onClick={(e) => { e.stopPropagation(); data.goalRef && data.onGenerateStories?.(data.goalRef); }}
+              >
+                <Wand2 size={12} />
+              </button>
+              <button
+                className="grv6-icon-btn grv6-milestone-icon-btn"
+                title="Open activity stream"
+                onClick={(e) => { e.stopPropagation(); data.goalRef && data.onOpenStream?.(data.goalRef); }}
+              >
+                <Activity size={12} />
+              </button>
+            </div>
+          </div>
         </div>
-        <div
-          className="grv6-milestone"
-          style={{ backgroundColor: data.themeColor }}
-        >
-          <Star size={16} fill="#fff" strokeWidth={1.5} />
-        </div>
+        {progressSummary && (
+          <div className="grv6-milestone-metrics">{progressSummary}</div>
+        )}
       </div>
     );
   }
 
-  const pct = Math.round(data.progress ?? 0);
-  const storyPct = data.pointsPct ?? pct;
   return (
-    <div className="grv6-task-shell" title={label}>
-      <div
-        className="grv6-task-label-outside"
-        style={{ color: data.themeColor, fontSize: `${titleSize}px` }}
-      >
-        {label}
-      </div>
+    <div className="grv6-task-shell" title={tooltipLabel} style={taskShellStyle}>
       <div
         className="grv6-task"
-        style={{ background: `${data.themeColor || '#3b82f6'}1a`, boxShadow: `inset 0 0 0 1px ${data.themeColor || 'rgba(59,130,246,0.4)'}` }}
+        style={{
+          background: accentBackground,
+          boxShadow: `inset 0 0 0 1px ${data.themeColor || 'rgba(59,130,246,0.4)'}`,
+        }}
+        aria-label={tooltipLabel}
       >
-        <div className="grv6-progress-outer">
+        <div className="grv6-task-title-row">
           <div
-            className="grv6-progress-inner bg-theme"
-            style={{ width: '100%', backgroundColor: data.themeColor }}
-          />
-          <div
-            className="grv6-progress-fill"
-            style={{ width: `${Math.min(100, storyPct)}%` }}
-          />
-          {showDetails && (
-            <div className="grv6-progress-overlay">
-              <span className="grv6-task-pct">{pct}%</span>
-              {showChips && data.pointsPct !== undefined && data.storyPoints !== undefined && (
-                <span className="grv6-chip">
-                  SP {data.donePoints ?? 0}/{data.storyPoints}
-                </span>
-              )}
-              {showChips && data.hasFinance && (
-                <span className="grv6-chip">
-                  Budget {data.financePct}%{data.currency ? ` ${data.currency}` : ''}
-                </span>
-              )}
-            </div>
+            className="grv6-task-title"
+            style={{ fontSize: `${Math.max(12, titleSize)}px`, color: data.themeColor }}
+          >
+            {label}
+          </div>
+          {hasStoryProgress && zoomPct <= PROGRESS_HIDE_AFTER_ZOOM && zoomPct >= PROGRESS_SHOW_MIN_ZOOM && (
+            <span className="grv6-task-pct">{storyProgress}%</span>
           )}
         </div>
+        {showProgressContent && (
+          <div className="grv6-task-progress-bottom">
+            <div className="grv6-progress-bars">
+              {hasStoryProgress && (
+                <div className="grv6-progress-row">
+                  <span className="grv6-progress-label">Story</span>
+                  <div className="grv6-progress-track">
+                    <div className="grv6-progress-fill story" style={{ width: `${storyProgress}%` }} />
+                  </div>
+                  <span className="grv6-progress-value">{`${storyDone}/${storyTotal} pts`}</span>
+                </div>
+              )}
+              {hasBudgetProgress && (
+                <div className="grv6-progress-row">
+                  <span className="grv6-progress-label">Budget</span>
+                  <div className="grv6-progress-track">
+                    <div className="grv6-progress-fill budget" style={{ width: `${budgetProgress}%` }} />
+                  </div>
+                  <span className="grv6-progress-value">{budgetLabel || `${budgetCurrency} ${budgetProgress}%`}</span>
+                </div>
+              )}
+            </div>
+            {finalProgressSummary && <div className="grv6-progress-summary">{finalProgressSummary}</div>}
+          </div>
+        )}
         <div className="grv6-actions">
           <button
             className="grv6-icon-btn"
@@ -174,6 +275,7 @@ const GoalRoadmapV6: React.FC = () => {
   const [storyPoints, setStoryPoints] = useState<Record<string, number>>({});
   const [storyDonePoints, setStoryDonePoints] = useState<Record<string, number>>({});
   const [potBalances, setPotBalances] = useState<Record<string, { balance: number; currency: string }>>({});
+  const [calendarBlocks, setCalendarBlocks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState('');
@@ -184,7 +286,8 @@ const GoalRoadmapV6: React.FC = () => {
   const [showStoryGoalsOnly, setShowStoryGoalsOnly] = useState(true);
   const [respectSprintScope, setRespectSprintScope] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
-  const [fullscreen, setFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const boardRef = useRef<HTMLDivElement | null>(null);
   const ganttApiRef = useRef<any | null>(null);
 
   const ENABLE_MONZO_POTS = process.env.REACT_APP_ENABLE_MONZO_POTS === 'true';
@@ -269,6 +372,27 @@ const GoalRoadmapV6: React.FC = () => {
           return;
         }
         console.error('[RoadmapV6] stories error', err);
+      }
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Calendar blocks for allocated hours
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(
+      collection(db, 'calendarBlocks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', 'personal')
+    );
+    const unsub = onSnapshot(
+      q,
+      snap => {
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setCalendarBlocks(data);
+      },
+      err => {
+        console.error('[RoadmapV6] calendar blocks error', err);
       }
     );
     return () => unsub();
@@ -397,10 +521,45 @@ const GoalRoadmapV6: React.FC = () => {
     return [todayMarker];
   }, []);
 
+  const cellHeight = useMemo(() => {
+    const min = 50;
+    const max = 130;
+    return Math.round(min + (zoomPercent / 100) * (max - min));
+  }, [zoomPercent]);
+
+  const cellWidth = useMemo(() => {
+    const min = 24;
+    const max = 110;
+    return Math.round(min + (zoomPercent / 100) * (max - min));
+  }, [zoomPercent]);
+
   const { tasks, chartStart, chartEnd } = useMemo(() => {
     let min: Date | null = null;
     let max: Date | null = null;
     const list: GanttTask[] = [];
+    const rowsByTheme: Record<string, Array<{ rowIndex: number; lastEnd: number }>> = {};
+    let nextRowIndex = 0;
+
+    const spacingBase = 70;
+    const spacingRange = 110;
+    const zoomFactor = Math.max(0, Math.min(1, (100 - zoomPercent) / 100));
+    const dynamicRowSpacing = Math.round(spacingBase + spacingRange * zoomFactor);
+
+    const assignRowIndex = (key: string, startMs: number, endMs: number) => {
+      if (!rowsByTheme[key]) {
+        rowsByTheme[key] = [];
+      }
+      const rows = rowsByTheme[key];
+      for (const row of rows) {
+        if (startMs >= row.lastEnd) {
+          row.lastEnd = endMs;
+          return row.rowIndex;
+        }
+      }
+      const rowIndex = nextRowIndex++;
+      rows.push({ rowIndex, lastEnd: endMs });
+      return rowIndex;
+    };
 
     for (const goal of sortedGoals) {
       const startMs = toMillis((goal as any).startDate) ?? toMillis((goal as any).targetDate) ?? Date.now();
@@ -411,8 +570,9 @@ const GoalRoadmapV6: React.FC = () => {
       if (!max || end > max) max = end;
 
       const themeId = migrateThemeValue((goal as any).theme);
-      const themeDef = globalThemes.find(t => t.id === themeId)
-        || (goal.parentGoalId ? globalThemes.find(t => t.id === migrateThemeValue(goalsById[goal.parentGoalId]?.theme)) : undefined);
+      const themeDef =
+        globalThemes.find(t => t.id === themeId) ||
+        (goal.parentGoalId ? globalThemes.find(t => t.id === migrateThemeValue(goalsById[goal.parentGoalId]?.theme)) : undefined);
       const color = themeDef?.color || '#3b82f6';
 
       const totalPts = storyPoints[goal.id] || 0;
@@ -421,21 +581,51 @@ const GoalRoadmapV6: React.FC = () => {
       const durationDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / DAY_MS));
       const isMilestone = durationDays < MILESTONE_THRESHOLD_DAYS;
 
+      const allocatedHours = calendarBlocks
+        .filter(block => block.goalId === goal.id)
+        .reduce((total, block) => {
+          const duration = block.durationMinutes || 60;
+          return total + (duration / 60);
+        }, 0);
+
       let financePct = 0;
       let hasFinance = false;
       let currency: string | undefined;
-      if ((goal as any).potId && potBalances[(goal as any).potId] && (goal as any).estimatedCost) {
+      let budgetTarget: number | undefined;
+      let budgetActual: number | undefined;
+      let budgetCurrency: string | undefined;
+      if ((goal as any).potId && potBalances[(goal as any).potId]) {
         const pot = potBalances[(goal as any).potId];
         const target = Number((goal as any).estimatedCost || 0);
-        financePct = target > 0 ? Math.round((pot.balance / target) * 100) : 0;
-        hasFinance = true;
-        currency = pot.currency;
+        if (target > 0) {
+          const pct = Math.min(Math.round((pot.balance / target) * 100), 100);
+          financePct = pct;
+          hasFinance = true;
+          currency = pot.currency;
+          budgetTarget = target;
+          budgetActual = pot.balance;
+          budgetCurrency = pot.currency;
+        }
       }
 
       const title = goal.title || 'Untitled Goal';
       const titleSize = Math.max(10, Math.round(10 + (zoomPercent / 100) * 6));
       const showDetails = zoomPercent >= 65;
       const showChips = zoomPercent >= 75;
+
+      const normalizedThemeId = themeDef?.id ?? themeId ?? 'unknown';
+      const themeKey = `theme-${normalizedThemeId}`;
+      const rowIndex = assignRowIndex(themeKey, startMs, endMs);
+      const rowSpacingForGoal = Math.max(56, dynamicRowSpacing - (isMilestone ? 6 : 0));
+      const isCriticalGoal = Boolean((goal as any).priority && (goal as any).priority >= 4);
+
+      const progressSummaryParts: string[] = [];
+      if (totalPts > 0) {
+        progressSummaryParts.push(`Story ${donePts}/${totalPts} pts`);
+      }
+      if (hasFinance && typeof financePct === 'number') {
+        progressSummaryParts.push(`Budget ${financePct}%`);
+      }
 
       list.push({
         id: goal.id,
@@ -453,15 +643,24 @@ const GoalRoadmapV6: React.FC = () => {
         financePct,
         hasFinance,
         currency,
+        budgetTarget,
+        budgetActual,
+        budgetCurrency,
+        allocatedHours: Math.round(allocatedHours * 10) / 10,
         goalRef: goal,
         uiScale: zoomPercent,
+        viewLevel: zoomLevel,
         titleSize,
         showDetails,
         showChips,
         onEdit: (g: Goal) => setEditGoal(g),
         onSchedule: (g: Goal) => handleScheduleGoal(g),
         onGenerateStories: (g: Goal) => handleGenerateStories(g),
-        onOpenStream: (g: Goal) => showSidebar(g, 'goal')
+        onOpenStream: (g: Goal) => showSidebar(g, 'goal'),
+        rowIndex,
+        rowSpacing: rowSpacingForGoal,
+        isCritical: isCriticalGoal,
+        progressSummary: progressSummaryParts.join(' · ')
       });
     }
 
@@ -469,13 +668,13 @@ const GoalRoadmapV6: React.FC = () => {
     const startDate = min ? new Date(Math.min(min.getTime(), today.getTime())) : today;
     const longHorizonDays =
       zoomPercent <= 10 ? 365 * 5 :
-      zoomPercent <= 18 ? 365 * 3 :
-      zoomPercent <= 60 ? 365 * 2 :
-      zoomPercent <= 88 ? 365 * 1.25 :
-      140;
+        zoomPercent <= 18 ? 365 * 3 :
+          zoomPercent <= 60 ? 365 * 2 :
+            zoomPercent <= 88 ? 365 * 1.25 :
+              140;
     const endDate = max ? new Date(max.getTime() + longHorizonDays * DAY_MS) : new Date(today.getTime() + longHorizonDays * DAY_MS);
     return { tasks: list, chartStart: startDate, chartEnd: endDate };
-  }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, goalsById, handleScheduleGoal, handleGenerateStories, showSidebar, zoomPercent]);
+  }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, calendarBlocks, goalsById, handleScheduleGoal, handleGenerateStories, showSidebar, zoomPercent, cellHeight]);
 
   const handleThemeChange = useCallback((val: string) => {
     if (val === 'all') {
@@ -506,9 +705,10 @@ const GoalRoadmapV6: React.FC = () => {
     return 'week';
   }, []);
 
-  useEffect(() => {
-    setZoomPercent(levelToPercent(zoomLevel));
-  }, [zoomLevel, levelToPercent]);
+  // Removed conflicting useEffect: setZoomPercent is now handled explicitly in handlers
+  // useEffect(() => {
+  //   setZoomPercent(levelToPercent(zoomLevel));
+  // }, [zoomLevel, levelToPercent]);
 
   const computeFitZoom = useCallback(() => {
     if (!tasks.length) return zoomLevel;
@@ -535,17 +735,6 @@ const GoalRoadmapV6: React.FC = () => {
 
   const visibleGoalCount = tasks.length;
   const milestoneCount = tasks.filter(t => t.isMilestone).length;
-  const cellHeight = useMemo(() => {
-    const min = 50;
-    const max = 130;
-    return Math.round(min + (zoomPercent / 100) * (max - min));
-  }, [zoomPercent]);
-
-  const cellWidth = useMemo(() => {
-    const min = 24;
-    const max = 110;
-    return Math.round(min + (zoomPercent / 100) * (max - min));
-  }, [zoomPercent]);
 
   const handleClearFilters = useCallback(() => {
     setSearch('');
@@ -559,6 +748,40 @@ const GoalRoadmapV6: React.FC = () => {
     setZoomLevel(z || 'year');
     setZoomPercent(levelToPercent(z || 'year'));
   }, [computeFitZoom, levelToPercent]);
+
+  const handleZoomSliderChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const pct = Number(e.target.value);
+    setZoomPercent(pct);
+    setZoomLevel(percentToLevel(pct));
+  }, [percentToLevel]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === boardRef.current);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    const className = 'grv6-full-active';
+    if (isFullscreen) document.body.classList.add(className);
+    else document.body.classList.remove(className);
+    return () => document.body.classList.remove(className);
+  }, [isFullscreen]);
+
+  const toggleFullscreen = useCallback(async () => {
+    if (!boardRef.current) return;
+    try {
+      if (document.fullscreenElement === boardRef.current) {
+        await document.exitFullscreen();
+      } else if (boardRef.current.requestFullscreen) {
+        await boardRef.current.requestFullscreen();
+      }
+    } catch (err) {
+      console.warn('[RoadmapV6] fullscreen toggle failed', err);
+    }
+  }, []);
 
   const persistGoalDates = useCallback(async (goalId: string, fallbackTask?: { start?: any; end?: any }) => {
     if (!currentUser?.uid) return;
@@ -626,7 +849,7 @@ const GoalRoadmapV6: React.FC = () => {
 
   if (!currentUser) return null;
 
-  const renderTopbar = (isFullscreen = false) => (
+  const renderTopbar = () => (
     <div className={`grv6-topbar ${isFullscreen ? 'grv6-topbar-fullscreen' : ''}`}>
       <div className="grv6-search">
         <Search size={16} />
@@ -684,8 +907,9 @@ const GoalRoadmapV6: React.FC = () => {
           />{' '}
           Limit to selected sprint
         </label>
+        <SprintSelector className="grv6-sprint-selector" />
+
       </div>
-      <SprintSelector className="grv6-sprint-selector" />
       <div className="grv6-zoom-group compact">
         {(['year', 'quarter', 'month', 'week'] as const).map(z => (
           <button
@@ -709,11 +933,8 @@ const GoalRoadmapV6: React.FC = () => {
           max={100}
           step={1}
           value={zoomPercent}
-          onChange={(e) => {
-            const pct = Number(e.target.value);
-            setZoomPercent(pct);
-            setZoomLevel(percentToLevel(pct));
-          }}
+          onChange={handleZoomSliderChange}
+          title={`Zoom: ${zoomPercent}%`}
         />
         <span className="grv6-zoom-pct">{zoomPercent}%</span>
       </div>
@@ -721,12 +942,15 @@ const GoalRoadmapV6: React.FC = () => {
         <button className="grv6-ghost-btn" onClick={handleClearFilters}>Clear filters</button>
         <a className="grv6-link" href="/goals" target="_blank" rel="noreferrer">Goals list</a>
         <a className="grv6-link" href="/goals-management" target="_blank" rel="noreferrer">Card view</a>
-        {!isFullscreen && (
-          <button className="grv6-primary-btn" onClick={() => setFullscreen(true)}>Fullscreen</button>
-        )}
-        {isFullscreen && (
-          <button className="grv6-primary-btn" onClick={() => setFullscreen(false)}>Exit fullscreen</button>
-        )}
+        <button
+          className="grv6-fullscreen-toggle"
+          onClick={toggleFullscreen}
+          title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+        >
+          {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          <span>{isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}</span>
+        </button>
       </div>
     </div>
   );
@@ -751,14 +975,18 @@ const GoalRoadmapV6: React.FC = () => {
                   const startMs = toMillis(s.startDate)!;
                   const endMs = toMillis(s.endDate)!;
                   const total = chartEnd.getTime() - chartStart.getTime();
-                  const leftPct = ((startMs - chartStart.getTime()) / total) * 100;
-                  const widthPct = ((endMs - startMs) / total) * 100;
-                  if (widthPct <= 0) return null;
+                  const leftPct = Math.max(0, ((startMs - chartStart.getTime()) / total) * 100);
+                  const widthPct = Math.max(0, ((endMs - startMs) / total) * 100);
+                  // Only show sprint overlays that are visible within the chart range
+                  if (widthPct <= 0 || leftPct >= 100 || (leftPct + widthPct) <= 0) return null;
                   return (
                     <div
                       key={s.id}
                       className="grv6-sprint-band"
-                      style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                      style={{ 
+                        left: `${Math.min(100, leftPct)}%`, 
+                        width: `${Math.min(100 - leftPct, widthPct)}%` 
+                      }}
                     >
                       <span className="grv6-sprint-label">{s.name || 'Sprint'}</span>
                     </div>
@@ -797,7 +1025,10 @@ const GoalRoadmapV6: React.FC = () => {
   };
 
   return (
-    <div className={`grv6-container theme-${theme}`}>
+    <div
+      ref={boardRef}
+      className={`grv6-container theme-${theme} ${isFullscreen ? 'grv6-in-fullscreen' : ''}`}
+    >
       <div className="grv6-header">
         <div className="grv6-title-stack">
           <h1 className="grv6-title">Goal Roadmap V6</h1>
@@ -810,17 +1041,6 @@ const GoalRoadmapV6: React.FC = () => {
           {renderGanttContent()}
         </div>
       </div>
-
-      {fullscreen && (
-        <div className="grv6-fullscreen-modal">
-          <div className="grv6-fullscreen-inner">
-            {renderTopbar(true)}
-            <div className="grv6-fullscreen-body">
-              {renderGanttContent()}
-            </div>
-          </div>
-        </div>
-      )}
 
       {editGoal && (
         <EditGoalModal

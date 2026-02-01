@@ -86,9 +86,10 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   ];
   const statuses = ['New', 'Work in Progress', 'Complete', 'Blocked', 'Deferred'];
   const priorities = [
-    { value: 1, label: 'High Priority (1)' },
-    { value: 2, label: 'Medium Priority (2)' },
-    { value: 3, label: 'Low Priority (3)' }
+    { value: 4, label: 'Critical' },
+    { value: 3, label: 'High' },
+    { value: 2, label: 'Medium' },
+    { value: 1, label: 'Low' }
   ];
 
   const goalIndex = useMemo(() => {
@@ -294,17 +295,20 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           return d ? d.toISOString().slice(0, 10) : '';
         })();
 
+        const resolvedThemeValue = (goal as any).themeId ?? goal.theme;
+        const canonicalThemeId = migrateThemeValue(resolvedThemeValue);
+
         setFormData({
           title: goal.title || '',
           description: goal.description || '',
-          theme: migrateThemeValue(goal.theme) || 1,
+          theme: canonicalThemeId || 1,
           size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
           timeToMasterHours: goal.timeToMasterHours || 40,
           confidence: goal.confidence || 0.5,
           startDate: startDateStr,
           endDate: endDateStr,
           status: statusMap[goal.status as keyof typeof statusMap] || 'New',
-          priority: goal.priority || 2,
+          priority: goal.priority ?? 2,
           estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
           kpis: goal.kpis || [],
           parentGoalId: goal.parentGoalId || '',
@@ -312,9 +316,9 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           tags: (goal as any).tags || [],
           autoCreatePot: !!(goal as any).autoCreatePot
         });
-        const current = migrateThemeValue(goal.theme);
+        const current = canonicalThemeId;
         const themeObj = themes.find(t => t.id === current);
-        setThemeInput(themeObj?.label || '');
+        setThemeInput(themeObj?.label || themeObj?.name || `${themeObj?.id ?? ''}`);
         setParentSearch('');
       } else {
         // CREATE MODE: Reset to defaults
@@ -413,6 +417,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         description: formData.description.trim(),
         theme: themeId,
         theme_id: themeId,
+        themeId: themeId,
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
@@ -676,9 +681,14 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                       placeholder="Search themes..."
                     />
                     <datalist id="edit-goal-theme-options">
-                      {themes.map(t => (
-                        <option key={t.id} value={t.label} />
-                      ))}
+                      {themes.map(t => {
+                        const display = t.label || t.name || `${t.id}`;
+                        return <option key={`label-${t.id}`} value={display} />;
+                      })}
+                      {themes.map(t => {
+                        if (!t.name || t.name === t.label) return null;
+                        return <option key={`name-${t.id}`} value={t.name!} />;
+                      })}
                     </datalist>
                   </Form.Group>
                 </div>

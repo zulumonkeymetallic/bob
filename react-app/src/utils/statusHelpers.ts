@@ -1,6 +1,7 @@
 // Quick runtime migration helpers for handling mixed string/number status values
 // This allows the build to work while we transition from strings to numbers
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { normalizePriorityValue } from './priorityUtils';
 
 export const isStatus = (actualStatus: any, expectedStatus: string): boolean => {
   // Handle numeric status values (legacy, mixed across entities)
@@ -53,25 +54,9 @@ export const isStatus = (actualStatus: any, expectedStatus: string): boolean => 
 };
 
 export const isPriority = (actualPriority: any, expectedPriority: string): boolean => {
-  // Handle numeric priority values
-  if (typeof actualPriority === 'number') {
-    if (expectedPriority === 'Critical') return actualPriority === 4;
-    if (expectedPriority === 'High') return actualPriority === 3;
-    if (expectedPriority === 'Medium') return actualPriority === 2;
-    if (expectedPriority === 'Low') return actualPriority === 1;
-    if (expectedPriority === 'None') return actualPriority === 0;
-    
-    // Alternative priority naming
-    if (expectedPriority === 'high') return actualPriority === 3;
-    if (expectedPriority === 'med') return actualPriority === 2;
-    if (expectedPriority === 'medium') return actualPriority === 2;
-    if (expectedPriority === 'low') return actualPriority === 1;
-    
-    return false;
-  }
-  
-  // Handle string priority values (legacy)
-  return actualPriority === expectedPriority;
+  const normalizedActual = normalizePriorityValue(actualPriority);
+  const normalizedExpected = normalizePriorityValue(expectedPriority);
+  return normalizedActual === normalizedExpected;
 };
 
 export const isTheme = (actualTheme: any, expectedTheme: string): boolean => {
@@ -125,6 +110,7 @@ export const getThemeClass = (theme: any): string => {
   if (lower.includes('wealth') || lower.includes('finance')) return 'wealth';
   if (lower.includes('tribe') || lower.includes('family') || lower.includes('relationship')) return 'tribe';
   if (lower.includes('home')) return 'home';
+  if (lower.includes('side gig') || lower.includes('sidegig') || lower.includes('side-gig')) return 'sidegig';
   if (lower.includes('work')) return 'work';
   if (lower.includes('sleep')) return 'sleep';
   if (lower.includes('random')) return 'random';
@@ -258,20 +244,12 @@ export const getBadgeVariant = (status: any): string => {
 
 // Helper to get priority badge class
 export const getPriorityBadge = (priority: any): { bg: string; text: string } => {
-  if (typeof priority === 'number') {
-    switch (priority) {
-      case 4: return { bg: 'danger', text: 'Critical' };
-      case 3: return { bg: 'danger', text: 'High' };
-      case 2: return { bg: 'warning', text: 'Medium' };
-      case 1: return { bg: 'secondary', text: 'Low' };
-      default: return { bg: 'light', text: 'None' };
-    }
+  const normalized = normalizePriorityValue(priority);
+  switch (normalized) {
+    case 4: return { bg: 'danger', text: 'Critical' };
+    case 3: return { bg: 'danger', text: 'High' };
+    case 2: return { bg: 'warning', text: 'Medium' };
+    case 1: return { bg: 'secondary', text: 'Low' };
+    default: return { bg: 'light', text: 'None' };
   }
-  
-  // Handle string priorities (legacy)
-  if (priority === 'high' || priority === 'High') return { bg: 'danger', text: 'High' };
-  if (priority === 'med' || priority === 'Medium') return { bg: 'warning', text: 'Medium' };
-  if (priority === 'low' || priority === 'Low') return { bg: 'secondary', text: 'Low' };
-  
-  return { bg: 'light', text: String(priority || 'None') };
 };

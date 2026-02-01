@@ -65,9 +65,10 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
   ];
   const statuses = ['New', 'Work in Progress', 'Complete', 'Blocked', 'Deferred'];
   const priorities = [
-    { value: 1, label: 'High Priority (1)' },
-    { value: 2, label: 'Medium Priority (2)' },
-    { value: 3, label: 'Low Priority (3)' }
+    { value: 4, label: 'Critical' },
+    { value: 3, label: 'High' },
+    { value: 2, label: 'Medium' },
+    { value: 1, label: 'Low' }
   ];
   const confidenceLevels = [
     { value: 1, label: 'High Confidence (100%)' },

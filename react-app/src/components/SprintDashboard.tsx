@@ -261,6 +261,7 @@ const SprintDashboard: React.FC = () => {
         planningDate: startDate,
         retroDate: endDate,
         ownerUid: currentUser.uid,
+        persona: currentPersona,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });

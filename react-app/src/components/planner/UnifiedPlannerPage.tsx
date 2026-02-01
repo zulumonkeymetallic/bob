@@ -83,6 +83,8 @@ const FALLBACK_THEME_COLORS: Record<string, string> = {
   Wealth: '#eab308',
   Tribe: '#8b5cf6',
   Home: '#f97316',
+  'Work (Main Gig)': '#0f172a',
+  'Side Gig': '#14b8a6',
   'Work Shift': '#0f172a',
 };
 
@@ -111,9 +113,9 @@ type ThemeOption = {
 interface BlockFormState {
   id?: string;
   title: string;
-  theme: CalendarBlock['theme'];
-  category: CalendarBlock['category'];
-  flexibility: CalendarBlock['flexibility'];
+  theme?: CalendarBlock['theme'];
+  category?: CalendarBlock['category'];
+  flexibility?: CalendarBlock['flexibility'];
   rationale: string;
   start: string;
   end: string;
@@ -123,6 +125,10 @@ interface BlockFormState {
   taskId?: string;
   aiScore?: number | null;
   aiReason?: string | null;
+  storyInput?: string;
+  recurrenceFreq: 'none' | 'daily' | 'weekly';
+  recurrenceDays: string[]; // BYDAY codes e.g. ['MO','WE']
+  recurrenceUntil: string; // date input string
 }
 
 const DEFAULT_BLOCK_FORM: BlockFormState = {
@@ -133,12 +139,16 @@ const DEFAULT_BLOCK_FORM: BlockFormState = {
   rationale: '',
   start: '',
   end: '',
-  syncToGoogle: false,
+  syncToGoogle: true,
   subTheme: '',
   storyId: undefined,
   taskId: undefined,
   aiScore: null,
   aiReason: null,
+  storyInput: '',
+  recurrenceFreq: 'none',
+  recurrenceDays: [],
+  recurrenceUntil: '',
 };
 
 type ViewType = 'day' | 'week' | 'month';
@@ -203,6 +213,7 @@ const hexToRgba = (hex: string, alpha: number) => {
 const UnifiedPlannerPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { themes: globalThemes } = useGlobalThemes();
+  const [stories, setStories] = useState<any[]>([]);
 
   const legacyThemeNameById = useMemo(() => {
     const map = new Map<number, string>();
@@ -216,10 +227,10 @@ const UnifiedPlannerPage: React.FC = () => {
 
   const themeOptions = useMemo(
     () => {
-      const isWorkShift = (value?: string | null) => String(value || '').trim().toLowerCase() === 'work shift';
+      const isLegacyWorkShift = (value?: string | null) => String(value || '').trim().toLowerCase() === 'work shift';
       const baseOptions: ThemeOption[] = globalThemes.length === 0
         ? Object.entries(FALLBACK_THEME_COLORS)
-          .filter(([value]) => !isWorkShift(value))
+          .filter(([value]) => !isLegacyWorkShift(value))
           .map(([value, color]) => ({
             id: value,
             value,
@@ -228,7 +239,7 @@ const UnifiedPlannerPage: React.FC = () => {
             textColor: '#ffffff',
           }))
         : globalThemes
-          .filter((theme) => !isWorkShift(theme.name) && !isWorkShift(theme.label))
+          .filter((theme) => !isLegacyWorkShift(theme.name) && !isLegacyWorkShift(theme.label))
           .map((theme) => {
             const legacyName = legacyThemeNameById.get(theme.id);
             const value = legacyName || theme.name || String(theme.id);
@@ -307,6 +318,7 @@ const UnifiedPlannerPage: React.FC = () => {
   const [planning, setPlanning] = useState(false);
   const [replanLoading, setReplanLoading] = useState(false);
   const [rebalanceLoading, setRebalanceLoading] = useState(false);
+  const [orchestrationLoading, setOrchestrationLoading] = useState(false);
   const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
   const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
@@ -324,6 +336,19 @@ const UnifiedPlannerPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentPersona } = usePersona();
+
+  // Load stories for linking
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      setStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+    });
+    return () => unsub();
+  }, [currentUser]);
 
   useEffect(() => {
     const state = ((location as unknown) as { state?: { focus?: string } | null }).state ?? null;
@@ -429,7 +454,12 @@ const UnifiedPlannerPage: React.FC = () => {
     });
 
     const externalEvents = planner.externalEvents
-      .filter((external) => !linkedGcalIds.has(external.id))
+      .filter((external) => {
+        if (linkedGcalIds.has(external.id)) return false;
+        const blockIdFromExt = (external.raw as any)?.extendedProperties?.private?.blockId;
+        if (blockIdFromExt && planner.blocks.some(b => b.id === blockIdFromExt)) return false;
+        return true;
+      })
       .map((external) => ({
         id: external.id,
         title: external.title,
@@ -452,6 +482,12 @@ const UnifiedPlannerPage: React.FC = () => {
     const completed = scheduledToday.filter((instance) => instance.status === 'completed').length;
     return Math.round((completed / scheduledToday.length) * 100);
   }, [scheduledToday]);
+
+  const storyLabel = useCallback((story: any) => {
+    if (!story) return '';
+    const ref = story.ref || story.referenceNumber || story.reference || story.code || (story.id ? story.id.slice(-6) : '');
+    return ref ? `${ref} — ${story.title}` : story.title || 'Story';
+  }, []);
 
   const unscheduledItems = useMemo(
     () => planner.instances.filter((instance) => instance.status === 'unscheduled'),
@@ -562,6 +598,7 @@ const UnifiedPlannerPage: React.FC = () => {
       theme: blockDefaultTheme as CalendarBlock['theme'],
       start: toInputValue(start),
       end: toInputValue(end),
+      syncToGoogle: true,
     });
     setComposerOpen(true);
   }, [blockDefaultTheme]);
@@ -572,6 +609,9 @@ const UnifiedPlannerPage: React.FC = () => {
       : blockDefaultTheme;
     const aiScore = (block as any).aiScore ?? (block as any).aiCriticalityScore ?? null;
     const aiReason = (block as any).aiReason || (block as any).aiCriticalityReason || null;
+    const recurrence = (block as any).recurrence || {};
+    const untilStr = recurrence?.until ? format(new Date(recurrence.until), 'yyyy-MM-dd') : '';
+    const story = block.storyId ? stories.find((s) => s.id === block.storyId) : undefined;
     setBlockForm({
       id: block.id,
       title: (block as any).title || `${block.category} • ${block.theme}`,
@@ -581,15 +621,19 @@ const UnifiedPlannerPage: React.FC = () => {
       rationale: block.rationale || '',
       start: toInputValue(new Date(block.start)),
       end: toInputValue(new Date(block.end)),
-      syncToGoogle: Boolean((block as any).syncToGoogle),
+      syncToGoogle: true,
       subTheme: block.subTheme || '',
       storyId: (block as any).storyId,
       taskId: (block as any).taskId,
       aiScore,
       aiReason,
+      storyInput: story ? storyLabel(story) : '',
+      recurrenceFreq: recurrence?.freq ? recurrence.freq : 'none',
+      recurrenceDays: Array.isArray(recurrence?.byDay) ? recurrence.byDay : [],
+      recurrenceUntil: untilStr,
     });
     setComposerOpen(true);
-  }, [blockDefaultTheme, resolveThemeAppearance]);
+  }, [blockDefaultTheme, resolveThemeAppearance, stories, storyLabel]);
 
   const handleSelectSlot = useCallback(
     ({ start, end }: { start: Date; end: Date }) => {
@@ -685,15 +729,45 @@ const UnifiedPlannerPage: React.FC = () => {
         // Optional Google Calendar sync for blocks marked to sync
         try {
           const block: any = event.block || {};
-          if (block.syncToGoogle) {
+          if (block.syncToGoogle !== false) {
             const startIso = new Date(start).toISOString();
             const endIso = new Date(end).toISOString();
+            const buildRecurrence = () => {
+              if (!block.recurrence || !block.recurrence.freq) return undefined;
+              const parts = [`FREQ=${String(block.recurrence.freq).toUpperCase()}`];
+              if (Array.isArray(block.recurrence.byDay) && block.recurrence.byDay.length) {
+                parts.push(`BYDAY=${block.recurrence.byDay.join(',')}`);
+              }
+              if (block.recurrence.until) {
+                parts.push(`UNTIL=${format(new Date(block.recurrence.until), "yyyyMMdd'T'HHmmss'Z'")}`);
+              }
+              return [`RRULE:${parts.join(';')}`];
+            };
             if (block.googleEventId) {
               const updateEv = httpsCallable(functions, 'updateCalendarEvent');
-              await updateEv({ eventId: block.googleEventId, start: startIso, end: endIso });
+              await updateEv({
+                eventId: block.googleEventId,
+                start: startIso,
+                end: endIso,
+                summary: block.title || 'Calendar entry',
+              });
             } else {
               const createEv = httpsCallable(functions, 'createCalendarEvent');
-              const res: any = await createEv({ summary: block.title || 'Calendar entry', start: startIso, end: endIso });
+              const recurrence = buildRecurrence();
+              const res: any = await createEv({
+                summary: block.title || 'Calendar entry',
+                start: startIso,
+                end: endIso,
+                recurrence,
+                extendedProperties: {
+                  private: {
+                    storyId: block.storyId || null,
+                    taskId: block.taskId || null,
+                    aiScore: block.aiScore ?? null,
+                    aiReason: block.aiReason ?? null,
+                  },
+                },
+              });
               const evId = res?.data?.event?.id;
               if (evId && block.id) {
                 await updateDoc(doc(db, 'calendar_blocks', block.id), { googleEventId: evId, updatedAt: Date.now() });
@@ -775,12 +849,32 @@ const UnifiedPlannerPage: React.FC = () => {
       return h.toString(36);
     };
 
+    const recurrence = (() => {
+      if (blockForm.recurrenceFreq === 'none') return null;
+      const ruleParts = [`FREQ=${blockForm.recurrenceFreq.toUpperCase()}`];
+      if (blockForm.recurrenceFreq === 'weekly' && blockForm.recurrenceDays.length) {
+        ruleParts.push(`BYDAY=${blockForm.recurrenceDays.join(',')}`);
+      }
+      if (blockForm.recurrenceUntil) {
+        const untilDate = new Date(blockForm.recurrenceUntil);
+        untilDate.setHours(23, 59, 59, 0);
+        ruleParts.push(`UNTIL=${format(untilDate, "yyyyMMdd'T'HHmmss'Z'")}`);
+      }
+      return {
+        freq: blockForm.recurrenceFreq as 'daily' | 'weekly',
+        byDay: blockForm.recurrenceDays,
+        until: blockForm.recurrenceUntil ? new Date(blockForm.recurrenceUntil).getTime() : null,
+        rrule: `RRULE:${ruleParts.join(';')}`,
+      };
+    })();
+
+    const linkedStory = blockForm.storyId ? stories.find((s) => s.id === blockForm.storyId) : null;
     const payload: Record<string, unknown> = {
       googleEventId: null,
-      syncToGoogle: blockForm.syncToGoogle,
-      taskId: null,
-      goalId: null,
-      storyId: null,
+      syncToGoogle: true,
+      taskId: blockForm.taskId || null,
+      goalId: linkedStory?.goalId || null,
+      storyId: blockForm.storyId || null,
       habitId: null,
       subTheme: blockForm.subTheme || null,
       persona: 'personal',
@@ -800,6 +894,22 @@ const UnifiedPlannerPage: React.FC = () => {
       ownerUid: currentUser.uid,
       title: blockForm.title,
       updatedAt: Date.now(),
+      recurrence: recurrence
+        ? { freq: recurrence.freq, byDay: recurrence.byDay, until: recurrence.until }
+        : null,
+      aiScore: blockForm.aiScore ?? null,
+      aiReason: blockForm.aiReason ?? null,
+    };
+
+    const extendedProps = {
+      private: {
+        storyId: blockForm.storyId || null,
+        taskId: blockForm.taskId || null,
+        aiScore: blockForm.aiScore ?? null,
+        aiReason: blockForm.aiReason ?? null,
+        blockId: blockForm.id || undefined,
+        dedupeKey: payload.dedupeKey,
+      },
     };
 
     try {
@@ -807,13 +917,47 @@ const UnifiedPlannerPage: React.FC = () => {
         const ref = doc(db, 'calendar_blocks', blockForm.id);
         await updateDoc(ref, payload);
         setFeedback({ variant: 'success', message: 'Calendar entry updated successfully.' });
+        // Patch Google event if present
+        try {
+          if ((blockForm as any).googleEventId || (payload as any).googleEventId) {
+            const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+            await updateEv({
+              eventId: (blockForm as any).googleEventId,
+              summary: blockForm.title,
+              start: start.toISOString(),
+              end: end.toISOString(),
+            });
+          }
+        } catch (err) {
+          console.warn('Planner: failed to update Google event', err);
+        }
       } else {
         const ref = collection(db, 'calendar_blocks');
         const now = Date.now();
-        await addDoc(ref, {
+        const docRef = await addDoc(ref, {
           ...payload,
           createdAt: now,
         });
+        // Create immediately in Google Calendar
+        try {
+          const createEv = httpsCallable(functions, 'createCalendarEvent');
+          const res: any = await createEv({
+            summary: blockForm.title || 'Calendar entry',
+            start: start.toISOString(),
+            end: end.toISOString(),
+            recurrence: recurrence?.rrule ? [recurrence.rrule] : undefined,
+            extendedProperties: {
+              ...extendedProps,
+              private: { ...extendedProps.private, blockId: docRef.id }
+            },
+          });
+          const evId = res?.data?.event?.id;
+          if (evId) {
+            await updateDoc(docRef, { googleEventId: evId, syncToGoogle: true });
+          }
+        } catch (err) {
+          console.warn('Planner: failed to push new entry to Google', err);
+        }
         setFeedback({ variant: 'success', message: 'New calendar entry created.' });
       }
       resetComposer();
@@ -830,7 +974,7 @@ const UnifiedPlannerPage: React.FC = () => {
     } finally {
       setComposerSaving(false);
     }
-  }, [blockForm, currentUser, resetComposer]);
+  }, [blockForm, currentUser, resetComposer, stories]);
 
   const handleInstanceStatusChange = useCallback(
     async (instance: ScheduledInstanceModel, status: ScheduledInstanceModel['status']) => {
@@ -896,6 +1040,11 @@ const UnifiedPlannerPage: React.FC = () => {
   }, [planner, range.start]);
 
   const handleReplanCalendar = useCallback(async () => {
+    if (!currentUser) {
+      setFeedback({ variant: 'danger', message: 'Please sign in to replan calendar.' });
+      return;
+    }
+    
     setReplanLoading(true);
     try {
       const callable = httpsCallable(functions, 'replanCalendarNow');
@@ -921,7 +1070,7 @@ const UnifiedPlannerPage: React.FC = () => {
     } finally {
       setReplanLoading(false);
     }
-  }, []);
+  }, [currentUser]);
 
   const eventStyleGetter = useCallback((event: PlannerCalendarEvent) => {
     const overlaps = (a: PlannerCalendarEvent, b: PlannerCalendarEvent) => {
@@ -935,10 +1084,11 @@ const UnifiedPlannerPage: React.FC = () => {
     const hasConflict = events.some(e => e.id !== event.id && overlaps(e, event) && e.type !== 'external' && event.type !== 'external');
     if (event.type === 'external') {
       return {
+        className: 'planner-event-external',
         style: {
-          backgroundColor: 'rgba(37, 99, 235, 0.12)',
-          borderColor: '#1d4ed8',
-          color: '#1d4ed8',
+          backgroundColor: 'rgba(191, 219, 254, 0.4)',
+          borderColor: '#60a5fa',
+          color: '#1e3a8a',
         },
       };
     }
@@ -1099,6 +1249,43 @@ const UnifiedPlannerPage: React.FC = () => {
     }
   }, [planner]);
 
+  const handleRunNightlyOrchestration = useCallback(async () => {
+    if (!currentUser) {
+      setFeedback({ variant: 'danger', message: 'Please sign in to run orchestration.' });
+      return;
+    }
+    
+    setOrchestrationLoading(true);
+    try {
+      const callable = httpsCallable(functions, 'runNightlyChainNow');
+      const response = await callable({});
+      const payload = response.data as { results?: Array<{ step?: string; status?: string }> };
+      const results = payload?.results || [];
+      const successSteps = results.filter(r => r.status === 'ok').length;
+      const totalSteps = results.length;
+      
+      if (successSteps === totalSteps) {
+        setFeedback({ variant: 'success', message: `Nightly orchestration complete: all ${totalSteps} steps succeeded.` });
+      } else if (successSteps > 0) {
+        setFeedback({ variant: 'info', message: `Orchestration partial: ${successSteps}/${totalSteps} steps completed.` });
+      } else {
+        setFeedback({ variant: 'danger', message: 'Nightly orchestration failed. Check logs and try again.' });
+      }
+    } catch (err) {
+      console.error('Nightly orchestration failed', err);
+      pushDiagnosticLog({
+        channel: 'ai-planner',
+        level: 'error',
+        timestamp: Date.now(),
+        message: 'Failed to trigger nightly orchestration.',
+        details: err instanceof Error ? err.message : String(err),
+      });
+      setFeedback({ variant: 'danger', message: 'Orchestration failed. Please retry in a moment.' });
+    } finally {
+      setOrchestrationLoading(false);
+    }
+  }, [currentUser]);
+
   return (
     <Container fluid className="py-4 unified-planner">
       <Row className="g-4">
@@ -1137,6 +1324,19 @@ const UnifiedPlannerPage: React.FC = () => {
                     <Clock size={16} className="me-1" />
                   )}
                   Replan around calendar
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleRunNightlyOrchestration}
+                  disabled={planner.loading || orchestrationLoading}
+                >
+                  {orchestrationLoading ? (
+                    <Spinner size="sm" animation="border" className="me-2" />
+                  ) : (
+                    <Sparkles size={16} className="me-1" />
+                  )}
+                  Run nightly orchestration
                 </Button>
               </div>
             </Card.Header>
@@ -1636,47 +1836,44 @@ const UnifiedPlannerPage: React.FC = () => {
                 onChange={(event) => setBlockForm((prev) => ({ ...prev, title: event.target.value }))}
               />
             </Form.Group>
-            <Row className="g-3">
-              <Col md={6}>
-                <Form.Group>
-                  <Form.Label>Theme</Form.Label>
-                  <Form.Select
-                    value={blockForm.theme}
-                    onChange={(event) => setBlockForm((prev) => ({ ...prev, theme: event.target.value as CalendarBlock['theme'] }))}
-                  >
-                    {themeOptions.map((theme) => (
-                      <option key={theme.value} value={theme.value}>
-                        {theme.label}
-                      </option>
-                    ))}
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-              <Col md={6}>
-                <Form.Group>
-                  <Form.Label>Category</Form.Label>
-                  <Form.Select
-                    value={blockForm.category}
-                    onChange={(event) => {
-                      const nextCategory = event.target.value as CalendarBlock['category'];
-                      setBlockForm((prev) => ({
-                        ...prev,
-                        category: nextCategory,
-                        subTheme: nextCategory === 'Fitness' ? prev.subTheme : '',
-                      }));
-                    }}
-                  >
-                    <option value="Fitness">Fitness</option>
-                    <option value="Wellbeing">Wellbeing</option>
-                    <option value="Tribe">Tribe</option>
-                    <option value="Chores">Chores</option>
-                    <option value="Gaming">Gaming</option>
-                    <option value="Sauna">Sauna</option>
-                    <option value="Sleep">Sleep</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-            </Row>
+            <Form.Group>
+              <Form.Label>Link to story (optional)</Form.Label>
+              <Form.Control
+                list="planner-story-options"
+                placeholder="Search story by ref or title..."
+                value={blockForm.storyInput || ''}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  const match = stories.find((s) => {
+                    const label = storyLabel(s);
+                    return s.id === value || s.title === value || label === value || (s.ref && s.ref === value);
+                  });
+                  setBlockForm((prev) => ({
+                    ...prev,
+                    storyId: match ? match.id : undefined,
+                    storyInput: value,
+                    title: match ? `${storyLabel(match)}` : prev.title,
+                    theme: match?.theme || prev.theme || blockDefaultTheme,
+                    aiScore: (match as any)?.aiCriticalityScore ?? (match as any)?.aiScore ?? prev.aiScore ?? null,
+                    aiReason: (match as any)?.aiCriticalityReason ?? prev.aiReason ?? null,
+                  }));
+                }}
+                onBlur={(event) => {
+                  const value = event.target.value;
+                  const match = stories.find((s) => storyLabel(s) === value || s.title === value || s.id === value);
+                  setBlockForm((prev) => ({
+                    ...prev,
+                    storyId: match ? match.id : undefined,
+                    storyInput: match ? storyLabel(match) : value,
+                  }));
+                }}
+              />
+              <datalist id="planner-story-options">
+                {stories.map((s) => (
+                  <option key={s.id} value={storyLabel(s)} />
+                ))}
+              </datalist>
+            </Form.Group>
             <Row className="g-3">
               <Col md={6}>
                 <Form.Group>
@@ -1708,13 +1905,52 @@ const UnifiedPlannerPage: React.FC = () => {
                 onChange={(event) => setBlockForm((prev) => ({ ...prev, rationale: event.target.value }))}
               />
             </Form.Group>
-            <Form.Check
-              type="switch"
-              id="planner-sync-switch"
-              label="Sync with Google Calendar"
-              checked={blockForm.syncToGoogle}
-              onChange={(event) => setBlockForm((prev) => ({ ...prev, syncToGoogle: event.target.checked }))}
-            />
+            <Form.Group>
+              <Form.Label>Recurrence</Form.Label>
+              <Form.Select
+                value={blockForm.recurrenceFreq}
+                onChange={(e) => setBlockForm((prev) => ({
+                  ...prev,
+                  recurrenceFreq: e.target.value as BlockFormState['recurrenceFreq'],
+                  recurrenceDays: e.target.value === 'weekly' ? prev.recurrenceDays : [],
+                }))}
+              >
+                <option value="none">One-time</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly (pick days)</option>
+              </Form.Select>
+              {blockForm.recurrenceFreq === 'weekly' && (
+                <div className="d-flex flex-wrap gap-2 mt-2">
+                  {['MO','TU','WE','TH','FR','SA','SU'].map((day) => (
+                    <Form.Check
+                      inline
+                      key={day}
+                      type="checkbox"
+                      id={`rec-${day}`}
+                      label={day}
+                      checked={blockForm.recurrenceDays.includes(day)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setBlockForm((prev) => ({
+                          ...prev,
+                          recurrenceDays: checked
+                            ? Array.from(new Set([...(prev.recurrenceDays || []), day]))
+                            : (prev.recurrenceDays || []).filter((d) => d !== day),
+                        }));
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+              <div className="mt-2">
+                <Form.Label className="mb-0">Repeat until (optional)</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={blockForm.recurrenceUntil}
+                  onChange={(e) => setBlockForm((prev) => ({ ...prev, recurrenceUntil: e.target.value }))}
+                />
+              </div>
+            </Form.Group>
           </Form>
         </Modal.Body>
         <Modal.Footer>

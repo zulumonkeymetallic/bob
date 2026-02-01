@@ -187,6 +187,16 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     lightColor: getCssVarValue('--theme-random-light', '#e2e8f0'),
     textColor: contrastText(getCssVarValue('--theme-random-primary', '#64748b')),
     description: 'Miscellaneous blocks without a specific theme'
+  },
+  {
+    id: 15,
+    name: 'Side Gig',
+    label: 'Side Gig',
+    color: getCssVarValue('--theme-sidegig-primary', '#14b8a6'),
+    darkColor: getCssVarValue('--theme-sidegig-dark', '#0f766e'),
+    lightColor: getCssVarValue('--theme-sidegig-light', '#99f6e4'),
+    textColor: contrastText(getCssVarValue('--theme-sidegig-primary', '#14b8a6')),
+    description: 'Secondary income or side projects'
   }
 ];
 
@@ -205,6 +215,9 @@ export const LEGACY_THEME_MAP = {
   'Work': 12,
   'Work (Main Gig)': 12,
   'Main Gig': 12,
+  'Side Gig': 15,
+  'SideGig': 15,
+  'Side-Gig': 15,
   'Sleep': 13,
   'Random': 14
 };

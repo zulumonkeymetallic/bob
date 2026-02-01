@@ -1296,6 +1296,8 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
         <div style={{
           flex: 1,
           overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '70vh',
           transition: 'margin-right 0.3s ease',
           marginRight: showConfig ? '320px' : '0',
         }}>

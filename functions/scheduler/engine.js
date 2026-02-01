@@ -106,11 +106,14 @@ function computeEligibleBlocks(blocks, occurrence) {
     // If block has theme, check various override conditions:
     const hasMatchingTheme = occurrence.theme && occurrence.theme === b.theme;
     const hasNoTheme = !occurrence.theme; // Allow non-themed items (user hasn't categorized)
+    // Urgent items (due in < 24h) can still slip in? User didn't explicitly forbid urgent, just priority.
+    // But "Critical" usually implies urgent. 
+    // "higher priority (critial) ... shoudl not override theme contrainits" 
+    // Let's keep 'isUrgent' for now as it's time-based (due date), but remove priority-based overrides.
     const isUrgent = occurrence.dueDate && occurrence.dueDate < (Date.now() + 24 * 60 * 60 * 1000);
-    const isHighPriority = occurrence.priority != null && occurrence.priority <= 2;
 
-    // Allow if: theme matches OR no theme OR urgent OR high priority
-    return hasMatchingTheme || hasNoTheme || isUrgent || isHighPriority;
+    // Allow if: theme matches OR no theme OR urgent (due soon)
+    return hasMatchingTheme || hasNoTheme || isUrgent;
   });
 
   return themeFiltered;
@@ -260,6 +263,7 @@ function inferThemeFromItem(item, type) {
   if (/sleep|rest|relax|nap|unwind/.test(text)) return 11;  // Rest & Recovery  
   if (/clean|chore|tidy|laundry|dishes|vacuum/.test(text)) return 10;  // Chores
   if (/family|kids|children|spouse|partner/.test(text)) return 5;  // Family & Relationships
+  if (/side\s*gig|sidegig|freelance|consulting|client work|client/.test(text)) return 15;  // Side Gig
   if (/work|career|meeting|project/.test(text)) return 2;  // Career & Professional
   if (/budget|finance|money|invest/.test(text)) return 3;  // Finance & Wealth
   if (/hobby|game|fun|play/.test(text)) return 6;  // Hobbies & Interests
@@ -434,7 +438,7 @@ async function computeStoryOccurrences(stories, windowStart, windowEnd, userId, 
     const ownerUid = story.ownerUid || userId;
     if (!ownerUid) continue;
     const status = String(story.status ?? '').toLowerCase();
-    if (status === 'done' || status === 'complete' || status === 'completed' || Number(story.status) === 3) continue;
+    if (status === 'done' || status === 'complete' || status === 'completed' || Number(story.status) >= 3) continue;
     if (story.deleted) continue;
 
     const zone = story.timezone || story.timeZone || DEFAULT_ZONE;

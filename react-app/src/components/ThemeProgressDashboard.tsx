@@ -9,6 +9,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { Goal, Story, Sprint } from '../types';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
+import { useSprintCapacity } from '../hooks/useSprintCapacity';
 
 const SPRINT_WINDOW = 5;
 
@@ -167,6 +168,24 @@ const ThemeProgressDashboard: React.FC = () => {
   }, [sprints]);
 
   const sprintIds = useMemo(() => new Set(upcomingSprints.map((s) => s.id)), [upcomingSprints]);
+  const primarySprintId = upcomingSprints[0]?.id;
+  const { data: capacityData, loading: capacityLoading } = useSprintCapacity(primarySprintId);
+
+  const capacitySummary = useMemo(() => {
+    if (!capacityData) return null;
+    const planned = capacityData.plannedCapacityHours ?? capacityData.totalCapacityHours ?? 0;
+    const scheduled = capacityData.scheduledHours ?? 0;
+    const free = capacityData.plannedFreeHours ?? Math.max(0, planned - scheduled);
+    return {
+      planned: Math.round(planned),
+      scheduled: Number(scheduled.toFixed(1)),
+      free: Number(free.toFixed(1)),
+      utilization: Math.min(100, Math.round((capacityData.plannedUtilization ?? 0) * 100)),
+      weeklyPlannerHours: Number((capacityData.weeklyPlannerHours ?? 0).toFixed(1)),
+      weeklyPlannerMinutes: capacityData.weeklyPlannerMinutes ?? 0,
+      sprintWeeks: capacityData.sprintWeeks ?? 0
+    };
+  }, [capacityData]);
 
   const sprintCapacity = useMemo(() => {
     const map = new Map<string, number>();
@@ -341,10 +360,62 @@ const ThemeProgressDashboard: React.FC = () => {
             Story points are treated as hours. Capacity uses sprint capacity points. Overall progress reflects all goals and stories in this persona.
           </div>
         </div>
-        <div className="text-muted small">
-          Capacity window: next {upcomingSprints.length} sprint{upcomingSprints.length === 1 ? '' : 's'}
-        </div>
+      <div className="text-muted small">
+        Capacity window: next {upcomingSprints.length} sprint{upcomingSprints.length === 1 ? '' : 's'}
       </div>
+    </div>
+
+      {capacityLoading && primarySprintId && (
+        <div className="text-muted small mb-3">
+          Refreshing capacity for {upcomingSprints[0]?.name || 'selected sprint'}…
+        </div>
+      )}
+      {capacitySummary && (
+        <div className="d-flex flex-wrap gap-3 mb-4">
+          <div
+            style={{
+              flex: '1 1 220px',
+              border: `1px solid ${themeVars.border}`,
+              borderRadius: 12,
+              padding: 16,
+              background: themeVars.card as string,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
+            }}
+          >
+            <div className="text-muted small">Planned capacity</div>
+            <div style={{ fontWeight: 700, fontSize: 20 }}>{capacitySummary.planned} h</div>
+            <div className="text-muted small">Weekly planner: {capacitySummary.weeklyPlannerHours} h × {capacitySummary.sprintWeeks} wk</div>
+          </div>
+          <div
+            style={{
+              flex: '1 1 220px',
+              border: `1px solid ${themeVars.border}`,
+              borderRadius: 12,
+              padding: 16,
+              background: themeVars.card as string,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
+            }}
+          >
+            <div className="text-muted small">Scheduled hours</div>
+            <div style={{ fontWeight: 700, fontSize: 20 }}>{capacitySummary.scheduled} h</div>
+            <div className="text-muted small">{capacitySummary.utilization}% utilization</div>
+          </div>
+          <div
+            style={{
+              flex: '1 1 220px',
+              border: `1px solid ${themeVars.border}`,
+              borderRadius: 12,
+              padding: 16,
+              background: themeVars.card as string,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
+            }}
+          >
+            <div className="text-muted small">Free capacity</div>
+            <div style={{ fontWeight: 700, fontSize: 20 }}>{capacitySummary.free} h</div>
+            <div className="text-muted small">Weekly planner minutes: {capacitySummary.weeklyPlannerMinutes}</div>
+          </div>
+        </div>
+      )}
 
       {!loading && (
         <div className="d-flex flex-wrap gap-3 mb-4">

@@ -16,15 +16,15 @@ const TIME_SLOTS = Array.from(
     (_, i) => START_HOUR * 60 + i * SLOT_MINUTES
 );
 const HEALTH_SUBTHEMES = ['Bike', 'Run', 'Swim', 'S&C', 'Crossfit', 'Meal Prep'];
-const WORK_SHIFT_THEME: GlobalTheme = {
-    id: 999,
-    name: 'Work Shift',
-    label: 'Work Shift',
+const WORK_MAIN_GIG_THEME: GlobalTheme = {
+    id: 12,
+    name: 'Work (Main Gig)',
+    label: 'Work (Main Gig)',
     color: '#0f172a',
     darkColor: '#0b1120',
     lightColor: '#e2e8f0',
     textColor: '#ffffff',
-    description: 'Work shift blocks planned in the weekly view',
+    description: 'Main gig work blocks planned in the weekly view',
 };
 
 interface Allocation {
@@ -65,10 +65,11 @@ const WeeklyThemePlanner: React.FC = () => {
     const { themes: globalThemes } = useGlobalThemes();
     const themeOptions = useMemo(() => {
         const base = globalThemes.length ? globalThemes : GLOBAL_THEMES;
-        const hasWorkShift = base.some((theme) =>
-            String(theme.name || theme.label || '').trim().toLowerCase() === 'work shift',
-        );
-        return hasWorkShift ? base : [...base, WORK_SHIFT_THEME];
+        const hasMainGig = base.some((theme) => {
+            const label = String(theme.name || theme.label || '').trim().toLowerCase();
+            return label === 'work (main gig)' || label === 'work';
+        });
+        return hasMainGig ? base : [...base, WORK_MAIN_GIG_THEME];
     }, [globalThemes]);
     const [allocations, setAllocations] = useState<Allocation[]>([]);
     const [loading, setLoading] = useState(true);
@@ -90,7 +91,7 @@ const WeeklyThemePlanner: React.FC = () => {
     const getAllocations = httpsCallable(functions, 'getThemeAllocations');
     const saveAllocationsFn = httpsCallable(functions, 'saveThemeAllocations');
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
-    const runNightlyChainFn = httpsCallable(functions, 'runNightlyChainNow');
+    const runNightlyChainFn = httpsCallable(functions, 'runNightlyChain');
 
     useEffect(() => {
         if (currentUser) loadAllocations();
@@ -140,7 +141,7 @@ const WeeklyThemePlanner: React.FC = () => {
             const skipped = Number(data?.skipped || 0);
             const total = Number(data?.total || 0);
             if (!total) {
-                setApplyFeedback({ variant: 'info', message: 'No fitness or work-shift blocks found in the weekly plan.' });
+                setApplyFeedback({ variant: 'info', message: 'No fitness or Work (Main Gig) blocks found in the weekly plan.' });
             } else {
                 setApplyFeedback({ variant: 'success', message: `Planner blocks created: ${created}. Skipped: ${skipped}.` });
             }
@@ -504,17 +505,16 @@ const WeeklyThemePlanner: React.FC = () => {
                     <small className="text-muted d-block">Tip: click and drag across time slots to create. Use the top/bottom handles to resize and drag the label to move. Use Clear to remove only the selected range.</small>
                 </div>
                 <div className="d-flex flex-wrap gap-2">
-                    <Button onClick={saveAllocations} disabled={saving || applying || nightlyRunning}>
+                    <Button onClick={saveAllocations} disabled={saving || applying}>
                     {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={18} className="me-2" />}
                     Save Changes
                     </Button>
-                    <Button variant="outline-primary" onClick={applyPlannerBlocksNow} disabled={saving || applying || nightlyRunning}>
+                    <Button variant="outline-primary" onClick={applyPlannerBlocksNow} disabled={saving || applying}>
                         {applying ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                         Apply Planner Blocks Now
                     </Button>
-                    <Button variant="outline-secondary" onClick={runNightlyChainNow} disabled={saving || applying || nightlyRunning}>
-                        {nightlyRunning ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                        Run Nightly Chain Now
+                    <Button variant="outline-secondary" onClick={() => window.open('https://bob.jc1.tech/calendar/planner', '_blank', 'noopener,noreferrer')} disabled={saving || applying}>
+                        Replan Around Calendar
                     </Button>
                 </div>
             </div>

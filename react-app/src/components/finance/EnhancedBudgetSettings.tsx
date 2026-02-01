@@ -1153,6 +1153,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                 goal={showEditGoal}
                 show={!!showEditGoal}
                 onClose={() => setShowEditGoal(null)}
+                currentUserId={currentUser?.uid || ''}
             />
 
             <Modal show={!!createPotGoal} onHide={() => setCreatePotGoal(null)} centered>

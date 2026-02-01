@@ -46,7 +46,7 @@ import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
-  goalTitle?: string;
+  linkedGoal?: string;
   sprintName?: string;
   sortOrder: number;
 }
@@ -117,7 +117,7 @@ const defaultColumns: Column[] = [
     visible: false,
     editable: true,
     type: 'select',
-    options: ['1', '2', '3', '4', '5']
+    options: ['4', '1', '2', '3', '5']
   },
   {
     key: 'effort',
@@ -145,6 +145,22 @@ const defaultColumns: Column[] = [
     type: 'number'
   },
   {
+    key: 'aiCriticalityScore',
+    label: 'AI Score',
+    width: '10%',
+    visible: false,
+    editable: false,
+    type: 'number'
+  },
+  {
+    key: 'aiCriticalityReason',
+    label: 'AI Reason',
+    width: '25%',
+    visible: false,
+    editable: false,
+    type: 'text'
+  },
+  {
     key: 'theme',
     label: 'Theme',
     width: '12%',
@@ -161,6 +177,14 @@ const defaultColumns: Column[] = [
     editable: true,
     type: 'select',
     options: []
+  },
+  {
+    key: 'linkedGoal',
+    label: 'Linked Goal',
+    width: '15%',
+    visible: true,
+    editable: false,
+    type: 'text'
   },
   {
     key: 'sprintName',
@@ -335,15 +359,24 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }
       return '';
     }
-    if (key === 'status') {
-      return taskStatusText(value);
-    }
-    if (key === 'points' && typeof value === 'number') {
-      return String(value);
+  if (key === 'status') {
+    return taskStatusText(value);
+  }
+  if (key === 'points' && typeof value === 'number') {
+    return String(value);
+  }
+  if (key === 'aiCriticalityScore' && typeof value === 'number') {
+    return String(Math.round(value));
+  }
+    if (key === 'aiCriticalityReason') {
+      return String(value || '');
     }
     if (key === 'theme' && typeof value === 'number') {
       const theme = GLOBAL_THEMES.find(t => t.id === value);
       return theme ? theme.name : '';
+    }
+    if (key === 'linkedGoal') {
+      return String(value || 'Unlinked goal');
     }
     return value || '';
   };
@@ -355,6 +388,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const renderCell = (column: Column) => {
     const value = task[column.key as keyof TaskTableRow];
+    const formattedValue = formatValue(column.key, value);
     const isEditing = editingCell === column.key;
 
     if (isEditing && column.editable) {
@@ -452,7 +486,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             e.currentTarget.style.backgroundColor = 'transparent';
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, formatValue(column.key, value))}
+        onClick={() => column.editable && handleCellEdit(column.key, formattedValue)}
       >
         <div style={{
           minHeight: '20px',
@@ -479,8 +513,33 @@ const SortableRow: React.FC<SortableRowProps> = ({
             >
               {formatValue(column.key, value)}
             </span>
+          ) : column.key === 'storyTitle' ? (
+            (() => {
+              const linkedStory = stories.find((story) => story.id === task.storyId || story.title === formattedValue);
+              const display = formattedValue || 'Unlinked story';
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (linkedStory) showSidebar(linkedStory, 'story');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    font: 'inherit',
+                    color: themeVars.brand as string,
+                    textDecoration: 'underline',
+                    cursor: linkedStory ? 'pointer' : 'default',
+                  }}
+                >
+                  {display}
+                </button>
+              );
+            })()
           ) : (
-            formatValue(column.key, value)
+            formattedValue
           )}
         </div>
       </td>
@@ -770,6 +829,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   // Convert tasks to table rows with sort order and story titles
   const tableRows: TaskTableRow[] = filteredTasks.map((task, index) => {
     const story = stories.find(s => s.id === task.storyId);
+    const goal = story ? goals.find((g) => g.id === story.goalId) : undefined;
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
     return {
       ...task,
@@ -777,6 +837,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       sprintName: sprintNameForId(sprints, derivedSprintId),
       sortOrder: index,
       storyTitle: story?.title || '',
+      linkedGoal: goal?.title || '',
     };
   });
 
@@ -1042,6 +1103,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
           <div style={{
             flex: 1,
             overflowX: 'auto',
+            overflowY: 'auto',
+            maxHeight: '70vh',
             transition: 'margin-right 0.3s ease',
             marginRight: showConfig ? '320px' : '0',
           }}>

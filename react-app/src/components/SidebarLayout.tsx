@@ -11,6 +11,7 @@ import SprintSelector from './SprintSelector';
 import GlobalSearchBar from './GlobalSearchBar';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
+import SprintClosureBanner from './sprints/SprintClosureBanner';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -38,7 +39,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
   const location = useLocation();
+  const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) return true;
     try { return localStorage.getItem('leftNavCollapsed') === '1'; } catch { return false; }
   });
   const toggleNavCollapsed = () => {
@@ -48,7 +51,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       return next;
     });
   };
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['Dashboards', 'Finance', 'Settings', 'Logs']);
+  // Start collapsed by default
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
   const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -59,15 +63,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   }, [location]);
 
   const navigationGroups: NavigationGroup[] = [
-    {
-      label: 'Dashboards',
-      icon: 'chart-bar',
-      items: [
-        { label: 'Overview', path: '/dashboard', icon: 'home' },
-        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
-        { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
-      ]
-    },
+      {
+        label: 'Dashboards',
+        icon: 'chart-bar',
+        items: [
+          { label: 'Overview', path: '/dashboard', icon: 'home' },
+          { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
+          { label: 'Calendar', path: '/calendar', icon: 'calendar' },
+          { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
+        ]
+      },
     // Health
     {
       label: 'Health',
@@ -152,7 +157,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Routines & Chores', path: '/routines', icon: 'clipboard-check' },
         { label: 'Daily Habits', path: '/habits', icon: 'check' },
-        { label: 'Unified Planner', path: '/calendar', icon: 'calendar' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
       ]
     },
@@ -217,6 +222,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   React.useEffect(() => {
     console.info('[Route] changed', { pathname: location.pathname, ts: new Date().toISOString() });
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => setIsSmallScreen(window.innerWidth <= 768);
+    handler();
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
 
   const toggleGroup = (groupLabel: string) => {
     setExpandedGroups(prev =>
@@ -324,6 +337,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                       e.currentTarget.style.background = 'transparent';
                       e.currentTarget.style.color = 'var(--notion-text-gray)';
                     }}
+                    title={group.label}
                   >
                     <div className="d-flex align-items-center">
                       <i className={`fas fa-${group.icon} me-2`}></i>
@@ -339,6 +353,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                         <div
                           key={item.path}
                           className="nav-link px-3 py-2 border-0 text-start"
+                          title={item.label}
                           onClick={() => {
                             console.log('[Sidebar Desktop] BEFORE navigate()', { path: item.path, currentLocation: window.location.pathname });
                             // Use setTimeout to ensure navigation happens after current event loop
@@ -457,11 +472,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             blueprint.organize.build
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
-            <SprintSelector
-              selectedSprintId={globalSprintId}
-              onSprintChange={setGlobalSprintId}
-            />
-            {/* Test mode toggle removed */}
             {currentUser && (
               <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center"
                 style={{ width: '24px', height: '24px', fontSize: '12px' }}>
@@ -599,32 +609,34 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       </Offcanvas>
 
       {/* Global collapse/expand toggle */}
-      <button
-        type="button"
-        onClick={toggleNavCollapsed}
-        className="position-fixed"
-        style={{
-          top: 10,
-          left: navCollapsed ? 10 : 260,
-          zIndex: 2000,
-          boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
-          border: '1px solid var(--notion-border)',
-          background: 'var(--notion-hover)',
-          color: 'var(--notion-text)',
-          padding: '4px 8px',
-          borderRadius: 6,
-          lineHeight: 1
-        }}
-        title={navCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-      >
-        {navCollapsed ? '▶' : '◀'}
-      </button>
+      {!isSmallScreen && (
+        <button
+          type="button"
+          onClick={toggleNavCollapsed}
+          className="position-fixed"
+          style={{
+            top: 10,
+            left: navCollapsed ? 10 : 260,
+            zIndex: 2000,
+            boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+            border: '1px solid var(--notion-border)',
+            background: 'var(--notion-hover)',
+            color: 'var(--notion-text)',
+            padding: '4px 8px',
+            borderRadius: 6,
+            lineHeight: 1
+          }}
+          title={navCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+        >
+          {navCollapsed ? '▶' : '◀'}
+        </button>
+      )}
 
       {/* Main Content Area */}
       <div
         className="flex-grow-1"
         style={{
-          paddingTop: window.innerWidth < 992 ? '60px' : '0',
+          paddingTop: isSmallScreen ? '60px' : '0',
           marginRight: isRightSidebarVisible && window.innerWidth >= 992 ? (isRightSidebarCollapsed ? '60px' : '400px') : '0',
           transition: 'margin-right 0.3s ease'
         }}
@@ -660,6 +672,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         </div>
 
         <main className="h-100">
+          <div className="p-3">
+            <SprintClosureBanner />
+          </div>
           {children}
         </main>
         <AssistantDock open={assistantOpen} onClose={() => setAssistantOpen(false)} />
