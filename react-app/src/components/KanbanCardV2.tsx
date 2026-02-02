@@ -10,7 +10,8 @@ import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, colorWithAlpha, goalThemeColor } from '../utils/storyCardFormatting';
 import { themeVars } from '../utils/themeVars';
 import { useAuth } from '../contexts/AuthContext';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
+import { ActivityStreamService } from '../services/ActivityStreamService';
 
 interface KanbanCardV2Props {
     item: Story | Task;
@@ -100,6 +101,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
 
     const priorityClass = priorityPillClass(item.priority);
     const priorityLabel = formatPriorityLabel(item.priority);
+    const dueDateMs = (() => {
+        const raw = (item as any).dueDate ?? (item as any).targetDate ?? (item as any).dueDateMs ?? null;
+        if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+        if (raw?.toDate) return raw.toDate().getTime();
+        const parsed = raw ? Date.parse(String(raw)) : NaN;
+        return Number.isNaN(parsed) ? null : parsed;
+    })();
+    const dueDateLabel = dueDateMs
+        ? new Date(dueDateMs).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' })
+        : null;
+    const overdueDays = dueDateMs && dueDateMs < Date.now()
+        ? Math.max(1, Math.floor((Date.now() - dueDateMs) / 86400000))
+        : 0;
     const notePreview = latestNote ? latestNote.replace(/\s+/g, ' ').trim() : '';
     const trimmedNote = notePreview.length > 140 ? `${notePreview.slice(0, 140)}...` : notePreview;
     const toDate = (value: any): Date | null => {
@@ -115,6 +129,10 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const steamSyncDate = toDate(steamMeta?.lastSyncAt);
     const steamSyncLabel = steamSyncDate ? steamSyncDate.toLocaleDateString() : null;
     const showSteamInfo = type === 'story' && steamMeta && (steamPlaytimeHours != null || steamSyncLabel);
+    const reminderSyncedAt = toDate((item as any).deviceUpdatedAt || (item as any).reminderCreatedAt);
+    const reminderSyncLabel = reminderSyncedAt
+        ? `${reminderSyncedAt.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} ${reminderSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : null;
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -138,14 +156,74 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         event.stopPropagation();
         setActionMessage(null);
         try {
-            const callable = httpsCallable(functions, 'convertTasksToStories');
-            await callable({
+            const suggest = httpsCallable(functions, 'suggestTaskStoryConversions');
+            const convert = httpsCallable(functions, 'convertTasksToStories');
+
+            const suggestionResp: any = await suggest({
+                persona: (item as any).persona || 'personal',
+                taskIds: [item.id],
+                limit: 1
+            });
+            const suggestions: any[] = Array.isArray(suggestionResp?.data?.suggestions) ? suggestionResp.data.suggestions : [];
+            const suggestion = suggestions.find(s => s.taskId === item.id) || suggestions[0] || {};
+
+            const storyTitle = (suggestion?.storyTitle || item.title || 'Converted task').slice(0, 140);
+            const storyDescription = (suggestion?.storyDescription || (item as any).description || '').slice(0, 1200);
+            const goalId = suggestion?.goalId || (item as any).goalId || (parentStory as any)?.goalId || null;
+
+            const resp: any = await convert({
                 conversions: [{
                     taskId: item.id,
-                    storyTitle: item.title || 'Converted task',
-                    storyDescription: (item as any).description || ''
+                    storyTitle,
+                    storyDescription,
+                    goalId
                 }]
             });
+
+            const created = (resp?.data?.created || resp?.data?.stories || resp?.data?.results || [])[0] || {};
+            const newStoryId = created.storyId || created.id || null;
+            const newStoryRef = created.storyRef || created.ref || created.reference || null;
+
+            // Close the task locally
+            try {
+                await updateDoc(doc(db, 'tasks', item.id), {
+                    status: 2,
+                    convertedToStoryId: newStoryId || null,
+                    updatedAt: serverTimestamp(),
+                });
+            } catch (e) {
+                console.warn('Failed to close task after conversion', e);
+            }
+
+            // Activity stream entry
+            if (currentUser) {
+                const desc = `Converted to story ${newStoryRef || newStoryId || ''}`.trim();
+                await ActivityStreamService.addActivity({
+                    entityId: item.id,
+                    entityType: 'task',
+                    activityType: 'task_to_story_conversion',
+                    userId: currentUser.uid,
+                    userEmail: currentUser.email || undefined,
+                    description: desc || 'Converted to story',
+                    persona: (item as any).persona || 'personal',
+                    referenceNumber: (item as any).ref,
+                    source: 'human'
+                } as any);
+                if (newStoryId) {
+                    await ActivityStreamService.addActivity({
+                        entityId: newStoryId,
+                        entityType: 'story',
+                        activityType: 'task_to_story_conversion',
+                        userId: currentUser.uid,
+                        userEmail: currentUser.email || undefined,
+                        description: `Created from task ${(item as any).ref || item.id}`,
+                        persona: (item as any).persona || 'personal',
+                        referenceNumber: newStoryRef || undefined,
+                        source: 'human'
+                    } as any);
+                }
+            }
+
             setActionMessage('Converted to story');
             setTimeout(() => setActionMessage(null), 2500);
         } catch (err: any) {
@@ -249,7 +327,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 onClick={handleConvertTaskToStory}
                                 onPointerDown={(e) => e.stopPropagation()}
                             >
-                                <Shuffle size={12} />
+                                <Wand2 size={12} />
                             </Button>
                         )}
                         {type === 'story' && (
@@ -326,11 +404,30 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         )}
                     </div>
                 )}
+                {(item as any).reminderId && reminderSyncLabel && (
+                    <div className="kanban-card__steam" style={{ justifyContent: 'flex-end' }}>
+                        <span className="kanban-card__steam-label">Reminder sync</span>
+                        <span className="kanban-card__steam-muted"> · {reminderSyncLabel}</span>
+                    </div>
+                )}
 
                 <div className="kanban-card__meta">
                     <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
                         {priorityLabel}
                     </span>
+                    {dueDateLabel && (
+                        <span className="kanban-card__meta-badge" title="Due date">
+                            Due {dueDateLabel}
+                        </span>
+                    )}
+                    <span className="kanban-card__meta-badge" title="Status">
+                        {statusLabel}
+                    </span>
+                    {overdueDays > 0 && (
+                        <span className="kanban-card__meta-badge" style={{ color: 'var(--red)' }} title="Overdue">
+                            {overdueDays}d overdue
+                        </span>
+                    )}
                     {type === 'story' && (
                         <span className="kanban-card__meta-badge" title="Story points">
                             {((item as Story).points ?? 0)} pts
@@ -347,9 +444,6 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             {Math.round(Number((item as any).aiCriticalityScore))}
                         </span>
                     ) : null}
-                    <span className="kanban-card__meta-text" title="Status">
-                        {statusLabel}
-                    </span>
                 </div>
 
                 <div className="kanban-card__goal">

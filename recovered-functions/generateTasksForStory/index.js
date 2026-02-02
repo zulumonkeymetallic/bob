@@ -2979,12 +2979,13 @@ async function validateCalendarBlocks(blocks, context) {
 // Map numeric theme to canonical label
 function themeLabelFromNumber(n) {
   switch (Number(n)) {
+    case 0: return 'General';
     case 1: return 'Health';
     case 2: return 'Growth';
     case 3: return 'Wealth';
     case 4: return 'Tribe';
     case 5: return 'Home';
-    default: return 'Growth';
+    default: return 'General';
   }
 }
 

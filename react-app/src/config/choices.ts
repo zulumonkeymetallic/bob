@@ -1,6 +1,7 @@
 // BOB Choice Configuration - ServiceNow style sys_choice approach
 // All database values stored as integers, labels configured here
 import { themeVars } from '../utils/themeVars';
+import { GLOBAL_THEMES } from '../constants/globalThemes';
 
 export interface Choice {
   value: number;
@@ -36,13 +37,12 @@ export const CHOICES: ChoiceTable = {
       { value: 2, label: 'Medium', color: 'var(--orange)', description: 'Some uncertainty' },
       { value: 3, label: 'High', color: 'var(--green)', description: 'Very confident' }
     ],
-    theme: [
-      { value: 1, label: 'Health', color: 'var(--green)', description: 'Physical and mental wellness' },
-      { value: 2, label: 'Growth', color: themeVars.brand as string, description: 'Personal and professional development' },
-      { value: 3, label: 'Wealth', color: 'var(--orange)', description: 'Financial goals and security' },
-      { value: 4, label: 'Tribe', color: 'var(--purple)', description: 'Relationships and community' },
-      { value: 5, label: 'Home', color: 'var(--blue)', description: 'Living space and environment' }
-    ]
+    theme: GLOBAL_THEMES.map(theme => ({
+      value: theme.id,
+      label: theme.label,
+      color: theme.color,
+      description: theme.description
+    }))
   },
 
   // Story choices
@@ -54,6 +54,7 @@ export const CHOICES: ChoiceTable = {
       { value: 4, label: 'Done', color: 'var(--green)', description: 'Completed successfully' }
     ],
     priority: [
+      { value: 4, label: 'Critical', color: 'var(--danger)', description: 'Critical priority — LLM assigned' },
       { value: 1, label: 'P1', color: 'var(--red)', description: 'Critical - must do' },
       { value: 2, label: 'P2', color: 'var(--orange)', description: 'Important - should do' },
       { value: 3, label: 'P3', color: themeVars.muted as string, description: 'Nice to have - could do' }
@@ -69,6 +70,7 @@ export const CHOICES: ChoiceTable = {
       { value: 2, label: 'Done', color: 'var(--green)', description: 'Completed' }
     ],
     priority: [
+      { value: 4, label: 'Critical', color: 'var(--danger)', description: 'Critical priority — LLM assigned' },
       { value: 1, label: 'High', color: 'var(--red)', description: 'Urgent priority' },
       { value: 2, label: 'Medium', color: 'var(--orange)', description: 'Normal priority' },
       { value: 3, label: 'Low', color: themeVars.muted as string, description: 'Low priority' }
@@ -160,6 +162,7 @@ export const StoryStatus = {
 };
 
 export const StoryPriority = {
+  CRITICAL: 4,
   P1: 1,
   P2: 2,
   P3: 3,
@@ -170,6 +173,7 @@ export const StoryPriority = {
 };
 
 export const TaskPriority = {
+  CRITICAL: 4,
   HIGH: 1,
   MEDIUM: 2,
   LOW: 3,

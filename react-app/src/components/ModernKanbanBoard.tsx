@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Card, Row, Col, Button, Form, Modal } from 'react-bootstrap';
 import {
   DndContext,
@@ -44,6 +44,71 @@ import '../styles/KanbanCards.css';
 import '../styles/KanbanFixes.css';
 import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, goalThemeColor, colorWithAlpha } from '../utils/storyCardFormatting';
 import SortableStoryCard from './stories/SortableStoryCard';
+import { normalizePriorityValue, isCriticalPriority } from '../utils/priorityUtils';
+
+const formatDueDate = (task: Task): string => {
+  const ms = getTaskDueMs(task);
+  if (!ms) return '—';
+  const d = new Date(ms);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear().toString().slice(-2)}`;
+};
+
+const getTaskDueMs = (task: Task): number | null => {
+  const fields = ['dueDate', 'dueDateMs', 'dueAt', 'targetDate'];
+  for (const field of fields) {
+    const raw = (task as any)[field];
+    if (raw == null) continue;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (typeof raw === 'object' && typeof (raw as any)?.toDate === 'function') {
+      return (raw as any).toDate().getTime();
+    }
+    const parsed = Date.parse(String(raw));
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
+};
+
+const isTaskOverdue = (task: Task): boolean => {
+  const due = getTaskDueMs(task);
+  return due != null && due < Date.now();
+};
+
+const daysOverdue = (task: Task): number | null => {
+  const due = getTaskDueMs(task);
+  if (due == null) return null;
+  const delta = Date.now() - due;
+  if (delta <= 0) return 0;
+  return Math.ceil(delta / 86400000);
+};
+
+const getStoryDueMs = (story: Story): number | null => {
+  const fields = ['dueDate', 'targetDate', 'plannedEndDate', 'plannedStartDate'];
+  for (const field of fields) {
+    const raw = (story as any)[field];
+    if (raw == null) continue;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (typeof raw === 'object' && typeof (raw as any)?.toDate === 'function') {
+      return (raw as any).toDate().getTime();
+    }
+    const parsed = Date.parse(String(raw));
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
+};
+
+const getAiScoreValue = (item: Story | Task): number => {
+  const raw = (item as any).aiCriticalityScore ?? (item as any).aiPriorityScore ?? null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : -Infinity;
+};
+
+const matchesCriticalOrHighAi = (item: Story | Task): boolean => {
+  return isCriticalPriority(item.priority) || getAiScoreValue(item) >= 90;
+};
+
+const isTaskLinkedToStory = (task: Task): boolean => !!(task.storyId && String(task.storyId).trim());
+const isStoryLinkedToGoal = (story: Story): boolean => !!(story.goalId && String(story.goalId).trim());
 
 interface ModernKanbanBoardProps {
   onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
@@ -131,6 +196,15 @@ const SortableTaskCard: React.FC<{
     backgroundColor: colorWithAlpha(accentColor, 0.12)
   };
 
+  const taskPriorityValue = normalizePriorityValue(task.priority);
+  const isCriticalTask = taskPriorityValue >= 4;
+  const criticalAccent = isCriticalTask
+    ? {
+      boxShadow: '0 0 0 2px rgba(251, 191, 36, 0.45)',
+      border: '1px solid rgba(251, 191, 36, 0.8)',
+    }
+    : {};
+
   const [converting, setConverting] = useState(false);
 
   const handleConvertToStory = async (event: React.MouseEvent) => {
@@ -159,7 +233,11 @@ const SortableTaskCard: React.FC<{
     <div ref={setNodeRef} style={style}>
       <div
         className={`kanban-card kanban-card--task kanban-card__clickable${isDragging ? ' dragging' : ''}`}
-        style={{ borderLeft: `3px solid ${isStatus((task as any).status, 'blocked') ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb')}`, marginBottom: '10px' }}
+        style={{
+          borderLeft: `3px solid ${isStatus((task as any).status, 'blocked') ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb')}`,
+          marginBottom: '10px',
+          ...criticalAccent,
+        }}
         role="button"
         tabIndex={0}
         onClick={handleCardClick}
@@ -224,6 +302,29 @@ const SortableTaskCard: React.FC<{
             </div>
           </div>
 
+          {isCriticalTask && (
+            <div
+              style={{
+                margin: '6px 12px 0 12px',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                backgroundColor: '#fef3c7',
+                border: '1px solid rgba(251, 191, 36, 0.4)',
+                color: '#92400e',
+                fontSize: '12px',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.1em',
+              }}
+            >
+              <span>Critical</span>
+              <span aria-hidden="true">!</span>
+            </div>
+          )}
+
           <div className="kanban-card__title" title={task.title || 'Untitled task'}>
             {task.title || 'Untitled task'}
           </div>
@@ -246,6 +347,26 @@ const SortableTaskCard: React.FC<{
             {pointsLabel && (
               <span className="kanban-card__meta-badge" title="Story points">
                 {pointsLabel}
+              </span>
+            )}
+            <span className="kanban-card__meta-text" title="Due date">
+              Due {formatDueDate(task)}
+            </span>
+            {(() => {
+              const overdue = daysOverdue(task);
+              if (!overdue || overdue <= 0) return null;
+              return (
+                <span className="kanban-card__meta-badge pill-danger" title="Overdue">
+                  {overdue}d overdue
+                </span>
+              );
+            })()}
+            {(task as any).aiCriticalityScore != null && (
+              <span
+                className="kanban-card__meta-badge"
+                title={`AI score ${Math.round(Number((task as any).aiCriticalityScore))}/100`}
+              >
+                AI {Math.round(Number((task as any).aiCriticalityScore))}
               </span>
             )}
             {estimateLabel && (
@@ -308,10 +429,17 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   // DnD state
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
   const [activeDragItem, setActiveDragItem] = useState<Story | Task | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
 
   // Form states
   const [editForm, setEditForm] = useState<any>({});
   const [addForm, setAddForm] = useState<any>({});
+  const [filterCriticalOnly, setFilterCriticalOnly] = useState(false);
+  const [filterCriticalAiOnly, setFilterCriticalAiOnly] = useState(false);
+  const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
+  const [filterUnlinkedStoriesOnly, setFilterUnlinkedStoriesOnly] = useState(false);
+  const [filterUnlinkedTasksOnly, setFilterUnlinkedTasksOnly] = useState(false);
+  const [sortMode, setSortMode] = useState<'default' | 'ai' | 'overdue' | 'priority' | 'due'>('default');
 
   // DnD sensors
   const sensors = useSensors(
@@ -358,7 +486,13 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       if (typeof RO === 'function') {
         ro = new RO(() => {
           // Batch callback to next tick to avoid layout thrash
-          requestAnimationFrame(recomputeBoardHeight);
+          if (resizeRafRef.current != null) {
+            cancelAnimationFrame(resizeRafRef.current);
+          }
+          resizeRafRef.current = requestAnimationFrame(() => {
+            resizeRafRef.current = null;
+            recomputeBoardHeight();
+          });
         });
         if (boardContainerRef.current) ro.observe(boardContainerRef.current);
       }
@@ -366,6 +500,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     return () => {
       window.removeEventListener('resize', recomputeBoardHeight);
       try { if (ro) ro.disconnect(); } catch { }
+      if (resizeRafRef.current != null) {
+        cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+      }
     };
   }, []);
 
@@ -540,14 +678,67 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     })
     : tasks;
 
+  const filteredStories = storiesInScope.filter((story) => {
+    if (filterCriticalOnly && !isCriticalPriority(story.priority)) return false;
+    if (filterCriticalAiOnly && !matchesCriticalOrHighAi(story)) return false;
+    if (filterUnlinkedStoriesOnly && isStoryLinkedToGoal(story)) return false;
+    return true;
+  });
+
+  const filteredTasks = tasksInScope.filter((task) => {
+    if (filterCriticalOnly && !isCriticalPriority(task.priority)) return false;
+    if (filterCriticalAiOnly && !matchesCriticalOrHighAi(task)) return false;
+    if (filterOverdueOnly && !isTaskOverdue(task)) return false;
+    if (filterUnlinkedTasksOnly && isTaskLinkedToStory(task)) return false;
+    return true;
+  });
+
+  const sortedStories = useMemo(() => {
+    const arr = [...filteredStories];
+    const now = Date.now();
+    const score = getAiScoreValue;
+    const dueMs = (story: Story) => getStoryDueMs(story);
+    arr.sort((a, b) => {
+      if (sortMode === 'ai') return (score(b) || -Infinity) - (score(a) || -Infinity);
+      if (sortMode === 'overdue') {
+        const da = dueMs(a); const db = dueMs(b);
+        const oa = da != null ? Math.max(0, now - da) : -Infinity;
+        const ob = db != null ? Math.max(0, now - db) : -Infinity;
+        return ob - oa;
+      }
+      if (sortMode === 'priority') return normalizePriorityValue(b.priority) - normalizePriorityValue(a.priority);
+      return 0;
+    });
+    return arr;
+  }, [filteredStories, sortMode]);
+
+  const sortedTasks = useMemo(() => {
+    const arr = [...filteredTasks];
+    const now = Date.now();
+    const score = getAiScoreValue;
+    const overdueMs = (task: Task) => {
+      const due = getTaskDueMs(task);
+      if (due == null) return -Infinity;
+      return Math.max(0, now - due);
+    };
+    arr.sort((a, b) => {
+      if (sortMode === 'ai') return (score(b) || -Infinity) - (score(a) || -Infinity);
+      if (sortMode === 'due') return (getTaskDueMs(a) || Infinity) - (getTaskDueMs(b) || Infinity);
+      if (sortMode === 'overdue') return overdueMs(b) - overdueMs(a);
+      if (sortMode === 'priority') return normalizePriorityValue(b.priority) - normalizePriorityValue(a.priority);
+      return 0;
+    });
+    return arr;
+  }, [filteredTasks, sortMode]);
+
   const getStoriesForLane = (status: string): Story[] => {
     const lane = (status as LaneStatus) || 'backlog';
-    return storiesInScope.filter(story => storyLaneForStatus(story) === lane);
+    return sortedStories.filter(story => storyLaneForStatus(story) === lane);
   };
 
   const getTasksForLane = (status: string): Task[] => {
     const lane = (status as LaneStatus) || 'backlog';
-    return tasksInScope.filter(task => taskLaneForStatus(task) === lane);
+    return sortedTasks.filter(task => taskLaneForStatus(task) === lane);
   };
 
   const parseDroppableId = (id: string): { lane: LaneStatus; type: 'stories' | 'tasks' } | null => {
@@ -634,7 +825,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona),
         where('sprintId', '==', sprintKey),
-        where('isOpen', '==', true),
         orderBy('dueDate', 'asc'),
         limit(1000)
       );
@@ -644,7 +834,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         collection(db, 'sprint_task_index'),
         where('ownerUid', '==', currentUser.uid),
         where('persona', '==', currentPersona),
-        where('isOpen', '==', true),
         orderBy('dueDate', 'asc'),
         limit(1000)
       );
@@ -949,6 +1138,62 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
           </Button>
         </div>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-critical"
+          label="Critical only"
+          checked={filterCriticalOnly}
+          onChange={(e) => setFilterCriticalOnly(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-critical-ai"
+          label="Critical or AI ≥90"
+          checked={filterCriticalAiOnly}
+          onChange={(e) => setFilterCriticalAiOnly(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-overdue"
+          label="Overdue tasks only"
+          checked={filterOverdueOnly}
+          onChange={(e) => setFilterOverdueOnly(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-unlinked-stories"
+          label="Unlinked stories"
+          checked={filterUnlinkedStoriesOnly}
+          onChange={(e) => setFilterUnlinkedStoriesOnly(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-unlinked-tasks"
+          label="Unlinked tasks"
+          checked={filterUnlinkedTasksOnly}
+          onChange={(e) => setFilterUnlinkedTasksOnly(e.currentTarget.checked)}
+        />
+        <Form.Group className="d-flex align-items-center mb-0">
+          <Form.Label className="me-2 mb-0">Sort</Form.Label>
+          <Form.Select
+            size="sm"
+            value={sortMode}
+            onChange={(e) => setSortMode(e.currentTarget.value as any)}
+          >
+            <option value="default">Default</option>
+            <option value="due">Due date</option>
+            <option value="priority">Priority (Critical → Low)</option>
+            <option value="overdue">Days overdue</option>
+            <option value="ai">AI score</option>
+          </Form.Select>
+        </Form.Group>
       </div>
 
       <div

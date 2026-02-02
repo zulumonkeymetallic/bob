@@ -3,6 +3,34 @@ const admin = require('firebase-admin');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 
+const parseToMinutes = (value) => {
+    if (!value) return null;
+    if (typeof value === 'number') return Number(value);
+    const [hours = '0', minutes = '0'] = String(value).split(':');
+    const h = Number(hours);
+    const m = Number(minutes);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return h * 60 + m;
+};
+
+const getWeeklyPlannerMinutes = async (db, userId) => {
+    try {
+        const allocDoc = await db.collection('theme_allocations').doc(userId).get();
+        if (!allocDoc.exists) return 0;
+        const allocations = allocDoc.data()?.allocations;
+        if (!Array.isArray(allocations) || !allocations.length) return 0;
+        return allocations.reduce((sum, alloc) => {
+            const start = parseToMinutes(alloc.startTime);
+            const end = parseToMinutes(alloc.endTime);
+            if (start === null || end === null) return sum;
+            return sum + Math.max(0, end - start);
+        }, 0);
+    } catch (err) {
+        console.warn('Failed to load planner allocations:', err.message || err);
+        return 0;
+    }
+};
+
 /**
  * Calculate Capacity for a specific Sprint
  * Callable Function: Can be called from frontend or other functions
@@ -87,9 +115,9 @@ async function calculateCapacityInternal(db, userId, sprintId) {
             }
         });
 
-        // 3. Calculate Total Capacity
-        // Base: 24h - 8h Sleep = 16h Available.
-        // Deduction: Work Blocks OR 8h (M-F Default).
+        const weeksInSprint = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24 * 7)));
+        const weeklyPlannerMinutes = await getWeeklyPlannerMinutes(db, userId);
+        const plannerCapacityHours = weeklyPlannerMinutes > 0 ? (weeklyPlannerMinutes / 60) * weeksInSprint : null;
         let totalCapacityHours = 0;
         let currentDate = new Date(startDate);
 
@@ -204,6 +232,11 @@ async function calculateCapacityInternal(db, userId, sprintId) {
             scheduledByTheme[theme] = (scheduledByTheme[theme] || 0) + hours;
         });
 
+        const plannedCapacityHours = plannerCapacityHours ?? totalCapacityHours;
+        const plannedFreeHours = Math.max(0, plannedCapacityHours - scheduledHours);
+        const plannedUtilization = plannedCapacityHours > 0 ? scheduledHours / plannedCapacityHours : 0;
+        const weeklyPlannerHours = weeklyPlannerMinutes / 60;
+
         return {
             sprintId,
             totalCapacityHours,
@@ -217,7 +250,14 @@ async function calculateCapacityInternal(db, userId, sprintId) {
             breakdownByTheme,
             scheduledHours,
             scheduledByGoal,
-            scheduledByTheme
+            scheduledByTheme,
+            weeklyPlannerMinutes,
+            weeklyPlannerHours,
+            plannerCapacityHours,
+            plannedCapacityHours,
+            plannedFreeHours,
+            plannedUtilization,
+            sprintWeeks
         };
     } catch (error) {
         console.error('Error in calculateCapacityInternal:', error);

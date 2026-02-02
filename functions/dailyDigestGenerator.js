@@ -18,6 +18,7 @@ exports.generateDailyDigest = onSchedule({
   timeZone: 'Europe/London',
   memory: '512MiB',
   timeoutSeconds: 300,
+  region: 'europe-west2',
   secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')]
 }, async (event) => {
   console.log('🌅 Starting daily digest generation at 06:45');
@@ -57,7 +58,7 @@ exports.generateDailyDigest = onSchedule({
 });
 
 // Manual trigger (per-user) to generate a digest on demand
-exports.runDailyDigestNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')] }, async (req) => {
+exports.runDailyDigestNow = httpsV2.onCall({ region: 'europe-west2', secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')] }, async (req) => {
   if (!DAILY_DIGEST_ENABLED) {
     throw new httpsV2.HttpsError('failed-precondition', 'Daily digest email is disabled in favor of the Daily Summary.');
   }
@@ -315,6 +316,26 @@ async function gatherUserData(db, userId, today, userProfile = {}) {
     .orderBy('start')
     .get();
 
+  // Planner stats (latest run)
+  let plannerStats = null;
+  try {
+    const ps = await db.collection('planner_stats').doc(userId).get();
+    if (ps.exists) {
+      const d = ps.data() || {};
+      plannerStats = {
+        lastRunAt: d.lastRunAt || null,
+        created: d.created || 0,
+        replaced: d.replaced || 0,
+        blocked: d.blocked || 0,
+        rescheduled: d.rescheduled || 0,
+        gcalLinksCount: d.gcalLinksCount || 0,
+        source: d.source || 'unknown',
+      };
+    }
+  } catch (err) {
+    console.warn('planner_stats fetch failed', err?.message || err);
+  }
+
   // Get current sprint information
   const currentSprintSnapshot = await db.collection('sprints')
     .where('ownerUid', '==', userId)
@@ -355,7 +376,8 @@ async function gatherUserData(db, userId, today, userProfile = {}) {
     locationLabel: loc.label,
     date: todayStr,
     dayOfWeek: today.toLocaleDateString('en-US', { weekday: 'long' }),
-    topTasksDueToday: tasksDueTodaySorted.slice(0, 3)
+    topTasksDueToday: tasksDueTodaySorted.slice(0, 3),
+    plannerStats,
   };
 }
 
@@ -457,6 +479,15 @@ async function createDigestHTML(userData, aiInsights) {
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\n/g, '<br>');
 
+  const plannerStats = userData.plannerStats;
+  const plannerLine = (() => {
+    if (!plannerStats) return 'Not yet run.';
+    const when = plannerStats.lastRunAt
+      ? new Date(plannerStats.lastRunAt).toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })
+      : 'Unknown time';
+    return `${when} · calendar entries +${plannerStats.created || 0}, replaced ${plannerStats.replaced || 0}, blocked ${plannerStats.blocked || 0}`;
+  })();
+
   return `
 <!DOCTYPE html>
 <html>
@@ -495,6 +526,15 @@ async function createDigestHTML(userData, aiInsights) {
         <div class="content">
             <div class="briefing-card">
                 ${formattedAdvice}
+            </div>
+
+            <div class="section-title">AI Planning Summary</div>
+            <div class="item">
+              <div>
+                <div class="item-title">Calendar planner</div>
+                <div class="item-meta">${plannerLine}</div>
+              </div>
+              <span class="tag tag-started">${plannerStats?.source || 'replan'}</span>
             </div>
 
             ${userData.stories.length > 0 ? `

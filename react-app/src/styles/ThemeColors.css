@@ -39,6 +39,12 @@
   --theme-work-dark: rgb(30, 64, 175);
   --theme-work-darker: rgb(30, 58, 138);
 
+  --theme-sidegig-primary: #14b8a6;
+  --theme-sidegig-light: rgba(20, 184, 166, 0.2);
+  --theme-sidegig-lighter: rgba(20, 184, 166, 0.1);
+  --theme-sidegig-dark: rgb(13, 148, 136);
+  --theme-sidegig-darker: rgb(15, 118, 110);
+
   --theme-sleep-primary: #6366f1;
   --theme-sleep-light: rgba(99, 102, 241, 0.2);
   --theme-sleep-lighter: rgba(99, 102, 241, 0.1);
@@ -192,6 +198,11 @@
 
 .theme-badge.work {
   background-color: var(--theme-work-primary) !important;
+  color: white;
+}
+
+.theme-badge.sidegig {
+  background-color: var(--theme-sidegig-primary) !important;
   color: white;
 }
 

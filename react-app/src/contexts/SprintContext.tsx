@@ -204,33 +204,28 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return new Date(millis);
     };
 
-    try { performance.mark('sprints_subscribe_start'); } catch { }
-    const unsubscribe = onSnapshot(
-      sprintQuery,
-      (snapshot) => {
-        try { performance.mark('sprints_first_snapshot'); performance.measure('sprints_attach', 'sprints_subscribe_start', 'sprints_first_snapshot'); } catch { }
-        const data = snapshot.docs.map((doc) => {
-          const raw = doc.data() as any;
-          return {
-            id: doc.id,
-            ...raw,
-            status: ChoiceMigration.migrateSprintStatus(raw.status),
-            startDate: normalizeTime(raw.startDate) ?? 0,
-            endDate: normalizeTime(raw.endDate) ?? 0,
-            planningDate: normalizeTime(raw.planningDate) ?? 0,
-            retroDate: normalizeTime(raw.retroDate) ?? 0,
-            createdAt: normalizeTimestamp(raw.createdAt),
-            updatedAt: normalizeTimestamp(raw.updatedAt),
-          } as Sprint;
-        });
-        setAllSprints(data);
+    const mapDocToSprint = (doc: any): Sprint => {
+      const raw = doc.data() as any;
+      return {
+        id: doc.id,
+        ...raw,
+        status: ChoiceMigration.migrateSprintStatus(raw.status),
+        startDate: normalizeTime(raw.startDate) ?? 0,
+        endDate: normalizeTime(raw.endDate) ?? 0,
+        planningDate: normalizeTime(raw.planningDate) ?? 0,
+        retroDate: normalizeTime(raw.retroDate) ?? 0,
+        createdAt: normalizeTimestamp(raw.createdAt),
+        updatedAt: normalizeTimestamp(raw.updatedAt),
+      } as Sprint;
+    };
 
-        const currentSelected = selectedSprintIdRef.current;
-        setSprints(data);
-        setLoading(false);
-        setError(null);
+    const applySprintData = (data: Sprint[], source: 'snapshot' | 'fallback') => {
+      setAllSprints(data);
+      setSprints(data);
+      setLoading(false);
+      setError(null);
 
-        // Log performance and clear marks
+      if (source === 'snapshot') {
         try {
           const attachEntries = performance.getEntriesByName('sprints_attach');
           const last = attachEntries[attachEntries.length - 1];
@@ -241,63 +236,95 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           performance.clearMarks('sprints_first_snapshot');
           performance.clearMeasures('sprints_attach');
         } catch { }
+      }
 
-        let nextSelectedId = selectedSprintIdRef.current;
-        // Default to active sprint (first in deduped) when there is no saved preference
-        // and the current selection is empty/undefined/null.
-        const savedPref = (() => { try { return localStorage.getItem('bob_selected_sprint'); } catch { return null; } })();
-        const noSavedPreference = savedPref === null || savedPref === undefined;
-        if ((!nextSelectedId || nextSelectedId === '') && noSavedPreference && data.length > 0) {
-          nextSelectedId = data[0].id;
+      let nextSelectedId = selectedSprintIdRef.current;
+      const savedPref = (() => { try { return localStorage.getItem('bob_selected_sprint'); } catch { return null; } })();
+      const noSavedPreference = savedPref === null || savedPref === undefined;
+      if ((!nextSelectedId || nextSelectedId === '') && noSavedPreference && data.length > 0) {
+        nextSelectedId = data[0].id;
+        setSelectedSprintId(nextSelectedId);
+      } else if (nextSelectedId && !data.some((s) => s.id === nextSelectedId)) {
+        const replacement = data[0];
+        if (replacement) {
+          nextSelectedId = replacement.id;
           setSelectedSprintId(nextSelectedId);
-        } else if (nextSelectedId && !data.some((s) => s.id === nextSelectedId)) {
-          const replacement = data[0];
-          if (replacement) {
-            nextSelectedId = replacement.id;
-            setSelectedSprintId(nextSelectedId);
-          }
         }
+      }
 
-        if (currentUser?.uid && currentPersona) {
-          persistSprintsToCache(currentUser.uid, currentPersona, {
-            sprints: data,
-            allSprints: data,
-            selectedSprintId: nextSelectedId,
-          });
-          cacheHydratedRef.current = true;
-        }
+      if (currentUser?.uid && currentPersona) {
+        persistSprintsToCache(currentUser.uid, currentPersona, {
+          sprints: data,
+          allSprints: data,
+          selectedSprintId: nextSelectedId,
+        });
+        cacheHydratedRef.current = true;
+      }
 
-        // Dev-only guardrail: if persona-scoped query returns 0 with no error,
-        // probe ownerUid-only to detect orphaned/mismatched persona docs and log guidance.
-        if (
-          process.env.REACT_APP_SPRINT_DEV_GUARDRAIL === 'true' &&
-          !didFallbackCheckRef.current &&
-          data.length === 0
-        ) {
-          didFallbackCheckRef.current = true;
-          (async () => {
-            try {
-              const ownerOnly = query(
-                collection(db, 'sprints'),
-                where('ownerUid', '==', currentUser.uid),
-                orderBy('startDate', 'desc'),
-                limit(20)
-              );
-              const snap = await getDocs(ownerOnly);
-              const allMine = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-              const personaMismatch = allMine.filter((d) => (d as any).persona !== currentPersona);
-              if (allMine.length > 0 && personaMismatch.length > 0) {
-                logger.warn('SprintContext', 'Detected sprints owned by user but not matching current persona. Consider backfilling persona.', {
-                  totalOwned: allMine.length,
-                  mismatchedCount: personaMismatch.length,
-                  currentPersona,
-                });
-              }
-            } catch (e: any) {
-              logger.warn('SprintContext', 'Owner-only probe failed', { code: e?.code, message: e?.message });
+      if (
+        process.env.REACT_APP_SPRINT_DEV_GUARDRAIL === 'true' &&
+        !didFallbackCheckRef.current &&
+        data.length === 0
+      ) {
+        didFallbackCheckRef.current = true;
+        (async () => {
+          try {
+            const ownerOnly = query(
+              collection(db, 'sprints'),
+              where('ownerUid', '==', currentUser.uid),
+              orderBy('startDate', 'desc'),
+              limit(20)
+            );
+            const snap = await getDocs(ownerOnly);
+            const allMine = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+            const personaMismatch = allMine.filter((d) => (d as any).persona !== currentPersona);
+            if (allMine.length > 0 && personaMismatch.length > 0) {
+              logger.warn('SprintContext', 'Detected sprints owned by user but not matching current persona. Consider backfilling persona.', {
+                totalOwned: allMine.length,
+                mismatchedCount: personaMismatch.length,
+                currentPersona,
+              });
             }
-          })();
-        }
+          } catch (e: any) {
+            logger.warn('SprintContext', 'Owner-only probe failed', { code: e?.code, message: e?.message });
+          }
+        })();
+      }
+    };
+
+    const fetchOwnerOnlySprints = async (originError: any) => {
+      try {
+        const ownerOnlyQuery = query(
+          collection(db, 'sprints'),
+          where('ownerUid', '==', currentUser.uid)
+        );
+        const snap = await getDocs(ownerOnlyQuery);
+        const data = snap.docs.map(mapDocToSprint);
+        data.sort((a, b) => (b.startDate ?? 0) - (a.startDate ?? 0));
+        logger.warn('SprintContext', 'Persona-scoped sprint query failed; falling back to owner-only results.', {
+          reason: originError?.message,
+          ownerOnlyCount: data.length,
+        });
+        applySprintData(data, 'fallback');
+      } catch (fallbackError) {
+        logger.error('SprintContext', 'Owner-only sprint fallback failed', {
+          code: fallbackError?.code,
+          message: fallbackError?.message,
+        });
+        setError(fallbackError);
+        setSprints([]);
+        setAllSprints([]);
+        setLoading(false);
+      }
+    };
+
+    try { performance.mark('sprints_subscribe_start'); } catch { }
+    const unsubscribe = onSnapshot(
+      sprintQuery,
+      (snapshot) => {
+        try { performance.mark('sprints_first_snapshot'); performance.measure('sprints_attach', 'sprints_subscribe_start', 'sprints_first_snapshot'); } catch { }
+        const data = snapshot.docs.map(mapDocToSprint);
+        applySprintData(data, 'snapshot');
       },
       (err) => {
         logger.error('SprintContext', 'sprint query failed', {
@@ -306,6 +333,10 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           uid: currentUser?.uid,
           persona: currentPersona,
         });
+        if (err.code === 'permission-denied') {
+          fetchOwnerOnlySprints(err);
+          return;
+        }
         setError(err);
         setSprints([]);
         setAllSprints([]);

@@ -29,6 +29,7 @@ const {
   loadSchedulerInputs,
   ensureFirestore,
   resolveTimezone,
+  loadProfile,
 } = require('./lib/reporting');
 // Nightly orchestration helpers (auto-pointing, conversion, priority, calendar)
 const nightlyOrchestration = require('./nightlyOrchestration');
@@ -51,7 +52,7 @@ try {
   console.warn('[init] dailyDigestGenerator not loaded', e?.message || e);
 }
 const { sendEmail } = require('./lib/email');
-const { coerceZone, toDateTime } = require('./lib/time');
+const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
 const crypto = require('crypto');
 const { KeyManagementServiceClient } = require('@google-cloud/kms');
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -1374,6 +1375,1112 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
   } catch (e) {
     console.error('planBlocksV2Http error', e);
     res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+const PRIORITY_TASK_CONTEXT_LIMIT = 6;
+const PRIORITY_STORY_CONTEXT_LIMIT = 5;
+const PRIORITY_CALENDAR_CONTEXT_LIMIT = 5;
+const PRIORITY_COLLECTION = 'daily_priority_runs';
+const PRIORITY_EVENT_MAP_COLLECTION = 'priority_calendar_events';
+const REPLAN_RUNS_COLLECTION = 'replan_runs';
+const PRIORITY_KEY_PREFIX = 'bobPriority';
+
+const TASK_DONE_STATUS_VALUES = new Set(['done', 'completed', 'complete', 'archived', '2', '3']);
+const STORY_DONE_STATUS_VALUES = new Set(['done', 'complete', 'archived', '3']);
+
+function applyPriorityCors(res) {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Credentials', 'true');
+}
+
+async function extractUidFromRequest(req) {
+  const authHeader = String(req.get('Authorization') || '');
+  if (!authHeader.startsWith('Bearer ')) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Missing Authorization header');
+  }
+  const token = authHeader.slice(7).trim();
+  if (!token) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Missing ID token');
+  }
+  const decoded = await admin.auth().verifyIdToken(token);
+  if (!decoded?.uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Invalid ID token');
+  }
+  return decoded.uid;
+}
+
+function normalizeStatus(value) {
+  if (value == null) return '';
+  if (typeof value === 'number') return String(value);
+  return String(value).toLowerCase();
+}
+
+function isDoneStatusInSet(value, set) {
+  return set.has(normalizeStatus(value));
+}
+
+function normalizeSprintStatusValue(value) {
+  if (typeof value === 'number') return value;
+  const str = String(value || '').toLowerCase();
+  if (!str) return 0;
+  if (str.includes('active')) return 1;
+  if (str.includes('plan')) return 0;
+  if (str.includes('done') || str.includes('complete')) return 2;
+  if (str.includes('cancel')) return 3;
+  return 0;
+}
+
+function resolveActiveSprint(sprints, now, zone) {
+  if (!Array.isArray(sprints) || !sprints.length) return null;
+  const enriched = sprints.map((s) => {
+    const start = toDateTimeFromValue(s.startDate || s.start, zone);
+    const end = toDateTimeFromValue(s.endDate || s.end, zone);
+    return {
+      ...s,
+      _status: normalizeSprintStatusValue(s.status),
+      _start: start,
+      _end: end,
+    };
+  });
+  const byStatus = enriched.find((s) => s._status === 1);
+  if (byStatus) return byStatus;
+  const inWindow = enriched.find((s) => s._start && s._end && now >= s._start && now <= s._end);
+  if (inWindow) return inWindow;
+  return enriched.find((s) => s._status === 0) || null;
+}
+
+function toDateTimeFromValue(raw, zone) {
+  if (!raw) return null;
+  if (DateTime.isDateTime(raw)) return raw.setZone(zone);
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return null;
+    return DateTime.fromMillis(raw, { zone });
+  }
+  if (raw?.seconds != null) {
+    const seconds = Number(raw.seconds);
+    if (Number.isFinite(seconds)) {
+      const millis = seconds * 1000 + Number(raw.nanoseconds || raw.nanos || 0) / 1e6;
+      return DateTime.fromMillis(millis, { zone });
+    }
+  }
+  if (typeof raw?.toDate === 'function') {
+    return DateTime.fromJSDate(raw.toDate(), { zone });
+  }
+  if (typeof raw === 'string') {
+    const parsed = DateTime.fromISO(raw, { zone });
+    if (parsed.isValid) return parsed;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return DateTime.fromMillis(numeric, { zone });
+  }
+  return null;
+}
+
+function resolveDateFromFields(entity, zone, fields = []) {
+  for (const field of fields) {
+    const candidate = toDateTimeFromValue(entity?.[field], zone);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function getTaskContext(task, zone) {
+  const due = resolveDateFromFields(task, zone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+  const created = resolveDateFromFields(task, zone, ['createdAt', 'createdAtMs', 'createdAtIso']);
+  const estimate = Number(task.estimateMin || task.estimatedMinutes || task.estimateMinutes || task.effort) || null;
+  return {
+    id: task.id,
+    title: String(task.title || task.description || 'Task').trim(),
+    dueIso: due ? due.toISO() : null,
+    dueDisplay: due ? due.toLocaleString(DateTime.DATE_MED) : null,
+    createdIso: created ? created.toISO() : null,
+    storyId: task.storyId || null,
+    goalId: task.goalId || null,
+    estimateMinutes: estimate,
+    persona: task.persona || null,
+    status: task.status || null,
+  };
+}
+
+function getStoryContext(story, zone) {
+  const due = resolveDateFromFields(story, zone, ['sprintDueDate', 'targetDate', 'plannedStartDate']);
+  return {
+    id: story.id,
+    title: String(story.title || 'Story').trim(),
+    dueIso: due ? due.toISO() : null,
+    status: story.status || null,
+    goalId: story.goalId || null,
+    sprintId: story.sprintId || null,
+    description: String(story.description || '').trim() || null,
+  };
+}
+
+function getCalendarContext(block, zone) {
+  const start = toDateTimeFromValue(block.start || block.startAt, zone);
+  const end = toDateTimeFromValue(block.end || block.endAt, zone);
+  return {
+    id: block.id,
+    title: String(block.title || block.note || block.category || 'Block').trim(),
+    startIso: start ? start.toISO() : null,
+    endIso: end ? end.toISO() : null,
+    source: block.source || block.sourceType || block.entryMethod || null,
+    theme: block.theme || null,
+    linkedTask: block.taskId || null,
+    linkedStory: block.storyId || null,
+    googleEventId: block.googleEventId || null,
+    immovable: Boolean(block.immovable || block.locked || block.entryMethod === 'calendar'),
+  };
+}
+
+function take(items, limit) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, limit);
+}
+
+function buildPriorityKey(dayIso, type, itemId) {
+  return `${PRIORITY_KEY_PREFIX}:${dayIso}:${type}:${itemId}`;
+}
+
+async function fetchLatestDailySummary(db, uid) {
+  try {
+    const snap = await db.collection('daily_summaries')
+      .where('ownerUid', '==', uid)
+      .orderBy('generatedAt', 'desc')
+      .limit(1)
+      .get();
+    if (snap.empty) return null;
+    return snap.docs[0].data();
+  } catch (error) {
+    console.warn('[priority] daily summary lookup failed', error?.message || error);
+    return null;
+  }
+}
+
+function buildPriorityInputPayload({ dayIso, timezone, now, tasks, stories, calendar, summary, sprint }) {
+  return {
+    dayIso,
+    timezone,
+    now: now.toISO(),
+    sprint: sprint
+      ? {
+        id: sprint.id || null,
+        title: sprint.title || sprint.name || 'Sprint',
+        status: sprint.status || null,
+        start: sprint._start ? sprint._start.toISO() : null,
+        end: sprint._end ? sprint._end.toISO() : null,
+      }
+      : null,
+    tasks: {
+      dueToday: take(tasks.dueToday.map((t) => getTaskContext(t, timezone)), PRIORITY_TASK_CONTEXT_LIMIT),
+      createdToday: take(tasks.createdToday.map((t) => getTaskContext(t, timezone)), PRIORITY_TASK_CONTEXT_LIMIT),
+      overdue: take(tasks.overdue.map((t) => getTaskContext(t, timezone)), PRIORITY_TASK_CONTEXT_LIMIT),
+    },
+    stories: take(stories.map((s) => getStoryContext(s, timezone)), PRIORITY_STORY_CONTEXT_LIMIT),
+    storyTasks: take(tasks.activeStoryTasks.map((t) => getTaskContext(t, timezone)), PRIORITY_TASK_CONTEXT_LIMIT),
+    calendar: take(calendar.map((c) => getCalendarContext(c, timezone)), PRIORITY_CALENDAR_CONTEXT_LIMIT),
+    dailySummary: summary
+      ? {
+        dayIso: summary.dayIso || dayIso,
+        highlights: summary.summary?.dailyChecklist || summary.summary?.dailyBriefing || summary.summary?.summary || null,
+      }
+      : null,
+  };
+}
+
+function buildFallbackPriorities({ dueToday, overdue, createdToday, timezone }) {
+  const candidates = [...dueToday, ...overdue, ...createdToday]
+    .map((task) => getTaskContext(task, timezone))
+    .filter(Boolean);
+  const picks = [];
+  const used = new Set();
+  for (const candidate of candidates) {
+    if (picks.length >= 3) break;
+    if (used.has(candidate.id)) continue;
+    picks.push({
+      type: 'task',
+      id: candidate.id,
+      title: candidate.title,
+      whyNow: candidate.dueDisplay ? `Due ${candidate.dueDisplay}` : 'Recently created',
+      estMinutes: candidate.estimateMinutes || 30,
+      nextAction: 'Open BOB and make progress',
+    });
+    used.add(candidate.id);
+  }
+  if (picks.length < 3) {
+    while (picks.length < 3) {
+      picks.push({
+        type: 'calendar',
+        id: `calendar-review-${picks.length}`,
+        title: 'Review today\'s events and choose a focus',
+        whyNow: 'Use remaining time to vision your day.',
+        estMinutes: 15,
+        nextAction: 'Scan the calendar and pick one story or task',
+      });
+    }
+  }
+  return picks;
+}
+
+function normalizePriorityItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, 3).map((item, index) => ({
+    type: (item?.type || 'task').toString(),
+    id: String(item?.id || `priority-${index + 1}`),
+    title: String(item?.title || `Priority ${index + 1}`).trim(),
+    whyNow: String(item?.whyNow || item?.reason || 'No reason provided').trim(),
+    estMinutes: Number(item?.estMinutes || item?.estimateMinutes || 0) || 30,
+    nextAction: String(item?.nextAction || item?.nextSteps || item?.next || 'Take action').trim(),
+  }));
+}
+
+async function persistPriorityRun(db, data) {
+  try {
+    const ref = db.collection(PRIORITY_COLLECTION).doc();
+    await ref.set({
+      id: ref.id,
+      ownerUid: data.ownerUid,
+      userId: data.ownerUid,
+      dayIso: data.dayIso,
+      timezone: data.timezone,
+      correlationId: data.correlationId,
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      inputs: data.inputs,
+      llmRaw: data.llmRaw,
+      priorities: data.priorities,
+    });
+  } catch (error) {
+    console.warn('[priority] persist run failed', error?.message || error);
+  }
+}
+
+async function logPriorityActivity(db, { ownerUid, correlationId, priorities, metadata = {} }) {
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'priority',
+      entityId: `priority:${ownerUid}:${correlationId}`,
+      activityType: 'PRIORITIES_GENERATED',
+      actor: 'AI_Agent',
+      userId: ownerUid,
+      ownerUid,
+      description: 'Siri "What\'s next" priorities generated',
+      metadata: {
+        correlationId,
+        priorities: priorities.map((p) => ({ type: p.type, id: p.id, title: p.title })),
+        ...metadata,
+      },
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[priority] activity log failed', error?.message || error);
+  }
+}
+
+exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req, res) => {
+  applyPriorityCors(res);
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+  if (req.method !== 'GET') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  let uid;
+  try {
+    uid = await extractUidFromRequest(req);
+  } catch (error) {
+    const message = error?.message || 'Authentication failed';
+    console.warn('[priorityNow] auth failed', message);
+    res.status(401).json({ error: message });
+    return;
+  }
+
+  try {
+    const db = ensureFirestore();
+    const profile = await loadProfile(db, uid);
+    const timezone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+    const now = DateTime.now().setZone(timezone);
+    const { start, end } = computeDayWindow({ day: now, timezone });
+    const startMs = start.toMillis();
+    const endMs = end.toMillis();
+
+    const [tasksSnap, storiesSnap, sprintsSnap, calendarSnap, latestSummary] = await Promise.all([
+      db.collection('tasks').where('ownerUid', '==', uid).limit(400).get(),
+      db.collection('stories').where('ownerUid', '==', uid).get(),
+      db.collection('sprints').where('ownerUid', '==', uid).get(),
+      db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('start', '>=', startMs)
+        .where('start', '<=', endMs)
+        .orderBy('start', 'asc')
+        .get(),
+      fetchLatestDailySummary(db, uid),
+    ]);
+
+    const tasks = tasksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const sprints = sprintsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const calendarBlocks = calendarSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const filteredTasks = tasks.filter((task) => !task.deleted && !isDoneStatusInSet(task.status, TASK_DONE_STATUS_VALUES));
+
+    const dueToday = filteredTasks.filter((task) => {
+      const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+      return due && due >= start && due <= end;
+    });
+    const createdToday = filteredTasks.filter((task) => {
+      const created = resolveDateFromFields(task, timezone, ['createdAt', 'createdAtMs', 'createdAtIso']);
+      return created && created >= start && created <= end;
+    });
+    const overdue = filteredTasks.filter((task) => {
+      const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+      return due && due < now;
+    });
+
+    const activeSprint = resolveActiveSprint(sprints, now, timezone);
+    const activeStoryIds = new Set(
+      activeSprint
+        ? stories.filter((story) => story.sprintId === activeSprint.id).map((story) => story.id)
+        : []
+    );
+    const activeStories = activeSprint
+      ? stories.filter((story) => activeStoryIds.has(story.id) && !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES))
+      : stories.filter((story) => !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES)).slice(0, PRIORITY_STORY_CONTEXT_LIMIT);
+    const activeStoryTasks = filteredTasks.filter((task) => task.storyId && activeStoryIds.has(task.storyId));
+
+    const contextPayload = buildPriorityInputPayload({
+      dayIso: start.toISODate(),
+      timezone,
+      now,
+      tasks: { dueToday, createdToday, overdue, activeStoryTasks },
+      stories: activeStories,
+      calendar: calendarBlocks,
+      summary: latestSummary,
+      sprint: activeSprint,
+    });
+
+    const systemPrompt = [
+      'You are BOB, the personal productivity assistant.',
+      'The user triggered Siri/Watch with "What\'s next?" for today.',
+      'Return JSON only; do not wrap in markdown or prose.',
+    ].join(' ');
+
+    const userPrompt = [
+      `Context: ${JSON.stringify(contextPayload)}`,
+      'Return EXACT JSON with keys: topPriorities, remainingCalendar, risks, displayText, speakText, debug.',
+      'Top priorities must be an array of exactly 3 objects with fields: type (task|story|calendar), id, title, whyNow, estMinutes, nextAction.',
+      'remainingCalendar should be a short list of upcoming events with title, start, and end.',
+      'risks should call out blockers, overdue work, or missing resources.',
+      'displayText should be 2-3 bullet lines summarizing the priorities.',
+      'speakText should be a short spoken summary (20-40 seconds).',
+      'debug should include counts referencing tasks/stories/calendar IDs from the context.',
+      'Priority selection should favor due/overdue work and items already scheduled soon.',
+    ].join('\n');
+
+    let llmText = '';
+    let parsed = {};
+    try {
+      llmText = await callLLMJson({
+        system: systemPrompt,
+        user: userPrompt,
+        purpose: 'priority_now',
+        userId: uid,
+        expectJson: true,
+        temperature: 0.2,
+      });
+      parsed = llmText ? JSON.parse(llmText) : {};
+    } catch (error) {
+      console.warn('[priorityNow] LLM failed or returned invalid JSON', error?.message || error);
+      parsed = {};
+    }
+
+    let priorities = normalizePriorityItems(parsed.topPriorities);
+    if (priorities.length !== 3) {
+      priorities = normalizePriorityItems(buildFallbackPriorities({ dueToday, overdue, createdToday, timezone }));
+    }
+
+    const calendarFallback = take(calendarBlocks, PRIORITY_CALENDAR_CONTEXT_LIMIT).map((block) => getCalendarContext(block, timezone));
+    const remainingCalendar =
+      Array.isArray(parsed.remainingCalendar) && parsed.remainingCalendar.length
+        ? parsed.remainingCalendar.slice(0, PRIORITY_CALENDAR_CONTEXT_LIMIT).map((item) => ({
+            title: String(item?.title || 'Block').trim(),
+            startIso: item?.start || null,
+            endIso: item?.end || null,
+          }))
+        : calendarFallback.map((block) => ({ title: block.title, startIso: block.startIso, endIso: block.endIso }));
+
+    const risks =
+      Array.isArray(parsed.risks) && parsed.risks.length
+        ? parsed.risks.map((risk) => String(risk).trim()).filter(Boolean)
+        : overdue.length
+          ? [`${overdue.length} overdue task${overdue.length === 1 ? '' : 's'} need attention`]
+          : [];
+
+    const displayText =
+      parsed.displayText ||
+      priorities.map((p) => `• ${p.title}: ${p.whyNow}`).join('\n') ||
+      'No urgent priorities detected.';
+
+    const speakText =
+      parsed.speakText ||
+      priorities.map((p) => `${p.title}, ${p.nextAction}`).join('. ') ||
+      'Nothing urgent on the agenda.';
+
+    const debug = {
+      llmRaw: llmText ? llmText.slice(0, 2000) : '',
+      counts: {
+        dueToday: dueToday.length,
+        createdToday: createdToday.length,
+        overdue: overdue.length,
+        activeStories: activeStories.length,
+        calendarEvents: calendarBlocks.length,
+      },
+      contextIds: {
+        taskIds: [...new Set([...dueToday, ...overdue].map((task) => task.id || '').filter(Boolean))],
+        storyIds: activeStories.map((story) => story.id || '').filter(Boolean),
+      },
+    };
+
+    const correlationId = crypto.randomUUID();
+    await persistPriorityRun(db, {
+      ownerUid: uid,
+      dayIso: start.toISODate(),
+      timezone,
+      correlationId,
+      inputs: {
+        dueToday: dueToday.length,
+        createdToday: createdToday.length,
+        overdue: overdue.length,
+        activeStories: activeStories.length,
+        calendarEvents: calendarBlocks.length,
+      },
+      llmRaw: llmText,
+      priorities,
+    });
+
+    await logPriorityActivity(db, {
+      ownerUid: uid,
+      correlationId,
+      priorities,
+      metadata: {
+        dayIso: start.toISODate(),
+        timezone,
+      },
+    });
+
+    res.status(200).json({
+      displayText,
+      speakText,
+      priorities,
+      remainingCalendar,
+      risks,
+      debug,
+    });
+  } catch (error) {
+    console.error('[priorityNow] failed', error);
+    res.status(500).json({ error: error?.message || 'Failed to generate priorities' });
+  }
+});
+
+function mergeIntervals(intervals) {
+  if (!intervals.length) return [];
+  const sorted = [...intervals].sort((a, b) => a.start.valueOf() - b.start.valueOf());
+  const merged = [sorted[0]];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const current = sorted[i];
+    const last = merged[merged.length - 1];
+    if (current.start <= last.end) {
+      last.end = last.end > current.end ? last.end : current.end;
+    } else {
+      merged.push({ start: current.start, end: current.end });
+    }
+  }
+  return merged;
+}
+
+function computeBusyIntervals(blocks, zone, windowStart, windowEnd) {
+  const intervals = [];
+  for (const block of blocks) {
+    const start = toDateTimeFromValue(block.start || block.startAt, zone);
+    const end = toDateTimeFromValue(block.end || block.endAt, zone);
+    if (!start || !end) continue;
+    if (end <= windowStart || start >= windowEnd) continue;
+    intervals.push({
+      start: start < windowStart ? windowStart : start,
+      end: end > windowEnd ? windowEnd : end,
+      immovable: Boolean(block.immovable),
+      sourceId: block.id,
+    });
+  }
+  return mergeIntervals(intervals);
+}
+
+function computeFreeSlots(busyIntervals, windowStart, windowEnd) {
+  const slots = [];
+  let cursor = windowStart;
+  for (const interval of busyIntervals) {
+    if (interval.start > cursor) {
+      slots.push({ start: cursor, end: interval.start });
+    }
+    if (interval.end > cursor) {
+      cursor = interval.end;
+    }
+    if (cursor >= windowEnd) break;
+  }
+  if (cursor < windowEnd) {
+    slots.push({ start: cursor, end: windowEnd });
+  }
+  return slots.filter((slot) => slot.end > slot.start);
+}
+
+function formatSlotForContext(slot) {
+  if (!slot) return null;
+  const duration = Math.round(slot.end.diff(slot.start, 'minutes').minutes || 0);
+  return {
+    startIso: slot.start.toISO(),
+    endIso: slot.end.toISO(),
+    durationMinutes: duration,
+  };
+}
+
+function intervalsOverlap(startA, endA, interval) {
+  if (!startA || !endA || !interval) return false;
+  return startA < interval.end && endA > interval.start;
+}
+
+async function ensurePriorityEvent({ db, uid, priority, dayIso, timezone, schedule, reason }) {
+  const priorityKey = buildPriorityKey(dayIso, priority.type || 'task', priority.id || priority.title || 'unknown');
+  const mapping = await getPriorityEventMapping(db, uid, priorityKey);
+  const descriptionParts = [`BOB priority: ${priority.title}`, reason].filter(Boolean);
+  const description = descriptionParts.join(' • ');
+  const extendedProperties = {
+    bobPriorityKey: priorityKey,
+    linkedType: priority.linkedType || priority.type || null,
+    linkedId: priority.linkedId || priority.id || null,
+  };
+  if (mapping?.googleEventId) {
+    const event = await updateGoogleCalendarEvent(uid, mapping.googleEventId, {
+      summary: priority.title,
+      startIso: schedule.start,
+      endIso: schedule.end,
+      description,
+      extendedProperties,
+    });
+    await upsertPriorityEventMapping(db, uid, priorityKey, event.id, { startIso: schedule.start, endIso: schedule.end });
+    return { priorityKey, eventId: event.id, status: 'updated' };
+  }
+  const event = await createGoogleCalendarEvent(uid, {
+    summary: priority.title,
+    startIso: schedule.start,
+    endIso: schedule.end,
+    description,
+    extendedProperties,
+  });
+  await upsertPriorityEventMapping(db, uid, priorityKey, event.id, { startIso: schedule.start, endIso: schedule.end });
+  return { priorityKey, eventId: event.id, status: 'created' };
+}
+
+async function getPriorityEventMapping(db, ownerUid, priorityKey) {
+  const snap = await db.collection(PRIORITY_EVENT_MAP_COLLECTION).doc(priorityKey).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (data.ownerUid !== ownerUid) return null;
+  return data;
+}
+
+async function upsertPriorityEventMapping(db, ownerUid, priorityKey, eventId, schedule) {
+  const ref = db.collection(PRIORITY_EVENT_MAP_COLLECTION).doc(priorityKey);
+  await ref.set({
+    id: priorityKey,
+    ownerUid,
+    priorityKey,
+    googleEventId: eventId,
+    lastSchedule: schedule,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+async function createGoogleCalendarEvent(uid, { summary, startIso, endIso, description, extendedProperties = {} }) {
+  const access = await getAccessToken(uid);
+  const payload = {
+    summary,
+    start: { dateTime: startIso },
+    end: { dateTime: endIso },
+    ...(description ? { description } : {}),
+    extendedProperties: {
+      private: extendedProperties,
+    },
+  };
+  const event = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + access },
+    body: JSON.stringify(payload),
+  });
+  return event;
+}
+
+async function updateGoogleCalendarEvent(uid, eventId, { summary, startIso, endIso, description, extendedProperties = {} }) {
+  const access = await getAccessToken(uid);
+  const body = {};
+  if (summary) body.summary = summary;
+  if (description) body.description = description;
+  if (startIso) body.start = { dateTime: startIso };
+  if (endIso) body.end = { dateTime: endIso };
+  if (Object.keys(extendedProperties).length) {
+    body.extendedProperties = { private: extendedProperties };
+  }
+  const event = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + access },
+    body: JSON.stringify(body),
+  });
+  return event;
+}
+
+async function deleteGoogleCalendarEvent(uid, eventId) {
+  const access = await getAccessToken(uid);
+  await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: 'Bearer ' + access },
+  });
+}
+
+async function applyCalendarOps(uid, db, ops = []) {
+  const applied = [];
+  for (const op of ops || []) {
+    try {
+      if (!op || !op.op) continue;
+      if (op.op === 'create') {
+        const event = await createGoogleCalendarEvent(uid, {
+          summary: op.title || op.summary || 'BOB Priority',
+          startIso: op.start,
+          endIso: op.end,
+          description: op.notes || null,
+          extendedProperties: {
+            linkedType: op.linkedType || null,
+            linkedId: op.linkedId || null,
+          },
+        });
+        applied.push({ ...op, status: 'created', eventId: event.id });
+      } else if (op.op === 'move' && op.eventId) {
+        await updateGoogleCalendarEvent(uid, op.eventId, {
+          summary: op.title || op.summary || null,
+          startIso: op.start,
+          endIso: op.end,
+          description: op.notes || null,
+        });
+        applied.push({ ...op, status: 'moved' });
+      } else if (op.op === 'delete' && op.eventId) {
+        await deleteGoogleCalendarEvent(uid, op.eventId);
+        applied.push({ ...op, status: 'deleted' });
+      }
+    } catch (error) {
+      console.warn('[replan] calendar op failed', error?.message || error, op);
+    }
+  }
+  return applied;
+}
+
+async function applyTaskOps(db, uid, ops = []) {
+  const applied = [];
+  for (const op of ops || []) {
+    if (!op || op.op !== 'update' || !op.taskId) continue;
+    const ref = db.collection('tasks').doc(op.taskId);
+    const snap = await ref.get();
+    if (!snap.exists) continue;
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) continue;
+    const fields = op.fields || {};
+    await ref.set(fields, { merge: true });
+    applied.push({ taskId: op.taskId, fields });
+  }
+  return applied;
+}
+
+async function applyStoryOps(db, uid, ops = []) {
+  const applied = [];
+  for (const op of ops || []) {
+    if (!op || op.op !== 'update' || !op.storyId) continue;
+    const ref = db.collection('stories').doc(op.storyId);
+    const snap = await ref.get();
+    if (!snap.exists) continue;
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) continue;
+    const fields = op.fields || {};
+    await ref.set(fields, { merge: true });
+    applied.push({ storyId: op.storyId, fields });
+  }
+  return applied;
+}
+
+async function persistReplanRun(db, payload) {
+  try {
+    const ref = db.collection(REPLAN_RUNS_COLLECTION).doc();
+    await ref.set({
+      id: ref.id,
+      ownerUid: payload.ownerUid,
+      correlationId: payload.correlationId,
+      reason: payload.reason || null,
+      constraints: payload.constraints || {},
+      inputs: payload.inputs || {},
+      plan: payload.plan || {},
+      appliedOps: payload.appliedOps || {},
+      status: payload.status || 'unknown',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[replan] persist run failed', error?.message || error);
+  }
+}
+
+async function logReplanActivity(db, { ownerUid, correlationId, activityType, status, metadata = {} }) {
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'replan',
+      entityId: `replan:${ownerUid}:${correlationId}`,
+      activityType,
+      actor: 'AI_Agent',
+      userId: ownerUid,
+      ownerUid,
+      description: `Replan ${status}`,
+      metadata: {
+        correlationId,
+        status,
+        ...metadata,
+      },
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[replan] activity log failed', error?.message || error);
+  }
+}
+
+async function fetchLatestPriorityRun(db, uid) {
+  try {
+    const snap = await db.collection(PRIORITY_COLLECTION)
+      .where('ownerUid', '==', uid)
+      .orderBy('generatedAt', 'desc')
+      .limit(1)
+      .get();
+    if (snap.empty) return null;
+    return snap.docs[0].data();
+  } catch (error) {
+    console.warn('[replan] latest priority fetch failed', error?.message || error);
+    return null;
+  }
+}
+
+exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req, res) => {
+  applyPriorityCors(res);
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  let uid;
+  try {
+    uid = await extractUidFromRequest(req);
+  } catch (error) {
+    const message = error?.message || 'Authentication failed';
+    console.warn('[replanDay] auth failed', message);
+    res.status(401).json({ error: message });
+    return;
+  }
+
+  const body = typeof req.body === 'object' && req.body ? req.body : {};
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : null;
+  const constraints = typeof body.constraints === 'object' && body.constraints ? body.constraints : {};
+  const availableUntilInput = constraints.availableUntil || body.availableUntil || null;
+  const focusBlockMinutes = Math.min(240, Math.max(15, Number(constraints.focusBlockMinutes || body.focusBlockMinutes || 60) || 60));
+  const correlationId = crypto.randomUUID();
+
+  try {
+    const db = ensureFirestore();
+    const profile = await loadProfile(db, uid);
+    const timezone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+    const now = DateTime.now().setZone(timezone);
+    const { start, end } = computeDayWindow({ day: now, timezone });
+    const windowStart = now > start ? now : start;
+    let availableUntil = toDateTimeFromValue(availableUntilInput, timezone);
+    if (!availableUntil || availableUntil <= windowStart) availableUntil = end;
+    if (availableUntil > end) availableUntil = end;
+
+    const [tasksSnap, storiesSnap, sprintsSnap, calendarSnap, latestPriorityRun] = await Promise.all([
+      db.collection('tasks').where('ownerUid', '==', uid).limit(400).get(),
+      db.collection('stories').where('ownerUid', '==', uid).get(),
+      db.collection('sprints').where('ownerUid', '==', uid).get(),
+      db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('start', '>=', start.toMillis())
+        .where('start', '<=', end.toMillis())
+        .orderBy('start', 'asc')
+        .get(),
+      fetchLatestPriorityRun(db, uid),
+    ]);
+
+    const tasks = tasksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const sprints = sprintsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const calendarBlocks = calendarSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const filteredTasks = tasks.filter((task) => !task.deleted && !isDoneStatusInSet(task.status, TASK_DONE_STATUS_VALUES));
+
+    const dueToday = filteredTasks.filter((task) => {
+      const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+      return due && due >= start && due <= end;
+    });
+    const createdToday = filteredTasks.filter((task) => {
+      const created = resolveDateFromFields(task, timezone, ['createdAt', 'createdAtMs', 'createdAtIso']);
+      return created && created >= start && created <= end;
+    });
+    const overdue = filteredTasks.filter((task) => {
+      const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+      return due && due < now;
+    });
+
+    const activeSprint = resolveActiveSprint(sprints, windowStart, timezone);
+    const activeStoryIds = new Set(
+      activeSprint
+        ? stories.filter((story) => story.sprintId === activeSprint.id).map((story) => story.id)
+        : []
+    );
+    const activeStories = activeSprint
+      ? stories.filter((story) => activeStoryIds.has(story.id) && !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES))
+      : stories.filter((story) => !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES)).slice(0, PRIORITY_STORY_CONTEXT_LIMIT);
+
+    const busyIntervals = computeBusyIntervals(calendarBlocks, timezone, windowStart, availableUntil);
+    const freeSlots = computeFreeSlots(busyIntervals, windowStart, availableUntil);
+    const slotContext = freeSlots.map(formatSlotForContext).filter(Boolean);
+
+    const previousPriorities = Array.isArray(latestPriorityRun?.priorities)
+      ? latestPriorityRun.priorities.slice(0, 3).map((item) => ({
+        id: item.id,
+        title: item.title,
+        type: item.type,
+      }))
+      : [];
+
+    const contextPayload = {
+      dayIso: windowStart.toISODate(),
+      timezone,
+      now: windowStart.toISO(),
+      reason,
+      focusBlockMinutes,
+      availableUntil: availableUntil.toISO(),
+      freeSlots: slotContext,
+      tasks: {
+        dueToday: take(dueToday, 6).map((task) => getTaskContext(task, timezone)),
+        overdue: take(overdue, 6).map((task) => getTaskContext(task, timezone)),
+        createdToday: take(createdToday, 6).map((task) => getTaskContext(task, timezone)),
+      },
+      stories: take(activeStories, 5).map((story) => getStoryContext(story, timezone)),
+      calendarBusy: take(calendarBlocks, 5).map((block) => getCalendarContext(block, timezone)),
+      previousPriorities,
+    };
+
+    const systemPrompt = [
+      'You are BOB, the day replanner for the remainder of today.',
+      'Produce a deterministic JSON plan that reselects three priorities and assigns calendar blocks.',
+      'Do not include any text outside the JSON object.',
+    ].join(' ');
+
+    const userPrompt = [
+      `Context: ${JSON.stringify(contextPayload)}`,
+      'Return JSON matching schema: {"priorities":[{"type":"task|story|calendar","id":"...","title":"...","estMinutes":number,"rationale":"...","schedule":{"start":"ISO","end":"ISO"},"changes":{"taskDueDate?":"ISO","storyDueDate?":"ISO"}}],"calendarOps":[{"op":"create|move|delete","eventId?":"...","title":"...","start":"ISO","end":"ISO","notes":"...","linkedType":"task|story","linkedId":"..."}],"taskOps":[{"op":"update","taskId":"...","fields":{...}}],"storyOps":[{"op":"update","storyId":"...","fields":{...}}],"displayText":"...","speakText":"..."}',
+      'Priorities must be exactly three entries covering free slots without conflicting existing immovable events.',
+      'Calendar operations must align with those priorities when possible; schedule durations should align with remaining time.',
+      'Return JSON only.',
+    ].join('\n');
+
+    let planRaw = '';
+    let plan = {};
+    try {
+      planRaw = await callLLMJson({
+        system: systemPrompt,
+        user: userPrompt,
+        purpose: 'replan_day',
+        userId: uid,
+        expectJson: true,
+        temperature: 0.2,
+      });
+      plan = planRaw ? JSON.parse(planRaw) : {};
+    } catch (error) {
+      console.error('[replanDay] LLM failed', error);
+      await logReplanActivity(db, {
+        ownerUid: uid,
+        correlationId,
+        activityType: 'REPLAN_FAILED',
+        status: 'error',
+        metadata: { error: error?.message || 'LLM failure', reason, focusBlockMinutes },
+      });
+      await persistReplanRun(db, {
+        ownerUid: uid,
+        correlationId,
+        reason,
+        constraints: { availableUntil: availableUntil.toISO(), focusBlockMinutes },
+        inputs: {
+          dueToday: dueToday.length,
+          overdue: overdue.length,
+          createdToday: createdToday.length,
+          freeSlots: slotContext.length,
+        },
+        plan: { error: 'LLM failed' },
+        appliedOps: {},
+        status: 'failed',
+      });
+      res.status(500).json({ error: 'Replan LLM failed' });
+      return;
+    }
+
+    const priorities = Array.isArray(plan.priorities) ? plan.priorities.slice(0, 3) : [];
+    if (priorities.length !== 3) {
+      throw new Error('LLM did not return three priorities');
+    }
+
+    const calendarOps = Array.isArray(plan.calendarOps) ? plan.calendarOps : [];
+    const taskOps = Array.isArray(plan.taskOps) ? plan.taskOps : [];
+    const storyOps = Array.isArray(plan.storyOps) ? plan.storyOps : [];
+
+    logReplanActivity(db, {
+      ownerUid: uid,
+      correlationId,
+      activityType: 'REPLAN_STARTED',
+      status: 'started',
+      metadata: { reason, focusBlockMinutes },
+    });
+
+    const validatedBlocks = [];
+    for (const priority of priorities) {
+      const schedule = priority.schedule || {};
+      if (!schedule.start || !schedule.end) {
+        throw new Error(`Missing schedule for priority ${priority.title}`);
+      }
+      const startDt = DateTime.fromISO(schedule.start, { zone: timezone });
+      const endDt = DateTime.fromISO(schedule.end, { zone: timezone });
+      if (!startDt.isValid || !endDt.isValid || endDt <= startDt) {
+        throw new Error(`Invalid schedule for priority ${priority.title}`);
+      }
+      if (startDt < windowStart || endDt > availableUntil) {
+        throw new Error(`Schedule for ${priority.title} falls outside the available window`);
+      }
+      const conflict = busyIntervals.some((interval) => intervalsOverlap(startDt, endDt, interval));
+      if (conflict) {
+        throw new Error(`Schedule for ${priority.title} conflicts with an existing event`);
+      }
+      validatedBlocks.push({ priority, schedule: { start: startDt, end: endDt } });
+    }
+
+    const appliedCalendarOps = await applyCalendarOps(uid, db, calendarOps);
+    const priorityEventResults = [];
+    for (const block of validatedBlocks) {
+      const schedulePayload = {
+        start: block.schedule.start.toISO(),
+        end: block.schedule.end.toISO(),
+      };
+      const priorityResult = await ensurePriorityEvent({
+        db,
+        uid,
+        priority: block.priority,
+        dayIso: windowStart.toISODate(),
+        timezone,
+        schedule: schedulePayload,
+        reason,
+      });
+      priorityEventResults.push(priorityResult);
+    }
+
+    const appliedTaskOps = await applyTaskOps(db, uid, taskOps);
+    const appliedStoryOps = await applyStoryOps(db, uid, storyOps);
+
+    await logReplanActivity(db, {
+      ownerUid: uid,
+      correlationId,
+      activityType: 'REPLAN_APPLIED',
+      status: 'applied',
+      metadata: {
+        reason,
+        focusBlockMinutes,
+        priorities: priorities.map((p) => ({ id: p.id, title: p.title })),
+      },
+    });
+
+    await persistReplanRun(db, {
+      ownerUid: uid,
+      correlationId,
+      reason,
+      constraints: { availableUntil: availableUntil.toISO(), focusBlockMinutes },
+      inputs: {
+        dueToday: dueToday.length,
+        overdue: overdue.length,
+        createdToday: createdToday.length,
+        freeSlots: slotContext.length,
+      },
+      plan: {
+        priorities,
+        calendarOps,
+        taskOps,
+        storyOps,
+        displayText: plan.displayText || '',
+        speakText: plan.speakText || '',
+      },
+      appliedOps: {
+        calendar: appliedCalendarOps,
+        tasks: appliedTaskOps,
+        stories: appliedStoryOps,
+        priorityEvents: priorityEventResults,
+      },
+      status: 'applied',
+    });
+
+    res.status(200).json({
+      displayText: plan.displayText || '',
+      speakText: plan.speakText || '',
+      scheduledBlocks: validatedBlocks.map((block) => ({
+        id: block.priority.id,
+        type: block.priority.type,
+        title: block.priority.title,
+        schedule: {
+          start: block.schedule.start.toISO(),
+          end: block.schedule.end.toISO(),
+        },
+      })),
+      calendarOps: appliedCalendarOps,
+    });
+  } catch (error) {
+    console.error('[replanDay] failed', error);
+    const db = ensureFirestore();
+    await logReplanActivity(db, {
+      ownerUid: uid,
+      correlationId,
+      activityType: 'REPLAN_FAILED',
+      status: 'failed',
+      metadata: { error: error?.message || 'Unknown failure', reason },
+    });
+    await persistReplanRun(db, {
+      ownerUid: uid,
+      correlationId,
+      reason,
+      constraints: { availableUntil: null, focusBlockMinutes },
+      inputs: {},
+      plan: { error: error?.message || 'Error' },
+      appliedOps: {},
+      status: 'failed',
+    });
+    res.status(500).json({ error: error?.message || 'Replan failed' });
   }
 });
 
@@ -5477,7 +6584,7 @@ Generate a plan as JSON with:
     {
       "taskId": "task_id_or_null",
       "goalId": "${focusGoalId || 'goal_id_or_null'}",
-      "theme": "General|Health & Fitness|Career & Professional|Finance & Wealth|Learning & Education|Family & Relationships|Hobbies & Interests|Travel & Adventure|Home & Living|Spiritual & Personal Growth|Chores|Work (Main Gig)|Sleep|Random|Routine|Dev Tasks",
+      "theme": "General|Health & Fitness|Career & Professional|Finance & Wealth|Learning & Education|Family & Relationships|Hobbies & Interests|Travel & Adventure|Home & Living|Spiritual & Personal Growth|Chores|Work (Main Gig)|Side Gig|Sleep|Random|Routine|Dev Tasks",
       "category": "Task Work|Goal Focus|Skill Building|Planning",
       "title": "Block title",
       "start": timestamp,
@@ -6083,6 +7190,7 @@ function themeLabelFromNumber(n) {
     case 12: return 'Work (Main Gig)';
     case 13: return 'Sleep';
     case 14: return 'Random';
+    case 15: return 'Side Gig';
     default: return 'General';
   }
 }
@@ -8454,7 +9562,7 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
         ? parsed.focus
         : [];
 
-    const normalised = aiItems
+    const normalisedTasks = aiItems
       .map((item) => {
         const key = (item?.ref || item?.id || '').toString().trim();
         if (!key) return null;
@@ -8483,7 +9591,22 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
         };
       })
       .filter(Boolean)
-      .slice(0, 5);
+      .slice(0, 3);
+
+    // Pick top 3 stories for balance (use storiesToStart when present)
+    const storyPool = Array.isArray(summaryData?.storiesToStart) ? summaryData.storiesToStart : [];
+    const normalisedStories = storyPool.slice(0, 3).map((story) => ({
+      ref: story.ref || story.id,
+      title: story.title || 'Story',
+      bucket: 'Today',
+      reason: story.goal ? `Goal ${story.goal}` : 'Progress sprint story',
+      nextStep: story.nextStep || null,
+      confidence: null,
+      dueDisplay: story.sprintDueDateDisplay || null,
+      deepLink: story.deepLink || (story.id ? `/stories/${story.id}` : null),
+    }));
+
+    const normalised = [...normalisedTasks, ...normalisedStories].slice(0, 6);
 
     if (!normalised.length) {
       return buildHeuristicFocus(summaryData, 'AI produced no actionable items; fallback applied.');
@@ -10052,6 +11175,155 @@ exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID,
   return { ok: true };
 });
 
+// ---------------------------------------------------------------------------
+// Auto-schedule due-today tasks into Google Calendar (no planner block)
+// ---------------------------------------------------------------------------
+exports.scheduleDueTasksToday = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const db = ensureFirestore();
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10); // yyyy-mm-dd
+  const workStart = req?.data?.workStart || '08:00';
+  const workEnd = req?.data?.workEnd || '18:00';
+
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const tz = (profileSnap.data() || {}).timezone || 'UTC';
+  const startDay = DateTime.fromISO(`${day}T${workStart}`, { zone: tz });
+  const endDay = DateTime.fromISO(`${day}T${workEnd}`, { zone: tz });
+  if (!startDay.isValid || !endDay.isValid) throw new httpsV2.HttpsError('invalid-argument', 'Invalid work window');
+
+  const access = await getAccessToken(uid);
+
+  // Pull existing GCal events to avoid overlaps
+  const existing = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${startDay.toUTC().toISO()}&timeMax=${endDay.toUTC().toISO()}`, {
+    headers: { Authorization: 'Bearer ' + access }
+  });
+  const busy = [];
+  (existing.items || []).forEach(ev => {
+    const s = ev.start?.dateTime || ev.start?.date;
+    const e = ev.end?.dateTime || ev.end?.date;
+    if (s && e) {
+      const ss = DateTime.fromISO(s, { zone: tz }).toMillis();
+      const ee = DateTime.fromISO(e, { zone: tz }).toMillis();
+      if (ss && ee) busy.push([ss, ee]);
+    }
+  });
+  busy.sort((a, b) => a[0] - b[0]);
+
+  // Tasks due today
+  const startMs = startDay.startOf('day').toMillis();
+  const endMs = startDay.endOf('day').toMillis();
+  const taskSnap = await db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .where('dueDate', '>=', startMs)
+    .where('dueDate', '<=', endMs)
+    .get();
+  const isDone = (s) => {
+    if (typeof s === 'number') return s === 2 || s === 4;
+    const v = String(s || '').toLowerCase();
+    return v === 'done' || v === 'complete' || v === 'completed' || v === '4';
+  };
+  const tasks = taskSnap.docs
+    .map(d => ({ id: d.id, ref: d.ref, ...(d.data() || {}) }))
+    .filter(t => !isDone(t.status) && !t.deleted);
+
+  // Sort by due then AI score desc
+  tasks.sort((a, b) => {
+    const da = Number(a.dueDate || 0); const dbv = Number(b.dueDate || 0);
+    if (da !== dbv) return da - dbv;
+    const sa = Number(a.aiCriticalityScore || 0); const sb = Number(b.aiCriticalityScore || 0);
+    return sb - sa;
+  });
+
+  const placed = [];
+
+  const findSlot = (durMinutes) => {
+    const durMs = durMinutes * 60000;
+    let cursor = startDay.toMillis();
+    for (let i = 0; i <= busy.length; i++) {
+      const nextBusyStart = i < busy.length ? busy[i][0] : endDay.toMillis();
+      if (cursor + durMs <= nextBusyStart) {
+        const slot = cursor;
+        busy.splice(i, 0, [slot, slot + durMs]);
+        return slot;
+      }
+      if (i < busy.length) {
+        cursor = Math.max(cursor, busy[i][1] || cursor);
+      }
+    }
+    return null;
+  };
+
+  for (const t of tasks) {
+    const points = Number(t.points ?? t.estimateMin ? Math.round(Number(t.estimateMin) / 60) : 0);
+    const dur = Math.min(180, Math.max(30, points > 0 ? points * 60 : 30));
+    const slotStart = findSlot(dur);
+    if (!slotStart) continue;
+    const slotEnd = slotStart + dur * 60000;
+
+    const summary = (t.ref ? `${t.ref} — ` : '') + (t.title || 'Task');
+    const dedupeKey = `task:${t.id}:${day}`;
+
+    const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        summary,
+        start: { dateTime: DateTime.fromMillis(slotStart, { zone: tz }).toUTC().toISO() },
+        end: { dateTime: DateTime.fromMillis(slotEnd, { zone: tz }).toUTC().toISO() },
+        description: t.description || '',
+        extendedProperties: {
+          private: {
+            taskId: t.id,
+            dedupeKey,
+            aiScore: t.aiCriticalityScore || null,
+            aiReason: t.aiCriticalityReason || null
+          }
+        }
+      })
+    });
+
+    const evId = ev?.id || ev?.event?.id || ev?.data?.event?.id;
+    if (evId) {
+      await t.ref.update({ gcalEventId: evId, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      placed.push({ taskId: t.id, eventId: evId, start: slotStart, end: slotEnd });
+    }
+  }
+
+  return { ok: true, placed: placed.length, details: placed };
+});
+
+// ---------------------------------------------------------------------------
+// Firestore trigger: when task completed, delete linked GCal event
+// ---------------------------------------------------------------------------
+exports.cleanupTaskCalendarEvent = firestoreV2.onDocumentUpdated('tasks/{taskId}', async (event) => {
+  const before = event.data?.before?.data() || {};
+  const after = event.data?.after?.data() || {};
+  const ref = event.data?.after?.ref || event.data?.before?.ref;
+  const uid = after.ownerUid || before.ownerUid;
+  if (!uid || !ref) return;
+  const toDone = (() => {
+    const s = after.status;
+    if (typeof s === 'number') return s === 2 || s === 4;
+    const v = String(s || '').toLowerCase();
+    return v === 'done' || v === 'complete' || v === 'completed' || v === '4';
+  })();
+  if (!toDone) return;
+  const evId = after.gcalEventId || before.gcalEventId;
+  if (!evId) return;
+  try {
+    const access = await getAccessToken(uid);
+    await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(evId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + access }
+    });
+  } catch (err) {
+    console.warn('[cleanupTaskCalendarEvent] failed delete', err?.message || err);
+  }
+  try {
+    await ref.update({ gcalEventId: admin.firestore.FieldValue.delete() });
+  } catch { }
+});
 // Sync plan assignments for a day to Google Calendar as child events under parent block events
 /**
  * Syncs the BOB plan for a specific day to Google Calendar (Push).
@@ -10893,11 +12165,6 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
     }
 
     const indexRef = db.collection('sprint_task_index').doc(id);
-    if (!isOpen) {
-      // Remove from index if present
-      try { await indexRef.delete(); } catch { }
-      return;
-    }
 
     // If still no sprint, index as backlog sentinel
     const sprintKey = effectiveSprintId || SPRINT_NONE;
@@ -10907,9 +12174,11 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
       persona: persona || null,
       sprintId: sprintKey,
       status: after.status,
-      isOpen: true,
+      isOpen,
       dueDate: after.dueDate || null,
       priority: after.priority ?? null,
+      aiCriticalityScore: after.aiCriticalityScore ?? null,
+      aiCriticalityReason: after.aiCriticalityReason ?? null,
       effort: after.effort ?? null,
       estimateMin: after.estimateMin ?? null,
       title: after.title || 'Task',
@@ -10918,6 +12187,7 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
       parentId: after.parentId || null,
       storyId: storyId,
       ref: after.ref || after.reference || null,
+      completedAt: after.completedAt || null,
       updatedAt: Date.now(),
     };
     await indexRef.set(indexDoc, { merge: true });
@@ -13961,6 +15231,13 @@ function findNextWorkingDate(startDt, context) {
 
 async function updateTaskDueDate(db, taskId, { newDueDateMs, reason, userId, runId, itemRef }) {
   const taskRef = db.collection('tasks').doc(taskId);
+  const beforeSnap = await taskRef.get();
+  const beforeData = beforeSnap.exists ? beforeSnap.data() || {} : {};
+  const oldDueDateMs = toMillis(beforeData.dueDate || beforeData.dueDateMs || beforeData.targetDate);
+  const formatIso = (ms) => {
+    if (!ms || !Number.isFinite(ms)) return 'unset';
+    try { return new Date(ms).toISOString().slice(0, 10); } catch { return 'invalid'; }
+  };
   await taskRef.set({
     dueDate: newDueDateMs,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -13989,6 +15266,7 @@ async function updateTaskDueDate(db, taskId, { newDueDateMs, reason, userId, run
   }
 
   const activityRef = db.collection('activity_stream').doc();
+  const descSuffix = `(${reason})${oldDueDateMs ? ` from ${formatIso(oldDueDateMs)} to ${formatIso(newDueDateMs)}` : ` to ${formatIso(newDueDateMs)}`}`;
   await activityRef.set({
     id: activityRef.id,
     entityId: taskId,
@@ -13997,8 +15275,8 @@ async function updateTaskDueDate(db, taskId, { newDueDateMs, reason, userId, run
     actor: 'AI_Scheduler',
     userId,
     ownerUid: userId,
-    description: `Scheduler moved ${itemRef || taskId} due date (${reason}).`,
-    metadata: { taskId, reason, runId, dueDate: newDueDateMs },
+    description: `Scheduler moved ${itemRef || taskId} due date ${descSuffix}.`,
+    metadata: { taskId, reason, runId, oldDueDate: oldDueDateMs || null, newDueDate: newDueDateMs },
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
@@ -14156,6 +15434,7 @@ function themeLabelFromValue(v) {
   const s = String(v || '').trim();
   if (!s) return 'General';
   const lower = s.toLowerCase();
+  if (lower.includes('side gig') || lower.includes('side-gig') || lower.includes('sidegig')) return 'Side Gig';
   if (lower.includes('work')) return 'Work (Main Gig)';
   if (lower.includes('sleep')) return 'Sleep';
   if (lower.includes('random')) return 'Random';

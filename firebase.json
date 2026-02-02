@@ -1,7 +1,7 @@
 {
   "functions": [
-    { "source": "functions", "codebase": "default" },
-    { "source": "functions-chores", "codebase": "chores" }
+    { "source": "functions", "codebase": "default", "region": "europe-west2" },
+    { "source": "functions-chores", "codebase": "chores", "region": "europe-west2" }
   ],
   "hosting": {
     "site": "bob20250810",
@@ -30,6 +30,20 @@
         "source": "/api/oauth/callback",
         "function": {
           "functionId": "oauthCallback",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/priority/now",
+        "function": {
+          "functionId": "priorityNow",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/plan/replan",
+        "function": {
+          "functionId": "replanDay",
           "region": "europe-west2"
         }
       },

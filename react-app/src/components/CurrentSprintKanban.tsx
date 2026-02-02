@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp, addDoc, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Story, Sprint, Task, Goal } from '../types';
-import { Container, Row, Col, Card, Dropdown, Button } from 'react-bootstrap';
+import { Container, Row, Col, Card, Dropdown, Button, Form } from 'react-bootstrap';
 import ModernTaskTable from './ModernTaskTable';
 import { ChoiceHelper } from '../config/choices';
 import { isStatus, isTheme, getThemeName } from '../utils/statusHelpers';
+import { isCriticalPriority } from '../utils/priorityUtils';
 import { domainThemePrimaryVar, themeVars } from '../utils/themeVars';
 
 const CurrentSprintKanban: React.FC = () => {
@@ -23,12 +24,24 @@ const CurrentSprintKanban: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [activityModal, setActivityModal] = useState<{ story: Story | null; note: string }>({ story: null, note: '' });
     const [latestActivities, setLatestActivities] = useState<{ [id: string]: any }>({});
+    const [highlightCriticalOnly, setHighlightCriticalOnly] = useState(false);
 
     const kanbanLanes = [
         { id: 0, title: 'Backlog', stringId: 'backlog' },
         { id: 2, title: 'In Progress', stringId: 'in-progress' }, // Story IN_PROGRESS = 2
         { id: 4, title: 'Done', stringId: 'done' } // Story DONE = 4
     ];
+
+    const getStoryAiScore = useCallback((story: Story) => {
+        const raw = (story as any).aiCriticalityScore ?? story.metadata?.aiScore ?? story.metadata?.aiCriticalityScore ?? null;
+        const numeric = Number(raw);
+        return Number.isFinite(numeric) ? numeric : null;
+    }, []);
+
+    const isCriticalStory = useCallback((story: Story) => {
+        const aiScore = getStoryAiScore(story);
+        return isCriticalPriority(story.priority) || (aiScore != null && aiScore >= 90);
+    }, [getStoryAiScore]);
 
     const themeColorForGoal = (goal?: Goal) => {
         if (!goal) return themeVars.muted as string;
@@ -126,6 +139,12 @@ const CurrentSprintKanban: React.FC = () => {
         fetchLatest();
     }, [stories, currentUser]);
 
+    useEffect(() => {
+        if (highlightCriticalOnly && selectedStory && !isCriticalStory(selectedStory)) {
+            setSelectedStory(null);
+        }
+    }, [highlightCriticalOnly, selectedStory, isCriticalStory]);
+
 
     const updateStoryStatus = async (storyId: string, newStatus: string) => {
         try {
@@ -166,6 +185,8 @@ const CurrentSprintKanban: React.FC = () => {
         return tasks.filter(t => t.parentId === storyId && t.parentType === 'story');
     };
 
+    const storiesToRender = highlightCriticalOnly ? stories.filter(isCriticalStory) : stories;
+
     if (loading) {
         return <div className="d-flex justify-content-center p-5"><div className="spinner-border" role="status"></div></div>;
     }
@@ -175,18 +196,27 @@ const CurrentSprintKanban: React.FC = () => {
         <Container fluid className="p-3">
             <div className="d-flex justify-content-between align-items-center mb-4">
                 <h1 className="h3 mb-0">Current Sprint Kanban</h1>
-                <Dropdown>
-                    <Dropdown.Toggle variant="primary" id="dropdown-basic">
-                        {activeSprint ? activeSprint.name : "Select Sprint"}
-                    </Dropdown.Toggle>
-                    <Dropdown.Menu>
-                        {sprints.map(sprint => (
-                            <Dropdown.Item key={sprint.id} onClick={() => setActiveSprint(sprint)}>
-                                {sprint.name} ({sprint.status})
-                            </Dropdown.Item>
-                        ))}
-                    </Dropdown.Menu>
-                </Dropdown>
+                <div className="d-flex align-items-center gap-3">
+                    <Form.Check
+                        type="switch"
+                        id="critical-filter-switch"
+                        label="Critical + AI >= 90"
+                        checked={highlightCriticalOnly}
+                        onChange={(e) => setHighlightCriticalOnly(e.target.checked)}
+                    />
+                    <Dropdown>
+                        <Dropdown.Toggle variant="primary" id="dropdown-basic">
+                            {activeSprint ? activeSprint.name : "Select Sprint"}
+                        </Dropdown.Toggle>
+                        <Dropdown.Menu>
+                            {sprints.map(sprint => (
+                                <Dropdown.Item key={sprint.id} onClick={() => setActiveSprint(sprint)}>
+                                    {sprint.name} ({sprint.status})
+                                </Dropdown.Item>
+                            ))}
+                        </Dropdown.Menu>
+                    </Dropdown>
+                </div>
             </div>
 
             {activeSprint ? (
@@ -218,7 +248,7 @@ const CurrentSprintKanban: React.FC = () => {
                     ) : (
                         // Show Kanban view
                         kanbanLanes.map(lane => {
-                            const laneStories = stories.filter(s => s.status === lane.id);
+                            const laneStories = storiesToRender.filter(s => s.status === lane.id);
                             return (
                                 <Col key={lane.id} md={4}>
                                     <Card className="h-100">

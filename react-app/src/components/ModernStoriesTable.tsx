@@ -134,6 +134,22 @@ const defaultColumns: Column[] = [
     editable: true,
     type: 'number'
   },
+  {
+    key: 'aiCriticalityScore',
+    label: 'AI Score',
+    width: '10%',
+    visible: true,
+    editable: false,
+    type: 'number'
+  },
+  {
+    key: 'aiCriticalityReason',
+    label: 'AI Reason',
+    width: '25%',
+    visible: false,
+    editable: false,
+    type: 'text'
+  },
   { 
     key: 'effort', 
     label: 'Effort', 
@@ -498,6 +514,15 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'sprintId' && value) {
       const sprint = sprints.find(s => s.id === value);
       return sprint ? sprint.name : value;
+    }
+    if (key === 'points' && typeof value === 'number') {
+      return String(value);
+    }
+    if (key === 'aiCriticalityScore' && typeof value === 'number') {
+      return String(Math.round(value));
+    }
+    if (key === 'aiCriticalityReason') {
+      return String(value || '');
     }
     return value || '';
   };
@@ -1504,6 +1529,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
         <div style={{
           flex: 1,
           overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '70vh',
           transition: 'margin-right 0.3s ease',
           marginRight: showConfig ? '320px' : '0',
         }}>

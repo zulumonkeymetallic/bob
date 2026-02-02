@@ -29,6 +29,8 @@ import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadg
 import SprintMetricsPanel from '../SprintMetricsPanel';
 import ModernSprintsTable from '../ModernSprintsTable';
 import SprintKanbanPageV2 from '../SprintKanbanPageV2';
+import SprintCloseDialog from './SprintCloseDialog';
+import SprintHistoryTable from './SprintHistoryTable';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, BarChart, Bar } from 'recharts';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
@@ -48,7 +50,8 @@ const SprintManagementView = () => {
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [showSprintModal, setShowSprintModal] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'board' | 'table' | 'burndown' | 'retrospective'>('table');
+  const [showCloseDialog, setShowCloseDialog] = useState(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'board' | 'table' | 'burndown' | 'retrospective' | 'history'>('table');
   const [newSprint, setNewSprint] = useState({
     name: '',
     objective: '',
@@ -420,6 +423,14 @@ const SprintManagementView = () => {
                 Retrospective
               </Button>
               <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => setActiveTab('history')}
+                className={activeTab === 'history' ? 'active' : ''}
+              >
+                History
+              </Button>
+              <Button
                 variant="primary"
                 size="sm"
                 onClick={() => setShowSprintModal(true)}
@@ -427,6 +438,17 @@ const SprintManagementView = () => {
                 <Plus size={16} className="me-1" />
                 New Sprint
               </Button>
+              {selectedSprint && (
+                <Button
+                  variant="warning"
+                  size="sm"
+                  onClick={() => setShowCloseDialog(true)}
+                  className="ms-2"
+                >
+                  <RotateCcw size={16} className="me-1" />
+                  Close Sprint
+                </Button>
+              )}
             </div>
           </div>
         </Col>
@@ -775,6 +797,16 @@ const SprintManagementView = () => {
       </Modal>
 
       {/* Sprint Modal */}
+      {/* Sprint History Tab */}
+      {activeTab === 'history' && (
+        <Row>
+          <Col>
+            <SprintHistoryTable />
+          </Col>
+        </Row>
+      )}
+
+      {/* Create Sprint Modal */}
       <Modal show={showSprintModal} onHide={() => setShowSprintModal(false)}>
         <Modal.Header closeButton>
           <Modal.Title>Create New Sprint</Modal.Title>
@@ -842,6 +874,15 @@ const SprintManagementView = () => {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {/* Sprint Close Dialog */}
+      {selectedSprint && (
+        <SprintCloseDialog
+          show={showCloseDialog}
+          onHide={() => setShowCloseDialog(false)}
+          sprint={selectedSprint}
+        />
+      )}
     </Container>
   );
 };

@@ -1,27 +1,55 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Table, ProgressBar, Collapse, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, ListChecks } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Task, Sprint, Goal } from '../types';
-import { isStatus } from '../utils/statusHelpers';
+import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
 import { useSprint } from '../contexts/SprintContext';
-import ChecklistPanel from './ChecklistPanel';
 import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import ThemeBreakdown from './ThemeBreakdown';
-import { format, startOfDay, endOfDay } from 'date-fns';
-import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
+import { addDays, addMinutes, endOfDay, endOfMonth, format, getDay, parse, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
+import { enGB } from 'date-fns/locale';
+import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
+import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 import { nextDueAt } from '../utils/recurrence';
 import StatCard from './common/StatCard';
 import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
 import '../styles/Dashboard.css';
+
+const locales = { 'en-GB': enGB } as const;
+const localizer = dateFnsLocalizer({
+  format,
+  parse,
+  startOfWeek: (date) => startOfWeek(date, { weekStartsOn: 1 }),
+  getDay,
+  locales,
+});
+
+const DragAndDropCalendar = withDragAndDrop(RBC as any);
+
+interface DashboardCalendarEvent {
+  id: string;
+  title: string;
+  start: Date;
+  end: Date;
+  type: 'block' | 'instance' | 'external';
+  color?: string;
+  textColor?: string;
+  block?: any;
+  instance?: ScheduledInstanceModel;
+  external?: any;
+}
 
 interface DashboardStats {
   activeGoals: number;
@@ -102,10 +130,19 @@ const Dashboard: React.FC = () => {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   // Use global sprint selection for consistency across app
   const { selectedSprintId, setSelectedSprintId, sprints, sprintsById } = useSprint();
+  const selectedSprint = selectedSprintId ? (sprintsById[selectedSprintId] ?? null) : (sprints[0] ?? null);
   const [priorityBanner, setPriorityBanner] = useState<{ title: string; score: number; bucket?: string } | null>(null);
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
+  const [tasksDueTodayList, setTasksDueTodayList] = useState<Task[]>([]);
+  const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
+  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai'>('due');
+  const [scheduledToday, setScheduledToday] = useState<ScheduledInstanceModel[]>([]);
+  const [scheduledTodayLoading, setScheduledTodayLoading] = useState(false);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
+  const [calendarView, setCalendarView] = useState<'day' | 'week' | 'month'>('day');
+  const [calendarDate, setCalendarDate] = useState<Date>(startOfDay(new Date()));
+  const [plannerStats, setPlannerStats] = useState<any | null>(null);
   const [remindersDueToday, setRemindersDueToday] = useState<ReminderItem[]>([]);
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
@@ -120,6 +157,7 @@ const Dashboard: React.FC = () => {
   const [dailySummaryLines, setDailySummaryLines] = useState<string[]>([]);
   const [dailySummarySource, setDailySummarySource] = useState<string | null>(null);
   const [prioritySource, setPrioritySource] = useState<string | null>(null);
+  const [aiFocusItems, setAiFocusItems] = useState<any[]>([]);
   const [metricsCollapsed, setMetricsCollapsed] = useState<boolean>(true);
   const [capacityData, setCapacityData] = useState<any | null>(null);
   const [capacityLoading, setCapacityLoading] = useState(false);
@@ -148,11 +186,112 @@ const Dashboard: React.FC = () => {
     return pounds.toLocaleString('en-GB', { style: 'currency', currency });
   }, []);
 
+  const formatInstanceTime = useCallback((instance: ScheduledInstanceModel) => {
+    try {
+      if (instance.plannedStart && instance.plannedEnd) {
+        const start = new Date(instance.plannedStart);
+        const end = new Date(instance.plannedEnd);
+        return `${format(start, 'HH:mm')} - ${format(end, 'HH:mm')}`;
+      }
+      if (instance.plannedStart) {
+        return format(new Date(instance.plannedStart), 'HH:mm');
+      }
+      return 'Flexible window';
+    } catch (err) {
+      console.warn('Failed to format instance window', err);
+      return 'Flexible window';
+    }
+  }, []);
+
+  const focusStatusVariant = useCallback((status: ScheduledInstanceModel['status']) => {
+    switch (status) {
+      case 'completed':
+        return 'success';
+      case 'missed':
+      case 'cancelled':
+        return 'danger';
+      case 'unscheduled':
+        return 'warning';
+      case 'committed':
+        return 'primary';
+      default:
+        return 'secondary';
+    }
+  }, []);
+
+  const taskRefLabel = useCallback((task: Task) => {
+    if (!task) return '';
+    const ref = (task as any).ref
+      || (task as any).referenceNumber
+      || (task as any).reference
+      || (task as any).code
+      || (task as any).displayId
+      || (task.id ? task.id.slice(-6).toUpperCase() : '');
+    if (typeof ref === 'string') return ref.trim();
+    return ref ? String(ref) : '';
+  }, []);
+
+
+  const storyRefLabel = useCallback((story: Story) => {
+    if (!story) return '';
+    const ref = (story as any).ref
+      || (story as any).referenceNumber
+      || (story as any).reference
+      || (story as any).code
+      || (story.id ? story.id.slice(-6).toUpperCase() : '');
+    if (typeof ref === 'string') return ref.trim();
+    return ref ? String(ref) : '';
+  }, []);
+
+  const getTaskDueMs = useCallback((task: Task): number | null => {
+    const raw: any = (task as any).dueDateMs
+      ?? (task as any).dueDate
+      ?? (task as any).targetDate
+      ?? (task as any).dueAt
+      ?? (task as any).due;
+    if (!raw) return null;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+      const parsed = new Date(raw).getTime();
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (raw instanceof Date) return raw.getTime();
+    if (typeof raw.toDate === 'function') {
+      const d = raw.toDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    if (typeof raw.toMillis === 'function') return raw.toMillis();
+    if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
+    return null;
+  }, []);
+
+  const formatDueDetail = useCallback((dueMs: number) => {
+    const dueDate = new Date(dueMs);
+    const dateLabel = format(dueDate, 'MMM d, yyyy');
+    const timeLabel = format(dueDate, 'HH:mm');
+    const hasTime = dueDate.getHours() !== 0 || dueDate.getMinutes() !== 0;
+    return hasTime ? `${dateLabel} • ${timeLabel}` : dateLabel;
+  }, []);
+
+  const handleTaskStatusChange = useCallback(async (task: Task, status: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, {
+        status,
+        completedAt: status === 2 ? serverTimestamp() : null,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error('Failed to update task status', err);
+    }
+  }, []);
+
   const loadDailySummary = useCallback(async () => {
     if (!currentUser) return;
     const todayStr = format(new Date(), 'yyyy-MM-dd');
     setDailySummarySource(null);
     setPrioritySource(null);
+    setAiFocusItems([]);
     try {
       // Prefer daily_summaries (structured); fallback to daily_digests AI text
       const summarySnap = await getDocs(query(
@@ -195,9 +334,10 @@ const Dashboard: React.FC = () => {
               }
             }
             const aiItems: any[] = Array.isArray(summary?.aiFocus?.items) ? summary.aiFocus.items : [];
+            setAiFocusItems(aiItems);
             aiItems.slice(0, 3).forEach((item) => {
-            const label = [item.ref, item.title || item.summary].filter(Boolean).join(' — ') || (item.ref || '');
-            lines.push(`Focus: ${label} — ${item.rationale || item.summary || item.title || ''}`.trim());
+              const label = [item.ref, item.title || item.summary].filter(Boolean).join(' — ') || (item.ref || '');
+              lines.push(`Focus: ${label} — ${item.rationale || item.summary || item.title || ''}`.trim());
             });
         }
       }
@@ -245,6 +385,168 @@ const Dashboard: React.FC = () => {
     const b = num & 255;
     return `rgba(${r},${g},${b},${alpha})`;
   };
+
+  const calendarRange: PlannerRange = useMemo(() => {
+    if (calendarView === 'week') {
+      const start = startOfWeek(calendarDate, { weekStartsOn: 1 });
+      return { start, end: endOfDay(addDays(start, 6)) };
+    }
+    if (calendarView === 'month') {
+      return { start: startOfMonth(calendarDate), end: endOfMonth(calendarDate) };
+    }
+    return { start: startOfDay(calendarDate), end: endOfDay(calendarDate) };
+  }, [calendarDate, calendarView]);
+
+  const planner = useUnifiedPlannerData(calendarRange);
+  const refreshExternalEvents = planner.refreshExternalEvents;
+
+  useEffect(() => {
+    if (!currentUser) return;
+    refreshExternalEvents().catch(() => undefined);
+  }, [currentUser, refreshExternalEvents]);
+
+  const calendarEvents: DashboardCalendarEvent[] = useMemo(() => {
+    const displayBlocks = planner.blocks.filter((block) => {
+      const source = String((block as any).source || '').toLowerCase();
+      const entryMethod = String((block as any).entry_method || '').toLowerCase();
+      return source !== 'gcal' && entryMethod !== 'google_calendar';
+    });
+
+    const blockEvents = displayBlocks.map((block) => {
+      const theme = themeFor(block.theme || block.subTheme);
+      const color = theme?.color || '#3b82f6';
+      return {
+        id: block.id,
+        title: (block as any).title || `${block.category} • ${block.theme}`,
+        start: new Date(block.start),
+        end: new Date(block.end),
+        type: 'block' as const,
+        color,
+        textColor: theme?.textColor || '#ffffff',
+        block,
+      };
+    });
+
+    const instanceEvents = planner.instances
+      .filter((instance) => instance.plannedStart || instance.occurrenceDate)
+      .map((instance) => {
+        const block = instance.blockId ? planner.blocks.find((b) => b.id === instance.blockId) : undefined;
+        const base = instance.occurrenceDate
+          ? parse(instance.occurrenceDate, 'yyyyMMdd', new Date())
+          : new Date(instance.plannedStart || Date.now());
+        const start = instance.plannedStart ? new Date(instance.plannedStart) : addMinutes(base, 8 * 60);
+        const end = instance.plannedEnd
+          ? new Date(instance.plannedEnd)
+          : addMinutes(new Date(start), instance.durationMinutes || 30);
+        const theme = themeFor((instance as any).theme || block?.theme || (instance as any).sourceTheme);
+        const fallback = instance.sourceType === 'chore'
+          ? '#f59e0b'
+          : instance.sourceType === 'routine'
+            ? '#0ea5e9'
+            : '#38bdf8';
+        return {
+          id: instance.id,
+          title: instance.title || (instance.sourceType === 'chore' ? 'Chore' : instance.sourceType === 'routine' ? 'Routine' : 'Planned work'),
+          start,
+          end,
+          type: 'instance' as const,
+          color: theme?.color || fallback,
+          textColor: theme?.textColor || '#ffffff',
+          block,
+          instance,
+        };
+      });
+
+    const linkedGcalIds = new Set<string>();
+    planner.instances.forEach((i) => {
+      if (i.external?.gcalEventId) linkedGcalIds.add(i.external.gcalEventId);
+    });
+    displayBlocks.forEach((b) => {
+      if (b.googleEventId) linkedGcalIds.add(b.googleEventId);
+    });
+
+    const externalEvents = planner.externalEvents
+      .filter((external) => {
+        if (linkedGcalIds.has(external.id)) return false;
+        const blockIdFromExt = (external.raw as any)?.extendedProperties?.private?.blockId;
+        if (blockIdFromExt && planner.blocks.some(b => b.id === blockIdFromExt)) return false;
+        return true;
+      })
+      .map((external) => ({
+        id: external.id,
+        title: external.title,
+        start: external.start,
+        end: external.end,
+        type: 'external' as const,
+        color: '#9ca3af',
+        textColor: '#111827',
+        external,
+      }));
+
+    return [...externalEvents, ...blockEvents, ...instanceEvents];
+  }, [planner.blocks, planner.externalEvents, planner.instances, themeFor]);
+
+  const calendarEventStyleGetter = useCallback((event: DashboardCalendarEvent) => {
+    const backgroundColor = event.color || '#3b82f6';
+    const color = event.textColor || '#ffffff';
+    return {
+      style: {
+        backgroundColor,
+        borderRadius: '6px',
+        border: 'none',
+        color,
+        padding: '2px 6px',
+      },
+    };
+  }, []);
+
+  const updateBlockTiming = useCallback(async (event: DashboardCalendarEvent, start: Date, end: Date) => {
+    if (!event.block?.id) return;
+    await updateDoc(doc(db, 'calendar_blocks', event.block.id), {
+      start: start.getTime(),
+      end: end.getTime(),
+      updatedAt: Date.now(),
+    });
+  }, []);
+
+  const updateInstanceTiming = useCallback(async (event: DashboardCalendarEvent, start: Date, end: Date) => {
+    if (!event.instance?.id) return;
+    await updateDoc(doc(db, 'scheduled_instances', event.instance.id), {
+      plannedStart: start.toISOString(),
+      plannedEnd: end.toISOString(),
+      occurrenceDate: format(start, 'yyyyMMdd'),
+      updatedAt: Date.now(),
+    });
+  }, []);
+
+  const updateExternalEventTiming = useCallback(async (event: DashboardCalendarEvent, start: Date, end: Date) => {
+    const eventId = event.external?.id || event.id;
+    if (!eventId) return;
+    const raw: any = event.external?.raw || {};
+    const isAllDay = Boolean(raw?.start?.date) && !raw?.start?.dateTime;
+    if (isAllDay) return;
+    const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+    await updateEv({ eventId, start: start.toISOString(), end: end.toISOString() });
+    await refreshExternalEvents();
+  }, [refreshExternalEvents]);
+
+  const handleCalendarEventMove = useCallback(async ({ event, start, end }: { event: DashboardCalendarEvent; start: Date; end: Date }) => {
+    if (event.type === 'external') {
+      await updateExternalEventTiming(event, start, end);
+      return;
+    }
+    if (event.type === 'block') {
+      await updateBlockTiming(event, start, end);
+      return;
+    }
+    if (event.type === 'instance') {
+      await updateInstanceTiming(event, start, end);
+    }
+  }, [updateBlockTiming, updateExternalEventTiming, updateInstanceTiming]);
+
+  const handleCalendarEventResize = useCallback(async ({ event, start, end }: { event: DashboardCalendarEvent; start: Date; end: Date }) => {
+    await handleCalendarEventMove({ event, start, end });
+  }, [handleCalendarEventMove]);
   const dailyBrief = () => {
     const parts: string[] = [];
     if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
@@ -481,7 +783,231 @@ const Dashboard: React.FC = () => {
     return () => unsub();
   }, [currentUser]);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setScheduledToday([]);
+      setScheduledTodayLoading(false);
+      return;
+    }
+    setScheduledTodayLoading(true);
+    const todayKey = format(new Date(), 'yyyyMMdd');
+    const q = query(
+      collection(db, 'scheduled_instances'),
+      where('ownerUid', '==', currentUser.uid),
+      where('occurrenceDate', '==', todayKey),
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs
+          .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }) as ScheduledInstanceModel)
+          .filter((instance) => {
+            if (!currentPersona || !instance.persona) return true;
+            return instance.persona === currentPersona;
+          })
+          .sort((a, b) => {
+            const aStart = a.plannedStart ? new Date(a.plannedStart).getTime() : 0;
+            const bStart = b.plannedStart ? new Date(b.plannedStart).getTime() : 0;
+            return aStart - bStart;
+          });
+        setScheduledToday(rows);
+        setScheduledTodayLoading(false);
+      },
+      (err) => {
+        console.error('Failed to load scheduled instances', err);
+        setScheduledToday([]);
+        setScheduledTodayLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setTasksDueTodayList([]);
+      setTasksDueTodayLoading(false);
+      return;
+    }
+    setTasksDueTodayLoading(true);
+    const q = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+    );
+    const sprintStart = selectedSprint?.startDate ? startOfDay(new Date(selectedSprint.startDate)).getTime() : null;
+    const sprintEnd = selectedSprint?.endDate ? endOfDay(new Date(selectedSprint.endDate)).getTime() : null;
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const todayStart = startOfDay(new Date()).getTime();
+        const todayEnd = endOfDay(new Date()).getTime();
+        const rows = snap.docs
+          .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) } as Task))
+          .filter((task) => !task.deleted)
+          .filter((task) => {
+            const due = getTaskDueMs(task);
+            if (!due) return false;
+            return due >= todayStart && due <= todayEnd;
+          })
+          .filter((task) => {
+            if (sprintStart == null || sprintEnd == null) return true;
+            const due = getTaskDueMs(task);
+            if (!due) return false;
+            return due >= sprintStart && due <= sprintEnd;
+          })
+          .filter((task) => (task.status ?? 0) !== 2);
+
+        rows.sort((a, b) => {
+          const aDue = getTaskDueMs(a) || 0;
+          const bDue = getTaskDueMs(b) || 0;
+          if (aDue !== bDue) return aDue - bDue;
+          const aScore = Number((a as any).aiCriticalityScore || 0);
+          const bScore = Number((b as any).aiCriticalityScore || 0);
+          return bScore - aScore;
+        });
+
+        setTasksDueTodayList(rows);
+        setTasksDueTodayLoading(false);
+      },
+      (err) => {
+        console.error('Failed to load tasks due today', err);
+        setTasksDueTodayList([]);
+        setTasksDueTodayLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [currentUser, currentPersona, getTaskDueMs, selectedSprint?.startDate, selectedSprint?.endDate]);
+
   const unscheduledSummary = unscheduledToday.slice(0, 3);
+  const scheduledCompletionRate = useMemo(() => {
+    if (scheduledToday.length === 0) return 0;
+    const completed = scheduledToday.filter((instance) => instance.status === 'completed').length;
+    return Math.round((completed / scheduledToday.length) * 100);
+  }, [scheduledToday]);
+
+  const nowNextLater = useMemo(() => {
+    const now = Date.now();
+    const mapped = scheduledToday.map((instance) => {
+      const base = instance.occurrenceDate
+        ? parse(instance.occurrenceDate, 'yyyyMMdd', new Date())
+        : new Date(instance.plannedStart || now);
+      const start = instance.plannedStart ? new Date(instance.plannedStart) : addMinutes(base, 8 * 60);
+      const end = instance.plannedEnd
+        ? new Date(instance.plannedEnd)
+        : addMinutes(new Date(start), instance.durationMinutes || 30);
+      return { instance, startMs: start.getTime(), endMs: end.getTime() };
+    });
+    const upcoming = mapped
+      .filter((item) => item.endMs >= now)
+      .sort((a, b) => a.startMs - b.startMs);
+    return {
+      nowNext: upcoming.slice(0, 2).map((item) => item.instance),
+      later: upcoming.slice(2, 6).map((item) => item.instance),
+    };
+  }, [scheduledToday]);
+
+  const tasksDueTodayCombined = useMemo(() => {
+    const items: Array<{
+      id: string;
+      kind: 'task' | 'routine' | 'chore';
+      title: string;
+      dueMs: number | null;
+      task?: Task;
+    }> = [];
+
+    tasksDueTodayList.forEach((task) => {
+      items.push({
+        id: task.id,
+        kind: 'task',
+        title: task.title || 'Task',
+        dueMs: getTaskDueMs(task),
+        task,
+      });
+    });
+
+    choresDueToday.forEach((chore) => {
+      items.push({
+        id: `chore-${chore.id}`,
+        kind: 'chore',
+        title: chore.title || 'Chore',
+        dueMs: chore.dueAt ? chore.dueAt.getTime() : null,
+      });
+    });
+
+    routinesDueToday.forEach((routine) => {
+      items.push({
+        id: `routine-${routine.id}`,
+        kind: 'routine',
+        title: routine.title || 'Routine',
+        dueMs: routine.dueAt ? routine.dueAt.getTime() : null,
+      });
+    });
+
+    if (tasksDueTodaySortMode === 'ai') {
+      const tasks = items.filter((item) => item.kind === 'task');
+      const habits = items.filter((item) => item.kind !== 'task');
+      tasks.sort((a, b) => {
+        const aScore = Number((a.task as any)?.aiCriticalityScore ?? (a.task as any)?.aiPriorityScore ?? 0);
+        const bScore = Number((b.task as any)?.aiCriticalityScore ?? (b.task as any)?.aiPriorityScore ?? 0);
+        if (aScore !== bScore) return bScore - aScore;
+        const aDue = a.dueMs ?? 0;
+        const bDue = b.dueMs ?? 0;
+        return aDue - bDue;
+      });
+      habits.sort((a, b) => (a.dueMs ?? 0) - (b.dueMs ?? 0));
+      return [...tasks, ...habits];
+    }
+
+    items.sort((a, b) => (a.dueMs ?? 0) - (b.dueMs ?? 0));
+    return items;
+  }, [tasksDueTodayList, choresDueToday, routinesDueToday, tasksDueTodaySortMode, getTaskDueMs]);
+
+  const tasksByRef = useMemo(() => {
+    const map = new Map<string, Task>();
+    const sources = [...upcomingTasks, ...tasksDueTodayList, ...sprintTasks];
+    sources.forEach((task) => {
+      const ref = taskRefLabel(task);
+      if (!ref) return;
+      map.set(ref.toUpperCase(), task);
+    });
+    return map;
+  }, [upcomingTasks, tasksDueTodayList, sprintTasks, taskRefLabel]);
+
+  const storiesByRef = useMemo(() => {
+    const map = new Map<string, Story>();
+    const sources = [...recentStories, ...sprintStories];
+    sources.forEach((story) => {
+      const ref = storyRefLabel(story);
+      if (!ref) return;
+      map.set(ref.toUpperCase(), story);
+    });
+    return map;
+  }, [recentStories, sprintStories, storyRefLabel]);
+
+  const sortedTasksDueToday = useMemo(() => {
+    const rows = [...tasksDueTodayList];
+    if (tasksDueTodaySortMode === 'ai') {
+      rows.sort((a, b) => {
+        const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
+        const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
+        if (aScore !== bScore) return bScore - aScore;
+        const aDue = getTaskDueMs(a) || 0;
+        const bDue = getTaskDueMs(b) || 0;
+        return aDue - bDue;
+      });
+      return rows;
+    }
+    rows.sort((a, b) => {
+      const aDue = getTaskDueMs(a) || 0;
+      const bDue = getTaskDueMs(b) || 0;
+      if (aDue !== bDue) return aDue - bDue;
+      const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
+      const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
+      return bScore - aScore;
+    });
+    return rows;
+  }, [tasksDueTodayList, tasksDueTodaySortMode, getTaskDueMs]);
   const potGoalLinks = useMemo(() => {
     const map: Record<string, { potId: string; potName: string; balance: number; currency: string; goals: Goal[] }> = {};
     goalsList.forEach((goal) => {
@@ -724,6 +1250,23 @@ const Dashboard: React.FC = () => {
     navigate('/stories', { state: { themeId } });
   };
 
+
+  const handleInstanceStatusChange = useCallback(
+    async (instance: ScheduledInstanceModel, status: ScheduledInstanceModel['status']) => {
+      try {
+        const ref = doc(db, 'scheduled_instances', instance.id);
+        await updateDoc(ref, {
+          status,
+          statusUpdatedAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.error('Failed to update instance status', err);
+      }
+    },
+    [],
+  );
+
   // Sprint-scoped data for metrics panel
   useEffect(() => {
     if (!currentUser || !currentPersona || !selectedSprintId) {
@@ -767,6 +1310,19 @@ const Dashboard: React.FC = () => {
       unsubGoals();
     };
   }, [currentUser, currentPersona, selectedSprintId]);
+
+  // Planner stats snapshot
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setPlannerStats(null);
+      return;
+    }
+    const ref = doc(db, 'planner_stats', currentUser.uid);
+    const unsub = onSnapshot(ref, (snap) => {
+      setPlannerStats(snap.exists() ? snap.data() : null);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
 
   useEffect(() => {
     if (!currentUser?.uid || !selectedSprintId) {
@@ -823,7 +1379,6 @@ const Dashboard: React.FC = () => {
     { label: 'Unscheduled blocks', value: unscheduledToday.length },
   ];
 
-  const selectedSprint = selectedSprintId ? (sprintsById[selectedSprintId] ?? null) : (sprints[0] ?? null);
   const capacitySummary = capacityData ? {
     total: Number(capacityData.totalCapacityHours ?? 0),
     allocated: Number(capacityData.allocatedHours ?? 0),
@@ -836,6 +1391,22 @@ const Dashboard: React.FC = () => {
     if (utilization > 80) return 'warning';
     return 'success';
   };
+
+  const financeSummary = useMemo(() => {
+    const spent = monzoSummary?.totals?.spent;
+    const budget = monzoSummary?.totals?.budget;
+    if (spent == null || budget == null) return '£0 spent';
+    const remaining = budget - spent;
+    return `£${(spent / 100).toFixed(0)} spent · £${(remaining / 100).toFixed(0)} left`;
+  }, [monzoSummary]);
+
+  const plannerSummary = useMemo(() => {
+    if (!plannerStats) return 'Not yet run';
+    const when = plannerStats.lastRunAt
+      ? new Date(plannerStats.lastRunAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+      : 'Unknown time';
+    return `${when} · +${plannerStats.created || 0} created · ${plannerStats.replaced || 0} replaced · ${plannerStats.blocked || 0} blocked`;
+  }, [plannerStats]);
 
   const sprintSummaryMetrics = useMemo(() => {
     if (!selectedSprint) return null;
@@ -884,6 +1455,14 @@ const Dashboard: React.FC = () => {
     };
   }, [selectedSprint, sprintStories, sprintTasks]);
 
+  const sprintSummary = useMemo(() => {
+    if (!selectedSprint || !sprintSummaryMetrics) return { label: 'Select sprint', detail: '' };
+    return {
+      label: `${sprintSummaryMetrics.progress}% · ${sprintSummaryMetrics.timeLabel}`,
+      detail: `${sprintSummaryMetrics.completedStories}/${sprintSummaryMetrics.totalStories} stories · ${sprintSummaryMetrics.completedPoints}/${sprintSummaryMetrics.totalPoints} pts`
+    };
+  }, [selectedSprint, sprintSummaryMetrics]);
+
   if (!currentUser) {
     return <div>Please sign in to view your dashboard.</div>;
   }
@@ -931,6 +1510,22 @@ const Dashboard: React.FC = () => {
                       {stats.totalGoals > 0 ? ` · ${stats.goalCompletion}%` : ' · 0%'}
                     </div>
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{
+                      border: '1px solid var(--bs-border-color, #dee2e6)',
+                      backgroundColor: 'var(--bs-body-bg)',
+                      color: 'var(--bs-body-color)',
+                      textAlign: 'left'
+                    }}
+                    disabled
+                  >
+                    <div className="text-muted" style={{ fontSize: 10 }}>AI Planning</div>
+                    <div className="fw-semibold" style={{ fontSize: 12 }}>
+                      {plannerSummary}
+                    </div>
+                  </button>
                 </div>
                 {stats.tasksUnlinked > 0 && (
                   <Badge bg="warning" text="dark" pill>
@@ -966,17 +1561,138 @@ const Dashboard: React.FC = () => {
                     {metricsCollapsed ? 'Expand' : 'Collapse'}
                   </Button>
                 </Card.Header>
-                <Card.Body className="pt-3 pb-2">
-                  {!hasSelectedSprint && (
-                    <div className="text-muted small">Select a sprint to see capacity.</div>
-                  )}
-                  {hasSelectedSprint && capacityLoading && (
-                    <div className="text-muted small">Loading capacity…</div>
-                  )}
-                  {hasSelectedSprint && capacityError && (
-                    <div className="text-danger small">{capacityError}</div>
-                  )}
-                  {hasSelectedSprint && capacitySummary && (
+                <Card.Body className="py-2">
+                  <Row className="g-2 mb-2">
+                    {/* Finance Group */}
+                    <Col xs={12} sm={6} lg={3}>
+                      <div 
+                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
+                        style={{ 
+                          background: 'var(--bs-body-bg)', 
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onClick={() => navigate('/finance/dashboard')}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-primary-bg-subtle)';
+                          e.currentTarget.style.borderColor = 'var(--bs-primary)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                        }}
+                      >
+                        <Wallet size={16} className="text-info" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Finance</div>
+                          <div className="fw-semibold">
+                            {financeSummary}
+                          </div>
+                        </div>
+                      </div>
+                    </Col>
+
+                    {/* Capacity Group */}
+                    <Col xs={12} sm={6} lg={3}>
+                      <div 
+                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
+                        style={{ 
+                          background: 'var(--bs-body-bg)', 
+                          cursor: hasSelectedSprint ? 'pointer' : 'default',
+                          transition: 'all 0.2s ease',
+                          opacity: hasSelectedSprint ? 1 : 0.6
+                        }}
+                        onClick={hasSelectedSprint ? () => navigate('/capacity') : undefined}
+                        onMouseEnter={(e) => {
+                          if (hasSelectedSprint) {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-primary-bg-subtle)';
+                            e.currentTarget.style.borderColor = 'var(--bs-primary)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (hasSelectedSprint) {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                          }
+                        }}
+                      >
+                        <Target size={16} className="text-primary" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Capacity</div>
+                          <div className="fw-semibold">
+                            {hasSelectedSprint && capacitySummary ? `${capacitySummary.utilization}% · ${capacitySummary.free.toFixed(1)}h free` : 'Select sprint'}
+                          </div>
+                        </div>
+                      </div>
+                    </Col>
+
+                    {/* Sprint Progress Group */}
+                    <Col xs={12} sm={6} lg={3}>
+                      <div 
+                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
+                        style={{ 
+                          background: 'var(--bs-body-bg)', 
+                          cursor: selectedSprint ? 'pointer' : 'default',
+                          transition: 'all 0.2s ease',
+                          opacity: selectedSprint ? 1 : 0.6
+                        }}
+                        onClick={selectedSprint ? () => navigate('/sprints/management') : undefined}
+                        onMouseEnter={(e) => {
+                          if (selectedSprint) {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-success-bg-subtle)';
+                            e.currentTarget.style.borderColor = 'var(--bs-success)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (selectedSprint) {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                          }
+                        }}
+                      >
+                        <TrendingUp size={16} className="text-success" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Sprint Progress</div>
+                          <div className="fw-semibold">
+                            {sprintSummary.label}
+                          </div>
+                          {sprintSummary.detail && <div className="text-muted small">{sprintSummary.detail}</div>}
+                        </div>
+                      </div>
+                    </Col>
+
+                    {/* Overall Progress Group */}
+                    <Col xs={12} sm={6} lg={3}>
+                      <div 
+                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
+                        style={{ 
+                          background: 'var(--bs-body-bg)', 
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onClick={() => navigate('/metrics/progress')}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
+                          e.currentTarget.style.borderColor = 'var(--bs-warning)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                        }}
+                      >
+                        <BookOpen size={16} className="text-warning" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Overall Progress</div>
+                          <div className="fw-semibold">
+                            {stats.storyPointsCompletion || 0}% pts · {stats.goalCompletion || 0}% goals
+                          </div>
+                          <div className="text-muted small">AI {plannerSummary}</div>
+                        </div>
+                      </div>
+                    </Col>
+                  </Row>
+
+                  {!metricsCollapsed && hasSelectedSprint && capacitySummary && (
                     <Row className="g-2 dashboard-inline-row dashboard-key-metrics">
                       <Col xs={6} md={4} xl={2}>
                         <Card className="h-100 border-0 shadow-sm">
@@ -1102,294 +1818,275 @@ const Dashboard: React.FC = () => {
             <Col xl={12}>
               <Card className="h-100 shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Pot Balances (Linked Goals)</span>
-                  <Button variant="link" size="sm" className="text-decoration-none" onClick={() => navigate('/finance')}>
-                    View finance
-                  </Button>
-                </Card.Header>
-                <Card.Body>
-                  {potGoalLinks.length === 0 ? (
-                    <div className="text-muted small">No goals are linked to Monzo pots yet.</div>
-                  ) : (
-                    <Row className="g-3">
-                      {potGoalLinks.map((pot) => (
-                        <Col key={pot.potId} xs={12} md={6} xl={4}>
-                          <Card className="h-100 border-0 shadow-sm">
-                            <Card.Body className="p-3">
-                              <div className="d-flex justify-content-between align-items-start mb-2">
-                                <div className="fw-semibold text-truncate">{pot.potName}</div>
-                                <div className="fw-semibold">{formatPotBalance(pot.balance, pot.currency)}</div>
-                              </div>
-                              <div className="text-muted small mb-2">{pot.goals.length} linked goal{pot.goals.length === 1 ? '' : 's'}</div>
-                              <ul className="mb-0 small">
-                                {pot.goals.slice(0, 4).map((goal) => (
-                                  <li key={goal.id} className="text-truncate">{goal.title || 'Untitled goal'}</li>
-                                ))}
-                                {pot.goals.length > 4 && (
-                                  <li className="text-muted">+{pot.goals.length - 4} more</li>
-                                )}
-                              </ul>
-                            </Card.Body>
-                          </Card>
-                        </Col>
-                      ))}
-                    </Row>
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-
-          <Row className="g-3 mb-4">
-            <Col xl={12}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-center">
                   <span className="fw-semibold">Today’s Plan</span>
                   <Button variant="link" size="sm" className="text-decoration-none" onClick={handleOpenChecklist}>
                     Open planner
                   </Button>
                 </Card.Header>
                 <Card.Body>
-                  {dailySummaryLines.length > 0 && (
-                    <div className="mb-3">
-                      <div className="fw-semibold mb-1">Daily Summary</div>
-                      {dailySummarySource && (
-                        <div className="text-muted small mb-1">Source: {dailySummarySource}</div>
-                      )}
-                      <ul className="mb-0 small">
-                        {dailySummaryLines.map((line, idx) => (
-                          <li key={idx}>{line}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {selectedSprint && sprintSummaryMetrics && (
-                    <div className="mb-3">
-                      <div className="fw-semibold mb-2">Sprint Snapshot</div>
-                      <Row className="g-2 dashboard-inline-row">
-                        <Col xs={6} md={3}>
-                          <Card className="h-100 border-0 shadow-sm">
-                            <Card.Body className="p-2 text-center">
-                              <div className="text-muted small">Time</div>
-                              <div className="fw-semibold">{sprintSummaryMetrics.timeLabel}</div>
-                            </Card.Body>
-                          </Card>
-                        </Col>
-                        <Col xs={6} md={3}>
-                          <Card className="h-100 border-0 shadow-sm">
-                            <Card.Body className="p-2 text-center">
-                              <div className="text-muted small">Stories</div>
-                              <div className="fw-semibold">
-                                {sprintSummaryMetrics.completedStories}/{sprintSummaryMetrics.totalStories}
-                              </div>
-                            </Card.Body>
-                          </Card>
-                        </Col>
-                        <Col xs={6} md={3}>
-                          <Card className="h-100 border-0 shadow-sm">
-                            <Card.Body className="p-2 text-center">
-                              <div className="text-muted small">Tasks</div>
-                              <div className="fw-semibold">
-                                {sprintSummaryMetrics.completedTasks}/{sprintSummaryMetrics.totalTasks}
-                              </div>
-                            </Card.Body>
-                          </Card>
-                        </Col>
-                        <Col xs={6} md={3}>
-                          <Card className="h-100 border-0 shadow-sm">
-                            <Card.Body className="p-2 text-center">
-                              <div className="text-muted small">Progress</div>
-                              <div className="fw-semibold">{sprintSummaryMetrics.progress}%</div>
-                            </Card.Body>
-                          </Card>
-                        </Col>
-                      </Row>
-                    </div>
-                  )}
-                  {unscheduledToday.length > 0 && (
-                    <Alert variant="warning" className="py-2">
-                      <div className="fw-semibold mb-1">Scheduling issues</div>
-                      <ul className="mb-0 small">
-                        {unscheduledSummary.map((item) => (
-                          <li key={item.id}>{item.title || item.sourceId}</li>
-                        ))}
-                        {unscheduledToday.length > unscheduledSummary.length && (
-                          <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
-                        )}
-                      </ul>
-                    </Alert>
-                  )}
-                  <ChecklistPanel title="" compact />
-                  {prioritySource && (
-                    <div className="text-muted small mb-3">Prioritization source: {prioritySource}</div>
-                  )}
-                  <Row className="mt-3 g-3">
+                  <Row className="g-3">
                     <Col lg={8}>
-                      <div className="fw-semibold mb-2">Calendar (Today)</div>
-                      {todayBlocks.length === 0 ? (
-                        <div className="text-muted">No blocks scheduled today.</div>
-                      ) : (
-                        <Table size="sm" className="mb-0">
-                          <tbody>
-                            {todayBlocks
-                              .slice()
-                              .sort((a, b) => (a.start || 0) - (b.start || 0))
-                              .map((block) => {
-                                const goal = block.goalId ? goalsList.find(g => g.id === block.goalId) : undefined;
-                                const theme = themeFor(goal?.theme ?? block.theme);
-                                const badge = theme?.label || goal?.title || block.theme || 'General';
-                                const color = theme?.color || '#6c757d';
-                                return (
-                                  <tr key={block.id} style={{ background: hexToRgba(color, 0.12) }}>
-                                    <td style={{ width: '32%' }}>
-                                      {new Date(block.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} –{' '}
-                                      {new Date(block.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                    </td>
-                                    <td>
-                                      <div className="d-flex align-items-center gap-2 flex-wrap">
-                                        <div>
-                                          <div className="fw-semibold">{block.title || block.category || 'Block'}</div>
-                                          {block.linkedTaskRef && <div className="text-muted small">Task: {block.linkedTaskRef}</div>}
-                                          {block.linkedStoryRef && <div className="text-muted small">Story: {block.linkedStoryRef}</div>}
-                                        </div>
-                                        <Button
-                                          size="sm"
-                                          variant="outline-primary"
-                                          onClick={() => handleOpenBlock(block.id)}
-                                        >
-                                          View
-                                        </Button>
-                                      </div>
-                                    </td>
-                                    <td className="text-end">
-                                      <Badge bg="secondary" style={{ backgroundColor: color }}>{badge}</Badge>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                          </tbody>
-                        </Table>
-                      )}
-                    </Col>
-                    <Col lg={4}>
-                      <div className="fw-semibold mb-2">Now / Next / Later</div>
-                      {(() => {
-                        const sorted = todayBlocks.slice().sort((a, b) => (a.start || 0) - (b.start || 0));
-                        const nowMs = Date.now();
-                        const nowBlock = sorted.find(b => b.start <= nowMs && nowMs < b.end);
-                        const nextBlock = sorted.find(b => b.start > nowMs);
-                        const later = sorted.filter(b => b.start > (nextBlock ? nextBlock.start : nowMs)).slice(0, 3);
-                        const renderBlock = (label: string, block: any) => {
-                          if (!block) return <div className="mb-2 text-muted small">{label}: none</div>;
-                          const goal = block.goalId ? goalsList.find(g => g.id === block.goalId) : undefined;
-                          const theme = themeFor(goal?.theme ?? block.theme);
-                          const color = theme?.color || '#6c757d';
-                          return (
-                            <div className="mb-2 p-2 rounded" style={{ background: hexToRgba(color, 0.12), borderLeft: `3px solid ${color}` }}>
-                              <div className="text-muted small">{label}</div>
-                              <div className="fw-semibold">{block.title || block.category || 'Block'}</div>
-                              <div className="small">
-                                {new Date(block.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – {new Date(block.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </div>
-                            </div>
-                          );
-                        };
-                        return (
-                          <>
-                            {renderBlock('Now', nowBlock)}
-                            {renderBlock('Next', nextBlock)}
-                            <div className="text-muted small">Later:</div>
-                            {later.length === 0 ? (
-                              <div className="text-muted small">No later blocks</div>
-                            ) : (
-                              <ul className="small mb-0">
-                                {later.map((b) => (
-                                  <li key={b.id}>
-                                    {b.title || b.category || 'Block'} ({new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
-                                  </li>
+                      <Row className="g-3 mb-3">
+                        <Col lg={7}>
+                          {dailySummaryLines.length > 0 && (
+                            <div>
+                              <div className="fw-semibold mb-1">Daily Summary</div>
+                              {dailySummarySource && (
+                                <div className="text-muted small mb-1">Source: {dailySummarySource}</div>
+                              )}
+                              <ul className="mb-0 small">
+                                {dailySummaryLines.map((line, idx) => (
+                                  <li key={idx}>{line}</li>
                                 ))}
                               </ul>
+                            </div>
+                          )}
+                        </Col>
+                        <Col lg={5}>
+                          {aiFocusItems.length > 0 && (
+                            <div>
+                              <div className="fw-semibold mb-1">AI focus</div>
+                              {prioritySource && <div className="text-muted small mb-1">Source: {prioritySource}</div>}
+                              <ul className="mb-0 small">
+                                {aiFocusItems.slice(0, 3).map((it: any, idx: number) => {
+                                  const refKey = (it.ref || '').toUpperCase();
+                                  const matchedTask = refKey ? tasksByRef.get(refKey) : undefined;
+                                  const matchedStory = !matchedTask && refKey ? storiesByRef.get(refKey) : undefined;
+                                  const directType = String(it.type || it.entityType || '').toLowerCase();
+                                  const directId = it.id || it.entityId || null;
+                                  const href = directId && directType === 'task'
+                                    ? `/tasks/${directId}`
+                                    : directId && directType === 'story'
+                                      ? `/stories/${directId}`
+                                      : matchedTask
+                                        ? `/tasks/${matchedTask.id}`
+                                        : matchedStory
+                                          ? `/stories/${matchedStory.id}`
+                                          : undefined;
+                                  const label = [it.ref, it.title || it.summary].filter(Boolean).join(' — ') || 'Focus';
+                                  const rationale = it.rationale || it.nextStep ? ` — ${it.rationale || it.nextStep}` : '';
+                                  return (
+                                    <li key={idx}>
+                                      {href ? (
+                                        <>
+                                          <a href={href} className="text-decoration-none">{label}</a>{rationale}
+                                        </>
+                                      ) : (
+                                        <>
+                                          {label}{rationale}
+                                        </>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </div>
+                          )}
+                        </Col>
+                      </Row>
+                      {unscheduledToday.length > 0 && (
+                        <Alert variant="warning" className="py-2">
+                          <div className="fw-semibold mb-1">Scheduling issues</div>
+                          <ul className="mb-0 small">
+                            {unscheduledSummary.map((item) => (
+                              <li key={item.id}>{item.title || item.sourceId}</li>
+                            ))}
+                            {unscheduledToday.length > unscheduledSummary.length && (
+                              <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
                             )}
-                          </>
-                        );
-                      })()}
+                          </ul>
+                        </Alert>
+                      )}
+                      <div className="fw-semibold mb-2">Calendar</div>
+                      <div className="calendar-dashboard-wrap">
+                        <DragAndDropCalendar
+                          localizer={localizer}
+                          events={calendarEvents}
+                          startAccessor="start"
+                          endAccessor="end"
+                          views={['day', 'week', 'month']}
+                          view={calendarView}
+                          date={calendarDate}
+                          defaultView={Views.DAY}
+                          onView={(view) => setCalendarView(view as 'day' | 'week' | 'month')}
+                          onNavigate={(date) => setCalendarDate(date)}
+                          onEventDrop={handleCalendarEventMove}
+                          onEventResize={handleCalendarEventResize}
+                          resizable
+                          popup
+                          scrollToTime={new Date(1970, 0, 1, 6, 0, 0)}
+                          style={{ height: 520 }}
+                          eventPropGetter={calendarEventStyleGetter}
+                        />
+                      </div>
+                    </Col>
+                    <Col lg={4}>
+                      <Card className="shadow-sm border-0 mb-3">
+                        <Card.Header className="d-flex align-items-center justify-content-between">
+                          <div className="fw-semibold">Now / Next</div>
+                          <Badge bg={scheduledToday.length > 0 ? 'info' : 'secondary'} pill>
+                            {scheduledCompletionRate}%
+                          </Badge>
+                        </Card.Header>
+                        <Card.Body className="p-3">
+                          {scheduledTodayLoading ? (
+                            <div className="d-flex align-items-center gap-2 text-muted">
+                              <Spinner size="sm" animation="border" /> Loading schedule…
+                            </div>
+                          ) : nowNextLater.nowNext.length === 0 ? (
+                            <div className="text-muted small">Nothing scheduled right now.</div>
+                          ) : (
+                            nowNextLater.nowNext.map((instance) => (
+                              <div key={instance.id} className="border rounded p-2 mb-2">
+                                <div className="d-flex justify-content-between align-items-start">
+                                  <div>
+                                    <div className="fw-semibold">{instance.title || instance.sourceId}</div>
+                                    <div className="text-muted small d-flex align-items-center gap-1">
+                                      <Clock size={12} /> {formatInstanceTime(instance)}
+                                    </div>
+                                  </div>
+                                  <Badge bg={focusStatusVariant(instance.status)}>{instance.status}</Badge>
+                                </div>
+                                <div className="d-flex gap-2 mt-2">
+                                  <Form.Check
+                                    type="checkbox"
+                                    id={`dashboard-instance-${instance.id}`}
+                                    label="Completed"
+                                    checked={instance.status === 'completed'}
+                                    onChange={(event) =>
+                                      handleInstanceStatusChange(
+                                        instance,
+                                        event.target.checked ? 'completed' : 'planned',
+                                      )
+                                    }
+                                  />
+                                  <Button
+                                    size="sm"
+                                    variant="outline-secondary"
+                                    onClick={() => handleInstanceStatusChange(instance, 'missed')}
+                                  >
+                                    Skip
+                                  </Button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                          <div className="fw-semibold text-muted mt-3 mb-2">Later Today</div>
+                          {scheduledTodayLoading ? null : nowNextLater.later.length === 0 ? (
+                            <div className="text-muted small">Nothing later today.</div>
+                          ) : (
+                            nowNextLater.later.map((instance) => (
+                              <div key={instance.id} className="border rounded p-2 mb-2">
+                                <div className="d-flex justify-content-between align-items-start">
+                                  <div>
+                                    <div className="fw-semibold">{instance.title || instance.sourceId}</div>
+                                    <div className="text-muted small d-flex align-items-center gap-1">
+                                      <Clock size={12} /> {formatInstanceTime(instance)}
+                                    </div>
+                                  </div>
+                                  <Badge bg={focusStatusVariant(instance.status)}>{instance.status}</Badge>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </Card.Body>
+                      </Card>
+                      <Card className="shadow-sm border-0">
+                        <Card.Header className="d-flex align-items-center justify-content-between">
+                          <div className="fw-semibold d-flex align-items-center gap-2">
+                            <Clock size={16} /> Tasks due today
+                          </div>
+                          <div className="d-flex align-items-center gap-2">
+                            <Form.Select
+                              size="sm"
+                              value={tasksDueTodaySortMode}
+                              onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai')}
+                            >
+                              <option value="due">Sort: Due time</option>
+                              <option value="ai">Sort: AI score</option>
+                            </Form.Select>
+                            <Badge bg={tasksDueTodayCombined.length > 0 ? 'info' : 'secondary'} pill>
+                              {tasksDueTodayCombined.length}
+                            </Badge>
+                          </div>
+                        </Card.Header>
+                        <Card.Body className="p-3 d-flex flex-column gap-2">
+                          {tasksDueTodayLoading ? (
+                            <div className="d-flex align-items-center gap-2 text-muted">
+                              <Spinner size="sm" animation="border" /> Loading tasks…
+                            </div>
+                          ) : tasksDueTodayCombined.length === 0 ? (
+                            <div className="text-muted small">No tasks or habits due today.</div>
+                          ) : (
+                            tasksDueTodayCombined.map((item) => {
+                              if (item.kind === 'task' && item.task) {
+                                const task = item.task;
+                                const dueMs = getTaskDueMs(task);
+                                const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                                const refLabel = taskRefLabel(task);
+                                const priorityBadge = getPriorityBadge((task as any).priority);
+                                const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
+                                return (
+                                  <div key={item.id} className="border rounded p-2">
+                                    <div className="d-flex justify-content-between align-items-start gap-2">
+                                      <div>
+                                        <div className="fw-semibold">{task.title}</div>
+                                        {refLabel && (
+                                          <div className="text-muted small">
+                                            <a href={`/tasks/${task.id}`} className="text-decoration-none">
+                                              <code className="text-primary">{refLabel}</code>
+                                            </a>
+                                          </div>
+                                        )}
+                                        <div className="text-muted small d-flex align-items-center gap-1">
+                                          <Clock size={12} /> Due {dueLabel ?? '—'}
+                                        </div>
+                                      </div>
+                                      <Form.Select
+                                        size="sm"
+                                        value={Number(task.status ?? 0)}
+                                        onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                        aria-label="Update task status"
+                                        style={{ width: 140 }}
+                                      >
+                                        <option value={0}>To Do</option>
+                                        <option value={1}>In Progress</option>
+                                        <option value={2}>Done</option>
+                                      </Form.Select>
+                                    </div>
+                                    <div className="d-flex align-items-center justify-content-between mt-2">
+                                      <div className="d-flex align-items-center gap-2 flex-wrap">
+                                        <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
+                                      </div>
+                                      <span className="text-muted small">
+                                        AI score {aiScore != null ? Math.round(aiScore) : '—'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              const dueLabel = item.dueMs ? new Date(item.dueMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'today';
+                              const badge = item.kind === 'routine' ? 'Routine' : 'Habit';
+                              const badgeVariant = item.kind === 'routine' ? 'success' : 'secondary';
+                              return (
+                                <div key={item.id} className="border rounded p-2">
+                                  <div className="d-flex justify-content-between align-items-start gap-2">
+                                    <div>
+                                      <div className="fw-semibold">{item.title}</div>
+                                      <div className="text-muted small d-flex align-items-center gap-1">
+                                        <Clock size={12} /> Due {dueLabel}
+                                      </div>
+                                    </div>
+                                    <Badge bg={badgeVariant}>{badge}</Badge>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </Card.Body>
+                      </Card>
                     </Col>
                   </Row>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-
-          <Row className="g-3">
-            <Col xl={6}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Reminders Due Today</span>
-                  <Badge bg="warning" text="dark">{remindersDueToday.length}</Badge>
-                </Card.Header>
-                <Card.Body>
-                  {remindersDueToday.length === 0 ? (
-                    <div className="text-muted">No reminders remaining today.</div>
-                  ) : (
-                    <ul className="list-unstyled mb-3">
-                      {remindersDueToday.slice(0, 6).map((reminder) => (
-                        <li key={reminder.id} className="d-flex justify-content-between align-items-center py-1">
-                          <span>{reminder.title}</span>
-                          <small className="text-muted ms-2">
-                            {reminder.dueDate ? format(reminder.dueDate, 'HH:mm') : 'Anytime'}
-                          </small>
-                        </li>
-                      ))}
-                      {remindersDueToday.length > 6 && (
-                        <li className="text-muted small">+{remindersDueToday.length - 6} more</li>
-                      )}
-                    </ul>
-                  )}
-                  <div className="d-flex justify-content-end">
-                    <Button size="sm" variant="outline-primary" onClick={handleNavigateToTasksToday}>
-                      Review tasks & reminders
-                    </Button>
-                  </div>
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col xl={6}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Routines &amp; Chores Today</span>
-                  <Badge bg="info">{choresDueToday.length + routinesDueToday.length}</Badge>
-                </Card.Header>
-                <Card.Body>
-                  {(choresDueToday.length + routinesDueToday.length) === 0 ? (
-                    <div className="text-muted">No routines or chores scheduled today.</div>
-                  ) : (
-                    <ul className="list-unstyled mb-3">
-                      {[...choresDueToday, ...routinesDueToday]
-                        .sort((a, b) => (a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER))
-                        .slice(0, 6)
-                        .map((item) => (
-                          <li key={`${item.type}-${item.id}`} className="d-flex justify-content-between align-items-center py-1">
-                            <span>
-                              <Badge bg={item.type === 'chore' ? 'secondary' : 'success'} className="me-2">
-                                {item.type === 'chore' ? 'Chore' : 'Routine'}
-                              </Badge>
-                              {item.title}
-                            </span>
-                            <small className="text-muted ms-2">
-                              {item.dueAt ? format(item.dueAt, 'HH:mm') : 'Anytime'}
-                            </small>
-                          </li>
-                        ))}
-                      {(choresDueToday.length + routinesDueToday.length) > 6 && (
-                        <li className="text-muted small">+{choresDueToday.length + routinesDueToday.length - 6} more</li>
-                      )}
-                    </ul>
-                  )}
-                  <div className="d-flex justify-content-end">
-                    <Button size="sm" variant="outline-primary" onClick={handleOpenChecklist}>
-                      Open daily checklist
-                    </Button>
-                  </div>
                 </Card.Body>
               </Card>
             </Col>

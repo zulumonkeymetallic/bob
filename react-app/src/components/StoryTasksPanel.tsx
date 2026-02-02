@@ -144,7 +144,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
         estimateMin: 60,
         estimatedHours: 1,
         alignedToGoal: true,
-        theme: story.theme || 1,
+        theme: story.theme || 0, // Default to General if story has no theme
         source: 'web',
         aiLinkConfidence: 1.0,
         hasGoal: !!story.goalId,

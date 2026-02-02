@@ -24,6 +24,7 @@ const THEME_NAME_MAP = {
   12: 'Work (Main Gig)',
   13: 'Sleep',
   14: 'Random',
+  15: 'Side Gig',
 };
 
 function parseAmount(data) {

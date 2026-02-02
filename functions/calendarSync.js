@@ -1,7 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { google } = require('googleapis');
-const { loadThemesForUser, mapThemeIdToLabel, getGoogleColorForThemeId } = require('./services/themeManager');
+const { loadThemesForUser, mapThemeIdToLabel, mapThemeLabelToId, getGoogleColorForThemeId, DEFAULT_THEMES } = require('./services/themeManager');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -10,6 +10,83 @@ const GCAL_FUTURE_DAYS = 90;
 const ALLOWED_ROUTINE_TYPES = new Set(['chore', 'routine', 'habit']);
 const TASK_TABLE_LIMIT = 12;
 const MAX_PRIVATE_TASK_REFS = 6;
+const GOOGLE_EVENT_COLORS_TTL_MS = 6 * 60 * 60 * 1000;
+
+let cachedGoogleEventColors = null;
+let cachedGoogleEventColorsAt = 0;
+
+// Legacy numeric theme index mapping (1-based order in DEFAULT_THEMES)
+const NUMERIC_THEME_MAP = {
+  1: 'Health & Fitness',
+  2: 'Career & Professional',
+  3: 'Finance & Wealth',
+  4: 'Learning & Education',
+  5: 'Family & Relationships',
+  6: 'Hobbies & Interests',
+  7: 'Travel & Adventure',
+  8: 'Home & Living',
+  9: 'Spiritual & Personal Growth',
+  10: 'Chores',
+  11: 'Routine',
+  12: 'Dev Tasks',
+  13: 'Work (Main Gig)',
+  14: 'Sleep',
+  15: 'Random',
+  16: 'Side Gig',
+};
+
+async function resolveThemeLabelForBlock(block, uid, themes) {
+  let themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || null);
+
+  // Parse numeric theme (legacy/numeric scale 1-15)
+  // If mapThemeIdToLabel returns a number or if themeLabel is numeric
+  if (Number.isFinite(Number(themeLabel)) || Number.isFinite(Number(block.theme))) {
+    const val = Number(themeLabel) || Number(block.theme);
+    if (NUMERIC_THEME_MAP[val]) {
+      themeLabel = NUMERIC_THEME_MAP[val];
+    }
+  }
+
+  let goalId = block.goalId || null;
+
+  // Try linked story for theme/goal
+  if (!themeLabel && block.storyId) {
+    try {
+      const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+      if (s.exists) {
+        const sd = s.data() || {};
+        themeLabel = sd.theme || themeLabel;
+        goalId = goalId || sd.goalId || null;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Try linked task for theme/goal
+  if (!themeLabel && block.taskId) {
+    try {
+      const t = await admin.firestore().collection('tasks').doc(String(block.taskId)).get();
+      if (t.exists) {
+        const td = t.data() || {};
+        themeLabel = td.theme || themeLabel;
+        goalId = goalId || td.goalId || null;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Fallback to goal theme if present
+  if (!themeLabel && goalId) {
+    try {
+      const g = await admin.firestore().collection('goals').doc(String(goalId)).get();
+      if (g.exists) {
+        const gd = g.data() || {};
+        themeLabel = gd.theme || gd.themeLabel || themeLabel;
+        if (!block.theme_id && gd.themeId) block.theme_id = gd.themeId;
+      }
+    } catch { /* ignore */ }
+  }
+
+  return themeLabel || 'General';
+}
 
 function toMillis(value) {
   if (value === null || value === undefined) return 0;
@@ -82,6 +159,118 @@ function resolveBlockDeepLink(block) {
   return null;
 }
 
+function canonicalizeThemeKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function parseColorToRgb(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.startsWith('var(')) return null;
+  if (raw.startsWith('#')) {
+    let hex = raw.slice(1);
+    if (hex.length === 3) {
+      hex = hex.split('').map((c) => c + c).join('');
+    }
+    if (hex.length !== 6) return null;
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    if ([r, g, b].some((c) => Number.isNaN(c))) return null;
+    return { r, g, b };
+  }
+  const rgbMatch = raw.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (rgbMatch) {
+    const r = Number(rgbMatch[1]);
+    const g = Number(rgbMatch[2]);
+    const b = Number(rgbMatch[3]);
+    if ([r, g, b].some((c) => Number.isNaN(c))) return null;
+    return { r, g, b };
+  }
+  return null;
+}
+
+function colorDistance(a, b) {
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return (dr * dr) + (dg * dg) + (db * db);
+}
+
+function pickThemeColor(theme) {
+  if (!theme) return null;
+  return theme.color || theme.primary || theme.lightColor || theme.darkColor || null;
+}
+
+function findThemeMatch(themeId, themeLabel, themes) {
+  if (!Array.isArray(themes)) return null;
+  const direct = themeId != null
+    ? themes.find((t) => String(t.id) === String(themeId))
+    : null;
+  if (direct) return direct;
+  const label = themeLabel || themeId;
+  if (!label) return null;
+  const canonical = canonicalizeThemeKey(label);
+  return themes.find((t) => {
+    const key = canonicalizeThemeKey(t.label || t.name || t.id);
+    return key === canonical;
+  }) || null;
+}
+
+function findClosestGoogleEventColorId(themeRgb, eventColors) {
+  if (!themeRgb || !eventColors) return null;
+  let bestId = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const [id, color] of Object.entries(eventColors)) {
+    const rgb = parseColorToRgb(color?.background);
+    if (!rgb) continue;
+    const distance = colorDistance(themeRgb, rgb);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
+
+function resolveGoogleEventColorId({ themeId, themeLabel, themes, eventColors }) {
+  const theme = findThemeMatch(themeId, themeLabel, themes);
+  const themeColor = pickThemeColor(theme);
+  const themeRgb = parseColorToRgb(themeColor);
+  if (themeRgb && eventColors) {
+    const closest = findClosestGoogleEventColorId(themeRgb, eventColors);
+    if (closest) return closest;
+  }
+
+  if (theme?.colorId) return theme.colorId;
+
+  const themeKey = themeId ?? mapThemeLabelToId(themeLabel, themes);
+  const fallbackFromUser = getGoogleColorForThemeId(themeKey, themes);
+  if (fallbackFromUser) return fallbackFromUser;
+
+  const fallbackFromDefaults = getGoogleColorForThemeId(mapThemeLabelToId(themeLabel, DEFAULT_THEMES), DEFAULT_THEMES);
+  return fallbackFromDefaults || '1';
+}
+
+async function getGoogleEventColors(calendar) {
+  const now = Date.now();
+  if (cachedGoogleEventColors && (now - cachedGoogleEventColorsAt) < GOOGLE_EVENT_COLORS_TTL_MS) {
+    return cachedGoogleEventColors;
+  }
+  try {
+    const res = await calendar.colors.get();
+    const eventColors = res?.data?.event || null;
+    if (eventColors) {
+      cachedGoogleEventColors = eventColors;
+      cachedGoogleEventColorsAt = now;
+    }
+    return eventColors || cachedGoogleEventColors;
+  } catch (err) {
+    return cachedGoogleEventColors;
+  }
+}
+
 function normalizeTaskStatus(status) {
   if (typeof status === 'number') {
     if (status === 0) return 'To Do';
@@ -102,9 +291,9 @@ function normalizeTaskStatus(status) {
 function normalizeTaskPriority(priority) {
   if (typeof priority === 'number') {
     if (priority === 4) return 'Critical';
-    if (priority === 3) return 'Low';
+    if (priority === 3) return 'High';
     if (priority === 2) return 'Medium';
-    if (priority === 1) return 'High';
+    if (priority === 1) return 'Low';
     if (priority === 0) return 'None';
     return 'Unknown';
   }
@@ -155,9 +344,9 @@ function buildLinkedTasksTable(tasks) {
   const priorityRank = (priority) => {
     if (typeof priority === 'number') {
       if (priority === 4) return 0;
-      if (priority === 1) return 1;
+      if (priority === 3) return 1;
       if (priority === 2) return 2;
-      if (priority === 3) return 3;
+      if (priority === 1) return 3;
       return 4;
     }
     const raw = String(priority || '').toLowerCase();
@@ -294,6 +483,28 @@ async function listAllEvents(calendar, { timeMin, timeMax }) {
   return events;
 }
 
+async function findExistingEventByPrivateProp(calendar, { key, value, timeMin, timeMax }) {
+  if (!key || !value) return null;
+  const events = [];
+  let pageToken = undefined;
+  do {
+    const resp = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: 'startTime',
+      showDeleted: false,
+      maxResults: 250,
+      privateExtendedProperty: `${key}=${value}`,
+      pageToken,
+    });
+    events.push(...(resp.data.items || []));
+    pageToken = resp.data.nextPageToken;
+  } while (pageToken);
+  return events.find((ev) => ev && ev.id) || null;
+}
+
 function parseEventTime(timeObj) {
   if (!timeObj) return null;
   if (timeObj.dateTime) return new Date(timeObj.dateTime).getTime();
@@ -346,7 +557,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
 
     if (action === 'create') {
       const themes = await loadThemesForUser(uid);
-      const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
+      const googleEventColors = await getGoogleEventColors(calendar);
+      const themeLabel = await resolveThemeLabelForBlock(block, uid, themes);
       const activityName = block.title || block.category || 'BOB Block';
       const refPart = block.storyRef || block.taskRef || '';
       const summaryParts = [];
@@ -372,6 +584,32 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       errorContext.activityName = activityName;
       if (!startMs || !endMs || startMs >= endMs) {
         throw new Error('Invalid start/end on block');
+      }
+      const lookupWindowMs = 30 * 24 * 60 * 60 * 1000;
+      const lookupStart = new Date(startMs - lookupWindowMs).toISOString();
+      const lookupEnd = new Date(endMs + lookupWindowMs).toISOString();
+      let existingEvent = null;
+      try {
+        existingEvent = await findExistingEventByPrivateProp(calendar, {
+          key: 'bob-block-id',
+          value: blockId,
+          timeMin: lookupStart,
+          timeMax: lookupEnd,
+        });
+        if (!existingEvent) {
+          existingEvent = await findExistingEventByPrivateProp(calendar, {
+            key: 'bobBlockId',
+            value: blockId,
+            timeMin: lookupStart,
+            timeMax: lookupEnd,
+          });
+        }
+      } catch (e) {
+        debugLogs.push({ step: 'lookup_existing_error', error: e?.message || String(e) });
+      }
+      if (existingEvent?.id) {
+        eventId = existingEvent.id;
+        debugLogs.push({ step: 'existing_event_found', eventId });
       }
       let enrichedDesc = block.rationale || '';
       let aiScoreVal = block.aiScore ?? block.aiCriticalityScore ?? null;
@@ -538,11 +776,17 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       };
 
       // Step 1: insert minimal to avoid validation edge-cases (no color, no extended props)
-      const createResponse = await calendar.events.insert({ calendarId: 'primary', resource: minimalEvent });
-      const createdEvent = createResponse?.data || {};
-      eventId = createdEvent.id;
-      let gcalHtmlLink = createdEvent.htmlLink || null;
-      debugLogs.push({ step: 'insert_minimal_ok', eventId });
+      let gcalHtmlLink = null;
+      if (!eventId) {
+        const createResponse = await calendar.events.insert({ calendarId: 'primary', resource: minimalEvent });
+        const createdEvent = createResponse?.data || {};
+        eventId = createdEvent.id;
+        gcalHtmlLink = createdEvent.htmlLink || null;
+        debugLogs.push({ step: 'insert_minimal_ok', eventId });
+      } else {
+        gcalHtmlLink = existingEvent?.htmlLink || null;
+        debugLogs.push({ step: 'insert_skipped_existing', eventId });
+      }
 
       // In test mode, stop after minimal insert so we can validate the API path
       if (testMode) {
@@ -602,7 +846,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         description: enrichedDesc || 'BOB calendar block',
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
-        colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
+        colorId: resolveGoogleEventColorId({ themeId: block.theme_id, themeLabel, themes, eventColors: googleEventColors }),
         source: eventSource,
         extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
@@ -649,7 +893,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
     else if (action === 'update') {
       if (!block.googleEventId) throw new Error('Block not synced to Google');
       const themes = await loadThemesForUser(uid);
-      const themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || 'General');
+      const googleEventColors = await getGoogleEventColors(calendar);
+      const themeLabel = await resolveThemeLabelForBlock(block, uid, themes);
       const activityName = block.title || block.category || 'BOB Block';
       const refPart = block.storyRef || block.taskRef || '';
       const summaryParts = [];
@@ -876,7 +1121,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         description: enrichedDesc2 || 'BOB calendar block',
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
-        colorId: block.theme_id ? getGoogleColorForThemeId(block.theme_id, themes) : getColorForTheme(themeLabel),
+        colorId: resolveGoogleEventColorId({ themeId: block.theme_id, themeLabel, themes, eventColors: googleEventColors }),
         source: eventSource,
         extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
@@ -997,17 +1242,17 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
       const source = String(before.source || before.entry_method || '').toLowerCase();
       const isExternal = source === 'gcal' || source === 'google_calendar';
       if (isExternal) {
-      await logCalendarIntegration(before.ownerUid, {
-        action: 'push',
-        direction: 'delete',
-        status: 'skipped',
-        blockId,
-        blockTitle: before.title || null,
-        eventId: before.googleEventId,
-        reason: 'skip_delete_external_gcal_block',
-      });
-      return;
-    }
+        await logCalendarIntegration(before.ownerUid, {
+          action: 'push',
+          direction: 'delete',
+          status: 'skipped',
+          blockId,
+          blockTitle: before.title || null,
+          eventId: before.googleEventId,
+          reason: 'skip_delete_external_gcal_block',
+        });
+        return;
+      }
       await syncBlockToGoogle(blockId, 'delete', before.ownerUid, before);
     }
     return;
@@ -1601,15 +1846,8 @@ exports.syncCalendarTestInsert = functions.https.onCall(async (data, context) =>
 });
 
 // Helper function to get Google Calendar color for themes
-function getColorForTheme(theme) {
-  const colorMap = {
-    'Health': '11', // Green
-    'Growth': '9',  // Blue
-    'Wealth': '5',  // Yellow
-    'Tribe': '3',   // Purple
-    'Home': '6'     // Orange
-  };
-  return colorMap[theme] || '1'; // Default to blue
+function getColorForTheme(theme, themes, eventColors) {
+  return resolveGoogleEventColorId({ themeLabel: theme, themes, eventColors });
 }
 
 // Scheduled function to sync calendar blocks (runs every hour)

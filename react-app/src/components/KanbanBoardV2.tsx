@@ -12,17 +12,17 @@ import { themeVars } from '../utils/themeVars';
 import { isStatus } from '../utils/statusHelpers';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 
-interface KanbanBoardV2Props {
-    sprintId?: string | null;
-    themeFilter?: number | null;
-    goalFilter?: string | null;
-    onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
-    onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
-    showDescriptions?: boolean;
-    showLatestNotes?: boolean;
-    dueFilter?: 'all' | 'today' | 'overdue';
-    sortByAi?: boolean;
-}
+    interface KanbanBoardV2Props {
+        sprintId?: string | null;
+        themeFilter?: number | null;
+        goalFilter?: string | null;
+        onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
+        onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
+        showDescriptions?: boolean;
+        showLatestNotes?: boolean;
+        dueFilter?: 'all' | 'today' | 'overdue';
+        sortBy?: 'ai' | 'due' | 'priority' | 'default';
+    }
 
 const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     sprintId,
@@ -31,10 +31,10 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     onItemSelect,
     onEdit,
     showDescriptions = false,
-    showLatestNotes = false,
-    dueFilter = 'all',
-    sortByAi = true
-}) => {
+        showLatestNotes = false,
+        dueFilter = 'all',
+        sortBy = 'ai'
+    }) => {
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
     const { sprints } = useSprint();
@@ -82,7 +82,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             );
 
         // Tasks (using sprint_task_index)
-        // If sprintId is provided, filter by it. Otherwise fetch all open tasks.
+        // Include completed tasks so Done column shows accurately; keep sprint filter when provided.
         let tasksQuery;
         if (sprintId) {
             tasksQuery = query(
@@ -90,7 +90,6 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
                 where('sprintId', '==', sprintId),
-                where('isOpen', '==', true),
                 orderBy('dueDate', 'asc'),
                 limit(1000)
             );
@@ -99,7 +98,6 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                 collection(db, 'sprint_task_index'),
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
-                where('isOpen', '==', true),
                 orderBy('dueDate', 'asc'),
                 limit(1000)
             );
@@ -393,19 +391,21 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     };
 
     const getStoryColumn = (s: Story) => {
-        const status = (s as any).status;
+        const raw = (s as any).status;
+        const status = (typeof raw === 'string' && /^\d+$/.test(raw)) ? Number(raw) : raw;
         if (typeof status === 'number') {
             if (status >= 4) return 'done';
-            if (status >= 1) return 'in-progress'; // 1=ready, 2=active, 3=testing. 
+            if (status >= 1) return 'in-progress'; // 1=ready, 2=active, 3=testing.
             return 'backlog';
         }
         return getColumnForStatus(status);
     };
 
     const getTaskColumn = (t: Task) => {
-        const status = (t as any).status;
+        const raw = (t as any).status;
+        const status = (typeof raw === 'string' && /^\d+$/.test(raw)) ? Number(raw) : raw;
         if (typeof status === 'number') {
-            if (status === 2) return 'done';
+            if (status === 2 || status === 4) return 'done';
             if (status === 1 || status === 3) return 'in-progress'; // 1=active, 3=blocked
             return 'backlog';
         }
@@ -440,7 +440,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         columns[col].items.push(t);
     });
 
-    if (sortByAi) {
+    const applySorting = () => {
         const scoreOf = (item: any) => {
             const score = Number(item.aiCriticalityScore ?? 0);
             return Number.isFinite(score) ? score : 0;
@@ -452,16 +452,39 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             const parsed = Date.parse(d);
             return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
         };
-        const sorter = (a: any, b: any) => {
-            const sa = scoreOf(a);
-            const sb = scoreOf(b);
-            if (sa !== sb) return sb - sa;
-            return dueMs(a) - dueMs(b);
+        const priorityVal = (item: any) => {
+            const p = Number(item.priority);
+            return Number.isFinite(p) ? p : 0;
         };
+
+        const sorter = (a: any, b: any) => {
+            if (sortBy === 'ai') {
+                const sa = scoreOf(a);
+                const sb = scoreOf(b);
+                if (sa !== sb) return sb - sa;
+                return dueMs(a) - dueMs(b);
+            }
+            if (sortBy === 'due') {
+                const da = dueMs(a);
+                const db = dueMs(b);
+                if (da !== db) return da - db;
+                return scoreOf(b) - scoreOf(a);
+            }
+            if (sortBy === 'priority') {
+                const pa = priorityVal(a);
+                const pb = priorityVal(b);
+                if (pa !== pb) return pb - pa;
+                return dueMs(a) - dueMs(b);
+            }
+            return 0;
+        };
+
         (Object.values(columns) as any[]).forEach(col => {
             col.items.sort(sorter);
         });
-    }
+    };
+
+    applySorting();
 
     if (loading) {
         return <div>Loading board...</div>;

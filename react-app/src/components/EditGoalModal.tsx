@@ -7,6 +7,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import { httpsCallable } from 'firebase/functions';
 import { migrateThemeValue } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { useActivityTracking } from '../hooks/useActivityTracking';
 import { toDate } from '../utils/firestoreAdapters';
 import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
@@ -48,7 +49,9 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const { themes } = useGlobalThemes();
+  const { trackFieldChange } = useActivityTracking();
   const [themeInput, setThemeInput] = useState('');
+  const [themeTouched, setThemeTouched] = useState(false);
   const resolveThemeId = useCallback((input: string, fallback: number) => {
     const trimmed = (input || '').trim();
     if (!trimmed) return fallback;
@@ -70,6 +73,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     const numeric = Number.parseInt(trimmed, 10);
     return Number.isFinite(numeric) ? numeric : fallback;
   }, [themes]);
+  const themeLabelForId = useCallback((value: any) => {
+    if (value == null) return '';
+    const match = themes.find(t => String(t.id) === String(value));
+    return match?.label || match?.name || String(value);
+  }, [themes]);
   const [parentSearch, setParentSearch] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const [monzoConnected, setMonzoConnected] = useState(false);
@@ -86,9 +94,10 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   ];
   const statuses = ['New', 'Work in Progress', 'Complete', 'Blocked', 'Deferred'];
   const priorities = [
-    { value: 1, label: 'High Priority (1)' },
-    { value: 2, label: 'Medium Priority (2)' },
-    { value: 3, label: 'Low Priority (3)' }
+    { value: 4, label: 'Critical' },
+    { value: 3, label: 'High' },
+    { value: 2, label: 'Medium' },
+    { value: 1, label: 'Low' }
   ];
 
   const goalIndex = useMemo(() => {
@@ -294,17 +303,21 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           return d ? d.toISOString().slice(0, 10) : '';
         })();
 
+        const resolvedThemeValue = (goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id;
+        const fallbackThemeId = migrateThemeValue(resolvedThemeValue);
+        const canonicalThemeId = resolveThemeId(String(resolvedThemeValue ?? ''), fallbackThemeId);
+
         setFormData({
           title: goal.title || '',
           description: goal.description || '',
-          theme: migrateThemeValue(goal.theme) || 1,
+          theme: canonicalThemeId || 1,
           size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
           timeToMasterHours: goal.timeToMasterHours || 40,
           confidence: goal.confidence || 0.5,
           startDate: startDateStr,
           endDate: endDateStr,
           status: statusMap[goal.status as keyof typeof statusMap] || 'New',
-          priority: goal.priority || 2,
+          priority: goal.priority ?? 2,
           estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
           kpis: goal.kpis || [],
           parentGoalId: goal.parentGoalId || '',
@@ -312,10 +325,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           tags: (goal as any).tags || [],
           autoCreatePot: !!(goal as any).autoCreatePot
         });
-        const current = migrateThemeValue(goal.theme);
-        const themeObj = themes.find(t => t.id === current);
-        setThemeInput(themeObj?.label || '');
+        const current = canonicalThemeId;
+        const themeObj = themes.find(t => String(t.id) === String(current));
+        setThemeInput(themeObj?.label || themeObj?.name || `${themeObj?.id ?? current ?? ''}`);
         setParentSearch('');
+        setThemeTouched(false);
       } else {
         // CREATE MODE: Reset to defaults
         setFormData({
@@ -338,9 +352,29 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         });
         setThemeInput('');
         setParentSearch('');
+        setThemeTouched(false);
       }
     }
-  }, [goal, show, themes]);
+  }, [goal, show, resolveThemeId]);
+
+  useEffect(() => {
+    if (!show) {
+      if (themeTouched) setThemeTouched(false);
+      return;
+    }
+    const resolved = themeInput.trim()
+      ? resolveThemeId(themeInput, formData.theme)
+      : formData.theme;
+    if (String(resolved) !== String(formData.theme)) {
+      setFormData(prev => ({ ...prev, theme: resolved }));
+    }
+    if (!themeTouched) {
+      const nextLabel = themeLabelForId(resolved);
+      if (nextLabel && nextLabel !== themeInput) {
+        setThemeInput(nextLabel);
+      }
+    }
+  }, [show, themeTouched, themeInput, formData.theme, themeLabelForId, resolveThemeId]);
 
   // Load user's Monzo pots for optional explicit mapping
   useEffect(() => {
@@ -407,12 +441,15 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
       const selectedSize = sizes.find(s => s.value === formData.size);
       const themeId = resolveThemeId(themeInput, formData.theme);
+      const previousThemeRaw = goal ? ((goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id) : null;
+      const previousThemeId = goal ? resolveThemeId(String(previousThemeRaw ?? ''), formData.theme) : null;
 
       const goalData: any = {
         title: formData.title.trim(),
         description: formData.description.trim(),
         theme: themeId,
         theme_id: themeId,
+        themeId: themeId,
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
@@ -468,6 +505,17 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         // UPDATE existing goal
         console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
         await updateDoc(doc(db, 'goals', goal.id), goalData);
+        if (goal && previousThemeId != null && String(previousThemeId) !== String(themeId)) {
+          const referenceNumber = (goal as any)?.ref || (goal as any)?.referenceNumber || goal.id;
+          await trackFieldChange(
+            goal.id,
+            'goal',
+            'theme',
+            themeLabelForId(previousThemeId),
+            themeLabelForId(themeId),
+            referenceNumber
+          );
+        }
         const createdPotId = await maybeCreateMonzoPot(goal.id, goalRefForPot);
         if (createdPotId) {
           await updateDoc(doc(db, 'goals', goal.id), { linkedPotId: createdPotId, potId: createdPotId });
@@ -656,6 +704,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                       onChange={(e) => {
                         const value = e.target.value;
                         setThemeInput(value);
+                        if (!themeTouched) setThemeTouched(true);
                         setFormData(prev => ({
                           ...prev,
                           theme: resolveThemeId(value, prev.theme)
@@ -676,9 +725,14 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                       placeholder="Search themes..."
                     />
                     <datalist id="edit-goal-theme-options">
-                      {themes.map(t => (
-                        <option key={t.id} value={t.label} />
-                      ))}
+                      {themes.map(t => {
+                        const display = t.label || t.name || `${t.id}`;
+                        return <option key={`label-${t.id}`} value={display} />;
+                      })}
+                      {themes.map(t => {
+                        if (!t.name || t.name === t.label) return null;
+                        return <option key={`name-${t.id}`} value={t.name!} />;
+                      })}
                     </datalist>
                   </Form.Group>
                 </div>

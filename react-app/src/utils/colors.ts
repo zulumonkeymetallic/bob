@@ -57,6 +57,7 @@ export const colors = {
         wealth: '#f59e0b',
         tribe: '#8b5cf6',
         home: '#ec4899',
+        sidegig: '#14b8a6',
     },
 };
 

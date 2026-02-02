@@ -63,6 +63,15 @@ const getDefaultThemesFromCss = (): ThemeSettings['themes'] => ({
     dark: getCssVarValue('--theme-work-dark', '#1e3a8a'),
     darker: getCssVarValue('--theme-work-darker', '#1d4ed8')
   },
+  'Side Gig': {
+    name: 'Side Gig',
+    primary: getCssVarValue('--theme-sidegig-primary', '#14b8a6'),
+    secondary: getCssVarValue('--theme-sidegig-dark', '#0f766e'),
+    light: getCssVarValue('--theme-sidegig-light', '#99f6e4'),
+    lighter: getCssVarValue('--theme-sidegig-lighter', '#ccfbf1'),
+    dark: getCssVarValue('--theme-sidegig-dark', '#0f766e'),
+    darker: getCssVarValue('--theme-sidegig-darker', '#115e59')
+  },
   Sleep: {
     name: 'Sleep',
     primary: getCssVarValue('--theme-sleep-primary', '#6366f1'),
@@ -217,18 +226,18 @@ async function resolveThemeId(entity: UseThemeColorProps['entity'], currentUser:
     
     if (themeSettingsDoc.exists()) {
       const settings = themeSettingsDoc.data() as ThemeSettings;
-      return settings.defaultThemeId || 'Health';
+      return settings.defaultThemeId || 'General';
     }
   } catch (error) {
     console.error('Error getting user default theme:', error);
   }
   
-  // Ultimate fallback
-  return 'Health';
+  // Ultimate fallback - use General for unlinked tasks
+  return 'General';
 }
 
 export const useThemeColor = (props: UseThemeColorProps = {}): UseThemeColorReturn => {
-  const { entity, fallbackTheme = 'Health' } = props;
+  const { entity, fallbackTheme = 'General' } = props;
   const { currentUser } = useAuth();
   const [themeSettings, setThemeSettings] = useState<ThemeSettings | null>(null);
   const [loading, setLoading] = useState(true);

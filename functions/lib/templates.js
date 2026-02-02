@@ -505,6 +505,90 @@ const renderActiveWorklist = (items, narrative) => {
   `;
 };
 
+const renderDailySummaryWithLinks = (items) => {
+  if (!Array.isArray(items) || !items.length) {
+    return '<div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:10px;color:#334155;font-size:13px;">No active tasks or stories for today.</div>';
+  }
+  
+  const highPriorityItems = items
+    .filter(item => item.aiScore && item.aiScore >= 70)
+    .slice(0, 5);
+    
+  if (!highPriorityItems.length) {
+    return '<div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:10px;color:#334155;font-size:13px;">No high-priority items identified for today.</div>';
+  }
+  
+  const itemsList = highPriorityItems
+    .map((item) => {
+      const ref = item.ref || item.title || 'Item';
+      const link = item.deepLink
+        ? `<a href="${escape(item.deepLink)}" style="color:#2563eb;text-decoration:none;font-weight:600;">${escape(ref)}</a>`
+        : escape(ref);
+      const title = item.title && item.title !== ref ? ` - ${escape(item.title)}` : '';
+      const score = item.aiScore != null ? Math.round(Number(item.aiScore)) : '';
+      const scoreDisplay = score ? ` (Score: ${score})` : '';
+      return `<li style="margin-bottom:8px;">${link}${title}${scoreDisplay}</li>`;
+    })
+    .join('');
+    
+  return `
+    <div style="margin-top:12px;padding:12px;background:#e0f2fe;border-radius:10px;">
+      <h4 style="margin:0 0 8px;color:#0369a1;font-size:14px;">Today's High Priority Items:</h4>
+      <ul style="margin:0;padding-left:20px;color:#0c4a6e;">${itemsList}</ul>
+    </div>
+  `;
+};
+
+const renderAIPriorityDetails = (items) => {
+  if (!Array.isArray(items) || !items.length) {
+    return '<p style="color:#6b7280;">No prioritization data available.</p>';
+  }
+  
+  const scoredItems = items
+    .filter(item => item.aiScore != null && item.aiReason)
+    .slice(0, 8);
+    
+  if (!scoredItems.length) {
+    return '<p style="color:#6b7280;">AI scoring in progress - check back later.</p>';
+  }
+  
+  const rows = scoredItems
+    .map((item) => {
+      const ref = item.ref || item.title || 'Item';
+      const link = item.deepLink
+        ? `<a href="${escape(item.deepLink)}" style="color:#2563eb;">${escape(ref)}</a>`
+        : escape(ref);
+      const score = item.aiScore != null ? Math.round(Number(item.aiScore)) : '—';
+      const reason = item.aiReason ? escape(item.aiReason) : '—';
+      const textScore = item.aiTextScore ? ` (Text: ${escape(item.aiTextScore)})` : '';
+      return `
+        <tr>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${link}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(item.title || '')}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:center;font-weight:600;color:${score >= 80 ? '#dc2626' : score >= 60 ? '#ea580c' : '#059669'};">${score}${textScore}</td>
+          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${reason}</td>
+        </tr>
+      `;
+    })
+    .join('\n');
+    
+  return `
+    <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:#f3f4f6;text-align:left;">
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Ref</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Title</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">AI Score</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Reasoning</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  `;
+};
+
 const renderMonzo = (monzo) => {
   if (!monzo) return '<p style="color:#6b7280;">Connect Monzo to track spending.</p>';
   const parts = [];
@@ -907,8 +991,15 @@ const renderDailySummaryEmail = (data) => {
       </header>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Key Metrics</h2>
-        ${renderKpiSummary(data.kpis)}
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Daily Brief</h2>
+        ${renderBriefing(data.dailyBrief)}
+        ${renderDailySummaryWithLinks(data.activeWorkItems || [])}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">AI Prioritization</h2>
+        ${renderPriorityNarrative(data.priorityNarrative || data.aiFocus)}
+        ${renderAIPriorityDetails(data.activeWorkItems || [])}
       </section>
 
       ${data.financeDaily ? `
@@ -920,18 +1011,8 @@ const renderDailySummaryEmail = (data) => {
       ` : ''}
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Daily Brief</h2>
-        ${renderBriefing(data.dailyBrief)}
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Active Sprint Prioritization</h2>
-        ${renderPriorityNarrative(data.priorityNarrative || data.aiFocus)}
-      </section>
-
-      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Active Sprint Worklist</h2>
-        ${renderActiveWorklist(data.activeWorkItems || [], data.priorityNarrative || data.aiFocus)}
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Key Metrics</h2>
+        ${renderKpiSummary(data.kpis)}
       </section>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
@@ -942,6 +1023,11 @@ const renderDailySummaryEmail = (data) => {
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">AI Planner Output</h2>
         ${renderPlannerOutput(data.plannerSummary, data.plannerBlocks || [])}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Active Sprint Worklist</h2>
+        ${renderActiveWorklist(data.activeWorkItems || [], data.priorityNarrative || data.aiFocus)}
       </section>
 
       <footer style="margin-top:24px;text-align:center;color:#6b7280;font-size:12px;">

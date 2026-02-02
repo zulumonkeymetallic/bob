@@ -19,7 +19,8 @@ import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 import { ChoiceHelper } from '../config/choices';
 import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
 import { useNavigate } from 'react-router-dom';
-import { isStatus } from '../utils/statusHelpers';
+import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
+import { normalizePriorityValue } from '../utils/priorityUtils';
 
 interface EntityLookupInputProps {
   type: 'goal' | 'story';
@@ -337,7 +338,11 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       return;
     }
 
-    setEditForm({ ...selectedItem });
+    const rawPriority = (selectedItem as any)?.priority;
+    const normalizedPriority = rawPriority === null || rawPriority === undefined || rawPriority === ''
+      ? ''
+      : normalizePriorityValue(rawPriority);
+    setEditForm({ ...selectedItem, priority: normalizedPriority });
     setIsEditing(false);
 
     if (!currentUser?.uid) return;
@@ -1057,46 +1062,31 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   </label>
                   {isEditing ? (
                     <Form.Select
-                      value={editForm.priority || ''}
-                      onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })}
+                      value={editForm.priority === '' || editForm.priority == null ? '' : Number(editForm.priority)}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setEditForm({ ...editForm, priority: next === '' ? '' : Number(next) });
+                      }}
                     >
-                      {selectedType === 'story' ? (
-                        <>
-                          <option value="P1">P1 - High</option>
-                          <option value="P2">P2 - Medium</option>
-                          <option value="P3">P3 - Low</option>
-                        </>
-                      ) : selectedType === 'task' ? (
-                        <>
-                          <option value="high">High</option>
-                          <option value="med">Medium</option>
-                          <option value="low">Low</option>
-                        </>
-                      ) : (
-                        <>
-                          <option value="high">High</option>
-                          <option value="medium">Medium</option>
-                          <option value="low">Low</option>
-                        </>
-                      )}
+                      <option value="">None</option>
+                      <option value={4}>Critical</option>
+                      <option value={3}>High</option>
+                      <option value={2}>Medium</option>
+                      <option value={1}>Low</option>
                     </Form.Select>
-                  ) : selectedItem.priority ? (
-                    <Badge
-                      bg={
-                        selectedItem.priority === 1 ? 'danger' :
-                          selectedItem.priority === 2 ? 'warning' :
-                            'secondary'
-                      }
-                      style={{ fontSize: '12px', padding: '6px 12px' }}
-                    >
-                      {selectedItem.priority === 1 ? 'P1 - High' :
-                        selectedItem.priority === 2 ? 'P2 - Medium' :
-                          selectedItem.priority === 3 ? 'P3 - Low' :
-                            'Unknown'}
-                    </Badge>
-                  ) : (
-                    <span style={{ color: '#9ca3af' }}>Not set</span>
-                  )}
+                  ) : (() => {
+                    const rawPriority = (selectedItem as any)?.priority;
+                    const normalizedPriority = normalizePriorityValue(rawPriority);
+                    if (rawPriority === null || rawPriority === undefined || rawPriority === '' || normalizedPriority <= 0) {
+                      return <span style={{ color: '#9ca3af' }}>Not set</span>;
+                    }
+                    const badge = getPriorityBadge(normalizedPriority);
+                    return (
+                      <Badge bg={badge.bg} style={{ fontSize: '12px', padding: '6px 12px' }}>
+                        {badge.text}
+                      </Badge>
+                    );
+                  })()}
                 </Col>
               </Row>
 

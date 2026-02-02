@@ -16,7 +16,6 @@ import EditGoalModal from '../../components/EditGoalModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import GLOBAL_THEMES, { migrateThemeValue, type GlobalTheme } from '../../constants/globalThemes';
-import SprintSelector from '../SprintSelector';
 
 type Zoom = 'weeks' | 'months' | 'quarters' | 'years';
 type AxisLabel = { label: string; subLabel?: string; x: number; width: number };
@@ -51,7 +50,7 @@ const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
-  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
+  const { selectedSprintId, sprints } = useSprint();
   const { showSidebar } = useSidebar();
   const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
@@ -472,18 +471,6 @@ const GoalRoadmapV3: React.FC = () => {
     return () => { el.removeEventListener('scroll', update); window.removeEventListener('resize', update); };
   }, []);
 
-  // Sprint overlays (labels + bands) for weeks/months only
-  const sprintOverlays = useMemo(() => {
-    if (!(zoom === 'weeks' || zoom === 'months')) return [] as { left: number; width: number; name: string }[];
-    return sprints.map(s => {
-      const sStart = new Date(s.startDate);
-      const sEnd = new Date(s.endDate);
-      const left = xFromDate(sStart);
-      const width = Math.max(8, xFromDate(sEnd) - left);
-      return { left, width, name: s.name };
-    });
-  }, [sprints, zoom, xFromDate]);
-
   // Filters derived function
   const applyFilters = useCallback((g: Goal): boolean => {
     if (filterHasStories && !(storyCounts[g.id] > 0)) return false;
@@ -866,6 +853,24 @@ const GoalRoadmapV3: React.FC = () => {
       minor: toSortedArray(minor)
     };
   }, [timeRange, totalWidth, xFromDate, zoom]);
+  const sprintOverlays = useMemo(() => {
+    if (!Number.isFinite(totalWidth) || totalWidth <= 0) return [];
+    return sprints.map(s => {
+      const sStart = toMillis(s.startDate) ? new Date(toMillis(s.startDate)!) : null;
+      const sEnd = toMillis(s.endDate) ? new Date(toMillis(s.endDate)!) : null;
+      if (!sStart || !sEnd) return null;
+      const clampedStart = Math.max(sStart.getTime(), timeRange.start.getTime());
+      const clampedEnd = Math.min(sEnd.getTime(), timeRange.end.getTime());
+      const left = xFromDate(new Date(clampedStart));
+      const right = xFromDate(new Date(clampedEnd));
+      const width = Math.max(8, right - left);
+      return {
+        left: Math.max(0, left),
+        width: Math.min(Math.max(0, totalWidth - Math.max(0, left)), width),
+        name: s.name || ''
+      };
+    }).filter((overlay): overlay is { left: number; width: number; name: string } => !!overlay && overlay.width > 0);
+  }, [sprints, xFromDate, timeRange, totalWidth]);
   const axisRowCount = Math.max(1, axis.rows.length);
   const axisHeight = axisRowCount * AXIS_ROW_HEIGHT + 12;
   const axisCssVars = useMemo(
@@ -1201,24 +1206,13 @@ const GoalRoadmapV3: React.FC = () => {
                   onMouseLeave={() => setHoveredId(null)}
                   onDoubleClick={() => showSidebar(g as any, 'goal')}
                 >
-                  {!isMilestone && (
-                    <div
-                      aria-label={`Completion ${pct}%`}
-                      style={{
-                        position: 'absolute',
-                        top: 6,
-                        left: 8,
-                        padding: '2px 6px',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        borderRadius: 999,
-                        background: isDark ? 'rgba(0,0,0,.4)' : 'rgba(255,255,255,.82)',
-                        color: isDark ? '#fff' : '#111827'
-                      }}
-                    >
-                      {pct}%
-                    </div>
-                  )}
+              {!isMilestone && (
+                <div className="grv3-progress-footer">
+                  <span className="grv3-progress-footer-text">
+                    {totalPoints > 0 ? `Progress ${pointsPct}%` : `Completion ${pct}%`}
+                  </span>
+                </div>
+              )}
                   {!isMilestone && (
                     <>
                       <div className="grv3-resize start" onPointerDown={(e) => { e.stopPropagation(); startDrag(e, g, 'start'); }} />
@@ -1231,27 +1225,45 @@ const GoalRoadmapV3: React.FC = () => {
                     </div>
                   )}
                   {!isMilestone && (zoom === 'weeks' || zoom === 'months') && (
-                    <div className="mt-1" style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {/* Story points progress bar */}
-                      {totalPoints > 0 && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <div style={{ fontSize: 9, fontWeight: 600, minWidth: 60, color: isDark ? 'rgba(255,255,255,.7)' : 'rgba(15,23,42,.7)' }}>
-                            Points: {pointsPct}%
-                          </div>
-                          <div style={{ flex: 1, height: 5, borderRadius: 999, background: isDark ? 'rgba(255,255,255,.18)' : 'rgba(15,23,42,.1)', overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: `${pointsPct}%`, background: isDark ? 'rgba(59,130,246,.85)' : 'rgba(59,130,246,.75)' }} />
-                          </div>
+                    <div className="mt-2" style={{ width: '100%', display: 'flex', flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {/* Budget/Progress/Story count labels */}
+                      {hasFinance && (
+                        <div style={{ 
+                          fontSize: 10, 
+                          fontWeight: 600, 
+                          padding: '2px 6px',
+                          borderRadius: 12,
+                          background: isDark ? 'rgba(34,197,94,.25)' : 'rgba(34,197,94,.15)',
+                          color: isDark ? 'rgba(34,197,94,.9)' : 'rgba(34,197,94,.8)',
+                          border: `1px solid ${isDark ? 'rgba(34,197,94,.4)' : 'rgba(34,197,94,.3)'}`
+                        }}>
+                          Budget: {financePct}%
                         </div>
                       )}
-                      {/* Finance/savings progress bar */}
-                      {hasFinance && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <div style={{ fontSize: 9, fontWeight: 600, minWidth: 60, color: isDark ? 'rgba(255,255,255,.7)' : 'rgba(15,23,42,.7)' }}>
-                            Saved: {financePct}%
-                          </div>
-                          <div style={{ flex: 1, height: 5, borderRadius: 999, background: isDark ? 'rgba(255,255,255,.18)' : 'rgba(15,23,42,.1)', overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: `${Math.min(100, financePct)}%`, background: isDark ? 'rgba(34,197,94,.85)' : 'rgba(34,197,94,.75)' }} />
-                          </div>
+                      {totalPoints > 0 && (
+                        <div style={{ 
+                          fontSize: 10, 
+                          fontWeight: 600, 
+                          padding: '2px 6px',
+                          borderRadius: 12,
+                          background: isDark ? 'rgba(59,130,246,.25)' : 'rgba(59,130,246,.15)',
+                          color: isDark ? 'rgba(59,130,246,.9)' : 'rgba(59,130,246,.8)',
+                          border: `1px solid ${isDark ? 'rgba(59,130,246,.4)' : 'rgba(59,130,246,.3)'}`
+                        }}>
+                          Progress: {pointsPct}%
+                        </div>
+                      )}
+                      {totalStories > 0 && (
+                        <div style={{ 
+                          fontSize: 10, 
+                          fontWeight: 600, 
+                          padding: '2px 6px',
+                          borderRadius: 12,
+                          background: isDark ? 'rgba(168,85,247,.25)' : 'rgba(168,85,247,.15)',
+                          color: isDark ? 'rgba(168,85,247,.9)' : 'rgba(168,85,247,.8)',
+                          border: `1px solid ${isDark ? 'rgba(168,85,247,.4)' : 'rgba(168,85,247,.3)'}`
+                        }}>
+                          {totalStories} stories
                         </div>
                       )}
                     </div>
@@ -1295,11 +1307,6 @@ const GoalRoadmapV3: React.FC = () => {
         ref={toolbarRef}
         className="grv3-toolbar"
       >
-        <SprintSelector
-          selectedSprintId={selectedSprintId}
-          onSprintChange={setSelectedSprintId}
-          className="grv3-sprint-selector"
-        />
         {/* Sticky zoom controls on the top-left */}
         <Button size="sm" variant="outline-secondary" onClick={() => {
           // Step zoom in: 5y -> 3y -> 1y -> quarters -> months -> weeks
@@ -1469,19 +1476,38 @@ const GoalRoadmapV3: React.FC = () => {
           </div>
         )}
 
-        {/* Sprint bands + labels on weeks/months */}
-        {showSprints && (zoom === 'weeks' || zoom === 'months') && (
+        {/* Sprint bands + labels - responsive to all zoom levels */}
+        {showSprints && sprintOverlays.length > 0 && (
           <>
             {sprintOverlays.map((s, i) => (
-              <div key={`band-${i}`} className="grv3-sprint-band" style={{ left: 260 + s.left, width: s.width, height: overlayHeight }} />
+              <div 
+                key={`band-${i}`} 
+                className="grv3-sprint-band" 
+                style={{ 
+                  left: 260 + s.left, 
+                  width: s.width, 
+                  height: overlayHeight,
+                  opacity: zoom === 'years' ? 0.3 : 0.6 // Reduce opacity for ultra-wide view
+                }} 
+              />
             ))}
-            <div className="grv3-sprints" style={{ width: totalWidth }}>
-              {sprintOverlays.map((s, i) => (
-                <div key={`label-${i}`} className="grv3-sprint-label" style={{ left: s.left, width: Math.max(54, s.width) }}>
-                  {s.name}
-                </div>
-              ))}
-            </div>
+            {(zoom === 'weeks' || zoom === 'months' || zoom === 'quarters') && (
+              <div className="grv3-sprints" style={{ width: totalWidth }}>
+                {sprintOverlays.map((s, i) => (
+                  <div 
+                    key={`label-${i}`} 
+                    className="grv3-sprint-label" 
+                    style={{ 
+                      left: s.left, 
+                      width: Math.max(54, s.width),
+                      fontSize: zoom === 'quarters' ? '10px' : '11px' // Smaller text for quarter view
+                    }}
+                  >
+                    {s.name}
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
 

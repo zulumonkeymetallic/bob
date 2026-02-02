@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { isStatus } from '../utils/statusHelpers';
+import { normalizePriorityValue } from '../utils/priorityUtils';
 import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
@@ -68,11 +69,12 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   useEffect(() => {
     if (story) {
       console.log('📝 EditStoryModal: Initializing with story:', story);
+      const normalizedPriority = normalizePriorityValue((story as any).priority);
       setEditedStory({
         title: story.title || '',
         description: story.description || '',
         goalId: story.goalId || '',
-        priority: story.priority || 2,
+        priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: (typeof story.status === 'number' ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0) : 0),
         theme: story.theme || 1,
         points: story.points || 0,
@@ -181,11 +183,12 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       console.log('💾 EditStoryModal: Saving story updates:', editedStory);
 
       const selectedGoal = goals.find(g => g.id === editedStory.goalId);
+      const normalizedPriority = normalizePriorityValue(editedStory.priority);
       const updates: any = {
         title: editedStory.title.trim(),
         description: editedStory.description.trim(),
         goalId: editedStory.goalId || null,
-        priority: editedStory.priority,
+        priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: editedStory.status,
         blocked: !!editedStory.blocked,
         points: editedStory.points,
@@ -315,9 +318,9 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                       onChange={(e) => handleInputChange('priority', parseInt(e.target.value))}
                     >
                       <option value={4}>Critical</option>
-                      <option value={1}>High</option>
+                      <option value={3}>High</option>
                       <option value={2}>Medium</option>
-                      <option value={3}>Low</option>
+                      <option value={1}>Low</option>
                     </Form.Select>
                   </Form.Group>
                 </Col>

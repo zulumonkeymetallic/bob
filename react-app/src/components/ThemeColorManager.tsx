@@ -134,20 +134,63 @@ const ThemeColorManager: React.FC = () => {
           
           // Only migrate if theme is still a string
           if (typeof data.theme === 'string') {
+            const normalizedTheme = String(data.theme).trim().toLowerCase();
             const themeMapping: Record<string, number> = {
-              'Health': 1,
-              'Growth': 2, 
-              'Wealth': 3,
-              'Tribe': 4,
-              'Home': 5,
-              'General': 0,
-              'Work (Main Gig)': 12,
-              'Work': 12,
-              'Sleep': 13,
-              'Random': 14
+              'general': 0,
+              'health': 1,
+              'health & fitness': 1,
+              'health and fitness': 1,
+              'fitness': 1,
+              'career': 2,
+              'professional': 2,
+              'career & professional': 2,
+              'career and professional': 2,
+              'finance': 3,
+              'wealth': 3,
+              'finance & wealth': 3,
+              'finance and wealth': 3,
+              'learning': 4,
+              'education': 4,
+              'learning & education': 4,
+              'learning and education': 4,
+              'family': 5,
+              'relationships': 5,
+              'family & relationships': 5,
+              'family and relationships': 5,
+              'tribe': 5,
+              'hobbies': 6,
+              'hobby': 6,
+              'interests': 6,
+              'hobbies & interests': 6,
+              'hobbies and interests': 6,
+              'travel': 7,
+              'adventure': 7,
+              'travel & adventure': 7,
+              'travel and adventure': 7,
+              'home': 8,
+              'home & living': 8,
+              'home and living': 8,
+              'growth': 9,
+              'spiritual': 9,
+              'spiritual & personal growth': 9,
+              'spiritual and personal growth': 9,
+              'personal growth': 9,
+              'chores': 10,
+              'rest': 11,
+              'recovery': 11,
+              'rest & recovery': 11,
+              'rest and recovery': 11,
+              'work': 12,
+              'work (main gig)': 12,
+              'main gig': 12,
+              'side gig': 15,
+              'side-gig': 15,
+              'sidegig': 15,
+              'sleep': 13,
+              'random': 14
             };
             
-            const newThemeId = themeMapping[data.theme] || 0;
+            const newThemeId = themeMapping[normalizedTheme] ?? 0;
             
             batch.update(doc(db, collectionName, docSnapshot.id), {
               theme: newThemeId,
@@ -191,6 +234,8 @@ const ThemeColorManager: React.FC = () => {
           tribe: 'tribe',
           home: 'home',
           work: 'work',
+          'side gig': 'sidegig',
+          sidegig: 'sidegig',
           sleep: 'sleep',
           random: 'random'
         };

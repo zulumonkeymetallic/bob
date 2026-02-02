@@ -182,6 +182,7 @@ const ComprehensiveTest: React.FC = () => {
         endDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
         status: 'active' as const,
         ownerUid: currentUser.uid,
+        persona: 'personal' as const,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };

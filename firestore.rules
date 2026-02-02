@@ -51,8 +51,31 @@ service cloud.firestore {
     }
     
     // Core v3.0.8 collections with enhanced logging
-    match /sprints/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /sprints/{id}   {
+      allow create: if isOwnerForCreate();
+      allow read: if isOwner();
+      allow update, delete: if isOwner();
+    }
+    match /sprint_closures/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
     match /calendar_blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Per-user planner stats summary (keyed by uid)
+    match /planner_stats/{uid} {
+      allow create: if isSignedIn() && (
+        request.auth.uid == uid ||
+        (request.resource.data.ownerUid == request.auth.uid && request.resource.data.ownerUid == uid)
+      );
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid ||
+        resource.data.ownerUid == request.auth.uid
+      );
+      allow update, delete: if isSignedIn() && (
+        request.auth.uid == uid ||
+        resource.data.ownerUid == request.auth.uid
+      );
+    }
     match /digests/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_hrv/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_workouts/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -213,6 +236,23 @@ service cloud.firestore {
         resource.data.ownerUid == request.auth.uid ||
         resource.data.userId == request.auth.uid
       );
+    }
+    match /daily_priority_runs/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+    match /replan_runs/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
+    }
+    match /priority_calendar_events/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
     }
     match /data_quality_reports/{id} {
       allow create: if isSignedIn() && (

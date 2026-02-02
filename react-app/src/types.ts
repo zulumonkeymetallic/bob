@@ -43,7 +43,7 @@ export interface Story {
   theme?: number; // Inherited from goal: 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
   status: number; // 0=Backlog, 1=Planned, 2=In Progress, 3=Testing, 4=Done
   blocked?: boolean; // Separate flag: when true, UI shows subtle red outline
-  priority: number; // 1=P1, 2=P2, 3=P3
+  priority: number; // 4=Critical, 3=High, 2=Medium, 1=Low
   points: number;
   wipLimit: number;
   tags?: string[];
@@ -54,6 +54,8 @@ export interface Story {
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
   dueDate?: number; // Legacy compatibility
+  targetDate?: number | string;
+  plannedStartDate?: number | string;
   taskCount?: number;
   doneTaskCount?: number;
   metadata?: Record<string, any>;
@@ -71,6 +73,7 @@ export interface Sprint {
   name: string;
   objective?: string;
   notes?: string;
+  persona?: 'personal' | 'work';
   status: number; // 0=Planning, 1=Active, 2=Complete, 3=Cancelled
   startDate: number;
   endDate: number;
@@ -104,7 +107,7 @@ export interface Task {
   title: string;
   description?: string;
   status: number; // 0=To Do, 1=In Progress, 2=Done, 3=Blocked
-  priority: number; // 1=High, 2=Medium, 3=Low
+  priority: number; // 4=Critical, 3=High, 2=Medium, 1=Low
   effort: 'S' | 'M' | 'L';
   estimateMin: number;
   points?: number;
@@ -128,6 +131,7 @@ export interface Task {
   syncState: 'clean' | 'dirty' | 'pending_push' | 'awaiting_ack';
   deviceUpdatedAt?: number;
   serverUpdatedAt: number;
+  macSyncedAt?: number;
   createdBy: string;
   ownerUid: string;
   // New fields for v3.0.2
@@ -142,9 +146,12 @@ export interface Task {
   duplicateChildren?: string[];
   reminderSyncDirective?: 'complete' | 'delete' | null;
   convertedToStoryId?: string;
+  aiCriticalityScore?: number;
+  aiCriticalityReason?: string;
   // Enhanced fields for v2.1.4+
   sprintId?: string;
   projectId?: string;
+  deepLink?: string; // Optional deep link for navigation
   // Legacy fields for backward compatibility
   reference?: string;
   storyId?: string;
@@ -214,7 +221,7 @@ export interface CalendarBlock {
   subTheme?: string;
   persona: 'personal' | 'work';
   theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home' | string;
-  category: 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep' | 'Work Shift';
+  category: 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep' | 'Work Shift' | 'Work (Main Gig)' | 'Side Gig';
   start: number; // timestamp
   end: number; // timestamp
   flexibility: 'hard' | 'soft';
@@ -230,6 +237,13 @@ export interface CalendarBlock {
   title?: string;
   conflictStatus?: string;
   updatedAt: number;
+  recurrence?: {
+    freq: 'daily' | 'weekly';
+    byDay?: string[]; // e.g., ['MO', 'WE']
+    until?: number | null; // timestamp (ms) for recurrence end date
+  };
+  aiScore?: number | null;
+  aiReason?: string | null;
 }
 
 export interface PlanningPrefs {

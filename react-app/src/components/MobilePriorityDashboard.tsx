@@ -213,7 +213,17 @@ const MobilePriorityDashboard: React.FC<MobilePriorityDashboardProps> = ({
                     <div className="flex-grow-1">
                       <div className="d-flex justify-content-between align-items-start mb-1">
                         <h6 className={`mb-0 fw-bold ${task.status === 2 ? 'text-decoration-line-through text-muted' : ''}`}>
-                          {task.title}
+                          {task.deepLink || task.ref ? (
+                            <a 
+                              href={task.deepLink || `/tasks/${task.ref || task.id}`}
+                              className="text-decoration-none"
+                              style={{ color: 'inherit' }}
+                            >
+                              {task.title}
+                            </a>
+                          ) : (
+                            task.title
+                          )}
                         </h6>
                         {(isPriority(task.priority, 'High') || isPriority(task.priority, 'Critical')) && <Star className="text-warning flex-shrink-0" fill="currentColor" />}
                       </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { format } from 'date-fns';
@@ -52,6 +52,7 @@ const planBlocksCallable = () => httpsCallable(functions, 'planBlocksV2');
 
 export const useUnifiedPlannerData = (range: PlannerRange | null): PlannerDataState => {
   const { currentUser } = useAuth();
+  const mountedRef = useRef(true);
 
   const [blocks, setBlocks] = useState<CalendarBlock[]>([]);
   const [instances, setInstances] = useState<ScheduledInstanceModel[]>([]);
@@ -67,6 +68,13 @@ export const useUnifiedPlannerData = (range: PlannerRange | null): PlannerDataSt
   const [error, setError] = useState<Error | null>(null);
 
   const ownerUid = currentUser?.uid;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!ownerUid) {
@@ -192,6 +200,7 @@ export const useUnifiedPlannerData = (range: PlannerRange | null): PlannerDataSt
       const events = Array.isArray(raw?.items)
         ? (raw.items as any[])
         : [];
+      if (!mountedRef.current) return;
       setExternalEvents(
         events
           .map((item) => {
@@ -217,8 +226,10 @@ export const useUnifiedPlannerData = (range: PlannerRange | null): PlannerDataSt
           .filter(Boolean) as ExternalCalendarEvent[],
       );
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
+      if (!mountedRef.current) return;
       setGoogleLoading(false);
     }
   }, [ownerUid]);

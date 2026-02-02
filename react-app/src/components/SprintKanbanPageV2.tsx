@@ -36,7 +36,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue'>('all');
-    const [sortByAi, setSortByAi] = useState<boolean>(false);
+    const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('ai');
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -88,13 +88,22 @@ const SprintKanbanPageV2: React.FC = () => {
     useEffect(() => {
         if (!currentUser) return;
 
-        const storiesQuery = query(
-            collection(db, 'stories'),
-            where('ownerUid', '==', currentUser.uid),
-            where('persona', '==', currentPersona),
-            orderBy('createdAt', 'desc'),
-            limit(1000)
-        );
+        const storiesQuery = filterSprintId
+            ? query(
+                collection(db, 'stories'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                where('sprintId', '==', filterSprintId),
+                orderBy('createdAt', 'desc'),
+                limit(1000)
+            )
+            : query(
+                collection(db, 'stories'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                orderBy('createdAt', 'desc'),
+                limit(1000)
+            );
 
         const goalsQuery = query(
             collection(db, 'goals'),
@@ -104,7 +113,7 @@ const SprintKanbanPageV2: React.FC = () => {
             limit(1000)
         );
 
-        // For metrics we need tasks too
+        // For metrics we need tasks too (include done so counts/Done lane align)
         let tasksQuery;
         if (filterSprintId) {
             tasksQuery = query(
@@ -112,7 +121,6 @@ const SprintKanbanPageV2: React.FC = () => {
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
                 where('sprintId', '==', filterSprintId),
-                where('isOpen', '==', true),
                 orderBy('dueDate', 'asc'),
                 limit(1000)
             );
@@ -121,7 +129,6 @@ const SprintKanbanPageV2: React.FC = () => {
                 collection(db, 'sprint_task_index'),
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
-                where('isOpen', '==', true),
                 orderBy('dueDate', 'asc'),
                 limit(1000)
             );
@@ -164,21 +171,29 @@ const SprintKanbanPageV2: React.FC = () => {
     const getSprintMetrics = () => {
         const storyCompleted = (story: Story) => {
             const status = (story as any).status;
-            return isStatus(status, 'done') || isStatus(status, 'Complete') || status === 4;
+            if (typeof status === 'number') return status >= 4;
+            const s = String(status || '').toLowerCase();
+            return s === 'done' || s === 'complete' || s === 'completed';
         };
         const taskCompleted = (task: Task) => {
             const status = (task as any).status;
-            return isStatus(status, 'done') || isStatus(status, 'Complete') || status === 2;
+            if (typeof status === 'number') return status === 2;
+            const s = String(status || '').toLowerCase();
+            return s === 'done' || s === 'complete' || s === 'completed';
         };
 
         const totalStories = sprintStories.length;
         const completedStories = sprintStories.filter(storyCompleted).length;
         const totalTasks = sprintTasks.length;
         const completedTasks = sprintTasks.filter(taskCompleted).length;
-        const totalPoints = sprintStories.reduce((sum, story) => sum + (story.points || 0), 0);
+        const normalizePoints = (story: Story) => {
+            const val = Number((story as any).points);
+            return Number.isFinite(val) ? val : 0;
+        };
+        const totalPoints = sprintStories.reduce((sum, story) => sum + normalizePoints(story), 0);
         const completedPoints = sprintStories
             .filter(storyCompleted)
-            .reduce((sum, story) => sum + (story.points || 0), 0);
+            .reduce((sum, story) => sum + normalizePoints(story), 0);
 
         return {
             totalStories,
@@ -219,7 +234,7 @@ const SprintKanbanPageV2: React.FC = () => {
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative', zIndex: 5 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                         <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: 'var(--text)' }}>
-                            Sprint Kanban V2
+                            Sprint Kanban
                         </h2>
 
                         <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
@@ -328,14 +343,18 @@ const SprintKanbanPageV2: React.FC = () => {
                                 </Dropdown.Menu>
                             </Dropdown>
 
-                            <Form.Check
-                                type="switch"
-                                id="toggle-ai-sort"
-                                label="Sort by AI score"
-                                checked={sortByAi}
-                                onChange={(e) => setSortByAi(e.target.checked)}
-                                className="ms-2"
-                            />
+                                <Form.Group className="ms-2">
+                                    <Form.Select
+                                        size="sm"
+                                        value={sortBy}
+                                        onChange={(e) => setSortBy(e.target.value as any)}
+                                    >
+                                        <option value="ai">Sort: AI score</option>
+                                        <option value="due">Sort: Due date</option>
+                                        <option value="priority">Sort: Priority</option>
+                                        <option value="default">Sort: Default</option>
+                                    </Form.Select>
+                                </Form.Group>
 
                             <Button
                                 variant="outline-secondary"
@@ -402,8 +421,8 @@ const SprintKanbanPageV2: React.FC = () => {
                             <Card.Body>
                                 <Row>
                                     <Col md={3}>
-                                        <div style={{ textAlign: 'center' }}>
-                                            <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--green)' }}>
+                                            <div style={{ textAlign: 'center' }}>
+                                                <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--green)' }}>
                                                 {metrics.completedStories}/{metrics.totalStories}
                                             </div>
                                             <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -417,8 +436,8 @@ const SprintKanbanPageV2: React.FC = () => {
                                         </div>
                                     </Col>
                                     <Col md={3}>
-                                        <div style={{ textAlign: 'center' }}>
-                                            <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--brand)' }}>
+                                                <div style={{ textAlign: 'center' }}>
+                                                <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--brand)' }}>
                                                 {metrics.completedTasks}/{metrics.totalTasks}
                                             </div>
                                             <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -432,9 +451,9 @@ const SprintKanbanPageV2: React.FC = () => {
                                         </div>
                                     </Col>
                                     <Col md={3}>
-                                        <div style={{ textAlign: 'center' }}>
-                                            <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--purple)' }}>
-                                                {metrics.completedPoints}/{metrics.totalPoints}
+                                                <div style={{ textAlign: 'center' }}>
+                                                <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--purple)' }}>
+                                                {metrics.completedPoints.toLocaleString()}/{metrics.totalPoints.toLocaleString()}
                                             </div>
                                             <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                                                 Story Points
@@ -471,17 +490,17 @@ const SprintKanbanPageV2: React.FC = () => {
                 <Col style={{ height: '100%' }}>
                     <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', height: '100%', borderRadius: isFullscreen ? 0 : undefined }}>
                         <Card.Body style={{ padding: '24px', height: '100%', overflow: 'hidden', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
-                            <KanbanBoardV2
-                                sprintId={filterSprintId}
-                                themeFilter={themeFilter}
-                                goalFilter={goalFilter}
-                                onItemSelect={(item, type) => showSidebar(item, type)}
-                                onEdit={handleEditItem}
-                                showDescriptions={showDescriptions}
-                                showLatestNotes={showLatestNotes}
-                                dueFilter={dueFilter}
-                                sortByAi={sortByAi}
-                            />
+                                <KanbanBoardV2
+                                    sprintId={filterSprintId}
+                                    themeFilter={themeFilter}
+                                    goalFilter={goalFilter}
+                                    onItemSelect={(item, type) => showSidebar(item, type)}
+                                    onEdit={handleEditItem}
+                                    showDescriptions={showDescriptions}
+                                    showLatestNotes={showLatestNotes}
+                                    dueFilter={dueFilter}
+                                    sortBy={sortBy}
+                                />
                         </Card.Body>
                     </Card>
                 </Col>
