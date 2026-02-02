@@ -81,8 +81,39 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   }, [themePalette]);
   const defaultTheme = themePalette[0] || GLOBAL_THEMES[0];
   const resolveTheme = (value: any): GlobalTheme => {
-    const themeId = migrateThemeValue(value);
-    return themeMap.get(themeId) || defaultTheme;
+    if (value == null) return defaultTheme;
+    if (typeof value === 'number') {
+      const direct = themeMap.get(value);
+      if (direct) return direct;
+      const legacy = themeMap.get(migrateThemeValue(value));
+      return legacy || defaultTheme;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return defaultTheme;
+      const normalize = (input: string) => input.toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const normalized = normalize(trimmed);
+      const directMatch = themePalette.find((theme) => {
+        const label = theme.label || '';
+        const name = theme.name || '';
+        return (
+          normalize(label) === normalized ||
+          normalize(name) === normalized ||
+          normalize(String(theme.id)) === normalized
+        );
+      });
+      if (directMatch) return directMatch;
+      const numeric = Number.parseInt(trimmed, 10);
+      if (Number.isFinite(numeric)) {
+        const numericMatch = themeMap.get(numeric);
+        if (numericMatch) return numericMatch;
+        const legacyMatch = themeMap.get(migrateThemeValue(numeric));
+        if (legacyMatch) return legacyMatch;
+      }
+      const legacyByName = themeMap.get(migrateThemeValue(trimmed));
+      return legacyByName || defaultTheme;
+    }
+    return defaultTheme;
   };
 
   const hexToRgb = (hex: string) => {
@@ -437,7 +468,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       </div>
       <div className={gridClassName}>
         {sortedGoals.map((goal) => {
-          const themeDef = resolveTheme(goal.theme);
+          const goalThemeValue = (goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id;
+          const themeDef = resolveTheme(goalThemeValue);
           const themeColor = themeDef.color || 'var(--brand)';
           const themeTextColor = themeDef.textColor || 'var(--on-accent)';
           const isSelected = selectedGoalId === goal.id;

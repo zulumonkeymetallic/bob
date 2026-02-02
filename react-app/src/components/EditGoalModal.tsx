@@ -303,7 +303,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           return d ? d.toISOString().slice(0, 10) : '';
         })();
 
-        const resolvedThemeValue = (goal as any).themeId ?? (goal as any).theme_id ?? goal.theme;
+        const resolvedThemeValue = (goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id;
         const fallbackThemeId = migrateThemeValue(resolvedThemeValue);
         const canonicalThemeId = resolveThemeId(String(resolvedThemeValue ?? ''), fallbackThemeId);
 
@@ -441,7 +441,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
       const selectedSize = sizes.find(s => s.value === formData.size);
       const themeId = resolveThemeId(themeInput, formData.theme);
-      const previousThemeRaw = goal ? ((goal as any).themeId ?? (goal as any).theme_id ?? (goal as any).theme) : null;
+      const previousThemeRaw = goal ? ((goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id) : null;
       const previousThemeId = goal ? resolveThemeId(String(previousThemeRaw ?? ''), formData.theme) : null;
 
       const goalData: any = {
