@@ -12859,6 +12859,7 @@ exports.getSteamAppDetails = httpsV2.onCall(async (req) => {
 });
 
 // ===== Hardcover (Books) — Sync + Status Updates
+const HARDCOVER_ALLOWED_USERNAME = 'greenboxyellowmoon';
 async function hardcoverApiBaseFor(uid) {
   try {
     const db = admin.firestore();
@@ -12908,25 +12909,113 @@ async function callHardcoverGraphQL(uid, query, variables, attempt = 1) {
   return json.data;
 }
 
-async function fetchHardcoverByStatus(uid, statusSlug, offset) {
+const normalizeHardcoverUsername = (value) => String(value || '').replace(/^@/, '').trim().toLowerCase();
+
+async function getHardcoverMe(uid) {
   const q = `
-    query BooksByStatus($offset: Int, $status: String!) {
-      user_books(limit: 100, offset: $offset, where: { user_book_status: { slug: { _eq: $status } } }) {
+    query Me($limit: Int) {
+      me(limit: $limit) { id username }
+    }
+  `;
+  const data = await callHardcoverGraphQL(uid, q, { limit: 1 });
+  const me = Array.isArray(data?.me) ? data.me[0] : null;
+  if (!me?.id) throw new Error('Unable to resolve Hardcover account for this token.');
+  return {
+    id: Number(me.id),
+    username: normalizeHardcoverUsername(me.username),
+  };
+}
+
+const uniqList = (values) => Array.from(new Set(values.filter(Boolean)));
+
+const extractBookAuthors = (book) => {
+  const authors = [];
+  const contributions = Array.isArray(book?.contributions) ? book.contributions : [];
+  contributions.forEach((c) => {
+    const name = c?.author?.name;
+    if (name) authors.push(String(name).trim());
+  });
+  const cached = book?.cached_contributors;
+  if (cached) {
+    if (Array.isArray(cached)) {
+      cached.forEach((item) => {
+        if (typeof item === 'string') authors.push(item.trim());
+        if (item?.name) authors.push(String(item.name).trim());
+      });
+    } else if (Array.isArray(cached?.authors)) {
+      cached.authors.forEach((item) => {
+        if (typeof item === 'string') authors.push(item.trim());
+        if (item?.name) authors.push(String(item.name).trim());
+      });
+    }
+  }
+  return uniqList(authors).slice(0, 6);
+};
+
+const extractBookGenres = (book) => {
+  const genres = [];
+  const taggings = Array.isArray(book?.taggings) ? book.taggings : [];
+  taggings.forEach((t) => {
+    const tag = t?.tag?.tag;
+    if (tag) genres.push(String(tag).trim());
+  });
+  const cached = book?.cached_tags;
+  if (cached) {
+    if (Array.isArray(cached)) {
+      cached.forEach((item) => {
+        if (typeof item === 'string') genres.push(item.trim());
+        if (item?.tag) genres.push(String(item.tag).trim());
+        if (item?.name) genres.push(String(item.name).trim());
+      });
+    } else if (Array.isArray(cached?.genres)) {
+      cached.genres.forEach((item) => {
+        if (typeof item === 'string') genres.push(item.trim());
+        if (item?.tag) genres.push(String(item.tag).trim());
+        if (item?.name) genres.push(String(item.name).trim());
+      });
+    } else if (Array.isArray(cached?.tags)) {
+      cached.tags.forEach((item) => {
+        if (typeof item === 'string') genres.push(item.trim());
+        if (item?.tag) genres.push(String(item.tag).trim());
+        if (item?.name) genres.push(String(item.name).trim());
+      });
+    }
+  }
+  return uniqList(genres).slice(0, 8);
+};
+
+async function fetchHardcoverByStatus(uid, statusSlug, offset, userId) {
+  const q = `
+    query BooksByStatus($offset: Int, $status: String!, $userId: Int!) {
+      user_books(limit: 100, offset: $offset, where: { user_id: { _eq: $userId }, user_book_status: { slug: { _eq: $status } } }) {
         id
         date_added
         updated_at
-        book { id title subtitle }
+        book {
+          id
+          title
+          subtitle
+          description
+          release_year
+          cached_tags
+          contributions(limit: 5) { author { name } }
+          taggings(limit: 10, where: { tag: { tag_category: { category: { _ilike: "%genre%" } } } }) {
+            tag { tag tag_category { category } }
+          }
+        }
         user_book_status { slug status }
         edition { cached_image }
       }
     }
   `;
-  const data = await callHardcoverGraphQL(uid, q, { status: statusSlug, offset: offset || 0 });
+  const data = await callHardcoverGraphQL(uid, q, { status: statusSlug, offset: offset || 0, userId });
   const rows = Array.isArray(data?.user_books) ? data.user_books : [];
   const items = rows.map((row) => {
     const book = row?.book || null;
     const edition = row?.edition || {};
     const cover = edition?.cached_image?.url || null;
+    const authors = extractBookAuthors(book);
+    const genres = extractBookGenres(book);
     return {
       status: row?.user_book_status?.slug || statusSlug,
       addedAt: row?.date_added || row?.updated_at || null,
@@ -12935,6 +13024,10 @@ async function fetchHardcoverByStatus(uid, statusSlug, offset) {
         title: book.title,
         subtitle: book.subtitle,
         coverUrl: cover,
+        description: book.description || null,
+        releaseYear: book.release_year ?? null,
+        authors,
+        genres,
       } : null,
     };
   }).filter((x) => x.book && x.book.id);
@@ -12948,10 +13041,15 @@ async function _syncHardcover(uid) {
   const statuses = ['want-to-read', 'currently-reading', 'read', 'paused', 'did-not-finish'];
   let total = 0;
   try {
+    const me = await getHardcoverMe(uid);
+    if (!me.username) throw new Error('Hardcover username not found for token.');
+    if (me.username !== HARDCOVER_ALLOWED_USERNAME) {
+      throw new Error(`Hardcover token must belong to @${HARDCOVER_ALLOWED_USERNAME}.`);
+    }
     for (const status of statuses) {
       let cursor = 0;
       do {
-        const { items, next } = await fetchHardcoverByStatus(uid, status, cursor);
+        const { items, next } = await fetchHardcoverByStatus(uid, status, cursor, me.id);
         cursor = next;
         if (!items.length) continue;
         const batch = db.batch();
@@ -12960,7 +13058,8 @@ async function _syncHardcover(uid) {
           const id = `${uid}_${b.id}`;
           const ref = db.collection('hardcover').doc(id);
           const cover = b?.coverUrl || null;
-          const authors = [];
+          const authors = Array.isArray(b?.authors) ? b.authors : [];
+          const genres = Array.isArray(b?.genres) ? b.genres : [];
           const addedAtMs = toMillis(entry.addedAt) || null;
           batch.set(ref, {
             id,
@@ -12969,6 +13068,9 @@ async function _syncHardcover(uid) {
             title: b.title || 'Book',
             subtitle: b.subtitle || null,
             authors,
+            description: b.description || null,
+            publicationYear: b.releaseYear ?? null,
+            genres,
             coverImage: cover,
             status: String(entry.status || status),
             addedAt: addedAtMs,
@@ -13108,7 +13210,6 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
   const goalId = goalIdRaw || '';
   const priority = Number(req?.data?.priority ?? 1);
   const persona = String(req?.data?.persona || 'personal');
-  const allowedUsername = 'greenboxyellowmoon';
   if (!rawSlug) throw new httpsV2.HttpsError('invalid-argument', 'listSlug is required');
 
   const db = admin.firestore();
@@ -13134,10 +13235,20 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
         lists(where: { slug: { _eq: $slug } }, limit: 1) {
           id
           name
-          user { username }
           list_books(order_by: { position: asc }, limit: 100, offset: $offset) {
             position
-            book { id title subtitle }
+            book {
+              id
+              title
+              subtitle
+              description
+              release_year
+              cached_tags
+              contributions(limit: 5) { author { name } }
+              taggings(limit: 10, where: { tag: { tag_category: { category: { _ilike: "%genre%" } } } }) {
+                tag { tag tag_category { category } }
+              }
+            }
             edition { cached_image }
           }
         }
@@ -13157,10 +13268,6 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
 
   while (true) {
     const list = await fetchListPage(offset);
-    const owner = String(list?.user?.username || '').replace(/^@/, '').trim().toLowerCase();
-    if (!owner || owner !== allowedUsername) {
-      throw new httpsV2.HttpsError('permission-denied', `Hardcover list owner must be @${allowedUsername}`);
-    }
     const items = Array.isArray(list.list_books) ? list.list_books : [];
     if (!items.length) break;
     for (const item of items) {
@@ -13168,6 +13275,10 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
       if (!b || !b.id) { skipped += 1; continue; }
       const bookId = String(b.id);
       const cover = item?.edition?.cached_image?.url || null;
+      const authors = extractBookAuthors(b);
+      const genres = extractBookGenres(b);
+      const publicationYear = b?.release_year ?? null;
+      const description = b?.description || null;
       const hcRef = db.collection('hardcover').doc(`${uid}_${bookId}`);
       const hcSnap = await hcRef.get();
       const hcData = hcSnap.exists ? hcSnap.data() : null;
@@ -13180,7 +13291,10 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
         hardcoverId: bookId,
         title: b.title || 'Book',
         subtitle: b.subtitle || null,
-        authors: hcData?.authors || [],
+        authors: authors.length ? authors : (hcData?.authors || []),
+        description: description || hcData?.description || null,
+        publicationYear: publicationYear ?? hcData?.publicationYear ?? null,
+        genres: genres.length ? genres : (hcData?.genres || []),
         coverImage: cover,
         status: hcData?.status || 'want-to-read',
         addedAt: hcData?.addedAt || now,

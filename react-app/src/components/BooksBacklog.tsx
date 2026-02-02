@@ -16,6 +16,9 @@ interface BookItem {
   title: string;
   subtitle?: string | null;
   authors?: string[];
+  publicationYear?: number | null;
+  description?: string | null;
+  genres?: string[];
   coverImage?: string | null;
   status?: 'to-read' | 'reading' | 'read' | string;
   addedAt?: number | null;
@@ -261,7 +264,20 @@ const BooksBacklog: React.FC = () => {
                 ) : <div style={{ width: 64, height: 96, background: '#ddd', borderRadius: 4 }} />}
                 <div className="flex-grow-1">
                   <Card.Title className="mb-1" style={{ fontSize: '1rem' }}>{b.title}</Card.Title>
-                  {b.authors?.length ? <div className="text-muted small mb-2">{b.authors.join(', ')}</div> : null}
+                  {b.authors?.length ? <div className="text-muted small mb-1">{b.authors.join(', ')}</div> : null}
+                  {b.publicationYear ? <div className="text-muted small mb-2">Published {b.publicationYear}</div> : null}
+                  {b.description ? (
+                    <div className="text-muted small mb-2" style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {b.description}
+                    </div>
+                  ) : null}
+                  {b.genres?.length ? (
+                    <div className="d-flex flex-wrap gap-1 mb-2">
+                      {b.genres.slice(0, 4).map((g) => (
+                        <Badge key={g} bg="light" text="dark">{g}</Badge>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mb-2">{renderRatingStars(b)}</div>
                   <div className="d-flex justify-content-between align-items-center">
                     <Badge bg={String(b.status || '').toLowerCase()==='read' ? 'success' : 'secondary'}>{b.status || '—'}</Badge>
