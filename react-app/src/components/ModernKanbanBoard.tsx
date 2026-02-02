@@ -1187,13 +1187,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             value={sortMode}
             onChange={(e) => setSortMode(e.currentTarget.value as any)}
           >
-            <option value="due">Due date</option>
-            <option value="priority">Priority</option>
-            <option value="overdue">Days overdue</option>
             <option value="default">Default</option>
-            <option value="ai">AI score</option>
-            <option value="overdue">Days overdue (desc)</option>
+            <option value="due">Due date</option>
             <option value="priority">Priority (Critical → Low)</option>
+            <option value="overdue">Days overdue</option>
+            <option value="ai">AI score</option>
           </Form.Select>
         </Form.Group>
       </div>

@@ -53,7 +53,7 @@ service cloud.firestore {
     // Core v3.0.8 collections with enhanced logging
     match /sprints/{id}   {
       allow create: if isOwnerForCreate();
-      allow read: if isSignedIn();
+      allow read: if isOwner();
       allow update, delete: if isOwner();
     }
     match /sprint_closures/{id} {
@@ -63,15 +63,17 @@ service cloud.firestore {
     match /calendar_blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     // Per-user planner stats summary (keyed by uid)
     match /planner_stats/{uid} {
-      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow create: if isSignedIn() && (
+        request.auth.uid == uid ||
+        (request.resource.data.ownerUid == request.auth.uid && request.resource.data.ownerUid == uid)
+      );
       allow read: if isSignedIn() && (
         request.auth.uid == uid ||
         resource.data.ownerUid == request.auth.uid
       );
       allow update, delete: if isSignedIn() && (
         request.auth.uid == uid ||
-        resource.data.ownerUid == request.auth.uid ||
-        request.resource.data.ownerUid == request.auth.uid
+        resource.data.ownerUid == request.auth.uid
       );
     }
     match /digests/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

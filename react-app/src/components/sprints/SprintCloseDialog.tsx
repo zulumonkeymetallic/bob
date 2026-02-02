@@ -3,11 +3,10 @@ import { Modal, Button, Form, Card, Row, Col, Alert, Spinner, Table } from 'reac
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useSprint } from '../../contexts/SprintContext';
-import { db, functions } from '../../firebase';
-import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, getDocs } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { db } from '../../firebase';
+import { collection, query, where, onSnapshot, doc, updateDoc, addDoc } from 'firebase/firestore';
 import { Story, Task, Goal, Sprint } from '../../types';
-import { CheckCircle, RotateCcw, TrendingUp, Target, Users, Calendar, ArrowRight, AlertCircle } from 'lucide-react';
+import { CheckCircle, RotateCcw, TrendingUp, Target, Calendar, ArrowRight, AlertCircle } from 'lucide-react';
 import { isStatus } from '../../utils/statusHelpers';
 
 interface SprintMetricsSnapshot {
@@ -121,11 +120,6 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
 
   // Metrics state
   const [metricsSnapshot, setMetricsSnapshot] = useState<SprintMetricsSnapshot | null>(null);
-  const [capacityData, setCapacityData] = useState<{
-    availableHours: number;
-    plannedHours: number;
-    utilization: number;
-  }>({ availableHours: 0, plannedHours: 0, utilization: 0 });
 
   // Load data when dialog opens
   useEffect(() => {

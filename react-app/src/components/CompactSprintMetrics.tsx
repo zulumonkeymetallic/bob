@@ -206,8 +206,6 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       const doneGoals = goals.filter(g => g.status === 2).length;
       const goalCompletion = allGoals > 0 ? Math.round((doneGoals / allGoals) * 100) : 0;
       const overallStoryCompletion = totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0;
-      const pointsCompletion = totalPoints > 0 ? Math.round((completedPoints / totalPoints) * 100) : 0;
-
       return {
         hasStarted: true,
         hasEnded: false,
@@ -227,7 +225,6 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
         doneGoals,
         goalCompletion,
         overallStoryCompletion,
-        pointsCompletion,
         allStoryPoints: totalPoints,
         allDoneStoryPoints: completedPoints
       };
@@ -297,8 +294,6 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     
     const allStoryPoints = stories.reduce((sum, s) => sum + (s.points || 0), 0);
     const allDoneStoryPoints = stories.filter(s => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
-    const pointsCompletion = allStoryPoints > 0 ? Math.round((allDoneStoryPoints / allStoryPoints) * 100) : 0;
-
     return {
       hasStarted,
       hasEnded,
@@ -318,7 +313,6 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       doneGoals,
       goalCompletion,
       overallStoryCompletion,
-      pointsCompletion,
       allStoryPoints,
       allDoneStoryPoints
     };
@@ -352,7 +346,6 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     doneGoals = 0,
     goalCompletion = 0,
     overallStoryCompletion = 0,
-    pointsCompletion = 0,
     allStoryPoints = 0,
     allDoneStoryPoints = 0
   } = metrics;

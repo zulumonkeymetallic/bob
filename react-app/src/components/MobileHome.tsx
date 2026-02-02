@@ -56,7 +56,6 @@ const MobileHome: React.FC = () => {
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
   const [replanLoading, setReplanLoading] = useState(false);
   const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
-  const isMobile = isSmallScreen;
   const activePlanningSprints = useMemo(
     () => sprints.filter((s) => s.status === 0 || s.status === 1),
     [sprints]

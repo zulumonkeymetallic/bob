@@ -106,14 +106,14 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   const story = type === 'task' ? getStoryForTask(item.id) : null;
   const themeColor = goal?.theme ? themeColors[goal.theme] : (themeVars.muted as string);
   const derivedEstimatedHours = type === 'task' ? deriveEstimatedHours(item as Task) : undefined;
-  const aiScoreValue = type === 'task' && item ? Number(((item as Task).aiCriticalityScore ?? null)) : null;
+  const aiScoreValue = type === 'task' ? Number(((item as Task).aiCriticalityScore ?? null)) : null;
   const formattedAiScore = aiScoreValue != null && Number.isFinite(aiScoreValue) ? Math.round(aiScoreValue) : null;
-  const storyMetadata = type === 'story' && item ? (item as Story).metadata : null;
+  const storyMetadata = type === 'story' ? (item as Story).metadata : null;
   const storyAiRaw = storyMetadata ? (storyMetadata.aiScore ?? storyMetadata.aiCriticalityScore ?? null) : null;
   const storyAiScore = storyAiRaw != null && Number.isFinite(Number(storyAiRaw)) ? Number(storyAiRaw) : null;
   const entityAiScore = type === 'task' ? aiScoreValue : storyAiScore;
   const derivedPriorityFromAi = entityAiScore != null && entityAiScore >= 90 ? 4 : undefined;
-  const rawPriorityValue = item ? (item.priority ?? derivedPriorityFromAi ?? 0) : derivedPriorityFromAi ?? 0;
+  const rawPriorityValue = (item as Story | Task).priority ?? derivedPriorityFromAi ?? 0;
   const normalizedPriorityForDisplay = normalizePriorityValue(rawPriorityValue);
   const priorityBadge = getPriorityBadge(normalizedPriorityForDisplay);
 

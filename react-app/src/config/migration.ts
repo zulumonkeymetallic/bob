@@ -153,14 +153,16 @@ export class ChoiceMigration {
     const mapping: Record<string, number> = {
       'p0': 4,
       'critical': 4,
-      'p1': 1,
-      'high': 1,
-      'p2': 2,
+      'urgent': 4,
+      'p1': 4,
+      'high': 3,
+      'p2': 3,
       'medium': 2,
       'med': 2,
       'normal': 2,
-      'p3': 3,
-      'low': 3
+      'p3': 2,
+      'low': 1,
+      'p4': 1
     };
     
     return mapping[stringValue] ?? 3; // Default to 'P3'

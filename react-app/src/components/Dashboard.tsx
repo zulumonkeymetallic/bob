@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, ListChecks, Wallet, Clock } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';

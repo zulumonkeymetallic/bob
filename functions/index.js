@@ -1418,8 +1418,7 @@ function normalizeStatus(value) {
   return String(value).toLowerCase();
 }
 
-function isDoneStatus(value, set) {
-  if (value == null) return false;
+function isDoneStatusInSet(value, set) {
   return set.has(normalizeStatus(value));
 }
 
@@ -1729,7 +1728,7 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
     const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     const sprints = sprintsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     const calendarBlocks = calendarSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-    const filteredTasks = tasks.filter((task) => !task.deleted && !isDoneStatus(task.status, TASK_DONE_STATUS_VALUES));
+    const filteredTasks = tasks.filter((task) => !task.deleted && !isDoneStatusInSet(task.status, TASK_DONE_STATUS_VALUES));
 
     const dueToday = filteredTasks.filter((task) => {
       const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
@@ -1751,8 +1750,8 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
         : []
     );
     const activeStories = activeSprint
-      ? stories.filter((story) => activeStoryIds.has(story.id) && !isDoneStatus(story.status, STORY_DONE_STATUS_VALUES))
-      : stories.filter((story) => !isDoneStatus(story.status, STORY_DONE_STATUS_VALUES)).slice(0, PRIORITY_STORY_CONTEXT_LIMIT);
+      ? stories.filter((story) => activeStoryIds.has(story.id) && !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES))
+      : stories.filter((story) => !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES)).slice(0, PRIORITY_STORY_CONTEXT_LIMIT);
     const activeStoryTasks = filteredTasks.filter((task) => task.storyId && activeStoryIds.has(task.storyId));
 
     const contextPayload = buildPriorityInputPayload({
@@ -2238,7 +2237,7 @@ exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_S
     const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     const sprints = sprintsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     const calendarBlocks = calendarSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-    const filteredTasks = tasks.filter((task) => !task.deleted && !isDoneStatus(task.status, TASK_DONE_STATUS_VALUES));
+    const filteredTasks = tasks.filter((task) => !task.deleted && !isDoneStatusInSet(task.status, TASK_DONE_STATUS_VALUES));
 
     const dueToday = filteredTasks.filter((task) => {
       const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
@@ -2260,8 +2259,8 @@ exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_S
         : []
     );
     const activeStories = activeSprint
-      ? stories.filter((story) => activeStoryIds.has(story.id) && !isDoneStatus(story.status, STORY_DONE_STATUS_VALUES))
-      : stories.filter((story) => !isDoneStatus(story.status, STORY_DONE_STATUS_VALUES)).slice(0, PRIORITY_STORY_CONTEXT_LIMIT);
+      ? stories.filter((story) => activeStoryIds.has(story.id) && !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES))
+      : stories.filter((story) => !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES)).slice(0, PRIORITY_STORY_CONTEXT_LIMIT);
 
     const busyIntervals = computeBusyIntervals(calendarBlocks, timezone, windowStart, availableUntil);
     const freeSlots = computeFreeSlots(busyIntervals, windowStart, availableUntil);
@@ -11248,7 +11247,9 @@ exports.scheduleDueTasksToday = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_I
         busy.splice(i, 0, [slot, slot + durMs]);
         return slot;
       }
-      cursor = Math.max(cursor, busy[i]?.[1] || cursor);
+      if (i < busy.length) {
+        cursor = Math.max(cursor, busy[i][1] || cursor);
+      }
     }
     return null;
   };
