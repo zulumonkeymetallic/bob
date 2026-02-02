@@ -13108,6 +13108,7 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
   const goalId = goalIdRaw || '';
   const priority = Number(req?.data?.priority ?? 1);
   const persona = String(req?.data?.persona || 'personal');
+  const allowedUsername = 'greenboxyellowmoon';
   if (!rawSlug) throw new httpsV2.HttpsError('invalid-argument', 'listSlug is required');
 
   const db = admin.firestore();
@@ -13133,6 +13134,7 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
         lists(where: { slug: { _eq: $slug } }, limit: 1) {
           id
           name
+          user { username }
           list_books(order_by: { position: asc }, limit: 100, offset: $offset) {
             position
             book { id title subtitle }
@@ -13155,6 +13157,10 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
 
   while (true) {
     const list = await fetchListPage(offset);
+    const owner = String(list?.user?.username || '').replace(/^@/, '').trim().toLowerCase();
+    if (!owner || owner !== allowedUsername) {
+      throw new httpsV2.HttpsError('permission-denied', `Hardcover list owner must be @${allowedUsername}`);
+    }
     const items = Array.isArray(list.list_books) ? list.list_books : [];
     if (!items.length) break;
     for (const item of items) {
