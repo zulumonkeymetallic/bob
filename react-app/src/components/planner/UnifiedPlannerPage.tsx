@@ -322,6 +322,7 @@ const UnifiedPlannerPage: React.FC = () => {
   const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
   const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai'>('due');
 
   useEffect(() => {
     setBlockForm((prev) => {
@@ -752,17 +753,6 @@ const UnifiedPlannerPage: React.FC = () => {
           if (block.syncToGoogle !== false) {
             const startIso = new Date(start).toISOString();
             const endIso = new Date(end).toISOString();
-            const buildRecurrence = () => {
-              if (!block.recurrence || !block.recurrence.freq) return undefined;
-              const parts = [`FREQ=${String(block.recurrence.freq).toUpperCase()}`];
-              if (Array.isArray(block.recurrence.byDay) && block.recurrence.byDay.length) {
-                parts.push(`BYDAY=${block.recurrence.byDay.join(',')}`);
-              }
-              if (block.recurrence.until) {
-                parts.push(`UNTIL=${format(new Date(block.recurrence.until), "yyyyMMdd'T'HHmmss'Z'")}`);
-              }
-              return [`RRULE:${parts.join(';')}`];
-            };
             if (block.googleEventId) {
               const updateEv = httpsCallable(functions, 'updateCalendarEvent');
               await updateEv({
@@ -771,27 +761,6 @@ const UnifiedPlannerPage: React.FC = () => {
                 end: endIso,
                 summary: block.title || 'Calendar entry',
               });
-            } else {
-              const createEv = httpsCallable(functions, 'createCalendarEvent');
-              const recurrence = buildRecurrence();
-              const res: any = await createEv({
-                summary: block.title || 'Calendar entry',
-                start: startIso,
-                end: endIso,
-                recurrence,
-                extendedProperties: {
-                  private: {
-                    storyId: block.storyId || null,
-                    taskId: block.taskId || null,
-                    aiScore: block.aiScore ?? null,
-                    aiReason: block.aiReason ?? null,
-                  },
-                },
-              });
-              const evId = res?.data?.event?.id;
-              if (evId && block.id) {
-                await updateDoc(doc(db, 'calendar_blocks', block.id), { googleEventId: evId, updatedAt: Date.now() });
-              }
             }
             // Ensure extendedProperties and metadata are refreshed via server push for this day
             try {
@@ -1026,6 +995,44 @@ const UnifiedPlannerPage: React.FC = () => {
       setFeedback({ variant: 'danger', message: 'Could not update task status.' });
     }
   }, []);
+
+  const handleTaskStatusChange = useCallback(async (task: Task, status: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, {
+        status,
+        completedAt: status === 2 ? serverTimestamp() : null,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error('Failed to update task status', err);
+      setFeedback({ variant: 'danger', message: 'Could not update task status.' });
+    }
+  }, []);
+
+  const sortedTasksDueToday = useMemo(() => {
+    const rows = [...tasksDueToday];
+    if (tasksSortMode === 'ai') {
+      rows.sort((a, b) => {
+        const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
+        const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
+        if (aScore !== bScore) return bScore - aScore;
+        const aDue = getTaskDueMs(a) || 0;
+        const bDue = getTaskDueMs(b) || 0;
+        return aDue - bDue;
+      });
+      return rows;
+    }
+    rows.sort((a, b) => {
+      const aDue = getTaskDueMs(a) || 0;
+      const bDue = getTaskDueMs(b) || 0;
+      if (aDue !== bDue) return aDue - bDue;
+      const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
+      const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
+      return bScore - aScore;
+    });
+    return rows;
+  }, [tasksDueToday, tasksSortMode, getTaskDueMs]);
 
   const handleAutoPlan = useCallback(async () => {
     setPlanning(true);
@@ -1505,21 +1512,31 @@ const UnifiedPlannerPage: React.FC = () => {
               <div className="fw-semibold d-flex align-items-center gap-2">
                 <Clock size={16} /> Tasks due today
               </div>
-              <Badge bg={tasksDueToday.length > 0 ? 'info' : 'secondary'} pill>
-                {tasksDueToday.length}
-              </Badge>
+              <div className="d-flex align-items-center gap-2">
+                <Form.Select
+                  size="sm"
+                  value={tasksSortMode}
+                  onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai')}
+                >
+                  <option value="due">Sort: Due time</option>
+                  <option value="ai">Sort: AI score</option>
+                </Form.Select>
+                <Badge bg={sortedTasksDueToday.length > 0 ? 'info' : 'secondary'} pill>
+                  {sortedTasksDueToday.length}
+                </Badge>
+              </div>
             </Card.Header>
             <Card.Body className="p-3 d-flex flex-column gap-2">
               {tasksLoading ? (
                 <div className="d-flex align-items-center gap-2 text-muted">
                   <Spinner size="sm" animation="border" /> Loading tasks…
                 </div>
-              ) : tasksDueToday.length === 0 ? (
+              ) : sortedTasksDueToday.length === 0 ? (
                 <div className="text-muted small">No tasks due today.</div>
               ) : (
-                tasksDueToday.map((task) => {
+                sortedTasksDueToday.map((task) => {
                   const dueMs = getTaskDueMs(task);
-                  const aiScore = (task as any).aiCriticalityScore;
+                  const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
                   const refLabel = taskRefLabel(task);
                   const priorityBadge = getPriorityBadge((task as any).priority);
                   const dueLabel = dueMs ? formatDueLabel(dueMs) : null;
@@ -1530,23 +1547,29 @@ const UnifiedPlannerPage: React.FC = () => {
                           <div className="fw-semibold">{task.title}</div>
                           {refLabel && (
                             <div className="text-muted small">
-                              <code className="text-primary">{refLabel}</code>
+                              <a href={`/tasks/${task.id}`} className="text-decoration-none">
+                                <code className="text-primary">{refLabel}</code>
+                              </a>
                             </div>
                           )}
                           <div className="text-muted small d-flex align-items-center gap-1">
                             <Clock size={12} /> Due {dueLabel ?? '—'}
                           </div>
                         </div>
-                        <Form.Check
-                          type="checkbox"
-                          checked={(task.status ?? 0) === 2}
-                          onChange={(e) => handleTaskCompletionToggle(task, e.target.checked)}
-                          aria-label="Mark task complete"
-                        />
+                        <Form.Select
+                          size="sm"
+                          value={Number(task.status ?? 0)}
+                          onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                          aria-label="Update task status"
+                          style={{ width: 140 }}
+                        >
+                          <option value={0}>To Do</option>
+                          <option value={1}>In Progress</option>
+                          <option value={2}>Done</option>
+                        </Form.Select>
                       </div>
                       <div className="d-flex align-items-center justify-content-between mt-2">
                         <div className="d-flex align-items-center gap-2 flex-wrap">
-                          <Badge bg={getBadgeVariant(task.status || 0)}>{getStatusName(task.status || 0)}</Badge>
                           <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
                         </div>
                         <span className="text-muted small">

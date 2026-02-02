@@ -9,6 +9,7 @@ import { Goal, Story, Task, Sprint as SprintType } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper, StoryStatus } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
+import { storyStatusText, taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 
 type TabKey = 'overview' | 'tasks' | 'stories' | 'goals';
@@ -24,6 +25,14 @@ const THEME_COLORS: Record<number, string> = {
 const formatShortDate = (value?: number) => {
   if (!value) return '—';
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
+
+const getStoryBadgeVariant = (status: any): string => {
+  const label = storyStatusText(status);
+  if (label === 'Done') return 'success';
+  if (label === 'In Progress') return 'primary';
+  if (label === 'Blocked') return 'danger';
+  return 'secondary';
 };
 
 const MobileHome: React.FC = () => {
@@ -846,7 +855,7 @@ const MobileHome: React.FC = () => {
                         />
                       </div>
                       <div className="d-flex flex-wrap gap-2 mt-1 align-items-center small text-muted">
-                        <span>Status: {getStatusName(task.status)}</span>
+                        <span>Status: {taskStatusText(task.status)}</span>
                         <span>Due: {formatShortDate(task.dueDate)}</span>
                       </div>
                       <div className="d-flex flex-wrap gap-2 mt-2 align-items-center">
@@ -891,7 +900,7 @@ const MobileHome: React.FC = () => {
                       )}
                     </div>
                     <div className="d-flex flex-column align-items-end gap-1">
-                      <Badge bg={getBadgeVariant(story.status)}>{getStatusName(story.status)}</Badge>
+                      <Badge bg={getStoryBadgeVariant(story.status)}>{storyStatusText(story.status)}</Badge>
                       {isCriticalStory && (
                         <Badge pill bg="warning" text="dark">Critical</Badge>
                       )}

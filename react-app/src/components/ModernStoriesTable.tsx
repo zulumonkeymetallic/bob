@@ -138,7 +138,7 @@ const defaultColumns: Column[] = [
     key: 'aiCriticalityScore',
     label: 'AI Score',
     width: '10%',
-    visible: false,
+    visible: true,
     editable: false,
     type: 'number'
   },

@@ -13,7 +13,7 @@ interface SprintMetricsSnapshot {
   completionDate: number;
   storyProgress: number;
   taskProgress: number;
-  totalStories: number;
+  totalStories: number;alendar (Today)
   completedStories: number;
   totalTasks: number;
   completedTasks: number;

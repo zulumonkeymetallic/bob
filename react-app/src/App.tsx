@@ -55,6 +55,8 @@ import SprintManagementView from './components/sprints/SprintManagementView';
 import SprintsPage from './components/sprints/SprintsPage';
 import SprintTablePage from './components/sprints/SprintTablePage';
 import SprintRetrospective from './components/SprintRetrospective';
+import CheckInDaily from './components/checkins/CheckInDaily';
+import CheckInWeekly from './components/checkins/CheckInWeekly';
 import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import MobileView from './components/MobileView';
@@ -323,6 +325,8 @@ function AppContent() {
             <Route path="/sprints/table" element={<SprintTablePage />} />
             <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
             <Route path="/sprints/retrospective" element={<SprintRetrospective />} />
+            <Route path="/checkin/daily" element={<CheckInDaily />} />
+            <Route path="/checkin/weekly" element={<CheckInWeekly />} />
             <Route path="/sprints/capacity" element={<CapacityDashboard />} />
 
             <Route path="/tasks-management" element={<TasksManagement />} />

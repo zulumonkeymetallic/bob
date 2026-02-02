@@ -483,6 +483,28 @@ async function listAllEvents(calendar, { timeMin, timeMax }) {
   return events;
 }
 
+async function findExistingEventByPrivateProp(calendar, { key, value, timeMin, timeMax }) {
+  if (!key || !value) return null;
+  const events = [];
+  let pageToken = undefined;
+  do {
+    const resp = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: 'startTime',
+      showDeleted: false,
+      maxResults: 250,
+      privateExtendedProperty: `${key}=${value}`,
+      pageToken,
+    });
+    events.push(...(resp.data.items || []));
+    pageToken = resp.data.nextPageToken;
+  } while (pageToken);
+  return events.find((ev) => ev && ev.id) || null;
+}
+
 function parseEventTime(timeObj) {
   if (!timeObj) return null;
   if (timeObj.dateTime) return new Date(timeObj.dateTime).getTime();
@@ -562,6 +584,32 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       errorContext.activityName = activityName;
       if (!startMs || !endMs || startMs >= endMs) {
         throw new Error('Invalid start/end on block');
+      }
+      const lookupWindowMs = 30 * 24 * 60 * 60 * 1000;
+      const lookupStart = new Date(startMs - lookupWindowMs).toISOString();
+      const lookupEnd = new Date(endMs + lookupWindowMs).toISOString();
+      let existingEvent = null;
+      try {
+        existingEvent = await findExistingEventByPrivateProp(calendar, {
+          key: 'bob-block-id',
+          value: blockId,
+          timeMin: lookupStart,
+          timeMax: lookupEnd,
+        });
+        if (!existingEvent) {
+          existingEvent = await findExistingEventByPrivateProp(calendar, {
+            key: 'bobBlockId',
+            value: blockId,
+            timeMin: lookupStart,
+            timeMax: lookupEnd,
+          });
+        }
+      } catch (e) {
+        debugLogs.push({ step: 'lookup_existing_error', error: e?.message || String(e) });
+      }
+      if (existingEvent?.id) {
+        eventId = existingEvent.id;
+        debugLogs.push({ step: 'existing_event_found', eventId });
       }
       let enrichedDesc = block.rationale || '';
       let aiScoreVal = block.aiScore ?? block.aiCriticalityScore ?? null;
@@ -728,11 +776,17 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       };
 
       // Step 1: insert minimal to avoid validation edge-cases (no color, no extended props)
-      const createResponse = await calendar.events.insert({ calendarId: 'primary', resource: minimalEvent });
-      const createdEvent = createResponse?.data || {};
-      eventId = createdEvent.id;
-      let gcalHtmlLink = createdEvent.htmlLink || null;
-      debugLogs.push({ step: 'insert_minimal_ok', eventId });
+      let gcalHtmlLink = null;
+      if (!eventId) {
+        const createResponse = await calendar.events.insert({ calendarId: 'primary', resource: minimalEvent });
+        const createdEvent = createResponse?.data || {};
+        eventId = createdEvent.id;
+        gcalHtmlLink = createdEvent.htmlLink || null;
+        debugLogs.push({ step: 'insert_minimal_ok', eventId });
+      } else {
+        gcalHtmlLink = existingEvent?.htmlLink || null;
+        debugLogs.push({ step: 'insert_skipped_existing', eventId });
+      }
 
       // In test mode, stop after minimal insert so we can validate the API path
       if (testMode) {
