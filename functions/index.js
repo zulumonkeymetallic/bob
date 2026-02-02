@@ -12957,7 +12957,10 @@ const extractBookGenres = (book) => {
   const taggings = Array.isArray(book?.taggings) ? book.taggings : [];
   taggings.forEach((t) => {
     const tag = t?.tag?.tag;
-    if (tag) genres.push(String(tag).trim());
+    const category = t?.tag?.tag_category?.category || '';
+    if (tag && String(category).toLowerCase().includes('genre')) {
+      genres.push(String(tag).trim());
+    }
   });
   const cached = book?.cached_tags;
   if (cached) {
@@ -12999,9 +13002,7 @@ async function fetchHardcoverByStatus(uid, statusSlug, offset, userId) {
           release_year
           cached_tags
           contributions(limit: 5) { author { name } }
-          taggings(limit: 10, where: { tag: { tag_category: { category: { _ilike: "%genre%" } } } }) {
-            tag { tag tag_category { category } }
-          }
+          taggings(limit: 10) { tag { tag tag_category { category } } }
         }
         user_book_status { slug status }
         edition { cached_image }
@@ -13245,9 +13246,7 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
               release_year
               cached_tags
               contributions(limit: 5) { author { name } }
-              taggings(limit: 10, where: { tag: { tag_category: { category: { _ilike: "%genre%" } } } }) {
-                tag { tag tag_category { category } }
-              }
+              taggings(limit: 10) { tag { tag tag_category { category } } }
             }
             edition { cached_image }
           }
