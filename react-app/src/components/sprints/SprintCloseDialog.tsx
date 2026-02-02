@@ -266,12 +266,6 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
 
     setMetricsSnapshot(snapshot);
 
-    // Set capacity data for new sprint planning
-    setCapacityData({
-      availableHours: totalCapacityHours,
-      plannedHours: usedCapacityHours,
-      utilization: capacityUtilization
-    });
   };
 
   const handleCreateNewSprint = async () => {
