@@ -64,7 +64,7 @@ import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
 import { pushDiagnosticLog } from '../../hooks/useDiagnosticsLog';
 import { usePersona } from '../../contexts/PersonaContext';
 import type { Task } from '../../types';
-import { getBadgeVariant, getStatusName } from '../../utils/statusHelpers';
+import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/statusHelpers';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -489,6 +489,18 @@ const UnifiedPlannerPage: React.FC = () => {
     return ref ? `${ref} — ${story.title}` : story.title || 'Story';
   }, []);
 
+  const taskRefLabel = useCallback((task: Task) => {
+    if (!task) return '';
+    const ref = (task as any).ref
+      || (task as any).referenceNumber
+      || (task as any).reference
+      || (task as any).code
+      || (task as any).displayId
+      || (task.id ? task.id.slice(-6).toUpperCase() : '');
+    if (typeof ref === 'string') return ref.trim();
+    return ref ? String(ref) : '';
+  }, []);
+
   const unscheduledItems = useMemo(
     () => planner.instances.filter((instance) => instance.status === 'unscheduled'),
     [planner.instances],
@@ -514,6 +526,14 @@ const UnifiedPlannerPage: React.FC = () => {
     if (typeof raw.toMillis === 'function') return raw.toMillis();
     if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
     return null;
+  }, []);
+
+  const formatDueLabel = useCallback((dueMs: number) => {
+    const dueDate = new Date(dueMs);
+    const dateLabel = format(dueDate, 'MMM d, yyyy');
+    const timeLabel = format(dueDate, 'HH:mm');
+    const hasTime = dueDate.getHours() !== 0 || dueDate.getMinutes() !== 0;
+    return hasTime ? `${dateLabel} • ${timeLabel}` : dateLabel;
   }, []);
 
   useEffect(() => {
@@ -1500,16 +1520,22 @@ const UnifiedPlannerPage: React.FC = () => {
                 tasksDueToday.map((task) => {
                   const dueMs = getTaskDueMs(task);
                   const aiScore = (task as any).aiCriticalityScore;
+                  const refLabel = taskRefLabel(task);
+                  const priorityBadge = getPriorityBadge((task as any).priority);
+                  const dueLabel = dueMs ? formatDueLabel(dueMs) : null;
                   return (
                     <div key={task.id} className="border rounded p-2">
                       <div className="d-flex justify-content-between align-items-start gap-2">
                         <div>
                           <div className="fw-semibold">{task.title}</div>
-                          {dueMs && (
-                            <div className="text-muted small d-flex align-items-center gap-1">
-                              <Clock size={12} /> {format(new Date(dueMs), 'HH:mm')}
+                          {refLabel && (
+                            <div className="text-muted small">
+                              <code className="text-primary">{refLabel}</code>
                             </div>
                           )}
+                          <div className="text-muted small d-flex align-items-center gap-1">
+                            <Clock size={12} /> Due {dueLabel ?? '—'}
+                          </div>
                         </div>
                         <Form.Check
                           type="checkbox"
@@ -1519,7 +1545,10 @@ const UnifiedPlannerPage: React.FC = () => {
                         />
                       </div>
                       <div className="d-flex align-items-center justify-content-between mt-2">
-                        <Badge bg={getBadgeVariant(task.status || 0)}>{getStatusName(task.status || 0)}</Badge>
+                        <div className="d-flex align-items-center gap-2 flex-wrap">
+                          <Badge bg={getBadgeVariant(task.status || 0)}>{getStatusName(task.status || 0)}</Badge>
+                          <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
+                        </div>
                         <span className="text-muted small">
                           AI score {aiScore != null ? Math.round(aiScore) : '—'}
                         </span>

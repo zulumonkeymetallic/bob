@@ -131,6 +131,7 @@ export interface Task {
   syncState: 'clean' | 'dirty' | 'pending_push' | 'awaiting_ack';
   deviceUpdatedAt?: number;
   serverUpdatedAt: number;
+  macSyncedAt?: number;
   createdBy: string;
   ownerUid: string;
   // New fields for v3.0.2

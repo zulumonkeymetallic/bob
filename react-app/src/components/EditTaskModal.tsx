@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { format } from 'date-fns';
 import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
 import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -24,6 +25,25 @@ const normalizeTaskStatus = (status: any) => {
   if (value.includes('progress') || value.includes('active')) return 1;
   if (value.includes('block')) return 3;
   return 0;
+};
+
+const resolveTimestampMs = (value: any): number | null => {
+  if (!value) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') {
+    const dateValue = value.toDate();
+    return dateValue instanceof Date ? dateValue.getTime() : null;
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (value.seconds != null) {
+    return (value.seconds * 1000) + Math.floor((value.nanoseconds || 0) / 1e6);
+  }
+  return null;
 };
 
 const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
@@ -56,6 +76,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   const selectedSprintStatus = selectedSprint
     ? (isStatus(selectedSprint.status, 'closed') ? 'Completed' : (isStatus(selectedSprint.status, 'cancelled') ? 'Cancelled' : ''))
     : '';
+  const macSyncedAtMs = task ? resolveTimestampMs((task as any).macSyncedAt) : null;
+  const showMacSync = !!task && (
+    (task as any).macSyncedAt != null
+    || (task as any).source === 'MacApp'
+    || (task as any).createdBy === 'mac_app'
+  );
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -287,6 +313,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                     {(task as Task).aiCriticalityReason && (
                       <div className="small text-muted">{(task as Task).aiCriticalityReason}</div>
                     )}
+                  </div>
+                )}
+                {showMacSync && (
+                  <div className="mb-3">
+                    <strong>Last Mac sync:</strong>{' '}
+                    {macSyncedAtMs ? format(new Date(macSyncedAtMs), 'MMM d, yyyy • HH:mm') : '—'}
                   </div>
                 )}
               </Form>
