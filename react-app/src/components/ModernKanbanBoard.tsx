@@ -429,6 +429,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   // DnD state
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
   const [activeDragItem, setActiveDragItem] = useState<Story | Task | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
 
   // Form states
   const [editForm, setEditForm] = useState<any>({});
@@ -485,7 +486,13 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       if (typeof RO === 'function') {
         ro = new RO(() => {
           // Batch callback to next tick to avoid layout thrash
-          requestAnimationFrame(recomputeBoardHeight);
+          if (resizeRafRef.current != null) {
+            cancelAnimationFrame(resizeRafRef.current);
+          }
+          resizeRafRef.current = requestAnimationFrame(() => {
+            resizeRafRef.current = null;
+            recomputeBoardHeight();
+          });
         });
         if (boardContainerRef.current) ro.observe(boardContainerRef.current);
       }
@@ -493,6 +500,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     return () => {
       window.removeEventListener('resize', recomputeBoardHeight);
       try { if (ro) ro.disconnect(); } catch { }
+      if (resizeRafRef.current != null) {
+        cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+      }
     };
   }, []);
 
