@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, s
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Story, Task, Sprint as SprintType } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper, StoryStatus } from '../config/choices';
@@ -38,6 +39,7 @@ const getStoryBadgeVariant = (status: any): string => {
 const MobileHome: React.FC = () => {
   const { currentUser } = useAuth();
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
+  const { currentPersona, setPersona } = usePersona();
 
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -144,26 +146,38 @@ const MobileHome: React.FC = () => {
   // Subscribe to Goals
   useEffect(() => {
     if (!currentUser?.uid) { setGoals([]); return; }
-    const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
     const unsub = onSnapshot(q, (snap) => setGoals(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Goal[]));
     return () => unsub();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, currentPersona]);
 
   // Subscribe to Stories (optionally filter by sprint)
   useEffect(() => {
     if (!currentUser?.uid) { setStories([]); return; }
-    const base = [collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)] as any[];
+    const base = [
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    ] as any[];
     if (selectedSprintId) base.push(where('sprintId', '==', selectedSprintId));
     const q = query.apply(null, base as any);
     const unsub = onSnapshot(q, (snap) => setStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Story[]));
     return () => unsub();
-  }, [currentUser?.uid, selectedSprintId]);
+  }, [currentUser?.uid, selectedSprintId, currentPersona]);
 
   // Subscribe to Tasks (optionally filter by sprint)
   useEffect(() => {
     if (!currentUser?.uid) { setTasks([]); setLoading(false); return; }
     setLoading(true);
-    const base = [collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid)] as any[];
+    const base = [
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    ] as any[];
     if (selectedSprintId) base.push(where('sprintId', '==', selectedSprintId));
     const q = query.apply(null, base as any);
     const unsub = onSnapshot(q, (snap) => {
@@ -172,7 +186,7 @@ const MobileHome: React.FC = () => {
       setLoading(false);
     });
     return () => unsub();
-  }, [currentUser?.uid, selectedSprintId]);
+  }, [currentUser?.uid, selectedSprintId, currentPersona]);
 
   const storiesById = useMemo(() => new Map(stories.map(s => [s.id, s])), [stories]);
   const storiesByRef = useMemo(() => new Map(stories.map(s => [(s.ref || s.id || '').toUpperCase(), s])), [stories]);
@@ -438,6 +452,16 @@ const MobileHome: React.FC = () => {
           )}
         </div>
         <div className="d-flex align-items-center gap-2 flex-wrap justify-content-end" style={{ minWidth: 0 }}>
+          <Form.Select
+            size="sm"
+            value={currentPersona}
+            onChange={(e) => setPersona(e.target.value as any)}
+            style={{ width: isSmallScreen ? 120 : 140, WebkitAppearance: 'none', appearance: 'none', backgroundImage: 'none' as any }}
+            title="Persona"
+          >
+            <option value="personal">Personal</option>
+            <option value="work">Work</option>
+          </Form.Select>
           <Form.Select
             size="sm"
             value={selectedSprintId || ''}
