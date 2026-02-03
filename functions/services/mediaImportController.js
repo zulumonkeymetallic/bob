@@ -7,10 +7,11 @@ const { ensureTaskPoints } = require('../utils/taskPoints');
 async function createStory(db, uid, payload) {
   const ref = db.collection('stories').doc();
   const now = Date.now();
+  const persona = payload.persona || 'personal';
   await ref.set(ensureTaskPoints({
     id: ref.id,
     ownerUid: uid,
-    persona: 'personal',
+    persona,
     title: payload.title,
     description: payload.description || '',
     theme: payload.theme || 'Hobbies & Interests',
@@ -32,10 +33,11 @@ async function createStory(db, uid, payload) {
 async function createTask(db, uid, storyId, payload) {
   const ref = db.collection('tasks').doc();
   const now = Date.now();
+  const persona = payload.persona || 'personal';
   await ref.set({
     id: ref.id,
     ownerUid: uid,
-    persona: 'personal',
+    persona,
     title: payload.title,
     description: payload.description || '',
     storyId,

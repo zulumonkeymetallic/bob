@@ -121,6 +121,7 @@ interface BlockFormState {
   end: string;
   syncToGoogle: boolean;
   subTheme: string;
+  persona?: 'personal' | 'work' | null;
   storyId?: string;
   taskId?: string;
   aiScore?: number | null;
@@ -141,6 +142,7 @@ const DEFAULT_BLOCK_FORM: BlockFormState = {
   end: '',
   syncToGoogle: true,
   subTheme: '',
+  persona: null,
   storyId: undefined,
   taskId: undefined,
   aiScore: null,
@@ -562,7 +564,7 @@ const UnifiedPlannerPage: React.FC = () => {
           .filter((task) => {
             const due = getTaskDueMs(task);
             if (!due) return false;
-            return due >= todayStart && due <= todayEnd;
+            return due <= todayEnd;
           })
           .filter((task) => (task.status ?? 0) !== 2);
 
@@ -620,9 +622,10 @@ const UnifiedPlannerPage: React.FC = () => {
       start: toInputValue(start),
       end: toInputValue(end),
       syncToGoogle: true,
+      persona: currentPersona || 'personal',
     });
     setComposerOpen(true);
-  }, [blockDefaultTheme]);
+  }, [blockDefaultTheme, currentPersona]);
 
   const openComposerForBlock = useCallback((block: CalendarBlock) => {
     const mergedTheme = resolveThemeAppearance(block.theme)
@@ -644,6 +647,7 @@ const UnifiedPlannerPage: React.FC = () => {
       end: toInputValue(new Date(block.end)),
       syncToGoogle: true,
       subTheme: block.subTheme || '',
+      persona: (block as any).persona || currentPersona || 'personal',
       storyId: (block as any).storyId,
       taskId: (block as any).taskId,
       aiScore,
@@ -654,7 +658,7 @@ const UnifiedPlannerPage: React.FC = () => {
       recurrenceUntil: untilStr,
     });
     setComposerOpen(true);
-  }, [blockDefaultTheme, resolveThemeAppearance, stories, storyLabel]);
+  }, [blockDefaultTheme, resolveThemeAppearance, stories, storyLabel, currentPersona]);
 
   const handleSelectSlot = useCallback(
     ({ start, end }: { start: Date; end: Date }) => {
@@ -866,7 +870,7 @@ const UnifiedPlannerPage: React.FC = () => {
       storyId: blockForm.storyId || null,
       habitId: null,
       subTheme: blockForm.subTheme || null,
-      persona: 'personal',
+      persona: blockForm.persona || currentPersona || 'personal',
       theme: blockForm.theme,
       category: blockForm.category,
       start: start.getTime(),
@@ -1510,7 +1514,7 @@ const UnifiedPlannerPage: React.FC = () => {
           <Card className="shadow-sm border-0 mb-4">
             <Card.Header className="d-flex align-items-center justify-content-between">
               <div className="fw-semibold d-flex align-items-center gap-2">
-                <Clock size={16} /> Tasks due today
+                <Clock size={16} /> Tasks due today & overdue
               </div>
               <div className="d-flex align-items-center gap-2">
                 <Form.Select
@@ -1532,7 +1536,7 @@ const UnifiedPlannerPage: React.FC = () => {
                   <Spinner size="sm" animation="border" /> Loading tasks…
                 </div>
               ) : sortedTasksDueToday.length === 0 ? (
-                <div className="text-muted small">No tasks due today.</div>
+                <div className="text-muted small">No tasks due today or overdue.</div>
               ) : (
                 sortedTasksDueToday.map((task) => {
                   const dueMs = getTaskDueMs(task);

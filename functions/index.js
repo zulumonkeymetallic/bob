@@ -1047,6 +1047,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
   const timezone = req?.data?.timezone || DEFAULT_TIMEZONE;
+  const persona = req?.data?.persona || 'personal';
   const startDate = req?.data?.startDate || DateTime.now().setZone(timezone).toISODate();
   const days = Math.min(Math.max(Number(req?.data?.days || 7), 1), 30);
   const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
@@ -1093,6 +1094,91 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     console.warn('[planBlocksV2] quiet hours application failed', e?.message || e);
   }
 
+  const isMainGigLabel = (value) => {
+    const raw = String(value || '').toLowerCase();
+    if (!raw) return false;
+    if (raw.includes('workout')) return false;
+    if (raw.includes('main gig') || raw.includes('work shift')) return true;
+    return /\bwork\b/.test(raw);
+  };
+
+  const isMainGigBlock = (block) => {
+    if (!block) return false;
+    if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+    const label = block.theme || block.category || block.title || '';
+    return isMainGigLabel(label);
+  };
+
+  // Apply calendar blocks as busy windows (persona-aware for work shift blocks)
+  try {
+    const blocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', start.toMillis())
+      .where('start', '<=', end.toMillis())
+      .get()
+      .catch(() => ({ docs: [] }));
+    const blocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+    const busyPersonal = [...busy];
+    const busyWork = [...busy];
+    const mainGigBlocks = blocks.filter((b) => isMainGigBlock(b) && b.start && b.end);
+
+    for (const b of blocks) {
+      if (!b.start || !b.end) continue;
+      const interval = {
+        start: DateTime.fromMillis(b.start, { zone: timezone }).toISO(),
+        end: DateTime.fromMillis(b.end, { zone: timezone }).toISO(),
+      };
+      if (isMainGigBlock(b)) {
+        busyPersonal.push(interval);
+      } else {
+        busyPersonal.push(interval);
+        busyWork.push(interval);
+      }
+    }
+
+    if (persona === 'work') {
+      // Block any time outside main gig blocks to keep work scheduling within work windows
+      const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+      for (let i = 0; i < daysSpan; i++) {
+        const dayStart = start.plus({ days: i }).startOf('day');
+        const dayEnd = dayStart.endOf('day');
+        const dayBlocks = mainGigBlocks
+          .filter((b) => b.start && b.end)
+          .filter((b) => {
+            const blockStart = DateTime.fromMillis(b.start, { zone: timezone });
+            const blockEnd = DateTime.fromMillis(b.end, { zone: timezone });
+            return blockEnd > dayStart && blockStart < dayEnd;
+          })
+          .map((b) => ({
+            start: DateTime.fromMillis(b.start, { zone: timezone }),
+            end: DateTime.fromMillis(b.end, { zone: timezone }),
+          }))
+          .sort((a, b) => a.start.toMillis() - b.start.toMillis());
+
+        if (!dayBlocks.length) {
+          busyWork.push({ start: dayStart.toISO(), end: dayEnd.toISO() });
+          continue;
+        }
+
+        let cursor = dayStart;
+        for (const block of dayBlocks) {
+          if (block.start > cursor) {
+            busyWork.push({ start: cursor.toISO(), end: block.start.toISO() });
+          }
+          cursor = block.end > cursor ? block.end : cursor;
+        }
+        if (cursor < dayEnd) {
+          busyWork.push({ start: cursor.toISO(), end: dayEnd.toISO() });
+        }
+      }
+    }
+
+    busy = persona === 'work' ? busyWork : busyPersonal;
+  } catch (err) {
+    console.warn('[planBlocksV2] calendar block busy merge failed', err?.message || err);
+  }
+
   // Fetch Theme Allocations
   let themeAllocations = [];
   try {
@@ -1108,6 +1194,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     busy,
     themeAllocations,
     includeChores: true, // allow routines/chores/habits to populate scheduled_instances
+    persona,
   });
 
   const existingIds = new Set(plan.existingIds || []);
@@ -1269,6 +1356,7 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
 
     const uid = decoded.uid;
     const timezone = req.body?.timezone || DEFAULT_TIMEZONE;
+    const persona = req.body?.persona || 'personal';
     const startDate = req.body?.startDate || DateTime.now().setZone(timezone).toISODate();
     const days = Math.min(Math.max(Number(req.body?.days || 7), 1), 30);
     const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
@@ -1309,7 +1397,90 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
       console.warn('[planBlocksV2Http] quiet hours apply failed', e?.message || e);
     }
 
-    const plan = await planSchedule({ db, userId: uid, windowStart: start, windowEnd: end, busy, includeChores: true });
+    const isMainGigLabel = (value) => {
+      const raw = String(value || '').toLowerCase();
+      if (!raw) return false;
+      if (raw.includes('workout')) return false;
+      if (raw.includes('main gig') || raw.includes('work shift')) return true;
+      return /\bwork\b/.test(raw);
+    };
+
+    const isMainGigBlock = (block) => {
+      if (!block) return false;
+      if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+      const label = block.theme || block.category || block.title || '';
+      return isMainGigLabel(label);
+    };
+
+    try {
+      const blocksSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('start', '>=', start.toMillis())
+        .where('start', '<=', end.toMillis())
+        .get()
+        .catch(() => ({ docs: [] }));
+      const blocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+      const busyPersonal = [...busy];
+      const busyWork = [...busy];
+      const mainGigBlocks = blocks.filter((b) => isMainGigBlock(b) && b.start && b.end);
+
+      for (const b of blocks) {
+        if (!b.start || !b.end) continue;
+        const interval = {
+          start: DateTime.fromMillis(b.start, { zone: timezone }).toISO(),
+          end: DateTime.fromMillis(b.end, { zone: timezone }).toISO(),
+        };
+        if (isMainGigBlock(b)) {
+          busyPersonal.push(interval);
+        } else {
+          busyPersonal.push(interval);
+          busyWork.push(interval);
+        }
+      }
+
+      if (persona === 'work') {
+        const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+        for (let i = 0; i < daysSpan; i++) {
+          const dayStart = start.plus({ days: i }).startOf('day');
+          const dayEnd = dayStart.endOf('day');
+          const dayBlocks = mainGigBlocks
+            .filter((b) => b.start && b.end)
+            .filter((b) => {
+              const blockStart = DateTime.fromMillis(b.start, { zone: timezone });
+              const blockEnd = DateTime.fromMillis(b.end, { zone: timezone });
+              return blockEnd > dayStart && blockStart < dayEnd;
+            })
+            .map((b) => ({
+              start: DateTime.fromMillis(b.start, { zone: timezone }),
+              end: DateTime.fromMillis(b.end, { zone: timezone }),
+            }))
+            .sort((a, b) => a.start.toMillis() - b.start.toMillis());
+
+          if (!dayBlocks.length) {
+            busyWork.push({ start: dayStart.toISO(), end: dayEnd.toISO() });
+            continue;
+          }
+
+          let cursor = dayStart;
+          for (const block of dayBlocks) {
+            if (block.start > cursor) {
+              busyWork.push({ start: cursor.toISO(), end: block.start.toISO() });
+            }
+            cursor = block.end > cursor ? block.end : cursor;
+          }
+          if (cursor < dayEnd) {
+            busyWork.push({ start: cursor.toISO(), end: dayEnd.toISO() });
+          }
+        }
+      }
+
+      busy = persona === 'work' ? busyWork : busyPersonal;
+    } catch (err) {
+      console.warn('[planBlocksV2Http] calendar block busy merge failed', err?.message || err);
+    }
+
+    const plan = await planSchedule({ db, userId: uid, windowStart: start, windowEnd: end, busy, includeChores: true, persona });
     const existingIds = new Set(plan.existingIds || []);
     const batch = db.batch();
     const nowMs = Date.now();
@@ -6207,7 +6378,7 @@ exports.runPlanner = functionsV2.https.onCall(async (req) => {
 
   try {
     if (!exports.planBlocksV2?.run) throw new Error('planBlocksV2 unavailable');
-    const schedRes = await exports.planBlocksV2.run({ auth: { uid }, data: { timezone, startDate, days, includeBusy: true } });
+    const schedRes = await exports.planBlocksV2.run({ auth: { uid }, data: { timezone, startDate, days, includeBusy: true, persona } });
     results.schedule = schedRes?.data || schedRes || null;
   } catch (e) {
     console.warn('[runPlanner] planBlocksV2 failed', e?.message || e);
@@ -6265,8 +6436,10 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
       basePrompt = settingsDoc.exists ? (settingsDoc.data().storyGenPrompt || null) : null;
     } catch { }
 
+    const goalPersona = goal?.persona || 'personal';
+    const personaLabel = goalPersona === 'work' ? 'work' : 'personal';
     const prompt = promptOverride || basePrompt || (
-      `Generate between 3 and 6 user stories for the following personal goal. ` +
+      `Generate between 3 and 6 user stories for the following ${personaLabel} goal. ` +
       `Each story must include a clear title and a 1-2 sentence description. ` +
       `Return STRICT JSON: {"stories":[{"title":"...","description":"..."}, ...]}. ` +
       `Do not include markdown or prose, JSON only.`
@@ -6298,7 +6471,7 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
       batch.set(ref, {
         id: ref.id,
         ref: `STY-${now}-${Math.floor(Math.random() * 10000)}`,
-        persona: 'personal',
+        persona: goalPersona,
         title: String(s.title).slice(0, 140),
         description: String(s.description || ''),
         goalId: goalId,
@@ -6471,20 +6644,17 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
 
   const tasks = tasksQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // Get goals (if personal)
-  let goals = [];
-  if (persona === 'personal') {
-    const goalsQuery = await db.collection('goals')
-      .where('ownerUid', '==', uid)
-      .where('status', 'in', ['new', 'active'])
-      .get();
-    goals = goalsQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  }
+  // Get goals for this persona
+  const goalsQuery = await db.collection('goals')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('status', 'in', ['new', 'active'])
+    .get();
+  const goals = goalsQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
   // Get existing calendar blocks
   const blocksQuery = await db.collection('calendar_blocks')
     .where('ownerUid', '==', uid)
-    .where('persona', '==', persona)
     .where('start', '>=', startDate.getTime())
     .where('start', '<=', endDate.getTime())
     .get();
@@ -6706,10 +6876,11 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
   // 3) Create a primary Research story and tasks
   const storyRef = db.collection('stories').doc();
   const baseTheme = goal.theme || 'Learning & Education';
+  const goalPersona = goal.persona || 'personal';
   await storyRef.set({
     id: storyRef.id,
     ownerUid: uid,
-    persona: 'personal',
+    persona: goalPersona,
     title: `Deep Research: ${goal.title}`,
     description: `Auto-generated research package for goal. Research Doc: /research/${researchRef.id}`,
     goalId,
@@ -6727,7 +6898,7 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     await tRef.set(ensureTaskPoints({
       id: tRef.id,
       ownerUid: uid,
-      persona: 'personal',
+      persona: goalPersona,
       title: String(a?.title || 'Next step'),
       description: 'Auto-generated from research plan',
       storyId: storyRef.id,
@@ -7042,6 +7213,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   const goalSnap = await db.collection('goals').doc(goalId).get();
   if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
   if (goalSnap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
+  const goalPersona = goalSnap.data().persona || 'personal';
 
   const threadRef = db.collection('goal_chats').doc(goalId);
   if (isUnsafeMessage(message)) {
@@ -7087,7 +7259,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
     await taskRef.set(ensureTaskPoints({
       id: taskRef.id,
       ownerUid: uid,
-      persona: 'personal',
+      persona: goalPersona,
       title: String(t?.title || 'Follow-up'),
       description: 'AI-suggested from goal chat',
       status: 0,
@@ -7118,6 +7290,19 @@ async function validateCalendarBlocks(blocks, context) {
   const warnings = [];
   const blockAnnotations = (blocks || []).map(() => ({ errors: [], warnings: [] }));
   let score = 1.0;
+  const isMainGigLabel = (value) => {
+    const raw = String(value || '').toLowerCase();
+    if (!raw) return false;
+    if (raw.includes('workout')) return false;
+    if (raw.includes('main gig') || raw.includes('work shift')) return true;
+    return /\bwork\b/.test(raw);
+  };
+  const isMainGigBlock = (block) => {
+    if (!block) return false;
+    if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+    const label = block.theme || block.category || block.title || '';
+    return isMainGigLabel(label);
+  };
 
   for (let i = 0; i < (blocks || []).length; i++) {
     const block = blocks[i];
@@ -7134,6 +7319,7 @@ async function validateCalendarBlocks(blocks, context) {
 
     // Conflicts with existing AI calendar blocks
     for (const existing of context.existingBlocks) {
+      if (context.persona === 'work' && isMainGigBlock(existing)) continue;
       if (isTimeOverlap(block.start, block.end, existing.start, existing.end)) {
         const msg = `Block conflicts with existing calendar block`;
         errors.push(msg);
@@ -7627,7 +7813,7 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
 
     const payload = {
       ownerUid: uid,
-      persona: 'personal',
+      persona: null,
       title: event.summary || 'Calendar Event',
       description: event.description || null,
       theme: 'Growth',
@@ -11067,7 +11253,7 @@ exports.syncCalendarBlocksBidirectional = httpsV2.onCall({ secrets: [GOOGLE_OAUT
         if (!blockDoc) {
           const ref = db.collection('calendar_blocks').doc(String(linkedId));
           batch.set(ref, {
-            id: String(linkedId), ownerUid: uid, persona: priv['bob-persona'] || 'personal',
+            id: String(linkedId), ownerUid: uid, persona: priv['bob-persona'] || null,
             title: ev.summary || 'Event', rationale: ev.description || null,
             theme: priv['bob-theme'] || 'Growth', theme_id: priv['bob-theme-id'] ? Number(priv['bob-theme-id']) : null,
             category: priv['bob-category'] || 'General', flexibility: priv['bob-flexibility'] || 'soft',
@@ -11099,7 +11285,7 @@ exports.syncCalendarBlocksBidirectional = httpsV2.onCall({ secrets: [GOOGLE_OAUT
         if (!existing) {
           const ref = db.collection('calendar_blocks').doc();
           batch.set(ref, {
-            id: ref.id, ownerUid: uid, persona: 'personal',
+            id: ref.id, ownerUid: uid, persona: null,
             title: ev.summary || 'Event', rationale: ev.description || null,
             theme: 'Growth', category: 'External', flexibility: 'soft',
             start: evStart, end: evEnd, googleEventId: ev.id, source: 'gcal', status: 'applied',
@@ -11721,6 +11907,18 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       if (routineHints.some(k => t.includes(k))) return 'routine';
       return 'reminder';
     };
+    const hasWorkToken = (value) => {
+      const lowered = String(value || '').toLowerCase();
+      if (lowered.includes('workout')) return false;
+      const tokens = lowered.split(/[^a-z0-9]+/).filter(Boolean);
+      if (tokens.includes('work')) return true;
+      return lowered.includes('work');
+    };
+    const resolvePersona = (list, tags) => {
+      if (Array.isArray(tags) && tags.some((t) => hasWorkToken(t))) return 'work';
+      if (hasWorkToken(list)) return 'work';
+      return 'personal';
+    };
 
     // Sprint metadata (used to tag new stories to current sprint)
     const sprintMeta = new Map();
@@ -11753,6 +11951,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       const kind = String(u.type || u.entityType || '').toLowerCase();
       const titleLower = title.toLowerCase();
       const tagsLower = iosTags.map((t) => String(t || '').toLowerCase());
+      const personaValue = resolvePersona(listName, tagsLower);
       const isStoryCandidate = kind === 'story'
         || titleLower.includes('#story')
         || tagsLower.some((t) => t.includes('story'))
@@ -11777,6 +11976,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           const patch = {
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             syncState: 'dirty',
+            persona: personaValue,
           };
           if (reminderId) patch['reminderId'] = reminderId;
           if (completed) {
@@ -11797,7 +11997,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           const base = {
             id: newRef.id,
             ownerUid: uid,
-            persona: 'personal',
+            persona: personaValue,
             title: title || 'Story (Reminders)',
             status: completed ? 4 : 0,
             reminderId: reminderId || null,
@@ -11831,7 +12031,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       }
       if (ref) {
         const task_type = classifyType(title);
-        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type, syncState: 'dirty' };
+        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type, syncState: 'dirty', persona: personaValue };
         if (reminderId) data['reminderId'] = reminderId;
         if (reminderId) data['duplicateKey'] = `reminder:${String(reminderId).toLowerCase()}`;
         if (completed) {
@@ -11876,7 +12076,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             await newRef.set(ensureTaskPoints({
               id: newRef.id,
               ownerUid: uid,
-              persona: 'personal',
+              persona: personaValue,
               title: title || 'Reminder',
               status: completed ? 2 : 0,
               task_type,
@@ -11898,7 +12098,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           await newRef.set(ensureTaskPoints({
             id: newRef.id,
             ownerUid: uid,
-            persona: 'personal',
+            persona: personaValue,
             title: title || 'Reminder',
             status: completed ? 2 : 0,
             task_type,
@@ -12183,6 +12383,7 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
       estimateMin: after.estimateMin ?? null,
       title: after.title || 'Task',
       description: after.description || null,
+      tags: Array.isArray(after.tags) ? after.tags : [],
       parentType: after.parentType || null,
       parentId: after.parentId || null,
       storyId: storyId,

@@ -38,6 +38,7 @@ import { useActivityTracking } from '../hooks/useActivityTracking';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import AddStoryModal from './AddStoryModal';
+import TagInput from './common/TagInput';
 import { DnDMutationHandler } from '../utils/dndMutations';
 import { themeVars } from '../utils/themeVars';
 import '../styles/KanbanCards.css';
@@ -45,6 +46,7 @@ import '../styles/KanbanFixes.css';
 import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, goalThemeColor, colorWithAlpha } from '../utils/storyCardFormatting';
 import SortableStoryCard from './stories/SortableStoryCard';
 import { normalizePriorityValue, isCriticalPriority } from '../utils/priorityUtils';
+import { cascadeTaskPersona } from '../utils/personaCascade';
 
 const formatDueDate = (task: Task): string => {
   const ms = getTaskDueMs(task);
@@ -157,7 +159,8 @@ const SortableTaskCard: React.FC<{
   themeColor: string;
   onEdit: (task: Task) => void;
   onItemClick: (task: Task) => void;
-}> = ({ task, story, themeColor, onEdit, onItemClick }) => {
+  showTags?: boolean;
+}> = ({ task, story, themeColor, onEdit, onItemClick, showTags = false }) => {
   const { showSidebar } = useSidebar();
   const {
     attributes,
@@ -198,6 +201,9 @@ const SortableTaskCard: React.FC<{
 
   const taskPriorityValue = normalizePriorityValue(task.priority);
   const isCriticalTask = taskPriorityValue >= 4;
+  const taskTags = Array.isArray((task as any).tags) ? (task as any).tags : [];
+  const visibleTags = taskTags.slice(0, 4);
+  const remainingTags = taskTags.length - visibleTags.length;
   const criticalAccent = isCriticalTask
     ? {
       boxShadow: '0 0 0 2px rgba(251, 191, 36, 0.45)',
@@ -335,6 +341,21 @@ const SortableTaskCard: React.FC<{
             </div>
           )}
 
+          {showTags && visibleTags.length > 0 && (
+            <div className="kanban-card__tags">
+              {visibleTags.map((tag) => (
+                <span key={tag} className="kanban-card__tag">
+                  #{tag}
+                </span>
+              ))}
+              {remainingTags > 0 && (
+                <span className="kanban-card__tag kanban-card__tag--muted">
+                  +{remainingTags}
+                </span>
+              )}
+            </div>
+          )}
+
           <div className="kanban-card__meta">
             <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
               {priorityLabel}
@@ -440,6 +461,15 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [filterUnlinkedStoriesOnly, setFilterUnlinkedStoriesOnly] = useState(false);
   const [filterUnlinkedTasksOnly, setFilterUnlinkedTasksOnly] = useState(false);
   const [sortMode, setSortMode] = useState<'default' | 'ai' | 'overdue' | 'priority' | 'due'>('default');
+  const [showTags, setShowTags] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const stored = window.localStorage.getItem('kanbanShowTags');
+      return stored ? stored === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
 
   // DnD sensors
   const sensors = useSensors(
@@ -506,6 +536,13 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('kanbanShowTags', showTags ? 'true' : 'false');
+    } catch { }
+  }, [showTags]);
 
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
@@ -867,6 +904,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           priority: x.priority ?? 2,
           effort: x.effort ?? 'M',
           estimateMin: x.estimateMin ?? 0,
+          tags: Array.isArray(x.tags) ? x.tags : [],
           dueDate: x.dueDate || null,
           parentType: x.parentType || 'story',
           parentId: x.parentId || x.storyId || '',
@@ -1007,6 +1045,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       const collection_name = selectedType === 'story' ? 'stories' : 'tasks';
       const docRef = doc(db, collection_name, selectedItem.id);
       let payload: any = { ...editForm, updatedAt: serverTimestamp() };
+      if ('tags' in payload) {
+        payload.tags = Array.isArray(payload.tags)
+          ? payload.tags.map((tag: string) => String(tag).trim()).filter(Boolean)
+          : [];
+      }
 
       if (selectedType === 'task') {
         const existing = tasks.find(t => t.id === selectedItem.id);
@@ -1030,6 +1073,17 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       }
 
       await updateDoc(docRef, payload);
+      if (selectedType === 'task' && selectedItem && currentUser?.uid) {
+        const prevPersona = ((selectedItem as any).persona || currentPersona || 'personal') as 'personal' | 'work';
+        const nextPersona = (payload.persona || prevPersona) as 'personal' | 'work';
+        if (prevPersona !== nextPersona) {
+          try {
+            await cascadeTaskPersona(currentUser.uid, selectedItem.id, nextPersona);
+          } catch (err) {
+            console.warn('[Kanban] persona cascade failed', err);
+          }
+        }
+      }
       setShowEditModal(false);
     } catch (error) {
       console.error('Error updating item:', error);
@@ -1180,6 +1234,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           checked={filterUnlinkedTasksOnly}
           onChange={(e) => setFilterUnlinkedTasksOnly(e.currentTarget.checked)}
         />
+        <Form.Check
+          inline
+          type="switch"
+          id="toggle-tags"
+          label="Show tags"
+          checked={showTags}
+          onChange={(e) => setShowTags(e.currentTarget.checked)}
+        />
         <Form.Group className="d-flex align-items-center mb-0">
           <Form.Label className="me-2 mb-0">Sort</Form.Label>
           <Form.Select
@@ -1286,6 +1348,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       onEdit={(story) => handleEdit(story, 'story')}
                                       onDelete={(story) => handleDelete(story, 'story')}
                                       onItemClick={(story) => handleItemClick(story, 'story')}
+                                      showTags={showTags}
                                     />
                                   );
                                 })}
@@ -1316,6 +1379,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       themeColor={themeColor}
                                       onEdit={(task) => handleEdit(task, 'task')}
                                       onItemClick={(task) => handleItemClick(task, 'task')}
+                                      showTags={showTags}
                                     />
                                   );
                                 })}
@@ -1384,6 +1448,24 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                       value={(editForm as any).description || ''}
                       onChange={(e) => setEditForm({ ...(editForm as any), description: e.target.value })}
                     />
+                  </Form.Group>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Tags</Form.Label>
+                    <TagInput
+                      value={Array.isArray((editForm as any).tags) ? (editForm as any).tags : []}
+                      onChange={(tags) => setEditForm({ ...(editForm as any), tags })}
+                      placeholder="Add tags..."
+                    />
+                  </Form.Group>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Persona</Form.Label>
+                    <Form.Select
+                      value={(editForm as any).persona || currentPersona || 'personal'}
+                      onChange={(e) => setEditForm({ ...(editForm as any), persona: e.target.value })}
+                    >
+                      <option value="personal">Personal</option>
+                      <option value="work">Work</option>
+                    </Form.Select>
                   </Form.Group>
                   <Row>
                     <Col md={4}>

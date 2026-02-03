@@ -4,6 +4,7 @@ import '@svar-ui/react-gantt/all.css';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Star, Search, Edit3, Wand2, CalendarClock, Activity, Maximize2, Minimize2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { usePersona } from '../../contexts/PersonaContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { db, functions } from '../../firebase';
 import { Goal, Story, Sprint } from '../../types';
@@ -265,6 +266,7 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
 
 const GoalRoadmapV6: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { theme } = useTheme();
   const { themes: globalThemes } = useGlobalThemes();
   const { sprints, selectedSprintId } = useSprint();
@@ -307,7 +309,7 @@ const GoalRoadmapV6: React.FC = () => {
       const planner = httpsCallable(functions, 'runPlanner');
       const minutes = Math.min(Math.max(60, (goal.timeToMasterHours || 2) * 60), 300);
       const startDate = new Date().toISOString().slice(0, 10);
-      const result = await planner({ persona: 'personal', startDate, days: 7, focusGoalId: goal.id, goalTimeRequest: minutes });
+      const result = await planner({ persona: currentPersona || 'personal', startDate, days: 7, focusGoalId: goal.id, goalTimeRequest: minutes });
       const blocksCreated = (result.data as any)?.llm?.blocksCreated || 0;
       alert(`AI scheduled ${blocksCreated} block${blocksCreated === 1 ? '' : 's'} for "${goal.title || 'Goal'}"`);
     } catch (err: any) {
@@ -383,7 +385,7 @@ const GoalRoadmapV6: React.FC = () => {
     const q = query(
       collection(db, 'calendarBlocks'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', 'personal')
+      where('persona', '==', currentPersona || 'personal')
     );
     const unsub = onSnapshot(
       q,
@@ -396,7 +398,7 @@ const GoalRoadmapV6: React.FC = () => {
       }
     );
     return () => unsub();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, currentPersona]);
 
   // Monzo pots (optional)
   useEffect(() => {

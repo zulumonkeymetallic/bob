@@ -30,6 +30,21 @@ const toMinutes = (hhmm) => {
   return Number(h) * 60 + Number(m);
 };
 
+const isMainGigLabel = (value) => {
+  const raw = String(value || '').toLowerCase();
+  if (!raw) return false;
+  if (raw.includes('workout')) return false;
+  if (raw.includes('main gig') || raw.includes('work shift')) return true;
+  return /\bwork\b/.test(raw);
+};
+
+const isMainGigBlock = (block) => {
+  if (!block) return false;
+  if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+  const label = block.theme || block.category || block.title || '';
+  return isMainGigLabel(label);
+};
+
 const buildPickSlots = (themeAllocations) => {
   const getUserSlots = (themeLabel, day) => {
     const matches = (Array.isArray(themeAllocations) ? themeAllocations : []).filter((a) => {
@@ -606,13 +621,16 @@ async function replanExistingBlocksForUser({
     else fixedBlocks.push(block);
   });
 
-  const busy = [];
+  const busyPersonal = [];
+  const busyWork = [];
   const mainGigBlocks = []; // Track main gig planner blocks separately  
   const capCounts = new Map();
-  const addBusy = (startMs, endMs) => {
+  const addBusy = (list, startMs, endMs) => {
     if (!startMs || !endMs) return;
-    busy.push({ start: startMs, end: endMs });
+    list.push({ start: startMs, end: endMs });
   };
+  const addBusyPersonal = (startMs, endMs) => addBusy(busyPersonal, startMs, endMs);
+  const addBusyWork = (startMs, endMs) => addBusy(busyWork, startMs, endMs);
   const addCap = (startMs) => {
     if (!startMs) return;
     const dayKey = DateTime.fromMillis(startMs, { zone: nowLocal.zoneName }).toISODate();
@@ -624,15 +642,13 @@ async function replanExistingBlocksForUser({
     const startMs = toMillis(block.start);
     const endMs = toMillis(block.end);
     if (!startMs || !endMs) return;
-    addBusy(startMs, endMs);
-    
-    // Track main gig blocks separately to prevent task/story placement
     const blockTheme = block.theme || block.category || '';
-    const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
-                          String(blockTheme).toLowerCase().includes('main gig') ||
-                          block.entityType === 'work_shift';
-    if (isMainGigBlock) {
+    if (isMainGigBlock(block)) {
       mainGigBlocks.push({ start: startMs, end: endMs, theme: blockTheme });
+      addBusyPersonal(startMs, endMs);
+    } else {
+      addBusyPersonal(startMs, endMs);
+      addBusyWork(startMs, endMs);
     }
     
     const entityType = String(block.entityType || '').toLowerCase();
@@ -641,9 +657,9 @@ async function replanExistingBlocksForUser({
     }
   });
 
-  const findGapInSlot = ({ slotStartMs, slotEndMs, durationMs }) => {
+  const findGapInSlot = ({ slotStartMs, slotEndMs, durationMs, busyList }) => {
     if (slotEndMs - slotStartMs < durationMs) return null;
-    const overlaps = busy
+    const overlaps = (busyList || [])
       .filter((b) => b.end > slotStartMs && b.start < slotEndMs)
       .sort((a, b) => a.start - b.start);
     let cursor = slotStartMs;
@@ -663,11 +679,37 @@ async function replanExistingBlocksForUser({
 
   const findSlotForBlock = (block, durationMinutes) => {
     const durationMs = durationMinutes * 60000;
+    const isWorkPersona = String(block?.persona || '').toLowerCase() === 'work';
+    const busyList = isWorkPersona ? busyWork : busyPersonal;
     const blockStart = toDateTime(block.start, { defaultValue: null });
     const blockDay = blockStart ? blockStart.setZone(nowLocal.zoneName).startOf('day') : windowStartDt;
     const totalDays = Math.max(1, Math.round(windowEndDt.diff(windowStartDt, 'days').days) + 1);
     const startOffset = Math.max(0, Math.floor(blockDay.diff(windowStartDt, 'days').days));
     const themeLabel = resolveThemeLabel(block.theme || block.theme_id || block.category || null);
+
+    if (isWorkPersona) {
+      if (!mainGigBlocks.length) return null;
+      const sortedMainGig = mainGigBlocks
+        .filter((mg) => mg.start && mg.end)
+        .sort((a, b) => a.start - b.start);
+      for (const mg of sortedMainGig) {
+        const slotStart = DateTime.fromMillis(mg.start, { zone: nowLocal.zoneName });
+        const slotEnd = DateTime.fromMillis(mg.end, { zone: nowLocal.zoneName });
+        if (slotEnd <= slotStart) continue;
+        const slotStartMs = slotStart.toMillis();
+        const slotEndMs = slotEnd.toMillis();
+        if (slotEndMs - slotStartMs < durationMs) continue;
+
+        const gap = findGapInSlot({
+          slotStartMs,
+          slotEndMs,
+          durationMs,
+          busyList,
+        });
+        if (gap) return gap;
+      }
+      return null;
+    }
 
     for (let offset = startOffset; offset < totalDays; offset += 1) {
       const day = windowStartDt.plus({ days: offset });
@@ -677,10 +719,7 @@ async function replanExistingBlocksForUser({
       const slots = pickSlots(themeLabel, day);
       for (const slot of slots) {
         // Skip main gig blocks for tasks/stories
-        const isMainGigSlot = slot.label && 
-          (slot.label.toLowerCase().includes('main gig') || 
-           slot.label.toLowerCase().includes('work') ||
-           slot.label.toLowerCase().includes('theme block: work'));
+        const isMainGigSlot = isMainGigLabel(slot.label);
         if (isMainGigSlot) continue;
         
         const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
@@ -713,6 +752,7 @@ async function replanExistingBlocksForUser({
           slotStartMs: effectiveStart.toMillis(),
           slotEndMs: slotEnd.toMillis(),
           durationMs,
+          busyList,
         });
         if (gap) return gap;
       }
@@ -734,9 +774,12 @@ async function replanExistingBlocksForUser({
     const durationMinutes = Math.max(15, Math.round((endMs - startMs) / 60000));
     const startDt = DateTime.fromMillis(startMs, { zone: nowLocal.zoneName });
     const endDt = DateTime.fromMillis(endMs, { zone: nowLocal.zoneName });
+    const isWorkPersona = String(block?.persona || '').toLowerCase() === 'work';
+    const busyList = isWorkPersona ? busyWork : busyPersonal;
 
-    if (!hasOverlap({ start: startDt, end: endDt }, busy)) {
-      addBusy(startMs, endMs);
+    if (!hasOverlap({ start: startDt, end: endDt }, busyList)) {
+      addBusyPersonal(startMs, endMs);
+      addBusyWork(startMs, endMs);
       addCap(startMs);
       continue;
     }
@@ -759,7 +802,8 @@ async function replanExistingBlocksForUser({
         conflictStatus: null,
       };
       await blockRef.set(patch, { merge: true });
-      addBusy(slot.start, slot.end);
+      addBusyPersonal(slot.start, slot.end);
+      addBusyWork(slot.start, slot.end);
       addCap(slot.start);
       rescheduled += 1;
 
@@ -779,7 +823,8 @@ async function replanExistingBlocksForUser({
         conflictStatus: 'blocked',
         rescheduleAttemptedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
-      addBusy(startMs, endMs);
+      addBusyPersonal(startMs, endMs);
+      addBusyWork(startMs, endMs);
       addCap(startMs);
       blocked += 1;
     }
@@ -793,7 +838,8 @@ async function replanExistingBlocksForUser({
     blocked,
     created,
     totalMovable: movableBlocks.length,
-    busy,
+    busy: busyPersonal,
+    busyWork,
     capCounts,
     windowStart: windowStartDt.toISO(),
     windowEnd: windowEndDt.toISO(),
@@ -1340,6 +1386,14 @@ async function runPriorityScoringJob() {
           patch.iosPriority = '!!';
         }
       }
+      // Escalate overdue tasks to critical
+      if (entityType === 'task' && dueMs) {
+        const todayStart = DateTime.now().startOf('day').toMillis();
+        if (dueMs < todayStart && !isTaskLocked(entity)) {
+          patch.priority = 4;
+          patch.iosPriority = '!!!';
+        }
+      }
       await ref.set(patch, { merge: true });
       await db.collection('activity_stream').add(activityPayload({
         ownerUid: userId,
@@ -1699,7 +1753,8 @@ async function runCalendarPlannerJob() {
       console.log(`[calendar-planner] rescheduled blocks for ${userId}: ${rescheduleResult.rescheduled}, blocked: ${rescheduleResult.blocked}`);
     }
 
-    const busy = rescheduleResult.busy || [];
+    const busyPersonal = Array.isArray(rescheduleResult.busy) ? [...rescheduleResult.busy] : [];
+    const busyWork = Array.isArray(rescheduleResult.busyWork) ? [...rescheduleResult.busyWork] : [];
     const scoreWithBonus = (priority, base) => (Number(priority) >= 4 ? Number(base || 0) + 500 : Number(base || 0));
 
     // Build sprint map for gating and metadata
@@ -1749,19 +1804,16 @@ async function runCalendarPlannerJob() {
       }
     }
 
-    const busyMap = [];
     const mainGigBlocks = []; // Track main gig planner blocks separately
     remainingBlocks.forEach((b) => {
       if (b.start && b.end) {
-        busyMap.push({ start: b.start, end: b.end });
-        
-        // Track main gig blocks separately to prevent task/story placement
         const blockTheme = b.theme || b.category || '';
-        const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
-                              String(blockTheme).toLowerCase().includes('main gig') ||
-                              b.entityType === 'work_shift';
-        if (isMainGigBlock) {
+        if (isMainGigBlock(b)) {
           mainGigBlocks.push({ start: b.start, end: b.end, theme: blockTheme });
+          busyPersonal.push({ start: b.start, end: b.end });
+        } else {
+          busyPersonal.push({ start: b.start, end: b.end });
+          busyWork.push({ start: b.start, end: b.end });
         }
       }
     });
@@ -1770,12 +1822,77 @@ async function runCalendarPlannerJob() {
       const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
       const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
       const sprintEnd = sprint?.end ? toMillis(sprint.end) : null;
+      const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
+      const busyList = isWorkPersona ? busyWork : busyPersonal;
 
       const durationMinutesRaw = kind === 'task'
         ? (Number(candidate.points) * 60) || Number(candidate.estimateMin) || 60
         : (Number(candidate.points) * 60) || 90;
       const durationMinutes = Math.min(kind === 'task' ? 180 : 240, Math.max(kind === 'task' ? 30 : 60, durationMinutesRaw || 60));
       const durationMs = durationMinutes * 60000;
+
+      if (isWorkPersona) {
+        if (!mainGigBlocks.length) return { created: 0, blocked: 1 };
+        const sortedMainGig = mainGigBlocks
+          .filter((mg) => mg.start && mg.end)
+          .sort((a, b) => a.start - b.start);
+
+        for (const mg of sortedMainGig) {
+          const slotStart = DateTime.fromMillis(mg.start, { zone: windowStart.zoneName });
+          const slotEnd = DateTime.fromMillis(mg.end, { zone: windowStart.zoneName });
+          if (slotEnd <= slotStart) continue;
+          if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
+          if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
+          if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
+
+          const overlaps = busyList
+            .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
+            .sort((a, b) => a.start - b.start);
+          let cursor = slotStart.toMillis();
+          for (const o of overlaps) {
+            if (o.start - cursor >= durationMs) break;
+            cursor = Math.max(cursor, o.end);
+            if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+          }
+          if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
+
+          const blockRef = db.collection('calendar_blocks').doc();
+          const payload = {
+            ownerUid: userId,
+            start: cursor,
+            end: cursor + durationMs,
+            title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
+            entityType: kind,
+            taskId: kind === 'task' ? candidate.id : null,
+            storyId: kind === 'story' ? candidate.id : null,
+            sprintId: candidate.sprintId || null,
+            theme: candidate.theme || null,
+            goalId: candidate.goalId || null,
+            status: 'planned',
+            aiGenerated: true,
+            aiScore: candidate.aiScore || null,
+            aiReason: candidate.aiCriticalityReason || null,
+            placementReason: 'Nightly planner: top priority item',
+            deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+            persona: candidate.persona || 'work',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          };
+          await blockRef.set(payload);
+          busyPersonal.push({ start: payload.start, end: payload.end });
+          busyWork.push({ start: payload.start, end: payload.end });
+          await db.collection('activity_stream').add(activityPayload({
+            ownerUid: userId,
+            entityId: candidate.id,
+            entityType: kind,
+            activityType: 'calendar_insertion',
+            description: `Calendar block created (${slotStart.toISODate()} ${slotStart.toFormat('HH:mm')}–${slotEnd.toFormat('HH:mm')})`,
+            metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
+          }));
+          return { created: 1 };
+        }
+        return { created: 0, blocked: 1 };
+      }
 
       for (let offset = 0; offset < 7; offset++) {
         const day = windowStart.plus({ days: offset });
@@ -1786,10 +1903,7 @@ async function runCalendarPlannerJob() {
         const slots = pickSlots(candidate.theme || candidate.goal || null, day);
         for (const slot of slots) {
           // Skip main gig blocks for tasks/stories
-          const isMainGigSlot = slot.label && 
-            (slot.label.toLowerCase().includes('main gig') || 
-             slot.label.toLowerCase().includes('work') ||
-             slot.label.toLowerCase().includes('theme block: work'));
+          const isMainGigSlot = isMainGigLabel(slot.label);
           if (isMainGigSlot) continue;
           
           const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
@@ -1800,7 +1914,7 @@ async function runCalendarPlannerJob() {
           if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
           if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
 
-          const overlaps = busyMap
+          const overlaps = busyList
             .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
             .sort((a, b) => a.start - b.start);
           let cursor = slotStart.toMillis();
@@ -1840,11 +1954,13 @@ async function runCalendarPlannerJob() {
             aiReason: candidate.aiCriticalityReason || null,
             placementReason: 'Nightly planner: top priority item',
             deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+            persona: candidate.persona || 'personal',
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           };
           await blockRef.set(payload);
-          busyMap.push({ start: payload.start, end: payload.end });
+          busyPersonal.push({ start: payload.start, end: payload.end });
+          busyWork.push({ start: payload.start, end: payload.end });
           await db.collection('activity_stream').add(activityPayload({
             ownerUid: userId,
             entityId: candidate.id,
@@ -2065,21 +2181,22 @@ exports.replanCalendarNow = onCall({
     }
   }
 
-  const busy = [];
+  const busyPersonal = [];
+  const busyWork = [];
   const mainGigBlocks = []; // Track main gig planner blocks separately
-  const addBusy = (start, end) => {
-    if (start && end) busy.push({ start, end });
+  const addBusyPersonal = (start, end) => {
+    if (start && end) busyPersonal.push({ start, end });
+  };
+  const addBusyWork = (start, end) => {
+    if (start && end) busyWork.push({ start, end });
   };
   remainingBlocks.forEach((b) => {
-    addBusy(b.start, b.end);
-    
-    // Track main gig blocks separately to prevent task/story placement
-    const blockTheme = b.theme || b.category || '';
-    const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
-                          String(blockTheme).toLowerCase().includes('main gig') ||
-                          b.entityType === 'work_shift';
-    if (isMainGigBlock) {
-      mainGigBlocks.push({ start: b.start, end: b.end, theme: blockTheme });
+    if (isMainGigBlock(b)) {
+      mainGigBlocks.push({ start: b.start, end: b.end, theme: b.theme || b.category || '' });
+      addBusyPersonal(b.start, b.end);
+    } else {
+      addBusyPersonal(b.start, b.end);
+      addBusyWork(b.start, b.end);
     }
   });
 
@@ -2089,12 +2206,68 @@ exports.replanCalendarNow = onCall({
     const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
     const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
     const sprintEnd = sprint?.end ? toMillis(sprint.end) : null;
+    const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
+    const busyList = isWorkPersona ? busyWork : busyPersonal;
 
     const durationMinutesRaw = kind === 'task'
       ? (Number(candidate.points) * 60) || Number(candidate.estimateMin) || 60
       : (Number(candidate.points) * 60) || 90;
     const durationMinutes = Math.min(kind === 'task' ? 180 : 240, Math.max(kind === 'task' ? 30 : 60, durationMinutesRaw || 60));
     const durationMs = durationMinutes * 60000;
+
+    if (isWorkPersona) {
+      if (!mainGigBlocks.length) return { created: 0, blocked: 1 };
+      const sortedMainGig = mainGigBlocks
+        .filter((mg) => mg.start && mg.end)
+        .sort((a, b) => a.start - b.start);
+      for (const mg of sortedMainGig) {
+        const slotStart = DateTime.fromMillis(mg.start, { zone: windowStart.zoneName });
+        const slotEnd = DateTime.fromMillis(mg.end, { zone: windowStart.zoneName });
+        if (slotEnd <= slotStart) continue;
+        if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
+        if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
+        if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
+
+        const overlaps = busyList
+          .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
+          .sort((a, b) => a.start - b.start);
+        let cursor = slotStart.toMillis();
+        for (const o of overlaps) {
+          if (o.start - cursor >= durationMs) break;
+          cursor = Math.max(cursor, o.end);
+          if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+        }
+        if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
+
+        const blockRef = db.collection('calendar_blocks').doc();
+        const payload = {
+          ownerUid: uid,
+          start: cursor,
+          end: cursor + durationMs,
+          title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
+          entityType: kind,
+          taskId: kind === 'task' ? candidate.id : null,
+          storyId: kind === 'story' ? candidate.id : null,
+          sprintId: candidate.sprintId || null,
+          theme: candidate.theme || null,
+          goalId: candidate.goalId || null,
+          status: 'planned',
+          aiGenerated: true,
+          aiScore: candidate.aiScore || null,
+          aiReason: candidate.aiCriticalityReason || null,
+          placementReason: 'Replan: top priority item',
+          deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+          persona: candidate.persona || 'work',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        await blockRef.set(payload);
+        busyPersonal.push({ start: payload.start, end: payload.end });
+        busyWork.push({ start: payload.start, end: payload.end });
+        return { created: 1, gcalLink: payload.gcalEventUrl || null };
+      }
+      return { created: 0, blocked: 1 };
+    }
 
     for (let offset = 0; offset < days; offset++) {
       const day = windowStart.plus({ days: offset });
@@ -2105,10 +2278,7 @@ exports.replanCalendarNow = onCall({
       const slots = pickSlots(candidate.theme || candidate.goal || null, day);
       for (const slot of slots) {
         // Skip main gig blocks for tasks/stories
-        const isMainGigSlot = slot.label && 
-          (slot.label.toLowerCase().includes('main gig') || 
-           slot.label.toLowerCase().includes('work') ||
-           slot.label.toLowerCase().includes('theme block: work'));
+        const isMainGigSlot = isMainGigLabel(slot.label);
         if (isMainGigSlot) continue;
         
         const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
@@ -2119,7 +2289,7 @@ exports.replanCalendarNow = onCall({
         if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
         if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
 
-        const overlaps = busy.filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis()).sort((a, b) => a.start - b.start);
+        const overlaps = busyList.filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis()).sort((a, b) => a.start - b.start);
         let cursor = slotStart.toMillis();
         for (const o of overlaps) {
           if (o.start - cursor >= durationMs) break;
@@ -2157,11 +2327,13 @@ exports.replanCalendarNow = onCall({
           aiReason: candidate.aiCriticalityReason || null,
           placementReason: 'Replan: top priority item',
           deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+          persona: candidate.persona || 'personal',
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
         await blockRef.set(payload);
-        busy.push({ start: payload.start, end: payload.end });
+        busyPersonal.push({ start: payload.start, end: payload.end });
+        busyWork.push({ start: payload.start, end: payload.end });
         return { created: 1, gcalLink: payload.gcalEventUrl || null };
       }
     }

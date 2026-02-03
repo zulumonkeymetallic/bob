@@ -6,9 +6,12 @@ import { db } from '../firebase';
 import { useSprint } from '../contexts/SprintContext';
 import { Task, Sprint, Story } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
+import TagInput from './common/TagInput';
+import { cascadeTaskPersona } from '../utils/personaCascade';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -57,6 +60,7 @@ const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
 
 const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpdated, container }) => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { sprints } = useSprint();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -68,6 +72,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     points: 1 as number,
     dueDate: '' as string,
     storyId: '' as string,
+    tags: [] as string[],
+    persona: 'personal' as 'personal' | 'work',
   });
   const [storyInput, setStoryInput] = useState('');
   const [stories, setStories] = useState<Story[]>([]);
@@ -92,10 +98,13 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       limit(200)
     );
     const unsub = onSnapshot(q, (snap) => {
-      setStories(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[]);
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+      const persona = (task as any)?.persona || currentPersona;
+      const filtered = persona ? rows.filter((s) => !s.persona || s.persona === persona) : rows;
+      setStories(filtered);
     });
     return () => unsub();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, currentPersona, task]);
 
   useEffect(() => {
     if (!task) return;
@@ -122,6 +131,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       points: (task as any).points ?? 1,
       dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
       storyId: linkedStoryId,
+      tags: Array.isArray((task as any).tags) ? (task as any).tags : [],
+      persona: ((task as any).persona || 'personal') as 'personal' | 'work',
     });
     setStoryInput(linkedStory ? storyLabel(linkedStory) : '');
   }, [task, show, stories]);
@@ -160,6 +171,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         storyId: form.storyId || null,
         parentType: form.storyId ? 'story' : null,
         parentId: form.storyId || null,
+        tags: Array.isArray(form.tags) ? form.tags.map((tag) => tag.trim()).filter(Boolean) : [],
+        persona: form.persona || 'personal',
         updatedAt: serverTimestamp(),
       };
       if (form.storyId) {
@@ -168,6 +181,15 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         if (!updates.sprintId && (linked as any)?.sprintId) updates.sprintId = (linked as any).sprintId;
       }
       await updateDoc(doc(db, 'tasks', task.id), updates);
+      const prevPersona = (((task as any).persona) || 'personal') as 'personal' | 'work';
+      const nextPersona = (updates.persona || prevPersona) as 'personal' | 'work';
+      if (prevPersona !== nextPersona && currentUser?.uid) {
+        try {
+          await cascadeTaskPersona(currentUser.uid, task.id, nextPersona);
+        } catch (err) {
+          console.warn('Failed to cascade persona for task', err);
+        }
+      }
       onUpdated?.();
       onHide();
     } catch (error) {
@@ -204,6 +226,24 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                     value={form.description}
                     onChange={(e) => setForm({ ...form, description: e.target.value })}
                   />
+                </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Tags</Form.Label>
+                  <TagInput
+                    value={form.tags}
+                    onChange={(tags) => setForm({ ...form, tags })}
+                    placeholder="Add tags..."
+                  />
+                </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Persona</Form.Label>
+                  <Form.Select
+                    value={form.persona}
+                    onChange={(e) => setForm({ ...form, persona: e.target.value as 'personal' | 'work' })}
+                  >
+                    <option value="personal">Personal</option>
+                    <option value="work">Work</option>
+                  </Form.Select>
                 </Form.Group>
                 <Row>
                   <Col md={4}>

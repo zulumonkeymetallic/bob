@@ -1430,7 +1430,7 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
           source: 'gcal',
           entry_method: 'google_calendar',
           status: 'imported',
-          persona: priv['bob-persona'] || 'personal',
+          persona: priv['bob-persona'] || null,
           theme: priv['bob-theme'] || null,
           theme_id: priv['bob-theme-id'] || null,
           storyId: priv['bob-story-id'] || null,

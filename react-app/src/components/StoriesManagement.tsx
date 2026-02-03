@@ -274,7 +274,7 @@ const StoriesManagement: React.FC = () => {
         ref: refNumber,
         referenceNumber: refNumber,
         ownerUid: currentUser!.uid,
-        persona: 'personal' as const, // Explicitly set to 'personal' to match Story type
+        persona: currentPersona || 'personal',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         // Default values if not provided

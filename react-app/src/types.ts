@@ -1,7 +1,7 @@
 export interface Goal {
   id: string;
   ref?: string;
-  persona: 'personal'; // Goals are personal-only per requirements
+  persona: 'personal' | 'work';
   title: string;
   description?: string;
   theme: number; // 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
@@ -36,7 +36,7 @@ export interface Story {
   id: string;
   ref: string;
   referenceNumber?: string;
-  persona: 'personal'; // Stories are personal-only per requirements
+  persona: 'personal' | 'work';
   title: string;
   description?: string;
   goalId: string;

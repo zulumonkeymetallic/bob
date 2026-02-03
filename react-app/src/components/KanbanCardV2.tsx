@@ -25,6 +25,7 @@ interface KanbanCardV2Props {
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     showDescription?: boolean;
     showLatestNote?: boolean;
+    showTags?: boolean;
     latestNote?: string;
     steamMeta?: {
         appId?: string | number;
@@ -48,6 +49,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     showLatestNote = false,
     latestNote,
     steamMeta,
+    showTags,
 }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
@@ -133,6 +135,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const reminderSyncLabel = reminderSyncedAt
         ? `${reminderSyncedAt.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} ${reminderSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
         : null;
+    const readKanbanTagPreference = () => {
+        if (typeof window === 'undefined') return true;
+        try {
+            const stored = window.localStorage.getItem('kanbanShowTags');
+            return stored ? stored === 'true' : true;
+        } catch {
+            return true;
+        }
+    };
+    const resolvedShowTags = typeof showTags === 'boolean' ? showTags : readKanbanTagPreference();
+    const itemTags = Array.isArray((item as any).tags) ? (item as any).tags : [];
+    const visibleTags = itemTags.slice(0, 4);
+    const remainingTags = itemTags.length - visibleTags.length;
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -387,6 +402,20 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 {showDescription && item.description && item.description.trim().length > 0 && (
                     <div className="kanban-card__description">
                         {item.description}
+                    </div>
+                )}
+                {resolvedShowTags && visibleTags.length > 0 && (
+                    <div className="kanban-card__tags">
+                        {visibleTags.map((tag: string) => (
+                            <span key={tag} className="kanban-card__tag">
+                                #{tag}
+                            </span>
+                        ))}
+                        {remainingTags > 0 && (
+                            <span className="kanban-card__tag kanban-card__tag--muted">
+                                +{remainingTags}
+                            </span>
+                        )}
                     </div>
                 )}
                 {showLatestNote && trimmedNote && (

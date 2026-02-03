@@ -15,6 +15,7 @@ import ResearchDocModal from './ResearchDocModal';
 import EditStoryModal from './EditStoryModal';
 import EditGoalModal from './EditGoalModal';
 import EditTaskModal from './EditTaskModal';
+import TagInput from './common/TagInput';
 import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 import { ChoiceHelper } from '../config/choices';
 import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
@@ -342,7 +343,11 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     const normalizedPriority = rawPriority === null || rawPriority === undefined || rawPriority === ''
       ? ''
       : normalizePriorityValue(rawPriority);
-    setEditForm({ ...selectedItem, priority: normalizedPriority });
+    setEditForm({
+      ...selectedItem,
+      priority: normalizedPriority,
+      tags: Array.isArray((selectedItem as any)?.tags) ? (selectedItem as any).tags : [],
+    });
     setIsEditing(false);
 
     if (!currentUser?.uid) return;
@@ -1007,6 +1012,32 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   <p style={{ margin: 0, color: themeVars.muted, lineHeight: '1.5' }}>
                     {selectedItem.description || 'No description provided'}
                   </p>
+                )}
+              </div>
+
+              {/* Tags */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
+                  Tags
+                </label>
+                {isEditing ? (
+                  <TagInput
+                    value={Array.isArray(editForm.tags) ? editForm.tags : []}
+                    onChange={(tags) => setEditForm({ ...editForm, tags })}
+                    placeholder="Add tags..."
+                  />
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {(selectedItem as any)?.tags?.length ? (
+                      (selectedItem as any).tags.map((tag: string) => (
+                        <Badge key={tag} bg="secondary" style={{ fontSize: '12px' }}>
+                          #{tag}
+                        </Badge>
+                      ))
+                    ) : (
+                      <span style={{ color: themeVars.muted }}>No tags</span>
+                    )}
+                  </div>
                 )}
               </div>
 
