@@ -513,9 +513,8 @@ const WeeklyThemePlanner: React.FC = () => {
                         {applying ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                         Apply Planner Blocks Now
                     </Button>
-                    <Button variant="outline-secondary" onClick={runNightlyChainNow} disabled={saving || applying || nightlyRunning}>
-                        {nightlyRunning ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                        Run Nightly Chain Now
+                    <Button variant="outline-secondary" onClick={() => window.open('https://bob.jc1.tech/calendar/planner', '_blank', 'noopener,noreferrer')} disabled={saving || applying}>
+                        Replan Around Calendar
                     </Button>
                 </div>
             </div>

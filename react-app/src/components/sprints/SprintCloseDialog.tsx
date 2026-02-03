@@ -265,7 +265,6 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
     };
 
     setMetricsSnapshot(snapshot);
-
   };
 
   const handleCreateNewSprint = async () => {
