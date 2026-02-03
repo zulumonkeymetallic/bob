@@ -12928,6 +12928,27 @@ async function getHardcoverMe(uid) {
 
 const uniqList = (values) => Array.from(new Set(values.filter(Boolean)));
 
+const DEFAULT_HARDCOVER_STATUSES = [
+  'want-to-read',
+  'currently-reading',
+  'reading',
+  'read',
+  'paused',
+  'did-not-finish',
+];
+
+async function fetchHardcoverStatusSlugs(uid) {
+  const q = `
+    query HardcoverStatuses {
+      user_book_statuses { slug }
+    }
+  `;
+  const data = await callHardcoverGraphQL(uid, q, {});
+  const rows = Array.isArray(data?.user_book_statuses) ? data.user_book_statuses : [];
+  const slugs = rows.map((row) => String(row?.slug || '').trim()).filter(Boolean);
+  return uniqList(slugs);
+}
+
 const extractBookAuthors = (book) => {
   const authors = [];
   const contributions = Array.isArray(book?.contributions) ? book.contributions : [];
@@ -13039,7 +13060,13 @@ async function fetchHardcoverByStatus(uid, statusSlug, offset, userId) {
 async function _syncHardcover(uid) {
   const db = admin.firestore();
   const startedAt = Date.now();
-  const statuses = ['want-to-read', 'currently-reading', 'read', 'paused', 'did-not-finish'];
+  let statuses = DEFAULT_HARDCOVER_STATUSES;
+  try {
+    const apiStatuses = await fetchHardcoverStatusSlugs(uid);
+    if (apiStatuses.length) statuses = apiStatuses;
+  } catch (e) {
+    console.warn('Hardcover status lookup failed; using defaults.', e?.message || e);
+  }
   let total = 0;
   try {
     const me = await getHardcoverMe(uid);
