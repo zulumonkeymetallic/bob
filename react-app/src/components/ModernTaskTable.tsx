@@ -1224,7 +1224,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                               status: 0 as any,
                               tags: [],
                               type: 'task',
-                              repeatFrequency: '',
+                              repeatFrequency: null,
                               repeatInterval: 1,
                               daysOfWeek: [],
                             });
