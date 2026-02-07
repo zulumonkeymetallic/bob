@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal, Dropdown } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
+import { usePersona } from '../../contexts/PersonaContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../firebase';
@@ -52,6 +53,7 @@ interface DragState {
 
 const ThemeBasedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { theme } = useTheme();
   const themeColors = useThemeAwareColors();
   
@@ -225,7 +227,7 @@ const ThemeBasedGanttChart: React.FC = () => {
         'status',
         goal.status.toString(),
         '4',
-        'personal',
+        currentPersona || 'personal',
         JSON.stringify({ action: 'archived', title: goal.title }),
         'human'
       );
@@ -249,7 +251,7 @@ const ThemeBasedGanttChart: React.FC = () => {
         'status',
         goal.status.toString(),
         '2',
-        'personal',
+        currentPersona || 'personal',
         JSON.stringify({ action: 'completed', title: goal.title }),
         'human'
       );
@@ -279,7 +281,7 @@ const ThemeBasedGanttChart: React.FC = () => {
         'status',
         '',
         '0',
-        'personal',
+        currentPersona || 'personal',
         JSON.stringify({ action: 'duplicated', originalTitle: goal.title, newTitle: duplicatedGoal.title }),
         'human'
       );
@@ -301,7 +303,7 @@ const ThemeBasedGanttChart: React.FC = () => {
         'status',
         deletingGoal.status,
         -1,
-        'personal',
+        currentPersona || 'personal',
         JSON.stringify({ action: 'deleted', title: deletingGoal.title }),
         'human'
       );
@@ -402,7 +404,7 @@ const ThemeBasedGanttChart: React.FC = () => {
         'timeline',
         `${dragState.originalTheme}`,
         JSON.stringify(updateData),
-        'personal',
+        currentPersona || 'personal',
         JSON.stringify({ dragType: dragState.dragType, ganttView: true }),
         'human'
       );

@@ -21,7 +21,18 @@ interface SortableStoryCardProps {
   onEdit?: (story: Story) => void;
   onDelete?: (story: Story) => void;
   onItemClick?: (story: Story) => void;
+  showTags?: boolean;
 }
+
+const readKanbanTagPreference = (): boolean => {
+  if (typeof window === 'undefined') return true;
+  try {
+    const stored = window.localStorage.getItem('kanbanShowTags');
+    return stored ? stored === 'true' : true;
+  } catch {
+    return true;
+  }
+};
 
 const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   story,
@@ -31,6 +42,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   onEdit,
   onDelete,
   onItemClick,
+  showTags,
 }) => {
   const { showSidebar } = useSidebar();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: story.id });
@@ -65,13 +77,19 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   })();
 
   const statusLabel = storyStatusText((story as any).status);
-  const priorityClass = priorityPillClass(story.priority);
-  const priorityLabel = formatPriorityLabel(story.priority);
+  const isTop3 = (story as any).aiTop3ForDay === true || Number((story as any).aiFocusStoryRank || 0) > 0;
+  const priorityClass = isTop3 ? priorityPillClass(4) : priorityPillClass(story.priority);
+  const priorityLabel = isTop3 ? 'Critical' : formatPriorityLabel(story.priority);
   const handleStyle: React.CSSProperties = {
     color: resolvedThemeColor,
     borderColor: colorWithAlpha(resolvedThemeColor, 0.45),
     backgroundColor: colorWithAlpha(resolvedThemeColor, 0.12),
   };
+
+  const resolvedShowTags = typeof showTags === 'boolean' ? showTags : readKanbanTagPreference();
+  const storyTags = Array.isArray((story as any).tags) ? (story as any).tags : [];
+  const visibleTags = storyTags.slice(0, 4);
+  const remainingTags = storyTags.length - visibleTags.length;
 
   const safeTaskCount = Number.isFinite(taskCount) ? Number(taskCount) : 0;
 
@@ -186,10 +204,30 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
             </div>
           )}
 
+          {resolvedShowTags && visibleTags.length > 0 && (
+            <div className="kanban-card__tags">
+              {visibleTags.map((tag) => (
+                <span key={tag} className="kanban-card__tag">
+                  #{tag}
+                </span>
+              ))}
+              {remainingTags > 0 && (
+                <span className="kanban-card__tag kanban-card__tag--muted">
+                  +{remainingTags}
+                </span>
+              )}
+            </div>
+          )}
+
           <div className="kanban-card__meta">
             <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
               {priorityLabel}
             </span>
+            {isTop3 && (
+              <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
+                Top 3
+              </span>
+            )}
             <span className="kanban-card__meta-badge" title="Story points">
               {(story.points ?? 0)} pts
             </span>

@@ -6,7 +6,7 @@ import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { schedulerCollections, type ScheduledInstanceModel } from '../../domain/scheduler/repository';
 
-type CheckInItemType = 'block' | 'instance';
+type CheckInItemType = 'block' | 'instance' | 'habit';
 
 interface DailyCheckInItem {
   key: string;
@@ -21,6 +21,7 @@ interface DailyCheckInItem {
   storyRef?: string | null;
   taskId?: string | null;
   taskRef?: string | null;
+  habitId?: string | null;
   goalId?: string | null;
   completed: boolean;
 }
@@ -63,9 +64,10 @@ const CheckInDaily: React.FC = () => {
         where('start', '>=', dayStart.getTime()),
         where('start', '<=', dayEnd.getTime()),
       );
-      const [blocksSnap, instancesSnap] = await Promise.all([
+      const [blocksSnap, instancesSnap, habitsSnap] = await Promise.all([
         getDocs(blockQuery),
         getDocs(schedulerCollections.userInstancesRange(db, ownerUid, dateKey, dateKey)),
+        getDocs(query(collection(db, 'habits'), where('ownerUid', '==', ownerUid), where('isActive', '==', true))),
       ]);
 
       const blocks = blocksSnap.docs
@@ -77,6 +79,33 @@ const CheckInDaily: React.FC = () => {
         });
 
       const instances = instancesSnap.docs.map((docSnap) => docSnap.data() as ScheduledInstanceModel);
+
+      const habits = habitsSnap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }));
+      const dayIndex = dayStart.getDay();
+      const dueHabits = habits.filter((habit) => {
+        const freq = String(habit.frequency || 'daily').toLowerCase();
+        if (freq === 'daily') return true;
+        if (freq === 'weekly') {
+          const days = Array.isArray(habit.daysOfWeek) ? habit.daysOfWeek : [];
+          return days.includes(dayIndex);
+        }
+        return false;
+      });
+
+      const habitCompletionMap = new Map<string, boolean>();
+      await Promise.all(
+        dueHabits.map(async (habit) => {
+          try {
+            const entrySnap = await getDoc(doc(db, `habits/${habit.id}/habitEntries/${dateKey}`));
+            if (entrySnap.exists()) {
+              const data = entrySnap.data() as any;
+              habitCompletionMap.set(habit.id, !!data?.isCompleted);
+            }
+          } catch {
+            // ignore habit entry read errors
+          }
+        }),
+      );
 
       const taskIds = new Set<string>();
       const storyIds = new Set<string>();
@@ -146,7 +175,33 @@ const CheckInDaily: React.FC = () => {
         };
       });
 
-      const plannedItems = [...blockItems, ...instanceItems].sort((a, b) => {
+      const habitItems: DailyCheckInItem[] = dueHabits.map((habit) => {
+        const schedule = String(habit.scheduleTime || '').trim();
+        let start: number | null = null;
+        let end: number | null = null;
+        if (schedule && schedule.includes(':')) {
+          const [hh, mm] = schedule.split(':').map((v: string) => Number(v));
+          const startDate = new Date(dayStart);
+          startDate.setHours(Number.isFinite(hh) ? hh : 7, Number.isFinite(mm) ? mm : 0, 0, 0);
+          start = startDate.getTime();
+          end = start + 15 * 60 * 1000;
+        }
+        return {
+          key: `habit:${habit.id}`,
+          type: 'habit',
+          title: habit.name || habit.title || 'Habit',
+          theme: null,
+          sourceType: 'habit',
+          start,
+          end,
+          durationMin: start && end ? Math.round((end - start) / 60000) : null,
+          habitId: habit.id,
+          goalId: habit.linkedGoalId || null,
+          completed: habitCompletionMap.get(habit.id) || false,
+        };
+      });
+
+      const plannedItems = [...blockItems, ...instanceItems, ...habitItems].sort((a, b) => {
         const aTime = a.start || 0;
         const bTime = b.start || 0;
         return aTime - bTime;
@@ -177,20 +232,39 @@ const CheckInDaily: React.FC = () => {
   }, [loadPlannedItems]);
 
   const handleToggle = useCallback(async (item: DailyCheckInItem) => {
+    const nextCompleted = !item.completed;
     setItems((prev) =>
-      prev.map((entry) => (entry.key === item.key ? { ...entry, completed: !entry.completed } : entry)),
+      prev.map((entry) => (entry.key === item.key ? { ...entry, completed: nextCompleted } : entry)),
     );
     if (item.type === 'instance') {
       try {
         await updateDoc(doc(db, 'scheduled_instances', item.key.replace('instance:', '')), {
-          status: item.completed ? 'planned' : 'completed',
+          status: nextCompleted ? 'completed' : 'planned',
           updatedAt: Date.now(),
         });
       } catch (err) {
         console.warn('Failed to update instance status', err);
       }
     }
-  }, []);
+    if (item.type === 'habit' && item.habitId) {
+      try {
+        const entryRef = doc(db, `habits/${item.habitId}/habitEntries/${dateKey}`);
+        await setDoc(entryRef, {
+          id: dateKey,
+          habitId: item.habitId,
+          ownerUid: currentUser?.uid || null,
+          date: dayStart.getTime(),
+          value: nextCompleted ? 1 : 0,
+          isCompleted: nextCompleted,
+          notes: '',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }, { merge: true });
+      } catch (err) {
+        console.warn('Failed to update habit entry', err);
+      }
+    }
+  }, [dateKey, dayStart, currentUser]);
 
   const handleSave = useCallback(async () => {
     if (!currentUser) return;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, collectionGroup, query, where, onSnapshot, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Task, Story, Goal, IHabit, IHabitEntry } from '../types';
@@ -42,7 +42,8 @@ const MobileView: React.FC = () => {
         const habitsQuery = query(collection(db, 'habits'), where('ownerUid', '==', currentUser.uid), where('isActive', '==', true));
         
         const habitEntriesQuery = query(
-            collection(db, 'habit_entries'),
+            collectionGroup(db, 'habitEntries'),
+            where('ownerUid', '==', currentUser.uid),
             where('date', '>=', startOfDay.getTime()),
             where('date', '<', endOfDay.getTime())
         );

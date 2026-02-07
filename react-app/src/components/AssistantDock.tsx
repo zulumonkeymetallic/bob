@@ -5,6 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
+import { usePersona } from '../contexts/PersonaContext';
 
 interface AssistantDockProps {
   open: boolean;
@@ -13,6 +14,7 @@ interface AssistantDockProps {
 
 const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { selectedItem, selectedType } = useSidebar();
   const [messages, setMessages] = useState<Array<{ id?: string; role: 'user'|'assistant'; content: string }>>([]);
   const [draft, setDraft] = useState('');
@@ -36,7 +38,7 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
     setSending(true);
     try {
       const callable = httpsCallable(functions, 'sendAssistantMessage');
-      const res = await callable({ message: content, persona: 'personal', days: 2 });
+      const res = await callable({ message: content, persona: currentPersona || 'personal', days: 2 });
       const data = res.data as any;
       if (data?.suggested_actions) setActions(data.suggested_actions);
       if (data?.insights) setInsights(data.insights);
@@ -53,7 +55,7 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
     try {
       const callable = httpsCallable(functions, 'runPlanner');
       const startDate = new Date().toISOString().slice(0,10);
-      const result = await callable({ persona: 'personal', startDate, days: 1 });
+      const result = await callable({ persona: currentPersona || 'personal', startDate, days: 1 });
       const data:any = result.data || {};
       const blocksCreated = data?.llm?.blocksCreated || (Array.isArray(data?.llm?.blocks) ? data.llm.blocks.length : 0);
       const planned = Array.isArray(data?.schedule?.planned) ? data.schedule.planned.length : (data?.schedule?.plannedCount || 0);

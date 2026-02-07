@@ -86,8 +86,8 @@ const CheckInWeekly: React.FC = () => {
             if (item.completed) themeRow.completed += 1;
             themeMap.set(label, themeRow);
           }
-          if (item.type === 'instance') {
-            const routineLabel = item.title || 'Routine';
+          if (item.type === 'instance' || item.type === 'habit') {
+            const routineLabel = item.title || (item.type === 'habit' ? 'Habit' : 'Routine');
             const routineRow = routineMap.get(routineLabel) || { planned: 0, completed: 0 };
             routineRow.planned += 1;
             if (item.completed) routineRow.completed += 1;
@@ -241,10 +241,10 @@ const CheckInWeekly: React.FC = () => {
             </Col>
             <Col lg={6}>
               <Card className="shadow-sm border-0">
-                <Card.Header className="fw-semibold">Routines & habits</Card.Header>
+                <Card.Header className="fw-semibold">Habits</Card.Header>
                 <Card.Body>
                   {metrics.routines.length === 0 ? (
-                    <div className="text-muted">No routine items logged.</div>
+                    <div className="text-muted">No habits logged.</div>
                   ) : (
                     metrics.routines.map((row) => (
                       <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">

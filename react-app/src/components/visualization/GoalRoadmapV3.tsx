@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
+import { usePersona } from '../../contexts/PersonaContext';
 import { collection, onSnapshot, query, where, updateDoc, doc, orderBy, limit, deleteDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
@@ -48,6 +49,7 @@ function toMillis(val: any): number | undefined {
 
 const GoalRoadmapV3: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const { selectedSprintId, sprints } = useSprint();
@@ -576,7 +578,7 @@ const GoalRoadmapV3: React.FC = () => {
     try {
       await updateDoc(doc(db, 'goals', s.id), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: serverTimestamp() });
       if (currentUser?.uid) {
-        await ActivityStreamService.logFieldChange(s.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${s.origStart.toDateString()} – ${s.origEnd.toDateString()}`, `${newStart.toDateString()} – ${newEnd.toDateString()}`, 'personal', s.id, 'human');
+        await ActivityStreamService.logFieldChange(s.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${s.origStart.toDateString()} – ${s.origEnd.toDateString()}`, `${newStart.toDateString()} – ${newEnd.toDateString()}`, currentPersona || 'personal', s.id, 'human');
       }
       const candidateTheme = themeDropCandidateRef.current;
       if (candidateTheme != null && s.goal) {
@@ -594,7 +596,7 @@ const GoalRoadmapV3: React.FC = () => {
               'theme',
               fromTheme?.name || String(originalThemeId),
               toTheme?.name || String(candidateTheme),
-              'personal',
+              currentPersona || 'personal',
               s.id,
               'human'
             );
@@ -694,7 +696,7 @@ const GoalRoadmapV3: React.FC = () => {
     try {
       await updateDoc(doc(db, 'goals', g.id), { startDate: ns.getTime(), endDate: ne.getTime(), updatedAt: serverTimestamp() });
       if (currentUser?.uid) {
-        await ActivityStreamService.logFieldChange(g.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${start.toDateString()} – ${end.toDateString()}`, `${ns.toDateString()} – ${ne.toDateString()}`, 'personal', g.id, 'human');
+        await ActivityStreamService.logFieldChange(g.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${start.toDateString()} – ${end.toDateString()}`, `${ns.toDateString()} – ${ne.toDateString()}`, currentPersona || 'personal', g.id, 'human');
       }
     } catch (err) { console.error('Nudge failed', err); }
   }, [currentUser?.uid]);
@@ -907,7 +909,7 @@ const GoalRoadmapV3: React.FC = () => {
       const runPlanner = httpsCallable(functions, 'runPlanner');
       const minutes = Math.min(Math.max(60, (g.timeToMasterHours || 2) * 60), 300);
       const startDate = new Date().toISOString().slice(0, 10);
-      const result = await runPlanner({ persona: 'personal', startDate, days: 7, focusGoalId: g.id, goalTimeRequest: minutes });
+      const result = await runPlanner({ persona: currentPersona || 'personal', startDate, days: 7, focusGoalId: g.id, goalTimeRequest: minutes });
       const data: any = result.data || {};
       const blocksCreated = data?.llm?.blocksCreated || (Array.isArray(data?.llm?.blocks) ? data.llm.blocks.length : 0);
       window.alert(`AI scheduled ${blocksCreated} time block${blocksCreated === 1 ? '' : 's'} for "${g.title}"`);
@@ -924,7 +926,7 @@ const GoalRoadmapV3: React.FC = () => {
 
   const handleAddNote = useCallback(async () => {
     if (!noteGoalId || !currentUser?.uid || !noteDraft.trim()) return;
-    await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft.trim(), currentUser.uid, currentUser.email || '', 'personal', noteGoalId, 'human');
+    await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft.trim(), currentUser.uid, currentUser.email || '', currentPersona || 'personal', noteGoalId, 'human');
     try { await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft.trim(), updatedAt: serverTimestamp() }); } catch { }
     setNoteDraft(''); setNoteGoalId(null);
   }, [noteGoalId, noteDraft, currentUser?.uid]);

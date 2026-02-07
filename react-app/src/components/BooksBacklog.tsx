@@ -32,6 +32,7 @@ interface ConvertPayload {
   sprintId: string | null;
   targetDate: string;
   rating: number;
+  goalId?: string | null;
 }
 
 const BooksBacklog: React.FC = () => {
@@ -44,7 +45,7 @@ const BooksBacklog: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'to-read' | 'reading' | 'read' | 'unconverted' | 'converted'>('all');
   const [selected, setSelected] = useState<BookItem | null>(null);
-  const [convertForm, setConvertForm] = useState<ConvertPayload>({ sprintId: null, targetDate: '', rating: 3 });
+  const [convertForm, setConvertForm] = useState<ConvertPayload>({ sprintId: null, targetDate: '', rating: 3, goalId: null });
   const [savingConversion, setSavingConversion] = useState(false);
   const [addedSince, setAddedSince] = useState<string>('');
   const [msg, setMsg] = useState<string | null>(null);
@@ -117,7 +118,7 @@ const BooksBacklog: React.FC = () => {
 
   const openConvert = (book: BookItem) => {
     setSelected(book);
-    setConvertForm({ sprintId: null, targetDate: '', rating: book.rating ?? 3 });
+    setConvertForm({ sprintId: null, targetDate: '', rating: book.rating ?? 3, goalId: null });
   };
 
   const markRead = async (book: BookItem) => {
@@ -152,7 +153,7 @@ const BooksBacklog: React.FC = () => {
         ref: storyRef,
         title: selected.title,
         description: `Read ${selected.title}${selected.subtitle ? ': ' + selected.subtitle : ''}.` + (selected.authors?.length ? `\nBy: ${selected.authors.join(', ')}` : ''),
-        goalId: '',
+        goalId: convertForm.goalId || '',
         sprintId: sprintId || null,
         dueDate: dueDateMs || null,
         status: 0,
@@ -353,6 +354,13 @@ const BooksBacklog: React.FC = () => {
               <Form.Select value={convertForm.sprintId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, sprintId: e.target.value || null }))}>
                 <option value="">No sprint</option>
                 {sprints.map((s: Sprint) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Goal to link (optional)</Form.Label>
+              <Form.Select value={convertForm.goalId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, goalId: e.target.value || null }))}>
+                <option value="">No goal</option>
+                {goals.map((g) => (<option key={g.id} value={g.id}>{g.title}</option>))}
               </Form.Select>
             </Form.Group>
             <Form.Group className="mb-3">

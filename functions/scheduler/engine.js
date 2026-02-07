@@ -752,6 +752,7 @@ async function planSchedule({
   busy,
   themeAllocations = [], // User-defined theme time blocks
   includeChores = false, // Phase 1: keep chores/routines out of scheduling window
+  persona,
 }) {
   const solverRunId = createHash('md5')
     .update(`${userId}:${Date.now()}:${Math.random()}`)
@@ -905,17 +906,28 @@ async function planSchedule({
   // Merge AI blocks into existing instances
   const allExisting = [...existingInstances, ...aiInstances];
 
+  const matchesPersona = (item) => {
+    if (!persona) return true;
+    const p = item?.persona;
+    if (persona === 'personal') return !p || p === 'personal';
+    return p === 'work';
+  };
+
   const tasksSnap = await db
     .collection('tasks')
     .where('ownerUid', '==', userId)
     .get();
-  const tasks = tasksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const tasks = tasksSnap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter(matchesPersona);
 
   const storiesSnap = await db
     .collection('stories')
     .where('ownerUid', '==', userId)
     .get();
-  const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const stories = storiesSnap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter(matchesPersona);
 
   const busyByDay = computeBusyByDay(busy, DEFAULT_ZONE);
   const storyOccurrences = await computeStoryOccurrences(stories, windowStart, windowEnd, userId, db);

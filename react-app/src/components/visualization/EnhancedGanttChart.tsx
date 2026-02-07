@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { Card, Container, Row, Col, Button, Form, Badge, Alert, Modal } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
+import { usePersona } from '../../contexts/PersonaContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, deleteDoc, orderBy, limit } from 'firebase/firestore';
@@ -82,6 +83,7 @@ type ActiveDrag = {
 
 const EnhancedGanttChart: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { theme } = useTheme();
   const { showSidebar } = useSidebar();
@@ -809,7 +811,7 @@ const EnhancedGanttChart: React.FC = () => {
               'theme',
               goal.theme,
               dropThemeId,
-              'personal',
+              currentPersona || 'personal',
               (goal as any).ref || '',
               'human'
             );
@@ -940,8 +942,8 @@ const EnhancedGanttChart: React.FC = () => {
         const g = goals.find(x => x.id === goalId);
         if (g) {
           const ref = (g as any).ref || g.title || '';
-          await ActivityStreamService.logFieldChange(goalId, 'goal', currentUser.uid, currentUser.email || '', 'startDate', (g as any).startDate, newStart.getTime(), 'personal', ref, 'human');
-          await ActivityStreamService.logFieldChange(goalId, 'goal', currentUser.uid, currentUser.email || '', 'endDate', (g as any).endDate, newEnd.getTime(), 'personal', ref, 'human');
+          await ActivityStreamService.logFieldChange(goalId, 'goal', currentUser.uid, currentUser.email || '', 'startDate', (g as any).startDate, newStart.getTime(), currentPersona || 'personal', ref, 'human');
+          await ActivityStreamService.logFieldChange(goalId, 'goal', currentUser.uid, currentUser.email || '', 'endDate', (g as any).endDate, newEnd.getTime(), currentPersona || 'personal', ref, 'human');
         }
       }
     } catch (err) {
@@ -978,7 +980,7 @@ const EnhancedGanttChart: React.FC = () => {
           'type' in item && item.type ? item.type as any : 'story',
           currentUser?.uid || '',
           currentUser?.email || '',
-          'personal',
+          currentPersona || 'personal',
           `Impacted by goal timeline change`
         );
       }
@@ -1000,7 +1002,7 @@ const EnhancedGanttChart: React.FC = () => {
       // Log deletion
       if (currentUser) {
         const g = goals.find(x => x.id === goalId);
-        await ActivityStreamService.logDeletion(goalId, 'goal', g?.title || '', currentUser.uid, currentUser.email || undefined, 'personal', (g as any)?.ref || '', 'human');
+        await ActivityStreamService.logDeletion(goalId, 'goal', g?.title || '', currentUser.uid, currentUser.email || undefined, currentPersona || 'personal', (g as any)?.ref || '', 'human');
       }
     } catch (e) {
       logger.error('gantt', 'Failed to delete goal', { goalId, e });
@@ -1626,7 +1628,7 @@ const EnhancedGanttChart: React.FC = () => {
           if (!noteGoalId || !currentUser) return;
           try {
             await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft, recentNoteAt: Date.now() });
-            await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft, currentUser.uid, currentUser.email || undefined, 'personal', '', 'human');
+            await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft, currentUser.uid, currentUser.email || undefined, currentPersona || 'personal', '', 'human');
             setNoteGoalId(null);
             setNoteDraft('');
           } catch (e) {

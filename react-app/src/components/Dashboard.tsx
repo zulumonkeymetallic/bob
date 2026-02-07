@@ -549,7 +549,7 @@ const Dashboard: React.FC = () => {
   }, [handleCalendarEventMove]);
   const dailyBrief = () => {
     const parts: string[] = [];
-    if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
+    if (tasksDueToday > 0) parts.push(`${tasksDueToday} due/overdue`);
     if (todayBlocks.length > 0) parts.push(`${todayBlocks.length} blocks scheduled`);
     if (priorityBanner?.title) parts.push(`Focus: ${priorityBanner.title}`);
     return parts.length ? parts.join(' · ') : 'No urgent items. Plan or review your goals.';
@@ -848,12 +848,13 @@ const Dashboard: React.FC = () => {
           .filter((task) => {
             const due = getTaskDueMs(task);
             if (!due) return false;
-            return due >= todayStart && due <= todayEnd;
+            return due <= todayEnd;
           })
           .filter((task) => {
             if (sprintStart == null || sprintEnd == null) return true;
             const due = getTaskDueMs(task);
             if (!due) return false;
+            if (due < todayStart) return true;
             return due >= sprintStart && due <= sprintEnd;
           })
           .filter((task) => (task.status ?? 0) !== 2);
@@ -1082,25 +1083,35 @@ const Dashboard: React.FC = () => {
   };
 
   const countTasksDueToday = async () => {
-    if (!currentUser) return;
+    if (!currentUser || !currentPersona) return;
     const start = new Date(); start.setHours(0, 0, 0, 0);
     const end = new Date(); end.setHours(23, 59, 59, 999);
-    // Tasks due today
+    const isPersonaMatch = (value: any) => {
+      if (currentPersona === 'work') return value === 'work';
+      return value == null || value === 'personal';
+    };
+    // Tasks due today or overdue
     const tq = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
-      where('dueDate', '>=', start.getTime()),
       where('dueDate', '<=', end.getTime())
     );
     const ts = await getDocs(tq);
-    let count = ts.size;
+    let count = 0;
+    ts.forEach((docSnap) => {
+      const data = docSnap.data() as any;
+      if (data?.deleted) return;
+      if ((data?.status ?? 0) === 2) return;
+      if (!isPersonaMatch(data?.persona)) return;
+      count += 1;
+    });
     // Chores due today via nextDueAt precompute
     const cq = query(collection(db, 'chores'), where('ownerUid', '==', currentUser.uid));
     const cs = await getDocs(cq);
     cs.forEach(d => {
       const c: any = d.data() || {};
       const due = c.nextDueAt;
-      if (due && due >= start.getTime() && due <= end.getTime()) count += 1;
+      if (due && due <= end.getTime()) count += 1;
     });
     setTasksDueToday(count);
   };
@@ -1372,7 +1383,7 @@ const Dashboard: React.FC = () => {
   };
 
   const automationSnapshot = [
-    { label: 'Tasks due today', value: tasksDueToday },
+    { label: 'Tasks due/overdue', value: tasksDueToday },
     { label: 'Reminders pending', value: remindersDueToday.length },
     { label: 'Chores today', value: choresDueToday.length },
     { label: 'Routines today', value: routinesDueToday.length },
@@ -1994,7 +2005,7 @@ const Dashboard: React.FC = () => {
                       <Card className="shadow-sm border-0">
                         <Card.Header className="d-flex align-items-center justify-content-between">
                           <div className="fw-semibold d-flex align-items-center gap-2">
-                            <Clock size={16} /> Tasks due today
+                            <Clock size={16} /> Tasks due today & overdue
                           </div>
                           <div className="d-flex align-items-center gap-2">
                             <Form.Select
@@ -2016,7 +2027,7 @@ const Dashboard: React.FC = () => {
                               <Spinner size="sm" animation="border" /> Loading tasks…
                             </div>
                           ) : tasksDueTodayCombined.length === 0 ? (
-                            <div className="text-muted small">No tasks or habits due today.</div>
+                            <div className="text-muted small">No tasks or habits due today or overdue.</div>
                           ) : (
                             tasksDueTodayCombined.map((item) => {
                               if (item.kind === 'task' && item.task) {

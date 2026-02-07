@@ -296,7 +296,7 @@ const MobileHome: React.FC = () => {
         noteText.trim(),
         currentUser.uid,
         currentUser.email || undefined,
-        'personal',
+        currentPersona || 'personal',
         undefined
       );
       setNoteModal(null);
@@ -338,7 +338,7 @@ const MobileHome: React.FC = () => {
       if (updates.status != null) {
         await ActivityStreamService.logStatusChange(
           task.id, 'task', currentUser!.uid, currentUser!.email || undefined,
-          String(task.status), String(updates.status), 'personal', task.ref || task.id
+          String(task.status), String(updates.status), currentPersona || 'personal', task.ref || task.id
         );
       }
     } catch (e) {
@@ -352,7 +352,7 @@ const MobileHome: React.FC = () => {
       if (updates.status != null) {
         await ActivityStreamService.logStatusChange(
           story.id, 'story', currentUser!.uid, currentUser!.email || undefined,
-          String(story.status), String(updates.status), 'personal', story.ref || story.id
+          String(story.status), String(updates.status), currentPersona || 'personal', story.ref || story.id
         );
       }
     } catch (e) {
@@ -366,7 +366,7 @@ const MobileHome: React.FC = () => {
       if (updates.status != null) {
         await ActivityStreamService.logStatusChange(
           goal.id, 'goal', currentUser!.uid, currentUser!.email || undefined,
-          String(goal.status), String(updates.status), 'personal', (goal as any).ref || goal.id
+          String(goal.status), String(updates.status), currentPersona || 'personal', (goal as any).ref || goal.id
         );
       }
     } catch (e) {

@@ -18,6 +18,7 @@ interface Goal {
   id: string;
   title: string;
   theme: number;
+  persona?: 'personal' | 'work';
 }
 
 const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) => {
@@ -82,7 +83,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             timestamp: new Date().toISOString()
           });
 
-          // Load goals for all personas
+          // Load goals (filter by persona on client so personal includes legacy nulls)
           const goalsQuery = query(
             collection(db, 'goals'),
             where('ownerUid', '==', currentUser.uid),
@@ -95,11 +96,17 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
           });
 
           const goalsSnapshot = await getDocs(goalsQuery);
-          const goalsData = goalsSnapshot.docs.map(doc => ({
-            id: doc.id,
-            title: doc.data().title,
-            theme: doc.data().theme as number
-          }));
+          const goalsData = goalsSnapshot.docs
+            .map(doc => ({
+              id: doc.id,
+              title: doc.data().title,
+              theme: doc.data().theme as number,
+              persona: doc.data().persona as any
+            }))
+            .filter(goal => {
+              if (currentPersona === 'work') return goal.persona === 'work';
+              return goal.persona == null || goal.persona === 'personal';
+            });
 
           console.log('✅ AddStoryModal: Goals loaded successfully', {
             action: 'goals_loaded',
@@ -200,12 +207,12 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         title: formData.title.trim(),
         description: formData.description.trim(),
         goalId: formData.goalId,
-        sprintId: formData.sprintId,
+        sprintId: formData.sprintId || null,
         priority: formData.priority,
         points: parseInt(formData.points.toString()),
         status: 0,
         theme: linkedGoal?.theme ?? 1,
-        persona: currentPersona,
+        persona: currentPersona || 'personal',
         ownerUid: currentUser.uid, // Ensure ownerUid is included
         orderIndex: Date.now(), // Simple ordering by creation time
         tags: formData.tags,

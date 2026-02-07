@@ -28,7 +28,15 @@ const CheckInBanner: React.FC = () => {
       const weeklyDismissed = localStorage.getItem(WEEKLY_DISMISS_KEY(weekKey));
 
       const dailySnap = await getDoc(doc(db, 'daily_checkins', `${currentUser.uid}_${dateKey}`));
-      setShowDaily(!dailySnap.exists() && !dailyDismissed);
+      if (!dailySnap.exists()) {
+        setShowDaily(!dailyDismissed);
+      } else {
+        const dailyData = dailySnap.data() as any;
+        const plannedCount = Number(dailyData?.plannedCount || 0);
+        const completedCount = Number(dailyData?.completedCount || 0);
+        const hasIncomplete = plannedCount > 0 && completedCount < plannedCount;
+        setShowDaily(hasIncomplete);
+      }
 
       const weeklySnap = await getDoc(doc(db, 'weekly_checkins', `${currentUser.uid}_${weekKey}`));
       const weekShouldPrompt = today.getTime() >= startOfWeek(today, { weekStartsOn: 1 }).getTime();

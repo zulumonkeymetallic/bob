@@ -15,6 +15,7 @@ import ModernStoriesTable from './ModernStoriesTable';
 import ModernTaskTable from './ModernTaskTable';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
+import { cascadeGoalPersona } from '../utils/personaCascade';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -43,7 +44,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     parentGoalId: '',
     linkedPotId: '',
     tags: [] as string[],
-    autoCreatePot: false
+    autoCreatePot: false,
+    persona: (currentPersona || 'personal') as 'personal' | 'work',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
@@ -140,7 +142,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     });
   }, [parentCandidates, parentSearch]);
 
-  const activePersona = (goal as any)?.persona || currentPersona;
+  const activePersona = (formData.persona || (goal as any)?.persona || currentPersona || 'personal') as 'personal' | 'work';
 
   useEffect(() => {
     const loadLinkedStories = async () => {
@@ -323,7 +325,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           parentGoalId: goal.parentGoalId || '',
           linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
           tags: (goal as any).tags || [],
-          autoCreatePot: !!(goal as any).autoCreatePot
+          autoCreatePot: !!(goal as any).autoCreatePot,
+          persona: ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work',
         });
         const current = canonicalThemeId;
         const themeObj = themes.find(t => String(t.id) === String(current));
@@ -348,7 +351,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           parentGoalId: '',
           linkedPotId: '',
           tags: [],
-          autoCreatePot: false
+          autoCreatePot: false,
+          persona: (currentPersona || 'personal') as 'personal' | 'work',
         });
         setThemeInput('');
         setParentSearch('');
@@ -462,7 +466,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         parentGoalId: formData.parentGoalId ? formData.parentGoalId : null,
         updatedAt: serverTimestamp(),
         tags: formData.tags,
-        autoCreatePot: formData.autoCreatePot
+        autoCreatePot: formData.autoCreatePot,
+        persona: formData.persona || currentPersona || 'personal',
       };
 
       // Read optional cost metadata and pot mapping from form elements
@@ -505,6 +510,17 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         // UPDATE existing goal
         console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
         await updateDoc(doc(db, 'goals', goal.id), goalData);
+        const prevPersona = ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work';
+        const nextPersona = (goalData.persona || prevPersona) as 'personal' | 'work';
+        if (prevPersona !== nextPersona) {
+          try {
+            await cascadeGoalPersona(currentUserId, goal.id, nextPersona);
+            setLinkedStories((prev) => prev.map((story) => ({ ...story, persona: nextPersona } as Story)));
+            setLinkedTasks((prev) => prev.map((task) => ({ ...task, persona: nextPersona } as Task)));
+          } catch (err) {
+            console.warn('Failed to cascade persona for goal', err);
+          }
+        }
         if (goal && previousThemeId != null && String(previousThemeId) !== String(themeId)) {
           const referenceNumber = (goal as any)?.ref || (goal as any)?.referenceNumber || goal.id;
           await trackFieldChange(
@@ -692,6 +708,17 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                   onChange={(tags) => setFormData({ ...formData, tags })}
                   placeholder="Add tags..."
                 />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Persona</Form.Label>
+                <Form.Select
+                  value={formData.persona}
+                  onChange={(e) => setFormData({ ...formData, persona: e.target.value as 'personal' | 'work' })}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="work">Work</option>
+                </Form.Select>
               </Form.Group>
 
               <div className="row">

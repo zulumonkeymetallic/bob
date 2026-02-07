@@ -25,6 +25,7 @@ interface KanbanCardV2Props {
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     showDescription?: boolean;
     showLatestNote?: boolean;
+    showTags?: boolean;
     latestNote?: string;
     steamMeta?: {
         appId?: string | number;
@@ -48,6 +49,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     showLatestNote = false,
     latestNote,
     steamMeta,
+    showTags,
 }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
@@ -99,8 +101,15 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         ? storyStatusText((item as any).status)
         : taskStatusText((item as any).status);
 
-    const priorityClass = priorityPillClass(item.priority);
-    const priorityLabel = formatPriorityLabel(item.priority);
+    const isTop3 = (item as any).aiTop3ForDay === true
+        || (item as any).aiFlaggedTop === true
+        || Number((item as any).aiPriorityRank || 0) > 0
+        || Number((item as any).aiFocusStoryRank || 0) > 0;
+    const aiReason = isTop3 && (item as any).aiTop3Reason
+        ? (item as any).aiTop3Reason
+        : ((item as any).aiCriticalityReason || null);
+    const priorityClass = isTop3 ? priorityPillClass(4) : priorityPillClass(item.priority);
+    const priorityLabel = isTop3 ? 'Critical' : formatPriorityLabel(item.priority);
     const dueDateMs = (() => {
         const raw = (item as any).dueDate ?? (item as any).targetDate ?? (item as any).dueDateMs ?? null;
         if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
@@ -133,6 +142,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const reminderSyncLabel = reminderSyncedAt
         ? `${reminderSyncedAt.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} ${reminderSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
         : null;
+    const readKanbanTagPreference = () => {
+        if (typeof window === 'undefined') return true;
+        try {
+            const stored = window.localStorage.getItem('kanbanShowTags');
+            return stored ? stored === 'true' : true;
+        } catch {
+            return true;
+        }
+    };
+    const resolvedShowTags = typeof showTags === 'boolean' ? showTags : readKanbanTagPreference();
+    const itemTags = Array.isArray((item as any).tags) ? (item as any).tags : [];
+    const visibleTags = itemTags.slice(0, 4);
+    const remainingTags = itemTags.length - visibleTags.length;
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -389,6 +411,20 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         {item.description}
                     </div>
                 )}
+                {resolvedShowTags && visibleTags.length > 0 && (
+                    <div className="kanban-card__tags">
+                        {visibleTags.map((tag: string) => (
+                            <span key={tag} className="kanban-card__tag">
+                                #{tag}
+                            </span>
+                        ))}
+                        {remainingTags > 0 && (
+                            <span className="kanban-card__tag kanban-card__tag--muted">
+                                +{remainingTags}
+                            </span>
+                        )}
+                    </div>
+                )}
                 {showLatestNote && trimmedNote && (
                     <div className="kanban-card__note">
                         <span className="kanban-card__note-label">Last note:</span>{' '}
@@ -415,6 +451,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
                         {priorityLabel}
                     </span>
+                    {isTop3 && (
+                        <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
+                            Top 3
+                        </span>
+                    )}
                     {dueDateLabel && (
                         <span className="kanban-card__meta-badge" title="Due date">
                             Due {dueDateLabel}
@@ -439,7 +480,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         </span>
                     )}
                     {(item as any).aiCriticalityScore != null ? (
-                        <span className="kanban-card__meta-badge" title="AI score">
+                        <span className="kanban-card__meta-badge" title={aiReason ? `AI reason: ${aiReason}` : 'AI score'}>
                             AI&nbsp;
                             {Math.round(Number((item as any).aiCriticalityScore))}
                         </span>
