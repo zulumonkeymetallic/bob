@@ -5,12 +5,14 @@ import { httpsCallable } from 'firebase/functions';
 import { format, formatDistanceToNow } from 'date-fns';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 
 type TaskType = 'chore' | 'routine';
 
 interface TaskRow {
   id: string;
   ownerUid: string;
+  persona?: 'personal' | 'work';
   title: string;
   status?: number;
   type?: TaskType | string;
@@ -39,6 +41,7 @@ const prettyFreq = (t: TaskRow) => {
 
 const ChoresTasksPage: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const [rows, setRows] = useState<TaskRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'danger' | 'info'; message: string } | null>(null);
@@ -61,7 +64,8 @@ const ChoresTasksPage: React.FC = () => {
     );
     const unsub = onSnapshot(q, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as TaskRow[];
-      const filtered = list.filter((r) => Number(r.status || 0) !== 2);
+      const filtered = list.filter((r) => Number(r.status || 0) !== 2)
+        .filter((r) => !currentPersona || !r.persona || r.persona === currentPersona);
       filtered.sort((a, b) => {
         const au = (a.updatedAt && (a.updatedAt as any).toDate ? (a.updatedAt as any).toDate().getTime() : (a.updatedAt as any)) || 0;
         const bu = (b.updatedAt && (b.updatedAt as any).toDate ? (b.updatedAt as any).toDate().getTime() : (b.updatedAt as any)) || 0;
@@ -71,7 +75,7 @@ const ChoresTasksPage: React.FC = () => {
       setLoading(false);
     }, () => setLoading(false));
     return () => unsub();
-  }, [currentUser]);
+  }, [currentUser, currentPersona]);
 
   const openCreate = () => {
     setEditing(null);
@@ -102,6 +106,7 @@ const ChoresTasksPage: React.FC = () => {
         .filter(Boolean);
       const payload: Partial<TaskRow> = {
         ownerUid: currentUser.uid,
+        persona: currentPersona || 'personal',
         title: form.title.trim(),
         type: form.type,
         status: 0,
@@ -148,7 +153,7 @@ const ChoresTasksPage: React.FC = () => {
   return (
     <div className="container py-3" style={{ maxWidth: 1100 }}>
       <div className="d-flex align-items-center justify-content-between mb-3">
-        <h4 className="mb-0">Chores & Routines</h4>
+        <h4 className="mb-0">Chores & Recurring Tasks</h4>
         <div className="d-flex gap-2">
           <Button variant="primary" onClick={openCreate}>Add</Button>
         </div>
@@ -203,7 +208,7 @@ const ChoresTasksPage: React.FC = () => {
       <Modal show={showModal} onHide={()=>setShowModal(false)}>
         <Form onSubmit={save}>
           <Modal.Header closeButton>
-            <Modal.Title>{editing ? 'Edit' : 'Add'} Chore/Routine</Modal.Title>
+            <Modal.Title>{editing ? 'Edit' : 'Add'} Recurring Task</Modal.Title>
           </Modal.Header>
           <Modal.Body>
             <Row className="g-3">

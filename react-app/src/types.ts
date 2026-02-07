@@ -59,6 +59,13 @@ export interface Story {
   taskCount?: number;
   doneTaskCount?: number;
   metadata?: Record<string, any>;
+  aiCriticalityScore?: number;
+  aiCriticalityReason?: string;
+  aiFocusStoryRank?: number;
+  aiTop3ForDay?: boolean;
+  aiTop3Date?: string;
+  aiPriorityLabel?: string;
+  aiTop3Reason?: string;
   // Optional travel/location metadata
   countryCode?: string; // ISO alpha-2
   city?: string;
@@ -148,6 +155,21 @@ export interface Task {
   convertedToStoryId?: string;
   aiCriticalityScore?: number;
   aiCriticalityReason?: string;
+  aiFlaggedTop?: boolean;
+  aiPriorityRank?: number;
+  aiTop3ForDay?: boolean;
+  aiTop3Date?: string;
+  aiPriorityLabel?: string;
+  aiTop3Reason?: string;
+  iosPriority?: string;
+  type?: 'task' | 'chore' | 'routine' | string;
+  repeatFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
+  repeatInterval?: number | null;
+  daysOfWeek?: string[] | null;
+  rrule?: string | null;
+  lastDoneAt?: any;
+  snoozedUntil?: number;
+  typeInferredAt?: any;
   // Enhanced fields for v2.1.4+
   sprintId?: string;
   projectId?: string;
@@ -191,6 +213,7 @@ export interface IHabit {
 export interface IHabitEntry {
   id: string; // Could be a date string like "YYYY-MM-DD"
   habitId: string;
+  ownerUid?: string;
   date: number; // Using number for Firebase Timestamp (start of day)
   value: number; // Actual value achieved for the habit on that day
   isCompleted: boolean; // Derived or explicitly set

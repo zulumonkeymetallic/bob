@@ -105,6 +105,17 @@ const getAiScoreValue = (item: Story | Task): number => {
   return Number.isFinite(parsed) ? parsed : -Infinity;
 };
 
+const isTop3Task = (task: Task): boolean => {
+  return (task as any).aiTop3ForDay === true
+    || (task as any).aiFlaggedTop === true
+    || Number((task as any).aiPriorityRank || 0) > 0;
+};
+
+const isTop3Story = (story: Story): boolean => {
+  return (story as any).aiTop3ForDay === true
+    || Number((story as any).aiFocusStoryRank || 0) > 0;
+};
+
 const matchesCriticalOrHighAi = (item: Story | Task): boolean => {
   return isCriticalPriority(item.priority) || getAiScoreValue(item) >= 90;
 };
@@ -460,6 +471,15 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [filterUnlinkedStoriesOnly, setFilterUnlinkedStoriesOnly] = useState(false);
   const [filterUnlinkedTasksOnly, setFilterUnlinkedTasksOnly] = useState(false);
+  const [filterTop3Only, setFilterTop3Only] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const stored = window.localStorage.getItem('kanbanTop3Only');
+      return stored ? stored === 'true' : false;
+    } catch {
+      return false;
+    }
+  });
   const [sortMode, setSortMode] = useState<'default' | 'ai' | 'overdue' | 'priority' | 'due'>('default');
   const [showTags, setShowTags] = useState(() => {
     if (typeof window === 'undefined') return true;
@@ -543,6 +563,13 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       window.localStorage.setItem('kanbanShowTags', showTags ? 'true' : 'false');
     } catch { }
   }, [showTags]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('kanbanTop3Only', filterTop3Only ? 'true' : 'false');
+    } catch { }
+  }, [filterTop3Only]);
 
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
@@ -716,14 +743,16 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     : tasks;
 
   const filteredStories = storiesInScope.filter((story) => {
-    if (filterCriticalOnly && !isCriticalPriority(story.priority)) return false;
+    if (filterTop3Only && !isTop3Story(story)) return false;
+    if (filterCriticalOnly && !(isCriticalPriority(story.priority) || isTop3Story(story))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(story)) return false;
     if (filterUnlinkedStoriesOnly && isStoryLinkedToGoal(story)) return false;
     return true;
   });
 
   const filteredTasks = tasksInScope.filter((task) => {
-    if (filterCriticalOnly && !isCriticalPriority(task.priority)) return false;
+    if (filterTop3Only && !isTop3Task(task)) return false;
+    if (filterCriticalOnly && !(isCriticalPriority(task.priority) || isTop3Task(task))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(task)) return false;
     if (filterOverdueOnly && !isTaskOverdue(task)) return false;
     if (filterUnlinkedTasksOnly && isTaskLinkedToStory(task)) return false;
@@ -896,15 +925,23 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       // Map index docs to Task-like shape expected by board UI
       const tasksData = snapshot.docs.map(d => {
         const x = d.data() as any;
-        const t: any = {
-          id: d.id,
-          title: x.title,
-          description: x.description || '',
-          status: x.status,
-          priority: x.priority ?? 2,
-          effort: x.effort ?? 'M',
-          estimateMin: x.estimateMin ?? 0,
-          tags: Array.isArray(x.tags) ? x.tags : [],
+          const t: any = {
+            id: d.id,
+            title: x.title,
+            description: x.description || '',
+            status: x.status,
+            priority: x.priority ?? 2,
+            aiCriticalityScore: x.aiCriticalityScore ?? null,
+            aiCriticalityReason: x.aiCriticalityReason ?? null,
+            aiFlaggedTop: x.aiFlaggedTop ?? false,
+            aiPriorityRank: x.aiPriorityRank ?? null,
+            aiTop3ForDay: x.aiTop3ForDay ?? false,
+            aiTop3Date: x.aiTop3Date ?? null,
+            aiPriorityLabel: x.aiPriorityLabel ?? null,
+            aiTop3Reason: x.aiTop3Reason ?? x.aiPriorityReason ?? null,
+            effort: x.effort ?? 'M',
+            estimateMin: x.estimateMin ?? 0,
+            tags: Array.isArray(x.tags) ? x.tags : [],
           dueDate: x.dueDate || null,
           parentType: x.parentType || 'story',
           parentId: x.parentId || x.storyId || '',
@@ -1209,6 +1246,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           label="Critical or AI ≥90"
           checked={filterCriticalAiOnly}
           onChange={(e) => setFilterCriticalAiOnly(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-top3"
+          label="Top 3 only"
+          checked={filterTop3Only}
+          onChange={(e) => setFilterTop3Only(e.currentTarget.checked)}
         />
         <Form.Check
           inline

@@ -96,7 +96,6 @@ import SteamSettings from './components/settings/integrations/SteamSettings';
 import HardcoverSettings from './components/settings/integrations/HardcoverSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
 import { useEntityAudit } from './hooks/useEntityAudit';
-import RoutinesChoresManager from './components/routines/RoutinesChoresManager';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
 import DeepLinkTask from './components/routes/DeepLinkTask';
@@ -335,7 +334,7 @@ function AppContent() {
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<HabitsManagement />} />
-            <Route path="/routines" element={<RoutinesChoresManager />} />
+            <Route path="/routines" element={<Navigate to="/chores" replace />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<PlanningDashboard />} />

@@ -394,8 +394,14 @@ async function generateAIInsights(userData) {
   - Top News: ${userData.news.map(n => `• ${n.title}`).join('\n')}
   - Current Sprint: ${userData.currentSprint ? `"${userData.currentSprint.title}" (Goal: ${userData.currentSprint.goal || 'None'})` : 'None'}
   - Active Stories (prefer STARTED): ${userData.stories.map(s => `• [${s.isStarted ? 'STARTED' : 'PLANNED'}] ${s.title} (Status: ${s.status})`).join('\n')}
-  - Top 3 Tasks Due Today (prefer highest AI score): ${userData.topTasksDueToday.map(t => `• ${t.title || t.ref || t.id} (AI score ${t.aiCriticalityScore ?? 'n/a'}${t.aiPriorityBucket ? ' bucket '+t.aiPriorityBucket : ''}${t.aiCriticalityReason ? ' reason: '+t.aiCriticalityReason : ''}, priority ${t.priority ?? 'n/a'}, due ${t.dueDateDisplay || 'today'}, theme ${t.theme || 'n/a'})`).join('\n') || 'None'}
-  - Tasks Due Today (${userData.tasksDueToday.length}): ${(userData.tasksDueTodaySorted || userData.tasksDueToday).map(t => `• ${t.title} (AI score ${t.aiCriticalityScore ?? 'n/a'}${t.aiCriticalityReason ? ' reason: '+t.aiCriticalityReason : ''}, due ${t.dueDateDisplay || 'today'})`).join('\n') || 'None'}
+  - Top 3 Tasks Due Today (prefer highest AI score): ${userData.topTasksDueToday.map(t => {
+    const aiReason = t.aiTop3ForDay && t.aiTop3Reason ? t.aiTop3Reason : t.aiCriticalityReason;
+    return `• ${t.title || t.ref || t.id} (AI score ${t.aiCriticalityScore ?? 'n/a'}${t.aiPriorityBucket ? ' bucket '+t.aiPriorityBucket : ''}${aiReason ? ' reason: '+aiReason : ''}, priority ${t.priority ?? 'n/a'}, due ${t.dueDateDisplay || 'today'}, theme ${t.theme || 'n/a'})`;
+  }).join('\\n') || 'None'}
+  - Tasks Due Today (${userData.tasksDueToday.length}): ${(userData.tasksDueTodaySorted || userData.tasksDueToday).map(t => {
+    const aiReason = t.aiTop3ForDay && t.aiTop3Reason ? t.aiTop3Reason : t.aiCriticalityReason;
+    return `• ${t.title} (AI score ${t.aiCriticalityScore ?? 'n/a'}${aiReason ? ' reason: '+aiReason : ''}, due ${t.dueDateDisplay || 'today'})`;
+  }).join('\\n') || 'None'}
   - Today’s Calendar Blocks: ${userData.todayBlocks.map(b => `• ${b.startTime}-${b.endTime} ${b.title || b.category || 'Block'} (theme ${b.theme || 'n/a'})`).join('\n') || 'None'}
   - Overdue Tasks (${userData.overdueTasks.length}): ${userData.overdueTasks.map(t => `• ${t.title} (due ${t.dueDateDisplay || 'overdue'})`).join('\n') || 'None'}
   - Calendar (next 7 days, first 10): ${userData.calendarBlocks.slice(0, 10).map(b => `• ${b.startDate} ${b.startTime}-${b.endTime}: ${b.title}`).join('\n')}

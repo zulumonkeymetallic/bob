@@ -554,11 +554,16 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                     <div style={{ marginBottom: '8px' }}>
                       <strong>AI Score:</strong> {formattedAiScore ?? (item as Task).aiCriticalityScore}
                     </div>
-                    {(item as Task).aiCriticalityReason && (
-                      <div style={{ marginBottom: '8px' }}>
-                        <strong>AI Rationale:</strong> {(item as Task).aiCriticalityReason}
-                      </div>
-                    )}
+                    {(() => {
+                      const t = item as Task;
+                      const top3Reason = (t as any).aiTop3ForDay ? (t as any).aiTop3Reason : null;
+                      const reason = top3Reason || (t as any).aiCriticalityReason || null;
+                      return reason ? (
+                        <div style={{ marginBottom: '8px' }}>
+                          <strong>AI Rationale:</strong> {reason}
+                        </div>
+                      ) : null;
+                    })()}
                   </>
                 )}
               </>

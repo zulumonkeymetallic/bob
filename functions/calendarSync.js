@@ -613,7 +613,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       }
       let enrichedDesc = block.rationale || '';
       let aiScoreVal = block.aiScore ?? block.aiCriticalityScore ?? null;
-      let aiReasonVal = block.aiReason || block.aiCriticalityReason || block.dueDateReason || '';
+      const blockTopReason = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
+      let aiReasonVal = block.aiReason || blockTopReason || block.aiCriticalityReason || block.dueDateReason || '';
       try {
         if (block.storyId) {
           const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
@@ -627,8 +628,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (sd.aiCriticalityScore != null) {
               aiScoreVal = aiScoreVal ?? sd.aiCriticalityScore;
             }
-            if (!aiReasonVal && sd.aiCriticalityReason) {
-              aiReasonVal = sd.aiCriticalityReason || '';
+            if (!aiReasonVal) {
+              const sdTopReason = sd.aiTop3ForDay && sd.aiTop3Reason ? sd.aiTop3Reason : null;
+              if (sdTopReason || sd.aiCriticalityReason) {
+                aiReasonVal = sdTopReason || sd.aiCriticalityReason || '';
+              }
             }
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
@@ -686,8 +690,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (td.aiCriticalityScore != null) {
               aiScoreVal = aiScoreVal ?? td.aiCriticalityScore;
             }
-            if (!aiReasonVal && td.aiCriticalityReason) {
-              aiReasonVal = td.aiCriticalityReason || '';
+            if (!aiReasonVal) {
+              const tdTopReason = td.aiTop3ForDay && td.aiTop3Reason ? td.aiTop3Reason : null;
+              if (tdTopReason || td.aiCriticalityReason) {
+                aiReasonVal = tdTopReason || td.aiCriticalityReason || '';
+              }
             }
             const lines = [];
             if (enrichedDesc) lines.push(enrichedDesc);
@@ -904,7 +911,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const summaryText = summaryParts.filter(Boolean).join(' - ');
       let enrichedDesc2 = block.rationale || '';
       let aiScoreVal2 = block.aiScore ?? block.aiCriticalityScore ?? null;
-      let aiReasonVal2 = block.aiReason || block.aiCriticalityReason || block.dueDateReason || '';
+      const blockTopReason2 = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
+      let aiReasonVal2 = block.aiReason || blockTopReason2 || block.aiCriticalityReason || block.dueDateReason || '';
       let eventDeepLink = resolveBlockDeepLink(block);
       const eventContext = {
         storyRef: block.storyRef || null,
@@ -928,8 +936,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (sd.aiCriticalityScore != null) {
               aiScoreVal2 = aiScoreVal2 ?? sd.aiCriticalityScore;
             }
-            if (!aiReasonVal2 && sd.aiCriticalityReason) {
-              aiReasonVal2 = sd.aiCriticalityReason || '';
+            if (!aiReasonVal2) {
+              const sdTopReason = sd.aiTop3ForDay && sd.aiTop3Reason ? sd.aiTop3Reason : null;
+              if (sdTopReason || sd.aiCriticalityReason) {
+                aiReasonVal2 = sdTopReason || sd.aiCriticalityReason || '';
+              }
             }
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
@@ -987,8 +998,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (td.aiCriticalityScore != null) {
               aiScoreVal2 = aiScoreVal2 ?? td.aiCriticalityScore;
             }
-            if (!aiReasonVal2 && td.aiCriticalityReason) {
-              aiReasonVal2 = td.aiCriticalityReason || '';
+            if (!aiReasonVal2) {
+              const tdTopReason = td.aiTop3ForDay && td.aiTop3Reason ? td.aiTop3Reason : null;
+              if (tdTopReason || td.aiCriticalityReason) {
+                aiReasonVal2 = tdTopReason || td.aiCriticalityReason || '';
+              }
             }
             const lines = [];
             if (enrichedDesc2) lines.push(enrichedDesc2);
@@ -1288,6 +1302,7 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
     'aiCriticalityScore',
     'aiReason',
     'aiCriticalityReason',
+    'aiTop3Reason',
     'placementReason',
   ];
   const hasChanges = relevantFields.some(f => JSON.stringify(before[f]) !== JSON.stringify(after[f]));

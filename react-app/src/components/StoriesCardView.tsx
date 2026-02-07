@@ -226,7 +226,9 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                             bg="light"
                             text="dark"
                             style={{ fontSize: '11px' }}
-                            title={(story as any).aiCriticalityReason || 'AI priority'}
+                            title={((story as any).aiTop3ForDay && (story as any).aiTop3Reason)
+                              ? (story as any).aiTop3Reason
+                              : ((story as any).aiCriticalityReason || 'AI priority')}
                           >
                             AI {Math.round(aiScore)}/100
                           </Badge>

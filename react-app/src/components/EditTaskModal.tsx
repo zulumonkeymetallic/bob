@@ -73,6 +73,10 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     dueDate: '' as string,
     storyId: '' as string,
     tags: [] as string[],
+    type: 'task' as 'task' | 'chore' | 'routine',
+    repeatFrequency: '' as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
+    repeatInterval: 1 as number,
+    daysOfWeek: [] as string[],
     persona: 'personal' as 'personal' | 'work',
   });
   const [storyInput, setStoryInput] = useState('');
@@ -132,6 +136,10 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
       storyId: linkedStoryId,
       tags: Array.isArray((task as any).tags) ? (task as any).tags : [],
+      type: ((task as any).type || 'task') as 'task' | 'chore' | 'routine',
+      repeatFrequency: ((task as any).repeatFrequency || '') as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
+      repeatInterval: Number((task as any).repeatInterval || 1) || 1,
+      daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
       persona: ((task as any).persona || 'personal') as 'personal' | 'work',
     });
     setStoryInput(linkedStory ? storyLabel(linkedStory) : '');
@@ -159,6 +167,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     if (!task) return;
     setSaving(true);
     try {
+      const isRecurringType = form.type === 'chore' || form.type === 'routine';
+      const normalizedFrequency = isRecurringType ? (form.repeatFrequency || null) : null;
+      const normalizedInterval = isRecurringType ? Math.max(1, Number(form.repeatInterval) || 1) : null;
+      const normalizedDays = isRecurringType && form.repeatFrequency === 'weekly'
+        ? Array.isArray(form.daysOfWeek) ? form.daysOfWeek : []
+        : [];
       const dueDateMs = form.dueDate ? new Date(`${form.dueDate}T00:00:00`).getTime() : null;
       const updates: any = {
         title: form.title.trim() || task.title,
@@ -172,6 +186,10 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         parentType: form.storyId ? 'story' : null,
         parentId: form.storyId || null,
         tags: Array.isArray(form.tags) ? form.tags.map((tag) => tag.trim()).filter(Boolean) : [],
+        type: form.type || 'task',
+        repeatFrequency: normalizedFrequency,
+        repeatInterval: normalizedInterval,
+        daysOfWeek: normalizedDays,
         persona: form.persona || 'personal',
         updatedAt: serverTimestamp(),
       };
@@ -235,6 +253,78 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                     placeholder="Add tags..."
                   />
                 </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Task type</Form.Label>
+                  <Form.Select
+                    value={form.type}
+                    onChange={(e) => setForm({ ...form, type: e.target.value as 'task' | 'chore' | 'routine' })}
+                  >
+                    <option value="task">Task</option>
+                    <option value="chore">Chore</option>
+                    <option value="routine">Routine</option>
+                  </Form.Select>
+                </Form.Group>
+                {(form.type === 'chore' || form.type === 'routine') && (
+                  <div className="mb-3">
+                    <Row className="g-3 align-items-end">
+                      <Col md={4}>
+                        <Form.Label>Frequency</Form.Label>
+                        <Form.Select
+                          value={form.repeatFrequency || ''}
+                          onChange={(e) => setForm({ ...form, repeatFrequency: e.target.value as any })}
+                        >
+                          <option value="">None</option>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="yearly">Yearly</option>
+                        </Form.Select>
+                      </Col>
+                      <Col md={4}>
+                        <Form.Label>Interval</Form.Label>
+                        <Form.Control
+                          type="number"
+                          min={1}
+                          max={365}
+                          value={form.repeatInterval || 1}
+                          onChange={(e) => setForm({ ...form, repeatInterval: Number(e.target.value) || 1 })}
+                        />
+                      </Col>
+                    </Row>
+                    {form.repeatFrequency === 'weekly' && (
+                      <div className="mt-2">
+                        <Form.Label>Days of week</Form.Label>
+                        <div className="d-flex flex-wrap gap-3">
+                          {[
+                            { label: 'Mon', value: 'mon' },
+                            { label: 'Tue', value: 'tue' },
+                            { label: 'Wed', value: 'wed' },
+                            { label: 'Thu', value: 'thu' },
+                            { label: 'Fri', value: 'fri' },
+                            { label: 'Sat', value: 'sat' },
+                            { label: 'Sun', value: 'sun' },
+                          ].map((day) => (
+                            <Form.Check
+                              key={day.value}
+                              inline
+                              type="checkbox"
+                              id={`task-${day.value}`}
+                              label={day.label}
+                              checked={form.daysOfWeek.includes(day.value)}
+                              onChange={(e) => {
+                                const exists = form.daysOfWeek.includes(day.value);
+                                const next = exists
+                                  ? form.daysOfWeek.filter((d) => d !== day.value)
+                                  : [...form.daysOfWeek, day.value];
+                                setForm({ ...form, daysOfWeek: next });
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <Form.Group className="mb-3">
                   <Form.Label>Persona</Form.Label>
                   <Form.Select
@@ -350,9 +440,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                     {Number.isFinite(Number((task as Task).aiCriticalityScore))
                       ? Math.round(Number((task as Task).aiCriticalityScore))
                       : (task as Task).aiCriticalityScore}
-                    {(task as Task).aiCriticalityReason && (
-                      <div className="small text-muted">{(task as Task).aiCriticalityReason}</div>
-                    )}
+                    {(() => {
+                      const t = task as Task;
+                      const top3Reason = (t as any).aiTop3ForDay ? (t as any).aiTop3Reason : null;
+                      const reason = top3Reason || (t as any).aiCriticalityReason || null;
+                      return reason ? <div className="small text-muted">{reason}</div> : null;
+                    })()}
                   </div>
                 )}
                 {showMacSync && (

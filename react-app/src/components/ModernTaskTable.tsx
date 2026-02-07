@@ -819,6 +819,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
+  const editType = (editForm as any)?.type || 'task';
+  const isRecurringEditType = editType === 'chore' || editType === 'routine';
+
   const filteredTasks = tasks.filter((task) => {
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
     if (sprintFilter === 'none') return !derivedSprintId;
@@ -1214,7 +1217,17 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         <button
                           onClick={() => {
                             setEditingTask(null);
-                            setEditForm({ title: '', description: '', priority: 2, status: 0 as any, tags: [] });
+                            setEditForm({
+                              title: '',
+                              description: '',
+                              priority: 2,
+                              status: 0 as any,
+                              tags: [],
+                              type: 'task',
+                              repeatFrequency: '',
+                              repeatInterval: 1,
+                              daysOfWeek: [],
+                            });
                             setStorySearch('');
                             setShowEditModal(true);
                           }}
@@ -1512,6 +1525,84 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     placeholder="Add tags..."
                   />
                 </div>
+                <div className="mb-3">
+                  <label className="form-label">Task type</label>
+                  <select
+                    className="form-select"
+                    value={editType}
+                    onChange={(e) => setEditForm({ ...editForm, type: e.target.value as any })}
+                  >
+                    <option value="task">Task</option>
+                    <option value="chore">Chore</option>
+                    <option value="routine">Routine</option>
+                  </select>
+                </div>
+                {isRecurringEditType && (
+                  <div className="mb-3">
+                    <div className="row">
+                      <div className="col-md-4 mb-2">
+                        <label className="form-label">Frequency</label>
+                        <select
+                          className="form-select"
+                          value={(editForm as any).repeatFrequency || ''}
+                          onChange={(e) => setEditForm({ ...editForm, repeatFrequency: e.target.value as any })}
+                        >
+                          <option value="">None</option>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="yearly">Yearly</option>
+                        </select>
+                      </div>
+                      <div className="col-md-4 mb-2">
+                        <label className="form-label">Interval</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={365}
+                          className="form-control"
+                          value={(editForm as any).repeatInterval || 1}
+                          onChange={(e) => setEditForm({ ...editForm, repeatInterval: Number(e.target.value) || 1 })}
+                        />
+                      </div>
+                    </div>
+                    {(editForm as any).repeatFrequency === 'weekly' && (
+                      <div className="mt-2">
+                        <label className="form-label">Days of week</label>
+                        <div className="d-flex flex-wrap gap-3">
+                          {[
+                            { label: 'Mon', value: 'mon' },
+                            { label: 'Tue', value: 'tue' },
+                            { label: 'Wed', value: 'wed' },
+                            { label: 'Thu', value: 'thu' },
+                            { label: 'Fri', value: 'fri' },
+                            { label: 'Sat', value: 'sat' },
+                            { label: 'Sun', value: 'sun' },
+                          ].map((day) => {
+                            const days = Array.isArray((editForm as any).daysOfWeek) ? (editForm as any).daysOfWeek : [];
+                            const checked = days.includes(day.value);
+                            return (
+                              <label key={day.value} className="form-check form-check-inline">
+                                <input
+                                  type="checkbox"
+                                  className="form-check-input"
+                                  checked={checked}
+                                  onChange={() => {
+                                    const next = checked
+                                      ? days.filter((d: string) => d !== day.value)
+                                      : [...days, day.value];
+                                    setEditForm({ ...editForm, daysOfWeek: next });
+                                  }}
+                                />
+                                <span className="form-check-label">{day.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="row">
                   <div className="col-md-6 mb-3">
                     <label className="form-label">Link to Story</label>
@@ -1547,13 +1638,23 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
                 <button type="button" className="btn btn-primary" onClick={async () => {
                   if (!editForm.title) return;
+                  const isRecurring = editType === 'chore' || editType === 'routine';
+                  const normalizedFrequency = isRecurring ? ((editForm as any).repeatFrequency || null) : null;
+                  const normalizedInterval = isRecurring ? Math.max(1, Number((editForm as any).repeatInterval || 1)) : null;
+                  const normalizedDays = isRecurring && (editForm as any).repeatFrequency === 'weekly'
+                    ? (Array.isArray((editForm as any).daysOfWeek) ? (editForm as any).daysOfWeek : [])
+                    : [];
                   if (editingTask) {
                     await handleValidatedUpdate(editingTask.id, {
                       title: editForm.title,
                       description: editForm.description,
                       priority: editForm.priority as any,
                       dueDate: editForm.dueDate as any,
-                      storyId: (editForm as any).storyId
+                      storyId: (editForm as any).storyId,
+                      type: editType,
+                      repeatFrequency: normalizedFrequency as any,
+                      repeatInterval: normalizedInterval as any,
+                      daysOfWeek: normalizedDays as any,
                     });
                   } else if (onTaskCreate) {
                     await onTaskCreate({
@@ -1561,7 +1662,11 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       description: editForm.description,
                       priority: editForm.priority as any,
                       dueDate: editForm.dueDate as any,
-                      storyId: (editForm as any).storyId
+                      storyId: (editForm as any).storyId,
+                      type: editType,
+                      repeatFrequency: normalizedFrequency as any,
+                      repeatInterval: normalizedInterval as any,
+                      daysOfWeek: normalizedDays as any,
                     });
                   }
                   setShowEditModal(false);

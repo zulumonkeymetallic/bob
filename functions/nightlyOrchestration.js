@@ -192,12 +192,16 @@ async function scorePriorityWithLLM({ userId, items }) {
       acceptanceCriteria: item.acceptanceCriteria || [],
       theme: item.theme || null,
       goal: trimText(item.goalTitle, 120) || null,
+      persona: item.persona || null,
+      dueInDays: Number.isFinite(Number(item.dueInDays)) ? Number(item.dueInDays) : null,
+      userPriority: item.userPriority || null,
     }));
 
   const system = [
     'You are a prioritization analyst for a productivity app.',
-    'Score importance based on title/description/acceptance criteria, focusing on: exams or training,',
-    'revenue/money/tax/compliance impact, and long-term growth or career leverage.',
+    'Score importance based on title/description/acceptance criteria and the provided dueInDays + userPriority.',
+    'Prefer family/health/safety/finance/compliance over hobbies/low-stakes items.',
+    'If items are tied, use the text to break ties (be decisive).',
     'Return JSON {"items":[{"id":string,"score":number,"reason":string}]} where score is 0-20.',
     'Keep reason under 120 characters, and use only the provided ids.',
   ].join(' ');
@@ -293,6 +297,22 @@ const isStoryDoneStatus = (status) => {
   if (num != null) return num >= 4;
   const normalized = normalizeStatusValue(status);
   return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
+};
+
+const isTaskOpenStatus = (status) => {
+  if (status === null || status === undefined || status === '') return true;
+  const num = parseStatusNumber(status);
+  if (num != null) return num === 0 || num === 1;
+  const normalized = normalizeStatusValue(status);
+  return ['backlog', 'todo', 'to do', 'in-progress', 'in progress', 'open', 'active', 'pending', 'planned', '0', '1'].includes(normalized);
+};
+
+const isStoryOpenStatus = (status) => {
+  if (status === null || status === undefined || status === '') return true;
+  const num = parseStatusNumber(status);
+  if (num != null) return num >= 0 && num < 4;
+  const normalized = normalizeStatusValue(status);
+  return ['backlog', 'planned', 'in-progress', 'in progress', 'open', 'active', 'pending', '0', '1', '2', '3'].includes(normalized);
 };
 
 function clampStoryStatus(status) {
@@ -393,6 +413,8 @@ async function appendToDescription(ref, existing, line) {
   const updated = desc ? `${desc}\n\n${line}` : line;
   await ref.set({ description: updated }, { merge: true });
 }
+
+const resolvePersona = (value) => (String(value || '').toLowerCase() === 'work' ? 'work' : 'personal');
 
 const isTaskLocked = (task) => task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
 
@@ -1199,7 +1221,6 @@ async function runPriorityScoringJob() {
       if (isDone || data.deleted) return;
       const isEntityActiveSprint = data.sprintId ? activeSprintIds.has(data.sprintId) : false;
       const isLinkedActiveSprint = data.storyId ? activeStoryIds.has(data.storyId) : false;
-      if (!isEntityActiveSprint && !isLinkedActiveSprint) return;
       if (hasRecurrence(data)) return;
       const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
       if (isRoutineChoreHabit(data) && !isTodayOrOverdue(dueMs)) return;
@@ -1224,6 +1245,8 @@ async function runPriorityScoringJob() {
         points: data.points,
       });
       const preScore = Math.min(100, baseScore + bonus);
+      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+      const dueInDays = dueMs ? Math.round((dueMs - Date.now()) / 86400000) : null;
       addCandidate({
         id: doc.id,
         kind: 'task',
@@ -1234,6 +1257,9 @@ async function runPriorityScoringJob() {
         theme: effectiveTheme,
         goalTitle: goal?.title || null,
         preScore,
+        persona,
+        dueInDays,
+        userPriority: priorityLevel,
       });
     });
 
@@ -1243,8 +1269,6 @@ async function runPriorityScoringJob() {
       const statusStr = String(statusRaw || '').toLowerCase();
       const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 4;
       if (isDone) return;
-      if (!data.sprintId || !activeSprintIds.has(data.sprintId)) return;
-
       const goal = data.goalId ? goalMap.get(data.goalId) : null;
       const createdMs = toDateTime(data.createdAt || data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
       const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
@@ -1262,6 +1286,8 @@ async function runPriorityScoringJob() {
         points: data.points,
       });
       const preScore = Math.min(100, baseScore + bonus);
+      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+      const dueInDays = dueMs ? Math.round((dueMs - Date.now()) / 86400000) : null;
       addCandidate({
         id: doc.id,
         kind: 'story',
@@ -1272,6 +1298,9 @@ async function runPriorityScoringJob() {
         theme,
         goalTitle: goal?.title || null,
         preScore,
+        persona,
+        dueInDays,
+        userPriority: priorityLevel,
       });
     });
 
@@ -1354,6 +1383,7 @@ async function runPriorityScoringJob() {
         aiCriticalityReason: reason,
         aiPriorityUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
         aiPriorityScore: admin.firestore.FieldValue.delete(),
+        aiTop3Reason: admin.firestore.FieldValue.delete(),
         aiPriorityReason: admin.firestore.FieldValue.delete(),
         aiPriorityTextScore: admin.firestore.FieldValue.delete(),
         aiPriorityTextReason: admin.firestore.FieldValue.delete(),
@@ -1378,22 +1408,6 @@ async function runPriorityScoringJob() {
       if (entityType === 'story' && !entity.deepLink) {
         patch.deepLink = buildEntityUrl('story', ref.id, ref.ref);
       }
-      // Promote small due-today tasks to high priority
-      if (entityType === 'task' && dueMs) {
-        const isToday = DateTime.fromMillis(dueMs).hasSame(DateTime.now(), 'day');
-        if (isToday && (entity.points || 0) <= 4) {
-          patch.priority = 'high';
-          patch.iosPriority = '!!';
-        }
-      }
-      // Escalate overdue tasks to critical
-      if (entityType === 'task' && dueMs) {
-        const todayStart = DateTime.now().startOf('day').toMillis();
-        if (dueMs < todayStart && !isTaskLocked(entity)) {
-          patch.priority = 4;
-          patch.iosPriority = '!!!';
-        }
-      }
       await ref.set(patch, { merge: true });
       await db.collection('activity_stream').add(activityPayload({
         ownerUid: userId,
@@ -1405,32 +1419,11 @@ async function runPriorityScoringJob() {
       }));
 
       if (entityType === 'story') {
-        storyScores.push({ id: ref.id, score, data: entity, reason, dueMs, createdMs, refObj: ref });
+        storyScores.push({ id: ref.id, score, data: entity, reason, dueMs, createdMs, refObj: ref, persona: entity.persona || 'personal' });
       }
 
       if (entityType === 'task') {
-        taskScores.push({ id: ref.id, score, data: entity, reason, dueMs, refObj: ref });
-        // Force due today for very old unlinked tasks (if not locked)
-        if (oldUnlinked && !isTaskLocked(entity)) {
-          const todayEnd = DateTime.now().endOf('day').toMillis();
-          await ref.set({
-            dueDate: todayEnd,
-            priority: 'high',
-            iosPriority: '!!',
-            aiDueDateSetAt: admin.firestore.FieldValue.serverTimestamp(),
-            dueDateReason: `AI priority promotion (aged unlinked >90d, score ${score}/100${bonusReasons.length ? `, ${bonusReasons.join(', ')}` : ''})`,
-            syncState: 'dirty',
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          }, { merge: true });
-          await db.collection('activity_stream').add(activityPayload({
-            ownerUid: userId,
-            entityId: ref.id,
-            entityType: 'task',
-            activityType: 'ai_due_date_adjustment',
-            description: 'Moved due date to today (aged > 90 days, unlinked)',
-            metadata: { reason: 'aged_unlinked', ageDays, newDueDate: todayEnd, run: '03:00_priority' },
-          }));
-        }
+        taskScores.push({ id: ref.id, score, data: entity, reason, dueMs, refObj: ref, persona: entity.persona || 'personal' });
       }
     };
 
@@ -1444,6 +1437,7 @@ async function runPriorityScoringJob() {
         aiCriticalityTextUpdatedAt: admin.firestore.FieldValue.delete(),
         aiCriticalityTextModel: admin.firestore.FieldValue.delete(),
         aiPriorityScore: admin.firestore.FieldValue.delete(),
+        aiTop3Reason: admin.firestore.FieldValue.delete(),
         aiPriorityReason: admin.firestore.FieldValue.delete(),
         aiPriorityTextScore: admin.firestore.FieldValue.delete(),
         aiPriorityTextReason: admin.firestore.FieldValue.delete(),
@@ -1454,11 +1448,21 @@ async function runPriorityScoringJob() {
       if (entityType === 'task') {
         patch.aiFlaggedTop = false;
         patch.aiPriorityRank = admin.firestore.FieldValue.delete();
+        patch.aiTop3ForDay = false;
+        patch.aiTop3Date = admin.firestore.FieldValue.delete();
+        patch.aiPriorityLabel = admin.firestore.FieldValue.delete();
+        patch.aiTop3Reason = admin.firestore.FieldValue.delete();
+        patch.aiPriorityReason = admin.firestore.FieldValue.delete();
         patch.syncState = 'dirty';
       }
       if (entityType === 'story') {
         patch.aiFocusStoryRank = admin.firestore.FieldValue.delete();
         patch.aiFocusStoryAt = admin.firestore.FieldValue.delete();
+        patch.aiTop3ForDay = false;
+        patch.aiTop3Date = admin.firestore.FieldValue.delete();
+        patch.aiPriorityLabel = admin.firestore.FieldValue.delete();
+        patch.aiTop3Reason = admin.firestore.FieldValue.delete();
+        patch.aiPriorityReason = admin.firestore.FieldValue.delete();
         patch.syncState = 'dirty';
       }
       await ref.set(patch, { merge: true });
@@ -1469,10 +1473,7 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const statusStr = String(statusRaw || '').toLowerCase();
       const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 2;
-      if (isDone || data.deleted) continue;
-      const isEntityActiveSprint = data.sprintId ? activeSprintIds.has(data.sprintId) : false;
-      const isLinkedActiveSprint = data.storyId ? activeStoryIds.has(data.storyId) : false;
-      if (!isEntityActiveSprint && !isLinkedActiveSprint) {
+      if (isDone || data.deleted || !isTaskOpenStatus(statusRaw)) {
         await clearPriorityFields(doc.ref, 'task');
         continue;
       }
@@ -1494,144 +1495,211 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const statusStr = String(statusRaw || '').toLowerCase();
       const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 4;
-      if (isDone) continue;
-      if (!data.sprintId || !activeSprintIds.has(data.sprintId)) {
+      if (isDone || !isStoryOpenStatus(statusRaw)) {
         await clearPriorityFields(doc.ref, 'story');
         continue;
       }
       await applyScore(doc.ref, data, 'story');
     }
 
-    // Select focus tasks (3–5) preferring active sprint, then fall back by score
-    const sortedTasks = taskScores
-      .map((t) => {
-        const createdMs = toDateTime(t.data.createdAt || t.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
-        const storyMeta = t.data.storyId ? (storyMetaMap.get(t.data.storyId) || {}) : {};
-        const sprintCandidate = t.data.sprintId || storyMeta.sprintId || null;
-        const active = sprintCandidate && activeSprintIds.has(sprintCandidate);
-        return { ...t, createdMs, sprintCandidate, active };
-      })
-      .filter((t) => !isTaskLocked(t.data) && !isRoutineChoreHabit(t.data))
-      .sort((a, b) => {
-        if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
-        return (a.createdMs || 0) - (b.createdMs || 0);
-      });
-
-    const preferred = sortedTasks.filter((t) => t.active);
-    const fallback = sortedTasks.filter((t) => !t.active);
-    let focusTasks = [...preferred, ...fallback].slice(0, 5);
-    if (focusTasks.length < 3) {
-      focusTasks = sortedTasks.slice(0, Math.min(5, sortedTasks.length));
-    }
-
-    // Align due dates for top focus tasks (top 3) to today or next day depending on time
     const nowLocal = DateTime.now();
+    const todayIso = nowLocal.toISODate();
     const todayEnd = nowLocal.endOf('day').toMillis();
     const tomorrowEnd = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
-    const eveningCutoffHour = 17; // after 5pm, push to next day
-    for (let idx = 0; idx < focusTasks.length; idx += 1) {
-      if (idx >= 3) break; // only adjust top 3
-      const task = focusTasks[idx];
-      if (isTaskLocked(task.data)) continue;
-      const dueMs = toDateTime(task.data.dueDate, { defaultValue: null })?.toMillis() || null;
-      const targetDue = (nowLocal.hour >= eveningCutoffHour) ? tomorrowEnd : todayEnd;
-      const shouldMove = !dueMs || dueMs > targetDue;
-      if (!shouldMove) continue;
-      const detailedReason = [
-        'AI focus (top 3)',
-        `score=${task.score}`,
-        task.reason ? `why=${task.reason}` : null,
-      ].filter(Boolean).join(' | ');
-      await task.refObj.set({
-        dueDate: targetDue,
-        priority: 4, // critical
-        iosPriority: '!!!',
-        aiDueDateSetAt: admin.firestore.FieldValue.serverTimestamp(),
-        dueDateReason: detailedReason,
-        aiFlaggedTop: true,
-        aiPriorityRank: idx + 1,
-        syncState: 'dirty',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      await db.collection('activity_stream').add(activityPayload({
-        ownerUid: userId,
-        entityId: task.id,
-        entityType: 'task',
-        activityType: 'ai_due_date_adjustment',
-        description: `Moved due date to ${nowLocal.hour >= eveningCutoffHour ? 'tomorrow' : 'today'} (top ${idx + 1}/3 focus task) · score ${task.score}/100`,
-        metadata: { score: task.score, reason: task.reason || 'focus_top3', run: '03:00_priority_top3', rank: idx + 1, newDueDate: targetDue },
+    const eveningCutoffHour = 17;
+    const focusDueDate = (nowLocal.hour >= eveningCutoffHour) ? tomorrowEnd : todayEnd;
+
+    const taskCandidates = taskScores
+      .map((t) => ({
+        ...t,
+        createdMs: toDateTime(t.data.createdAt || t.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null,
+        persona: String(t.data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal',
+      }))
+      .filter((t) => !isRoutineChoreHabit(t.data));
+
+    const storyCandidates = storyScores
+      .map((s) => ({
+        ...s,
+        createdMs: toDateTime(s.data.createdAt || s.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null,
+        persona: String(s.data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal',
       }));
+
+    const sortByScore = (a, b) => {
+      if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
+      return (a.createdMs || 0) - (b.createdMs || 0);
+    };
+
+    const pickTop = (items, { rankKey, flagKey }) => {
+      const prev = items.filter((it) => {
+        const rank = Number(it.data?.[rankKey] || 0);
+        if (rank > 0) return true;
+        if (flagKey && it.data?.[flagKey] === true) return true;
+        return it.data?.aiTop3ForDay === true;
+      });
+      const prevSorted = prev
+        .slice()
+        .sort((a, b) => {
+          const ar = Number(a.data?.[rankKey] || 0);
+          const br = Number(b.data?.[rankKey] || 0);
+          if (ar && br && ar !== br) return ar - br;
+          return (a.createdMs || 0) - (b.createdMs || 0);
+        });
+      const prevIds = new Set(prevSorted.map((p) => p.id));
+      const remaining = items.filter((it) => !prevIds.has(it.id)).sort(sortByScore);
+      return [...prevSorted, ...remaining].slice(0, 3);
+    };
+
+    const topTaskIdsByPersona = { personal: new Set(), work: new Set() };
+    const topStoryIdsByPersona = { personal: new Set(), work: new Set() };
+
+    for (const persona of ['personal', 'work']) {
+      const personaTasks = taskCandidates.filter((t) => t.persona === persona);
+      const personaStories = storyCandidates.filter((s) => s.persona === persona);
+
+      const focusTasks = pickTop(personaTasks, { rankKey: 'aiPriorityRank', flagKey: 'aiFlaggedTop' });
+      const focusStories = pickTop(personaStories, { rankKey: 'aiFocusStoryRank' });
+
+      topTaskIdsByPersona[persona] = new Set(focusTasks.map((t) => t.id));
+      topStoryIdsByPersona[persona] = new Set(focusStories.map((s) => s.id));
+
+      const taskBatch = db.batch();
+      focusTasks.forEach((task, idx) => {
+        const tags = Array.isArray(task.data?.tags) ? [...task.data.tags] : [];
+        if (!tags.includes('critical')) tags.push('critical');
+        const reason = [
+          'Top 3 priority',
+          `score=${Math.round(task.score || 0)}`,
+          task.reason ? `why=${task.reason}` : null,
+        ].filter(Boolean).join(' | ');
+        const patch = {
+          aiFlaggedTop: true,
+          aiPriorityRank: idx + 1,
+          aiTop3ForDay: true,
+          aiTop3Date: todayIso,
+          aiPriorityLabel: 'critical',
+          aiTop3Reason: reason,
+          aiPriorityReason: admin.firestore.FieldValue.delete(),
+          iosPriority: '!!',
+          tags,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          syncState: 'dirty',
+        };
+        if (!isTaskLocked(task.data)) {
+          patch.dueDate = focusDueDate;
+          patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.dueDateReason = reason;
+        }
+        taskBatch.set(task.refObj, patch, { merge: true });
+
+        db.collection('activity_stream').add(activityPayload({
+          ownerUid: userId,
+          entityId: task.id,
+          entityType: 'task',
+          activityType: 'ai_top3_selected',
+          description: `Selected as top ${idx + 1}/3 (${persona}) · score ${Math.round(task.score || 0)}/100`,
+          metadata: { persona, rank: idx + 1, score: task.score, reason: task.reason || null, run: '03:00_priority_top3' },
+        })).catch(() => { });
+      });
+      await taskBatch.commit();
+
+      const storyBatch = db.batch();
+      focusStories.forEach((story, idx) => {
+        const reason = [
+          'Top 3 priority',
+          `score=${Math.round(story.score || 0)}`,
+          story.reason ? `why=${story.reason}` : null,
+        ].filter(Boolean).join(' | ');
+        const patch = {
+          aiFocusStoryRank: idx + 1,
+          aiFocusStoryAt: admin.firestore.FieldValue.serverTimestamp(),
+          aiTop3ForDay: true,
+          aiTop3Date: todayIso,
+          aiPriorityLabel: 'critical',
+          aiTop3Reason: reason,
+          aiPriorityReason: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          syncState: 'dirty',
+        };
+        if (focusDueDate) {
+          patch.dueDate = focusDueDate;
+          patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.dueDateReason = reason;
+        }
+        storyBatch.set(story.refObj, patch, { merge: true });
+
+        db.collection('activity_stream').add(activityPayload({
+          ownerUid: userId,
+          entityId: story.id,
+          entityType: 'story',
+          activityType: 'ai_top3_selected',
+          description: `Selected as top ${idx + 1}/3 (${persona}) · score ${Math.round(story.score || 0)}/100`,
+          metadata: { persona, rank: idx + 1, score: story.score, reason: story.reason || null, run: '03:00_priority_top3' },
+        })).catch(() => { });
+      });
+      await storyBatch.commit();
     }
 
-    // Flag top 3 for Reminders (and clear previous flags), track focus ranks for up to 5
-    const focusFlagIds = new Set(focusTasks.slice(0, 3).map((t) => t.id));
+    // Clear flags for tasks no longer in top 3 (per persona)
     const flaggedQuery = await db.collection('tasks')
       .where('ownerUid', '==', userId)
       .where('aiFlaggedTop', '==', true)
-      .limit(100)
+      .limit(200)
       .get()
       .catch(() => ({ docs: [] }));
-
-    const batchFlag = db.batch();
+    const clearTasksBatch = db.batch();
     for (const doc of flaggedQuery.docs) {
-      if (!focusFlagIds.has(doc.id)) {
-        batchFlag.set(doc.ref, {
+      const data = doc.data() || {};
+      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+      if (!topTaskIdsByPersona[persona].has(doc.id)) {
+        clearTasksBatch.set(doc.ref, {
           aiFlaggedTop: false,
           aiPriorityRank: admin.firestore.FieldValue.delete(),
+          aiTop3ForDay: false,
+          aiTop3Date: admin.firestore.FieldValue.delete(),
+          aiPriorityLabel: admin.firestore.FieldValue.delete(),
+          aiTop3Reason: admin.firestore.FieldValue.delete(),
+          aiPriorityReason: admin.firestore.FieldValue.delete(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           syncState: 'dirty',
         }, { merge: true });
       }
     }
-    focusTasks.forEach((task, idx) => {
-      batchFlag.set(task.refObj, {
-        aiFlaggedTop: idx < 3,
-        aiPriorityRank: idx + 1,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        syncState: 'dirty',
-      }, { merge: true });
-    });
-    await batchFlag.commit();
+    await clearTasksBatch.commit();
 
-    // Focus stories: pick top 3 (prefer active sprint) and clear previous ranks
-    const storyCandidates = storyScores
-      .map((s) => {
-        const createdMs = toDateTime(s.data.createdAt || s.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
-        const sprintCandidate = s.data.sprintId || null;
-        const active = sprintCandidate && activeSprintIds.has(sprintCandidate);
-        return { ...s, createdMs, sprintCandidate, active };
-      })
-      .sort((a, b) => {
-        if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
-        return (a.createdMs || 0) - (b.createdMs || 0);
-      });
-
-    const preferredStories = storyCandidates.filter((s) => s.active);
-    const fallbackStories = storyCandidates.filter((s) => !s.active);
-    let focusStories = [...preferredStories, ...fallbackStories].slice(0, 3);
-    if (focusStories.length < 3) focusStories = storyCandidates.slice(0, Math.min(3, storyCandidates.length));
-
-    const focusStoryIds = new Set(focusStories.map((s) => s.id));
-    const storyBatch = db.batch();
-    storyScores.forEach((s) => {
-      const currentRank = Number(s.data?.aiFocusStoryRank || 0);
-      if (currentRank > 0 && !focusStoryIds.has(s.id)) {
-        storyBatch.set(s.refObj, {
-          aiFocusStoryRank: admin.firestore.FieldValue.delete(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          syncState: 'dirty',
-        }, { merge: true });
+    // Clear/update story focus ranks and ensure non-top stories use sprint end date
+    const storyClearBatch = db.batch();
+    storiesSnap.docs.forEach((doc) => {
+      const data = doc.data() || {};
+      if (isStoryDoneStatus(data.status)) return;
+      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+      const isTop = topStoryIdsByPersona[persona].has(doc.id);
+      const sprint = data.sprintId ? sprintMap.get(data.sprintId) : null;
+      const sprintEnd = sprint?.endDateMs || null;
+      const patch = {};
+      if (isTop) {
+        patch.aiTop3ForDay = true;
+        patch.aiTop3Date = todayIso;
+        patch.aiPriorityLabel = 'critical';
+      } else {
+        if (Number(data.aiFocusStoryRank || 0) > 0 || data.aiTop3ForDay) {
+          patch.aiFocusStoryRank = admin.firestore.FieldValue.delete();
+          patch.aiTop3ForDay = false;
+          patch.aiTop3Date = admin.firestore.FieldValue.delete();
+          patch.aiPriorityLabel = admin.firestore.FieldValue.delete();
+          patch.aiTop3Reason = admin.firestore.FieldValue.delete();
+          patch.aiPriorityReason = admin.firestore.FieldValue.delete();
+        }
+        if (sprintEnd) {
+          patch.dueDate = sprintEnd;
+        }
+      }
+      if (Object.keys(patch).length) {
+        patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        patch.syncState = 'dirty';
+        storyClearBatch.set(doc.ref, patch, { merge: true });
       }
     });
-    focusStories.forEach((story, idx) => {
-      storyBatch.set(story.refObj, {
-        aiFocusStoryRank: idx + 1,
-        aiFocusStoryAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        syncState: 'dirty',
-      }, { merge: true });
-    });
-    await storyBatch.commit();
+    await storyClearBatch.commit();
   }
 }
 
@@ -1763,23 +1831,34 @@ async function runCalendarPlannerJob() {
 
     const openStories = storiesSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-      .filter((s) => !isStoryDoneStatus(s.status) && s.sprintId && activeSprintIds.has(s.sprintId));
+      .filter((s) => !isStoryDoneStatus(s.status));
 
     const openTasks = tasksSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-      .filter((t) => {
-        return !isTaskDoneStatus(t.status) && !t.deleted && t.sprintId && activeSprintIds.has(t.sprintId);
-      });
+      .filter((t) => !isTaskDoneStatus(t.status) && !t.deleted);
 
-    const topStories = openStories
-      .map((s) => ({ ...s, aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore) }))
-      .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
-      .slice(0, 3);
+    const isTopTask = (t) => t.aiTop3ForDay === true || t.aiFlaggedTop === true || Number(t.aiPriorityRank || 0) > 0;
+    const isTopStory = (s) => s.aiTop3ForDay === true || Number(s.aiFocusStoryRank || 0) > 0;
+    const rankSort = (a, b, key) => {
+      const ar = Number(a?.[key] || 0) || 99;
+      const br = Number(b?.[key] || 0) || 99;
+      if (ar !== br) return ar - br;
+      const as = scoreWithBonus(a.priority, a.aiCriticalityScore);
+      const bs = scoreWithBonus(b.priority, b.aiCriticalityScore);
+      return bs - as;
+    };
 
-    const topTasks = openTasks
-      .map((t) => ({ ...t, aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore) }))
-      .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
-      .slice(0, 3);
+    const topStories = ['personal', 'work']
+      .flatMap((persona) => openStories
+        .filter((s) => resolvePersona(s.persona) === persona && isTopStory(s))
+        .sort((a, b) => rankSort(a, b, 'aiFocusStoryRank'))
+        .slice(0, 3));
+
+    const topTasks = ['personal', 'work']
+      .flatMap((persona) => openTasks
+        .filter((t) => resolvePersona(t.persona) === persona && isTopTask(t))
+        .sort((a, b) => rankSort(a, b, 'aiPriorityRank'))
+        .slice(0, 3));
 
     const topIds = new Set([
       ...topStories.map((s) => `story:${s.id}`),

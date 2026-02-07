@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Form, Button, Row, Col, Table, Badge } from 'react-bootstrap';
+import { Card, Form, Button, Row, Col, Table, Badge, Alert } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
@@ -9,6 +9,7 @@ const HabitsManagement: React.FC = () => {
   const [habits, setHabits] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ name: '', description: '', frequency: 'daily', targetValue: 1, unit: 'times', scheduleTime: '07:00', linkedGoalId: '', isActive: true, daysOfWeek: [] as number[], daysText: '' });
   const [goals, setGoals] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const dayKey = useMemo(() => {
     const d = new Date();
     const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
@@ -31,6 +32,11 @@ const HabitsManagement: React.FC = () => {
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !form.name) return;
+    if (!form.linkedGoalId) {
+      setError('Please link a goal for every habit.');
+      return;
+    }
+    setError(null);
     const parseDays = (text: string) => {
       if (!text) return [] as number[];
       try {
@@ -63,6 +69,7 @@ const HabitsManagement: React.FC = () => {
     await setDoc(ref, {
       id: entryId,
       habitId: habit.id,
+      ownerUid: currentUser.uid,
       date: new Date().setHours(0,0,0,0),
       value: 1,
       isCompleted: true,
@@ -79,7 +86,12 @@ const HabitsManagement: React.FC = () => {
 
   return (
     <div className="container py-3" style={{ maxWidth: 980 }}>
-      <h4 className="mb-3">Daily Routines (Habits)</h4>
+      <h4 className="mb-3">Habits</h4>
+      {error && (
+        <Alert variant="warning" onClose={() => setError(null)} dismissible>
+          {error}
+        </Alert>
+      )}
       <Card className="mb-3">
         <Card.Body>
           <Form onSubmit={handleAdd}>
@@ -110,9 +122,9 @@ const HabitsManagement: React.FC = () => {
                 <Form.Control value={form.unit} onChange={e=>setForm({ ...form, unit: e.target.value })} />
               </Col>
               <Col md={3}>
-                <Form.Label>Link Goal</Form.Label>
+                <Form.Label>Link Goal (required)</Form.Label>
                 <Form.Select value={form.linkedGoalId} onChange={e=>setForm({ ...form, linkedGoalId: e.target.value })}>
-                  <option value="">(none)</option>
+                  <option value="">Select a goal...</option>
                   {goals.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
                 </Form.Select>
               </Col>
@@ -162,7 +174,7 @@ const HabitsManagement: React.FC = () => {
               </Row>
             )}
             <div className="mt-3">
-              <Button type="submit">Add Habit</Button>
+              <Button type="submit" disabled={!form.linkedGoalId}>Add Habit</Button>
             </div>
           </Form>
         </Card.Body>
@@ -187,7 +199,7 @@ const HabitsManagement: React.FC = () => {
                   <td>{h.name}</td>
                   <td>{h.frequency}</td>
                   <td>{h.scheduleTime || '—'}</td>
-                  <td>{h.linkedGoalId ? (goals.find(g=>g.id===h.linkedGoalId)?.title || h.linkedGoalId) : '—'}</td>
+                  <td>{h.linkedGoalId ? (goals.find(g=>g.id===h.linkedGoalId)?.title || h.linkedGoalId) : <Badge bg="warning">Missing</Badge>}</td>
                   <td>{h.isActive ? <Badge bg="success">On</Badge> : <Badge bg="secondary">Off</Badge>}</td>
                   <td className="text-end">
                     <Button size="sm" className="me-2" variant="outline-success" onClick={()=>toggleCompleteToday(h)}>Mark Done Today</Button>

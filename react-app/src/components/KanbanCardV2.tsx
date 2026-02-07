@@ -101,8 +101,15 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         ? storyStatusText((item as any).status)
         : taskStatusText((item as any).status);
 
-    const priorityClass = priorityPillClass(item.priority);
-    const priorityLabel = formatPriorityLabel(item.priority);
+    const isTop3 = (item as any).aiTop3ForDay === true
+        || (item as any).aiFlaggedTop === true
+        || Number((item as any).aiPriorityRank || 0) > 0
+        || Number((item as any).aiFocusStoryRank || 0) > 0;
+    const aiReason = isTop3 && (item as any).aiTop3Reason
+        ? (item as any).aiTop3Reason
+        : ((item as any).aiCriticalityReason || null);
+    const priorityClass = isTop3 ? priorityPillClass(4) : priorityPillClass(item.priority);
+    const priorityLabel = isTop3 ? 'Critical' : formatPriorityLabel(item.priority);
     const dueDateMs = (() => {
         const raw = (item as any).dueDate ?? (item as any).targetDate ?? (item as any).dueDateMs ?? null;
         if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
@@ -444,6 +451,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
                         {priorityLabel}
                     </span>
+                    {isTop3 && (
+                        <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
+                            Top 3
+                        </span>
+                    )}
                     {dueDateLabel && (
                         <span className="kanban-card__meta-badge" title="Due date">
                             Due {dueDateLabel}
@@ -468,7 +480,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         </span>
                     )}
                     {(item as any).aiCriticalityScore != null ? (
-                        <span className="kanban-card__meta-badge" title="AI score">
+                        <span className="kanban-card__meta-badge" title={aiReason ? `AI reason: ${aiReason}` : 'AI score'}>
                             AI&nbsp;
                             {Math.round(Number((item as any).aiCriticalityScore))}
                         </span>

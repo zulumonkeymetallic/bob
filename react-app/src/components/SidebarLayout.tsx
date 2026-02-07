@@ -153,10 +153,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       ]
     },
     {
-      label: 'Routines',
+      label: 'Habits & Chores',
       icon: 'check-circle',
       items: [
-        { label: 'Routines & Chores', path: '/routines', icon: 'clipboard-check' },
+        { label: 'Chores & Recurring Tasks', path: '/chores', icon: 'clipboard-check' },
         { label: 'Daily Habits', path: '/habits', icon: 'check' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
