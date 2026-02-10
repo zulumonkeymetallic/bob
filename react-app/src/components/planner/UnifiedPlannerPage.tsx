@@ -773,6 +773,118 @@ const UnifiedPlannerPage: React.FC = () => {
     };
   }, [currentUser, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setTop3Tasks([]);
+      setTop3Stories([]);
+      setTop3Loading(false);
+      return;
+    }
+    setTop3Loading(true);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    let tasksReady = false;
+    let storiesReady = false;
+    const markReady = () => {
+      if (tasksReady && storiesReady) setTop3Loading(false);
+    };
+
+    const isTaskDone = (status: any) => {
+      if (typeof status === 'number') return status >= 2;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+    const isStoryDone = (status: any) => {
+      if (typeof status === 'number') return status >= 4;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+
+    const taskQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+    const storyQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+
+    const unsubTasks = onSnapshot(
+      taskQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
+          .filter((task) => !task.deleted)
+          .filter((task) => !isTaskDone(task.status))
+          .filter((task) => {
+            const aiDate = (task as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiPriorityRank || 0) || 99;
+            const br = Number((b as any).aiPriorityRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Tasks(rows);
+        tasksReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 tasks', err);
+        setTop3Tasks([]);
+        tasksReady = true;
+        markReady();
+      },
+    );
+
+    const unsubStories = onSnapshot(
+      storyQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Story))
+          .filter((story) => !isStoryDone(story.status))
+          .filter((story) => {
+            const aiDate = (story as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
+            const br = Number((b as any).aiFocusStoryRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Stories(rows);
+        storiesReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 stories', err);
+        setTop3Stories([]);
+        storiesReady = true;
+        markReady();
+      },
+    );
+
+    return () => {
+      unsubTasks();
+      unsubStories();
+    };
+  }, [currentUser, currentPersona]);
+
   const topChores = useMemo(() => planner.chores.slice(0, 5), [planner.chores]);
   const topRoutines = useMemo(() => planner.routines.slice(0, 5), [planner.routines]);
 

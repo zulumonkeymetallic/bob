@@ -1174,6 +1174,54 @@ const MobileHome: React.FC = () => {
             </Card.Body>
           </Card>
 
+          <Card className="mb-3" style={{ background: '#f0fdf4' }}>
+            <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+              <div>
+                <strong>Chores &amp; Habits</strong>
+                <Badge bg="secondary" pill className="ms-2">{choresDueToday.length}</Badge>
+              </div>
+              <Button size="sm" variant="outline-secondary" href="/chores/checklist">Checklist</Button>
+            </Card.Header>
+            <Card.Body className="pt-0">
+              {choresLoading ? (
+                <div className="text-muted small">Loading chores…</div>
+              ) : choresDueToday.length === 0 ? (
+                <div className="text-muted small">No chores, habits, or routines due today.</div>
+              ) : (
+                <ListGroup variant="flush">
+                  {choresDueToday.map((task) => {
+                    const kind = getChoreKind(task) || 'chore';
+                    const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                    const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                    const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
+                    const dueLabel = formatDueLabel(dueMs);
+                    const isOverdue = !!dueMs && dueMs < todayStartMs;
+                    const busy = !!choreCompletionBusy[task.id];
+                    return (
+                      <ListGroup.Item key={task.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
+                        <Form.Check
+                          type="checkbox"
+                          checked={busy}
+                          disabled={busy}
+                          onChange={() => handleCompleteChoreTask(task)}
+                          aria-label={`Complete ${task.title}`}
+                        />
+                        <div className="flex-grow-1">
+                          <div className="fw-semibold">{task.title}</div>
+                          <div className="text-muted small">{isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}</div>
+                        </div>
+                        <div className="d-flex flex-column align-items-end gap-1">
+                          {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                          <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                        </div>
+                      </ListGroup.Item>
+                    );
+                  })}
+                </ListGroup>
+              )}
+            </Card.Body>
+          </Card>
+
           {summary?.priorities?.items?.length > 0 && (
             <Card className="mb-3" style={{ background: '#f0f9ff' }}>
               <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
