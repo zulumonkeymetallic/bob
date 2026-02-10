@@ -330,7 +330,7 @@ function hasRecurrence(entity) {
 function isRoutineChoreHabit(entity) {
   const type = String(entity?.type || entity?.category || '').toLowerCase();
   if (['routine', 'chore', 'habit', 'habitual'].some((k) => type.includes(k))) return true;
-  const tags = Array.isArray(entity?.tags) ? entity.tags.map((t) => String(t || '').toLowerCase()) : [];
+  const tags = Array.isArray(entity?.tags) ? entity.tags.map((t) => String(t || '').toLowerCase().replace(/^#/, '')) : [];
   if (tags.some((t) => ['routine', 'chore', 'habit', 'habitual'].includes(t))) return true;
   const listName = String(entity?.reminderListName || '').toLowerCase();
   if (['routine', 'chore', 'habit'].some((k) => listName.includes(k))) return true;
@@ -417,6 +417,7 @@ async function appendToDescription(ref, existing, line) {
 const resolvePersona = (value) => (String(value || '').toLowerCase() === 'work' ? 'work' : 'personal');
 
 const isTaskLocked = (task) => task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
+const isStoryLocked = (story) => story?.dueDateLocked || story?.lockDueDate || story?.immovable === true || story?.status === 'immovable';
 
 async function materializePlannerThemeBlocks({
   db,
@@ -556,6 +557,82 @@ async function materializePlannerThemeBlocks({
   }
 
   return results;
+}
+
+async function dedupePlannerBlocksForUser({ db, userId, windowStart, windowEnd }) {
+  if (!userId) return { blocks: [], removed: 0, groups: 0 };
+  const windowStartMs = windowStart?.toMillis ? windowStart.toMillis() : toMillis(windowStart);
+  const windowEndMs = windowEnd?.toMillis ? windowEnd.toMillis() : toMillis(windowEnd);
+  const snap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', userId)
+    .where('start', '>=', windowStartMs)
+    .where('start', '<=', windowEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const entries = snap.docs.map((doc) => ({ id: doc.id, ref: doc.ref, data: doc.data() || {} }));
+  const isPlannerCandidate = (data) => {
+    const source = String(data.source || data.sourceType || '').toLowerCase();
+    const entityType = String(data.entityType || data.category || '').toLowerCase();
+    const isAi = data.aiGenerated === true || data.isAiGenerated === true || data.createdBy === 'ai';
+    const isPlanner = source.includes('theme_allocation') || source.includes('health_allocation') || source.includes('work_shift_allocation');
+    const isExternal = source === 'gcal' || source === 'google_calendar' || data.createdBy === 'google';
+    if (isExternal) return false;
+    return isAi || isPlanner || ['health', 'work_shift', 'task', 'story'].includes(entityType);
+  };
+  const buildKey = (data) => {
+    const start = toMillis(data.start) || 0;
+    const end = toMillis(data.end) || 0;
+    const title = String(data.title || '').trim().toLowerCase();
+    const entityType = String(data.entityType || data.category || '').trim().toLowerCase();
+    const sourceType = String(data.sourceType || data.source || '').trim().toLowerCase();
+    const persona = String(data.persona || '').trim().toLowerCase();
+    const taskId = data.taskId || '';
+    const storyId = data.storyId || '';
+    const goalId = data.goalId || '';
+    return [start, end, title, entityType, sourceType, persona, taskId, storyId, goalId].join('|');
+  };
+
+  const groups = new Map();
+  const keptBlocks = [];
+
+  entries.forEach((entry) => {
+    if (!isPlannerCandidate(entry.data)) {
+      keptBlocks.push({ id: entry.id, ...(entry.data || {}) });
+      return;
+    }
+    const key = buildKey(entry.data);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(entry);
+  });
+
+  const deletions = [];
+  let removed = 0;
+  let groupsWithDupes = 0;
+  groups.forEach((group) => {
+    if (group.length === 1) {
+      keptBlocks.push({ id: group[0].id, ...(group[0].data || {}) });
+      return;
+    }
+    groupsWithDupes += 1;
+    group.sort((a, b) => {
+      const aTime = toMillis(a.data?.createdAt) || toMillis(a.data?.updatedAt) || toMillis(a.data?.start) || 0;
+      const bTime = toMillis(b.data?.createdAt) || toMillis(b.data?.updatedAt) || toMillis(b.data?.start) || 0;
+      return aTime - bTime;
+    });
+    const [keep, ...dupes] = group;
+    keptBlocks.push({ id: keep.id, ...(keep.data || {}) });
+    dupes.forEach((dup) => {
+      deletions.push(dup.ref.delete());
+      removed += 1;
+    });
+  });
+
+  if (deletions.length) {
+    await Promise.allSettled(deletions);
+  }
+
+  return { blocks: keptBlocks, removed, groups: groupsWithDupes };
 }
 
 async function replanExistingBlocksForUser({
@@ -1167,6 +1244,20 @@ async function runPriorityScoringJob() {
       return Array.from(seen.values());
     };
 
+    const isDueInActiveSprint = (dueMs) => {
+      if (!dueMs) return false;
+      for (const sprintId of activeSprintIds) {
+        const sprint = sprintMap.get(sprintId);
+        if (!sprint) continue;
+        const start = sprint.startDateMs;
+        const end = sprint.endDateMs;
+        if (start && end && dueMs >= start && dueMs <= end) {
+          return true;
+        }
+      }
+      return false;
+    };
+
     const activeSprintList = Array.from(activeSprintIds);
 
     const taskDocs = await fetchActiveTasks();
@@ -1367,7 +1458,7 @@ async function runPriorityScoringJob() {
       const textSignal = textSignals.get(ref.id);
       const textScore = textSignal ? clampTextScore(textSignal.score) : 0;
       const textReason = textSignal?.reason ? `Text signal: ${textSignal.reason} (+${textScore})` : '';
-      let score = Math.min(100, baseScore + bonus + textScore);
+      let score = Math.min(99, baseScore + bonus + textScore);
       if (isHobbyTheme) {
         // Hard cap hobby items below other themes
         score = Math.min(score, 45);
@@ -1473,17 +1564,21 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const statusStr = String(statusRaw || '').toLowerCase();
       const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 2;
-      if (isDone || data.deleted || !isTaskOpenStatus(statusRaw)) {
+      if (isDone || data.deleted) {
         await clearPriorityFields(doc.ref, 'task');
         continue;
       }
-      // Skip recurring items entirely from AI priority/focus
-      if (hasRecurrence(data)) {
+      // Never score recurring chores/routines/habits
+      if (hasRecurrence(data) || isRoutineChoreHabit(data)) {
         await clearPriorityFields(doc.ref, 'task');
         continue;
       }
-      const dueMs = toDateTime(data.dueDate, { defaultValue: null })?.toMillis() || null;
-      if (isRoutineChoreHabit(data) && !isTodayOrOverdue(dueMs)) {
+      const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
+      const storyMeta = data.storyId ? (storyMetaMap.get(data.storyId) || {}) : {};
+      const inActiveSprint = (data.sprintId && activeSprintIds.has(data.sprintId))
+        || (storyMeta.sprintId && activeSprintIds.has(storyMeta.sprintId));
+      const mustScore = inActiveSprint || isDueInActiveSprint(dueMs);
+      if (!mustScore && !isTaskOpenStatus(statusRaw)) {
         await clearPriorityFields(doc.ref, 'task');
         continue;
       }
@@ -1495,7 +1590,14 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const statusStr = String(statusRaw || '').toLowerCase();
       const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 4;
-      if (isDone || !isStoryOpenStatus(statusRaw)) {
+      if (isDone) {
+        await clearPriorityFields(doc.ref, 'story');
+        continue;
+      }
+      const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
+      const inActiveSprint = data.sprintId && activeSprintIds.has(data.sprintId);
+      const mustScore = inActiveSprint || isDueInActiveSprint(dueMs);
+      if (!mustScore && !isStoryOpenStatus(statusRaw)) {
         await clearPriorityFields(doc.ref, 'story');
         continue;
       }
@@ -1565,7 +1667,7 @@ async function runPriorityScoringJob() {
       const taskBatch = db.batch();
       focusTasks.forEach((task, idx) => {
         const tags = Array.isArray(task.data?.tags) ? [...task.data.tags] : [];
-        if (!tags.includes('critical')) tags.push('critical');
+        if (!tags.includes('Top3')) tags.push('Top3');
         const reason = [
           'Top 3 priority',
           `score=${Math.round(task.score || 0)}`,
@@ -1576,10 +1678,9 @@ async function runPriorityScoringJob() {
           aiPriorityRank: idx + 1,
           aiTop3ForDay: true,
           aiTop3Date: todayIso,
-          aiPriorityLabel: 'critical',
           aiTop3Reason: reason,
+          aiCriticalityScore: 100,
           aiPriorityReason: admin.firestore.FieldValue.delete(),
-          iosPriority: '!!',
           tags,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           syncState: 'dirty',
@@ -1614,13 +1715,13 @@ async function runPriorityScoringJob() {
           aiFocusStoryAt: admin.firestore.FieldValue.serverTimestamp(),
           aiTop3ForDay: true,
           aiTop3Date: todayIso,
-          aiPriorityLabel: 'critical',
           aiTop3Reason: reason,
+          aiCriticalityScore: 100,
           aiPriorityReason: admin.firestore.FieldValue.delete(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           syncState: 'dirty',
         };
-        if (focusDueDate) {
+        if (focusDueDate && !isStoryLocked(story.data)) {
           patch.dueDate = focusDueDate;
           patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
           patch.dueDateReason = reason;
@@ -1640,14 +1741,34 @@ async function runPriorityScoringJob() {
     }
 
     // Clear flags for tasks no longer in top 3 (per persona)
-    const flaggedQuery = await db.collection('tasks')
-      .where('ownerUid', '==', userId)
-      .where('aiFlaggedTop', '==', true)
-      .limit(200)
-      .get()
-      .catch(() => ({ docs: [] }));
+    const flaggedSnaps = await Promise.all([
+      db.collection('tasks')
+        .where('ownerUid', '==', userId)
+        .where('aiFlaggedTop', '==', true)
+        .limit(500)
+        .get()
+        .catch(() => ({ docs: [] })),
+      db.collection('tasks')
+        .where('ownerUid', '==', userId)
+        .where('aiTop3ForDay', '==', true)
+        .limit(500)
+        .get()
+        .catch(() => ({ docs: [] })),
+      db.collection('tasks')
+        .where('ownerUid', '==', userId)
+        .where('aiPriorityRank', '>', 0)
+        .limit(500)
+        .get()
+        .catch(() => ({ docs: [] })),
+    ]);
+    const flaggedMap = new Map();
+    flaggedSnaps.forEach((snap) => {
+      (snap?.docs || []).forEach((doc) => {
+        if (!flaggedMap.has(doc.id)) flaggedMap.set(doc.id, doc);
+      });
+    });
     const clearTasksBatch = db.batch();
-    for (const doc of flaggedQuery.docs) {
+    flaggedMap.forEach((doc) => {
       const data = doc.data() || {};
       const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
       if (!topTaskIdsByPersona[persona].has(doc.id)) {
@@ -1663,7 +1784,7 @@ async function runPriorityScoringJob() {
           syncState: 'dirty',
         }, { merge: true });
       }
-    }
+    });
     await clearTasksBatch.commit();
 
     // Clear/update story focus ranks and ensure non-top stories use sprint end date
@@ -1679,7 +1800,6 @@ async function runPriorityScoringJob() {
       if (isTop) {
         patch.aiTop3ForDay = true;
         patch.aiTop3Date = todayIso;
-        patch.aiPriorityLabel = 'critical';
       } else {
         if (Number(data.aiFocusStoryRank || 0) > 0 || data.aiTop3ForDay) {
           patch.aiFocusStoryRank = admin.firestore.FieldValue.delete();
@@ -1689,7 +1809,7 @@ async function runPriorityScoringJob() {
           patch.aiTop3Reason = admin.firestore.FieldValue.delete();
           patch.aiPriorityReason = admin.firestore.FieldValue.delete();
         }
-        if (sprintEnd) {
+        if (sprintEnd && !isStoryLocked(data)) {
           patch.dueDate = sprintEnd;
         }
       }
@@ -1787,13 +1907,11 @@ async function runCalendarPlannerJob() {
       .get()
       .catch(() => ({ docs: [] }));
 
-    const blocksSnap = await db.collection('calendar_blocks')
-      .where('ownerUid', '==', userId)
-      .where('start', '>=', windowStart.toMillis())
-      .where('start', '<=', windowEnd.toMillis())
-      .get()
-      .catch(() => ({ docs: [] }));
-    const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    const dedupeResult = await dedupePlannerBlocksForUser({ db, userId, windowStart, windowEnd });
+    if (dedupeResult.removed > 0) {
+      console.log(`[calendar-planner] removed ${dedupeResult.removed} duplicate blocks for ${userId}`);
+    }
+    const existingBlocks = dedupeResult.blocks;
 
     const plannerBlockResult = await materializePlannerThemeBlocks({
       db,
@@ -1837,8 +1955,17 @@ async function runCalendarPlannerJob() {
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
       .filter((t) => !isTaskDoneStatus(t.status) && !t.deleted);
 
-    const isTopTask = (t) => t.aiTop3ForDay === true || t.aiFlaggedTop === true || Number(t.aiPriorityRank || 0) > 0;
-    const isTopStory = (s) => s.aiTop3ForDay === true || Number(s.aiFocusStoryRank || 0) > 0;
+    const todayIso = nowLocal.toISODate();
+    const isTopTask = (t) => {
+      if (t.aiTop3ForDay !== true) return false;
+      if (t.aiTop3Date && String(t.aiTop3Date).slice(0, 10) !== todayIso) return false;
+      return true;
+    };
+    const isTopStory = (s) => {
+      if (s.aiTop3ForDay !== true) return false;
+      if (s.aiTop3Date && String(s.aiTop3Date).slice(0, 10) !== todayIso) return false;
+      return true;
+    };
     const rankSort = (a, b, key) => {
       const ar = Number(a?.[key] || 0) || 99;
       const br = Number(b?.[key] || 0) || 99;
@@ -1848,17 +1975,23 @@ async function runCalendarPlannerJob() {
       return bs - as;
     };
 
+    const selectTop = (items, rankKey, filterFn) => {
+      const flagged = items.filter(filterFn);
+      const base = flagged.length ? flagged : items;
+      return base.slice().sort((a, b) => rankSort(a, b, rankKey)).slice(0, 3);
+    };
+
     const topStories = ['personal', 'work']
-      .flatMap((persona) => openStories
-        .filter((s) => resolvePersona(s.persona) === persona && isTopStory(s))
-        .sort((a, b) => rankSort(a, b, 'aiFocusStoryRank'))
-        .slice(0, 3));
+      .flatMap((persona) => {
+        const personaStories = openStories.filter((s) => resolvePersona(s.persona) === persona);
+        return selectTop(personaStories, 'aiFocusStoryRank', isTopStory);
+      });
 
     const topTasks = ['personal', 'work']
-      .flatMap((persona) => openTasks
-        .filter((t) => resolvePersona(t.persona) === persona && isTopTask(t))
-        .sort((a, b) => rankSort(a, b, 'aiPriorityRank'))
-        .slice(0, 3));
+      .flatMap((persona) => {
+        const personaTasks = openTasks.filter((t) => resolvePersona(t.persona) === persona);
+        return selectTop(personaTasks, 'aiPriorityRank', isTopTask);
+      });
 
     const topIds = new Set([
       ...topStories.map((s) => `story:${s.id}`),
@@ -2107,13 +2240,11 @@ exports.materializeFitnessBlocksNow = onCall({
     if (allocDoc.exists) themeAllocations = allocDoc.data()?.allocations || [];
   } catch { /* ignore */ }
 
-  const blocksSnap = await db.collection('calendar_blocks')
-    .where('ownerUid', '==', uid)
-    .where('start', '>=', windowStart.toMillis())
-    .where('start', '<=', windowEnd.toMillis())
-    .get()
-    .catch(() => ({ docs: [] }));
-  const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const dedupeResult = await dedupePlannerBlocksForUser({ db, userId: uid, windowStart, windowEnd });
+  if (dedupeResult.removed > 0) {
+    console.log(`[calendar-planner] removed ${dedupeResult.removed} duplicate blocks for ${uid}`);
+  }
+  const existingBlocks = dedupeResult.blocks;
 
   const result = await materializePlannerThemeBlocks({
     db,
@@ -2217,6 +2348,17 @@ exports.replanCalendarNow = onCall({
     .catch(() => ({ docs: [] }));
 
   const scoreWithBonus = (priority, base) => (Number(priority) >= 4 ? Number(base || 0) + 500 : Number(base || 0));
+  const todayIso = DateTime.now().toISODate();
+  const isTopTask = (t) => {
+    if (t.aiTop3ForDay !== true) return false;
+    if (t.aiTop3Date && String(t.aiTop3Date).slice(0, 10) !== todayIso) return false;
+    return true;
+  };
+  const isTopStory = (s) => {
+    if (s.aiTop3ForDay !== true) return false;
+    if (s.aiTop3Date && String(s.aiTop3Date).slice(0, 10) !== todayIso) return false;
+    return true;
+  };
   const openStories = storiesSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((s) => !isStoryDoneStatus(s.status) && activeSprintIds.length > 0 && activeSprintIds.includes(s.sprintId));
@@ -2225,19 +2367,23 @@ exports.replanCalendarNow = onCall({
     .filter((t) => !isTaskDoneStatus(t.status))
     .filter((t) => !t.sprintId || activeSprintIds.includes(t.sprintId));
 
-  const topStories = openStories
-    .map((s) => ({
-      ...s,
-      aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore),
-    }))
+  const scoredStories = openStories.map((s) => ({
+    ...s,
+    aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore),
+  }));
+  const scoredTasks = openTasks.map((t) => ({
+    ...t,
+    aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore),
+  }));
+
+  const flaggedStories = scoredStories.filter(isTopStory);
+  const flaggedTasks = scoredTasks.filter(isTopTask);
+
+  const topStories = (flaggedStories.length ? flaggedStories : scoredStories)
     .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
     .slice(0, 3);
 
-  const topTasks = openTasks
-    .map((t) => ({
-      ...t,
-      aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore),
-    }))
+  const topTasks = (flaggedTasks.length ? flaggedTasks : scoredTasks)
     .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
     .slice(0, 3);
 

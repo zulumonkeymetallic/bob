@@ -6,7 +6,9 @@ import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
 import { Container, Row, Col, Card, Button, Modal, Form } from 'react-bootstrap';
-import { getThemeName, isStatus } from '../utils/statusHelpers';
+import { isStatus } from '../utils/statusHelpers';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { resolveThemeFromValue } from '../utils/themeResolver';
 import {
   DndContext,
   closestCenter,
@@ -31,6 +33,7 @@ const SprintPlanner: React.FC = () => {
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
     const { sprints } = useSprint();
+    const { themes: globalThemes } = useGlobalThemes();
     const [stories, setStories] = useState<Story[]>([]);
     const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
@@ -45,15 +48,6 @@ const SprintPlanner: React.FC = () => {
     });
     const [selectedStory, setSelectedStory] = useState<Story | null>(null);
     const [showEditModal, setShowEditModal] = useState(false);
-
-    // Theme colors for visual consistency
-    const themeColors = {
-        'Health': '#22c55e',
-        'Growth': '#3b82f6', 
-        'Wealth': '#eab308',
-        'Tribe': '#8b5cf6',
-        'Home': '#f97316'
-    };
 
     // Configure drag sensors
     const sensors = useSensors(
@@ -70,13 +64,10 @@ const SprintPlanner: React.FC = () => {
     const getGoalForStory = (story: Story): Goal | undefined => goals.find(goal => goal.id === story.goalId);
 
     const resolveThemeColor = (story: Story, goal?: Goal): string => {
-        const rawTheme = goal?.theme ?? (story as any)?.theme ?? 1;
-        if (typeof rawTheme === 'string') {
-            return themeColors[rawTheme as keyof typeof themeColors] || '#6c757d';
-        }
-        const numericTheme = Number(rawTheme);
-        const themeName = Number.isNaN(numericTheme) ? 'Growth' : getThemeName(numericTheme);
-        return themeColors[themeName as keyof typeof themeColors] || '#6c757d';
+        const rawTheme = (goal as any)?.theme ?? (goal as any)?.themeId ?? (goal as any)?.theme_id
+            ?? (story as any)?.theme ?? (story as any)?.themeId ?? (story as any)?.theme_id;
+        const themeDef = resolveThemeFromValue(rawTheme, globalThemes);
+        return themeDef?.color || '#6c757d';
     };
 
     const getTaskCount = (story: Story): number => {
@@ -331,6 +322,7 @@ const SprintPlanner: React.FC = () => {
                                                 goal={storyGoal}
                                                 taskCount={taskCount}
                                                 themeColor={themeColor}
+                                                themes={globalThemes}
                                                 onEdit={handleEditStory}
                                                 onDelete={handleDeleteStory}
                                             />
@@ -373,6 +365,7 @@ const SprintPlanner: React.FC = () => {
                                                         goal={storyGoal}
                                                         taskCount={taskCount}
                                                         themeColor={themeColor}
+                                                        themes={globalThemes}
                                                         onEdit={handleEditStory}
                                                         onDelete={handleDeleteStory}
                                                     />

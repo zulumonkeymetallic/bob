@@ -56,6 +56,7 @@ const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
 const crypto = require('crypto');
 const { KeyManagementServiceClient } = require('@google-cloud/kms');
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const MS_IN_WEEK = 7 * MS_IN_DAY;
 const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
 const SPRINT_NONE = '__none__';
 
@@ -90,6 +91,7 @@ try {
     // Capacity Planning
     const capacityPlanning = require('./capacityPlanning');
     exports.calculateSprintCapacity = capacityPlanning.calculateSprintCapacity;
+    exports.calculateNextWeekCapacity = capacityPlanning.calculateNextWeekCapacity;
     exports.updateStoryPriorities = capacityPlanning.updateStoryPriorities; // New Scheduled Function
   }
 } catch (e) {
@@ -205,6 +207,8 @@ function makeAssignmentId({ planId, itemType, itemId }) {
 
 const MS_IN_MINUTE = 60 * 1000;
 const CHORE_LOOKAHEAD_DAYS = 90;
+const CHORE_DUE_ROLLOVER_DAYS = 3;
+const CHORE_DUE_ROLLOVER_MS = CHORE_DUE_ROLLOVER_DAYS * 24 * 60 * 60 * 1000;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 const AI_PRIORITY_MODEL = GEMINI_MODEL;
 
@@ -234,9 +238,10 @@ function toMillis(value) {
 function inferTaskType(data) {
   const rawTitle = String(data?.title || '').toLowerCase();
   const rawList = String(data?.reminderListName || data?.reminderListId || '').toLowerCase();
-  const tags = Array.isArray(data?.tags) ? data.tags.map((t) => String(t || '').toLowerCase()) : [];
+  const tags = Array.isArray(data?.tags) ? data.tags.map((t) => String(t || '').toLowerCase().replace(/^#/, '')) : [];
   const note = String(data?.note || '').toLowerCase();
   const candidates = [rawTitle, rawList, note, ...tags];
+  if (candidates.some((s) => s.includes('habit'))) return 'habit';
   if (candidates.some((s) => s.includes('routine'))) return 'routine';
   if (candidates.some((s) => s.includes('chore'))) return 'chore';
   return null;
@@ -283,6 +288,16 @@ function normaliseRecurrence(data) {
   return { changed, patch: out };
 }
 
+function isRecurringChoreTask(task) {
+  const type = String(task?.type || '').toLowerCase();
+  if (!['chore', 'routine', 'habit'].includes(type)) return false;
+  const freq = task?.repeatFrequency || task?.repeatInterval || task?.recurrence?.frequency || task?.recurrence?.freq || null;
+  const days = Array.isArray(task?.daysOfWeek) && task.daysOfWeek.length;
+  const recurDays = Array.isArray(task?.repeatDaysOfWeek) && task.repeatDaysOfWeek.length;
+  const recurMeta = Array.isArray(task?.recurrence?.daysOfWeek) && task.recurrence.daysOfWeek.length;
+  return !!(freq || days || recurDays || recurMeta);
+}
+
 function* iterateNextDays(startDate, count) {
   const d = new Date(startDate);
   for (let i = 0; i < count; i++) {
@@ -313,10 +328,18 @@ function toISODate(date) {
   return `${y}-${m}-${d}`;
 }
 
+function isSameDay(a, b) {
+  return startOfDay(new Date(a)).getTime() === startOfDay(new Date(b)).getTime();
+}
+
 function shouldScheduleOnDay(task, date) {
   const freq = task?.repeatFrequency;
   const interval = Number(task?.repeatInterval || 1) || 1;
-  if (!freq) return false;
+  if (!freq) {
+    const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    if (!dueMs) return false;
+    return isSameDay(date, dueMs);
+  }
   if (freq === 'daily') {
     // If we have a baseline, respect interval
     const base = toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now();
@@ -324,16 +347,49 @@ function shouldScheduleOnDay(task, date) {
     return daysDiff % interval === 0;
   }
   if (freq === 'weekly') {
-    const allowed = Array.isArray(task?.daysOfWeek) ? task.daysOfWeek : [];
-    return allowed.includes(dayOfWeekKey(date));
+    const normalizeDayToken = (value) => {
+      if (value === null || value === undefined) return null;
+      if (typeof value === 'number') {
+        const map = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+        if (value >= 1 && value <= 7) return map[value - 1] || null;
+        if (value >= 0 && value <= 6) return map[value] || null;
+        return null;
+      }
+      const raw = String(value).toLowerCase().trim();
+      if (!raw) return null;
+      if (['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(raw)) return raw;
+      if (raw.startsWith('su')) return 'sun';
+      if (raw.startsWith('mo')) return 'mon';
+      if (raw.startsWith('tu')) return 'tue';
+      if (raw.startsWith('we')) return 'wed';
+      if (raw.startsWith('th')) return 'thu';
+      if (raw.startsWith('fr')) return 'fri';
+      if (raw.startsWith('sa')) return 'sat';
+      return null;
+    };
+    const allowedRaw = []
+      .concat(task?.daysOfWeek || [])
+      .concat(task?.repeatDaysOfWeek || [])
+      .concat(task?.recurrence?.daysOfWeek || []);
+    const allowed = Array.from(new Set(allowedRaw.map(normalizeDayToken).filter(Boolean)));
+    const base = new Date(toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now());
+    const fallback = dayOfWeekKey(base);
+    const days = allowed.length ? allowed : [fallback];
+    if (!days.includes(dayOfWeekKey(date))) return false;
+    const weeksDiff = Math.floor((startOfWeek(date).getTime() - startOfWeek(base).getTime()) / MS_IN_WEEK);
+    return weeksDiff % interval === 0;
   }
   if (freq === 'monthly') {
     const base = new Date(toMillis(task?.createdAt) || Date.now());
-    return date.getDate() === base.getDate();
+    if (date.getDate() !== base.getDate()) return false;
+    const monthsDiff = (date.getFullYear() - base.getFullYear()) * 12 + (date.getMonth() - base.getMonth());
+    return monthsDiff % interval === 0;
   }
   if (freq === 'yearly') {
     const base = new Date(toMillis(task?.createdAt) || Date.now());
-    return date.getMonth() === base.getMonth() && date.getDate() === base.getDate();
+    if (date.getMonth() !== base.getMonth() || date.getDate() !== base.getDate()) return false;
+    const yearsDiff = date.getFullYear() - base.getFullYear();
+    return yearsDiff % interval === 0;
   }
   return false;
 }
@@ -344,12 +400,158 @@ function startOfDay(d) {
   return nd;
 }
 
+function startOfWeek(d) {
+  const nd = startOfDay(d);
+  const day = nd.getDay(); // 0 = Sunday
+  nd.setDate(nd.getDate() - day);
+  return nd;
+}
+
+function hasTimeComponent(ms) {
+  if (!ms) return false;
+  const d = new Date(ms);
+  return d.getHours() !== 0 || d.getMinutes() !== 0 || d.getSeconds() !== 0;
+}
+
+function applyTimeOfDay(day, timeMs) {
+  const base = new Date(timeMs);
+  const d = new Date(day.getTime());
+  d.setHours(base.getHours(), base.getMinutes(), 0, 0);
+  return d.getTime();
+}
+
+function durationMinutesFromTask(task) {
+  const points = Number(task?.points || 0);
+  const estimateMin = Number(task?.estimateMin || 0);
+  const type = String(task?.type || '').toLowerCase();
+  const isChoreLike = ['chore', 'routine', 'habit'].includes(type);
+  const choreMin = 10;
+  if (estimateMin > 0) return Math.min(180, Math.max(isChoreLike ? choreMin : 15, Math.round(estimateMin)));
+  if (points > 0) return Math.min(240, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 60)));
+  return isChoreLike ? choreMin : 30;
+}
+
+async function resolveSprintIdForDate(db, ownerUid, persona, dueDateMs, cache) {
+  if (!dueDateMs || !ownerUid) return null;
+  const key = `${ownerUid}:${persona || ''}`;
+  let sprints = cache?.get(key);
+  if (!sprints) {
+    let qs = db.collection('sprints').where('ownerUid', '==', ownerUid);
+    if (persona) qs = qs.where('persona', '==', persona);
+    const snap = await qs.get().catch(() => ({ docs: [] }));
+    sprints = (snap.docs || []).map((doc) => {
+      const data = doc.data() || {};
+      return {
+        id: doc.id,
+        start: toMillis(data.startDate),
+        end: toMillis(data.endDate),
+      };
+    }).filter((s) => s.start && s.end);
+    cache?.set(key, sprints);
+  }
+  const match = sprints.find((s) => dueDateMs >= s.start && dueDateMs <= s.end);
+  return match?.id ?? null;
+}
+
+async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
+  const busy = [];
+  const snap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', ownerUid)
+    .where('start', '>=', dayStartMs)
+    .where('start', '<=', dayEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+  snap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const start = toMillis(data.start);
+    const end = toMillis(data.end) || (start ? start + durationMs : null);
+    if (start && end) busy.push([start, end]);
+  });
+  busy.sort((a, b) => a[0] - b[0]);
+  let cursor = dayStartMs + (8 * 60 * 60 * 1000);
+  const windowEnd = dayEndMs - durationMs;
+  for (let i = 0; i <= busy.length; i++) {
+    const nextBusyStart = i < busy.length ? busy[i][0] : dayEndMs;
+    if (cursor + durationMs <= nextBusyStart) {
+      if (cursor <= windowEnd) return cursor;
+      return null;
+    }
+    if (i < busy.length) {
+      cursor = Math.max(cursor, busy[i][1] || cursor);
+    }
+  }
+  return null;
+}
+
 async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
   if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
   const ownerUid = task.ownerUid;
   const today = startOfDay(new Date());
   const snoozedUntil = toMillis(task?.snoozedUntil) || 0;
   let created = 0, updated = 0;
+  let nextStartMs = null;
+  const nowMs = Date.now();
+  const durationMin = durationMinutesFromTask(task);
+  const durationMs = durationMin * MS_IN_MINUTE;
+  const taskDueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+  const dueHasTime = hasTimeComponent(taskDueMs);
+  const dayCtxCache = new Map();
+  const sprintCache = new Map();
+
+  const loadDayCtx = async (dayStartMs, dayEndMs, dayKey) => {
+    if (dayCtxCache.has(dayKey)) return dayCtxCache.get(dayKey);
+    const snap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', ownerUid)
+      .where('start', '>=', dayStartMs)
+      .where('start', '<=', dayEndMs)
+      .get()
+      .catch(() => ({ docs: [] }));
+    const windows = [];
+    const occupied = [];
+    snap.docs.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const start = toMillis(data.start);
+      const end = toMillis(data.end);
+      if (!start || !end || end <= start) return;
+      const source = String(data.source || data.entityType || data.entry_method || '').toLowerCase();
+      const entityType = String(data.entityType || '').toLowerCase();
+      const isChoreEvent = source === 'chore' || entityType === 'chore';
+      const themeLabel = themeLabelFromValue(
+        data.theme ?? data.theme_id ?? data.themeId ?? data.category ?? data.title ?? ''
+      );
+      const isChoreTheme = String(themeLabel || '').toLowerCase().includes('chore');
+      if (isChoreEvent) {
+        occupied.push({ id: docSnap.id, start, end });
+      } else if (isChoreTheme) {
+        windows.push({ start, end });
+      }
+    });
+    windows.sort((a, b) => a.start - b.start);
+    occupied.sort((a, b) => a.start - b.start);
+    const ctx = { windows, occupied };
+    dayCtxCache.set(dayKey, ctx);
+    return ctx;
+  };
+
+  const fitsInWindows = (startMs, endMs, windows) =>
+    windows.some((w) => startMs >= w.start && endMs <= w.end);
+
+  const overlapsAny = (startMs, endMs, occupied) =>
+    occupied.some((o) => startMs < o.end && endMs > o.start);
+
+  const findSlotInWindows = (windows, occupied, duration) => {
+    for (const window of windows) {
+      let cursor = window.start;
+      for (const occ of occupied) {
+        if (occ.end <= window.start || occ.start >= window.end) continue;
+        if (cursor + duration <= occ.start) return cursor;
+        cursor = Math.max(cursor, occ.end);
+        if (cursor >= window.end) break;
+      }
+      if (cursor + duration <= window.end) return cursor;
+    }
+    return null;
+  };
   for (const day of iterateNextDays(today, lookaheadDays)) {
     if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
     if (!shouldScheduleOnDay(task, day)) continue;
@@ -358,6 +560,60 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     const docId = `chore_${task.id}_${dayKey}`;
     const ref = db.collection('calendar_blocks').doc(docId);
     const snap = await ref.get();
+    const dayStartMs = startOfDay(day).getTime();
+    const dayEndMs = dayStartMs + (24 * 60 * 60 * 1000) - 1;
+    const dayCtx = await loadDayCtx(dayStartMs, dayEndMs, dayKey);
+    if (!dayCtx.windows.length) {
+      if (snap.exists) {
+        await ref.delete();
+        dayCtx.occupied = dayCtx.occupied.filter((o) => o.id !== docId);
+      }
+      continue;
+    }
+
+    const occupiedWithoutSelf = dayCtx.occupied.filter((o) => o.id !== docId);
+    let startMs = null;
+    let endMs = null;
+
+    if (snap.exists) {
+      const existing = snap.data() || {};
+      const existingStart = toMillis(existing.start);
+      const existingEnd = toMillis(existing.end);
+      if (existingStart && existingEnd &&
+        fitsInWindows(existingStart, existingEnd, dayCtx.windows) &&
+        !overlapsAny(existingStart, existingEnd, occupiedWithoutSelf)) {
+        startMs = existingStart;
+        endMs = existingEnd;
+      }
+    }
+
+    if (startMs == null && taskDueMs && dueHasTime) {
+      const preferred = applyTimeOfDay(day, taskDueMs);
+      const preferredEnd = preferred + durationMs;
+      if (fitsInWindows(preferred, preferredEnd, dayCtx.windows) &&
+        !overlapsAny(preferred, preferredEnd, occupiedWithoutSelf)) {
+        startMs = preferred;
+        endMs = preferredEnd;
+      }
+    }
+
+    if (startMs == null) {
+      const slot = findSlotInWindows(dayCtx.windows, occupiedWithoutSelf, durationMs);
+      if (!slot) {
+        if (snap.exists) {
+          await ref.delete();
+          dayCtx.occupied = occupiedWithoutSelf;
+        }
+        continue;
+      }
+      startMs = slot;
+      endMs = slot + durationMs;
+    }
+
+    if (startMs >= nowMs && (nextStartMs == null || startMs < nextStartMs)) {
+      nextStartMs = startMs;
+    }
+    const checklistLink = `/chores/checklist?date=${encodeURIComponent(iso)}&taskId=${encodeURIComponent(task.id)}`;
     const base = {
       ownerUid,
       entityType: 'chore',
@@ -365,8 +621,11 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
       date: iso,
       title: task.title || 'Chore',
       status: 'planned',
-      start: startOfDay(day).getTime(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      start: startMs,
+      end: endMs,
+      source: 'chore',
+      syncToGoogle: false,
+      deepLink: checklistLink,
       metadata: {
         frequency: task.repeatFrequency || null,
         interval: Number(task.repeatInterval || 1) || 1,
@@ -375,11 +634,42 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     };
     if (snap.exists) {
       const existing = snap.data() || {};
-      const needsUpdate = existing.title !== base.title || existing.status === undefined || existing.ownerUid !== ownerUid;
-      if (needsUpdate) { await ref.set({ ...existing, ...base }, { merge: true }); updated++; }
+      const needsUpdate = existing.title !== base.title
+        || existing.status === undefined
+        || existing.ownerUid !== ownerUid
+        || existing.start !== base.start
+        || existing.end !== base.end
+        || existing.syncToGoogle !== base.syncToGoogle
+        || existing.deepLink !== base.deepLink;
+      if (needsUpdate) {
+        await ref.set({ ...existing, ...base, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        updated++;
+      }
     } else {
-      await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       created++;
+    }
+    dayCtx.occupied = [...occupiedWithoutSelf, { id: docId, start: base.start, end: base.end }];
+  }
+
+  if (nextStartMs && isRecurringChoreTask(task) && !isTaskLocked(task)) {
+    const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    const isMissing = !dueMs;
+    const isOverdueBeyondGrace = !!dueMs && dueMs < (nowMs - CHORE_DUE_ROLLOVER_MS);
+    const isFutureMismatch = !!dueMs && dueMs >= nowMs && Math.abs(dueMs - nextStartMs) > (5 * MS_IN_MINUTE);
+    if (isMissing || isOverdueBeyondGrace || isFutureMismatch) {
+      const hasStory = !!(task?.storyId || (task?.parentType === 'story' && task?.parentId));
+      const sprintId = hasStory
+        ? (task?.sprintId || null)
+        : await resolveSprintIdForDate(db, ownerUid, task?.persona || null, nextStartMs, sprintCache);
+      await db.collection('tasks').doc(task.id).set({
+        dueDate: nextStartMs,
+        sprintId: sprintId ?? null,
+        dueDateReason: isOverdueBeyondGrace ? 'chore_rollover' : 'chore_block',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        serverUpdatedAt: Date.now(),
+        syncState: 'dirty',
+      }, { merge: true });
     }
   }
   return { created, updated };
@@ -1217,7 +1507,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     }
     batch.set(ref, payload, { merge: true });
 
-    // Mirror routines/chores/habits into calendar_blocks for GCal sync
+    // Mirror routines/chores/habits into calendar_blocks for internal tracking
     const blockId = `sched_${instance.id}`;
     const blockRef = db.collection('calendar_blocks').doc(blockId);
     const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
@@ -1238,7 +1528,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
         goalId: instance.goalId || null,
         updatedAt: nowMs,
         createdAt: nowMs,
-        syncToGoogle: true,
+        syncToGoogle: false,
       }, { merge: true });
     }
   }
@@ -1520,7 +1810,7 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
           goalId: instance.goalId || null,
           updatedAt: nowMs,
           createdAt: nowMs,
-          syncToGoogle: true,
+          syncToGoogle: false,
         }, { merge: true });
       }
     }
@@ -2681,7 +2971,7 @@ exports.listChoresWithStats = httpsV2.onCall(async (req) => {
       id: chore.id,
       title: chore.title || 'Chore',
       cadence: chore.recurrence?.rrule || null,
-      durationMinutes: Number(chore.durationMinutes || 15),
+      durationMinutes: Number(chore.durationMinutes || 10),
       priority: chore.priority || 3,
       tags: chore.tags || [],
       requiredBlockId: chore.requiredBlockId || null,
@@ -3121,6 +3411,15 @@ function getGoogleRedirectUri() {
   return `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
 }
 
+function getYouTubeRedirectUri() {
+  try {
+    if (process.env.GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI) return process.env.GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI;
+  } catch { }
+  const projectId = process.env.GCLOUD_PROJECT;
+  if (!projectId) return null;
+  return `https://europe-west2-${projectId}.cloudfunctions.net/youtubeOAuthCallback`;
+}
+
 exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
   try {
     const uid = String(req.query.uid || "");
@@ -3149,6 +3448,37 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGL
     res.redirect(authUrl);
   } catch (e) {
     res.status(500).send("OAuth start error: " + e.message);
+  }
+});
+
+// ===== YouTube OAuth: start
+exports.youtubeOAuthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+
+    const redirectUri = getYouTubeRedirectUri();
+    if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI)");
+    const clientId = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+    const clientSecret = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+
+    if (!clientId || !/\.apps\.googleusercontent\.com$/.test(String(clientId))) {
+      return res.status(500).send(
+        [
+          'Google OAuth is not configured. Please set GOOGLE_OAUTH_CLIENT_ID (Web application client) and GOOGLE_OAUTH_CLIENT_SECRET as Functions secrets.',
+          'Also add this Redirect URI in the Google Cloud Console:',
+          redirectUri
+        ].join('\n')
+      );
+    }
+
+    const state = stateEncode({ uid, nonce });
+    const scope = encodeURIComponent("https://www.googleapis.com/auth/youtube.readonly");
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&access_type=offline&include_granted_scopes=true&prompt=consent%20select_account&scope=${scope}&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).send("YouTube OAuth start error: " + e.message);
   }
 });
 
@@ -3766,6 +4096,70 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   } catch (e) {
     try { console.error('OAuth callback error:', e?.message || e); } catch { }
     res.status(500).send("OAuth callback error: " + (e?.message || String(e)));
+  }
+});
+
+// ===== YouTube OAuth: callback
+exports.youtubeOAuthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const redirectUri = getYouTubeRedirectUri();
+    if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI)");
+
+    let tokenData;
+    try {
+      tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+          client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+    } catch (tokenError) {
+      console.error('YouTube OAuth token exchange failed:', tokenError);
+      return res.status(401).send(
+        `OAuth token error: ${tokenError?.message || String(tokenError)}. ` +
+        'This usually means the Google OAuth client credentials are invalid or the redirect URI doesn\'t match. ' +
+        'Verify GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET secrets are set correctly.'
+      );
+    }
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresIn = tokenData.expires_in || 3600;
+    if (!refresh) {
+      return res.status(400).send("No refresh_token returned. Ensure prompt=consent and access_type=offline.");
+    }
+
+    const db = admin.firestore();
+    const expiresAt = Math.floor(Date.now() / 1000) + Number(expiresIn || 0);
+    await db.collection("tokens").doc(`${uid}_youtube`).set({
+      provider: "google_youtube",
+      ownerUid: uid,
+      refresh_token: refresh,
+      access_token: access || null,
+      expires_at: expiresAt,
+      scope: tokenData.scope || null,
+      access_at: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await db.collection('profiles').doc(uid).set({
+      youtubeConnected: true,
+    }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Connected to YouTube. You can close this window.");
+  } catch (e) {
+    try { console.error('YouTube OAuth callback error:', e?.message || e); } catch { }
+    res.status(500).send("YouTube OAuth callback error: " + (e?.message || String(e)));
   }
 });
 
@@ -8844,7 +9238,7 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
     }
     batch.set(ref, payload, { merge: true });
 
-    // Mirror routines/chores/habits into calendar_blocks for GCal sync
+    // Mirror routines/chores/habits into calendar_blocks for internal tracking
     const blockId = `sched_${instance.id}`;
     const blockRef = db.collection('calendar_blocks').doc(blockId);
     const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
@@ -8865,7 +9259,7 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
         goalId: instance.goalId || null,
         updatedAt: nowMs,
         createdAt: nowMs,
-        syncToGoogle: true,
+        syncToGoogle: false,
       }, { merge: true });
     }
   }
@@ -10017,10 +10411,6 @@ function assembleDailyChecklist(summaryData) {
     // completedAt when transitioning to done (status=2)
     const beforeStatus = Number(before?.status ?? null);
     const afterStatus = Number(after?.status ?? null);
-    if ((beforeStatus !== 2) && (afterStatus === 2) && !after?.completedAt) {
-      patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
-      needsPatch = true;
-    }
 
     // One-time type inference if missing
     if (!after?.type) {
@@ -10032,15 +10422,42 @@ function assembleDailyChecklist(summaryData) {
     const { changed, patch: norm } = normaliseRecurrence(after);
     if (changed) { Object.assign(patch, norm); needsPatch = true; }
 
+    // Enforce chores theme for chore-type tasks
+    const effectiveType = String(after?.type || patch?.type || '').toLowerCase();
+    const isChoreLike = effectiveType === 'chore' || effectiveType === 'routine' || effectiveType === 'habit';
+    const effectiveTask = { ...(after || {}), ...(patch || {}), type: effectiveType };
+    const isRecurringChore = isRecurringChoreTask(effectiveTask);
+    if (effectiveType === 'chore') {
+      const currentTheme = after?.theme ?? patch?.theme ?? null;
+      const currentLabel = themeLabelFromValue(currentTheme);
+      if (String(currentLabel || '').toLowerCase() !== 'chores') {
+        patch.theme = 'Chores';
+        needsPatch = true;
+      }
+    }
+
+    if ((beforeStatus !== 2) && (afterStatus === 2)) {
+      if (isRecurringChore) {
+        patch.status = 0;
+        patch.completedAt = admin.firestore.FieldValue.delete();
+        patch.deleteAfter = admin.firestore.FieldValue.delete();
+        patch.lastDoneAt = admin.firestore.FieldValue.serverTimestamp();
+        needsPatch = true;
+      } else if (!after?.completedAt) {
+        patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+        needsPatch = true;
+      }
+    }
+
     if (needsPatch) {
       // Avoid infinite loops: keep patch minimal and idempotent
       await ref.set(patch, { merge: true });
     }
 
     // Materialize chore/routine calendar blocks for next 14 days (active only)
-    const type = (after?.type || patch?.type || '').toLowerCase();
-    const active = Number(afterStatus) !== 2;
-    const isChoreLike = type === 'chore' || type === 'routine';
+    const type = effectiveType;
+    const effectiveStatus = Number(patch?.status ?? afterStatus);
+    const active = Number(effectiveStatus) !== 2;
     if (isChoreLike && active) {
       const task = { id, ...(after || {}), ...(patch || {}) };
       await upsertChoreBlocksForTask(db, task, 14);
@@ -10104,7 +10521,7 @@ function assembleDailyChecklist(summaryData) {
   exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
     const db = admin.firestore();
     let scanned = 0, created = 0, updated = 0;
-    for (const t of ['chore', 'routine']) {
+    for (const t of ['chore', 'routine', 'habit']) {
       // Only open tasks (status == 0)
       const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
       for (const doc of snap.docs) {
@@ -10138,11 +10555,22 @@ function assembleDailyChecklist(summaryData) {
     const task = snap.data() || {};
     if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
     const type = String(task?.type || '').toLowerCase();
-    if (type !== 'chore' && type !== 'routine') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine');
-    const todayKey = toDayKey(new Date());
+    if (type !== 'chore' && type !== 'routine' && type !== 'habit') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine/habit');
+    const today = new Date();
+    const todayKey = toDayKey(today);
+    const todayIso = today.toISOString().slice(0, 10);
     const blockId = `chore_${taskId}_${todayKey}`;
     await db.collection('calendar_blocks').doc(blockId)
-      .set({ ownerUid: uid, taskId, entityType: 'chore', status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      .set({
+        ownerUid: uid,
+        taskId,
+        entityType: 'chore',
+        status: 'done',
+        source: 'chore',
+        syncToGoogle: false,
+        deepLink: `/chores/checklist?date=${encodeURIComponent(todayIso)}&taskId=${encodeURIComponent(taskId)}`,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
     await taskRef.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     return { ok: true };
   });
@@ -10547,6 +10975,47 @@ async function getAccessToken(uid) {
     }).toString(),
   });
   return token.access_token;
+}
+
+async function getYouTubeTokenDoc(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('tokens').doc(`${uid}_youtube`).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+async function getYouTubeAccessToken(uid) {
+  const doc = await getYouTubeTokenDoc(uid);
+  if (!doc) throw new Error('YouTube not connected. Connect via Settings > Integrations > YouTube.');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  const refresh = doc.refresh_token;
+  if (!refresh) throw new Error('Missing refresh_token for YouTube');
+  const tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+      client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+      refresh_token: refresh,
+      grant_type: "refresh_token",
+    }).toString(),
+  });
+  const access = tokenData.access_token;
+  const expiresAt = tokenData.expires_at || (Math.floor(Date.now() / 1000) + Number(tokenData.expires_in || 0));
+  const newRefresh = tokenData.refresh_token || refresh;
+  const db = admin.firestore();
+  await db.collection('tokens').doc(`${uid}_youtube`).set({
+    provider: 'google_youtube',
+    ownerUid: uid,
+    access_token: access,
+    refresh_token: newRefresh,
+    expires_at: expiresAt,
+    scope: tokenData.scope || doc.scope || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return access;
 }
 
 // ===== Calendar callables
@@ -11612,6 +12081,8 @@ async function syncPlanToGoogleForUser(uid, dayStr) {
             for (const item of storyCtx.ac) descLines.push(`- ${item}`);
           }
         }
+        descLines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+        descLines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
         const body = {
           summary,
           description: descLines.join('\n') || 'BOB block',
@@ -11676,6 +12147,8 @@ async function syncPlanToGoogleForUser(uid, dayStr) {
             for (const item of storyCtx2.ac) descLines2.push(`- ${item}`);
           }
         }
+        descLines2.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+        descLines2.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
         const body2 = {
           summary: summary2,
           description: descLines2.join('\n') || 'BOB block',
@@ -11945,7 +12418,13 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       const reminderId = u.reminderId ? String(u.reminderId) : null;
       const completed = !!u.completed;
       const title = String(u.title || '');
-      const iosTags = Array.isArray(u.tags) ? u.tags.filter(x => typeof x === 'string').slice(0, 12) : [];
+      const iosTagsRaw = Array.isArray(u.tags) ? u.tags.filter(x => typeof x === 'string').slice(0, 12) : [];
+      const iosTags = iosTagsRaw.filter((tag) => {
+        const key = String(tag || '').trim().replace(/^#/, '').toLowerCase();
+        if (!key) return false;
+        if (key.startsWith('goal-') || key.startsWith('story-')) return false;
+        return true;
+      });
       if (!id && !reminderId && !title) continue;
 
       const listName = String(u.list || u.reminderListName || '').toLowerCase();
@@ -12147,11 +12626,38 @@ exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{
     if (!tasksSnapshot.empty) {
       const batch = db.batch();
       tasksSnapshot.docs.forEach(doc => {
-        batch.update(doc.ref, { sprintId: newSprintId, dueDate: newDueDate });
+        const task = doc.data() || {};
+        const hasDue = task.dueDate || task.dueDateMs || task.targetDate;
+        const isLocked = task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
+        const patch = { sprintId: newSprintId };
+        if (!hasDue && newDueDate && !isLocked) {
+          patch.dueDate = newDueDate;
+        }
+        batch.update(doc.ref, patch);
       });
       await batch.commit();
     }
   }
+});
+
+// Auto-map story sprintId from due date updates
+exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stories/{storyId}", async (event) => {
+  const storyId = event.params.storyId;
+  const beforeData = event.data.before.data() || {};
+  const afterData = event.data.after.data() || {};
+  const beforeDue = toMillis(beforeData.dueDate || beforeData.targetDate);
+  const afterDue = toMillis(afterData.dueDate || afterData.targetDate);
+  if ((beforeDue ?? null) === (afterDue ?? null)) return;
+
+  const ownerUid = afterData.ownerUid || beforeData.ownerUid;
+  if (!ownerUid) return;
+  const persona = afterData.persona || beforeData.persona || null;
+  const db = admin.firestore();
+  const sprintId = afterDue
+    ? await resolveSprintIdForDate(db, ownerUid, persona, afterDue, new Map())
+    : null;
+  if ((afterData.sprintId || null) === (sprintId ?? null)) return;
+  await db.collection('stories').doc(storyId).set({ sprintId: sprintId ?? null }, { merge: true });
 });
 
 // ===== Task lifecycle maintenance (completed/duplicates TTL and flags)
@@ -12289,6 +12795,29 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
     console.warn('[onTaskWritten] sprint snap skipped', e?.message || e);
   }
 
+  // Auto-map sprintId from due date changes (non-story tasks)
+  try {
+    const ownerUidTask = after.ownerUid || before?.ownerUid || null;
+    const persona = after.persona || before?.persona || null;
+    const hasStory = !!(after.storyId || (after.parentType === 'story' && after.parentId));
+    const beforeDueMs = toMillis(before?.dueDate || before?.dueDateMs || before?.targetDate);
+    const afterDueMs = toMillis(after?.dueDate || after?.dueDateMs || after?.targetDate);
+    const dueDateChanged = (beforeDueMs ?? null) !== (afterDueMs ?? null);
+    if (ownerUidTask && !hasStory && dueDateChanged && afterDueMs) {
+      const sprintId = await resolveSprintIdForDate(db, ownerUidTask, persona, afterDueMs, new Map());
+      if ((after.sprintId || null) !== (sprintId ?? null)) {
+        patch.sprintId = sprintId ?? null;
+      }
+    }
+    if (ownerUidTask && !hasStory && dueDateChanged && !afterDueMs) {
+      if (after.sprintId) {
+        patch.sprintId = null;
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] sprint auto-map skipped', e?.message || e);
+  }
+
   if (Object.keys(patch).length) {
     try { await ref.set(patch, { merge: true }); } catch (e) { console.warn('[onTaskWritten] patch failed', id, e?.message || e); }
   }
@@ -12396,6 +12925,12 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
       snoozedUntil: after.snoozedUntil || null,
       title: after.title || 'Task',
       description: after.description || null,
+      theme: after.theme ?? null,
+      goalId: after.goalId ?? null,
+      syncState: after.syncState ?? null,
+      deviceUpdatedAt: after.deviceUpdatedAt ?? null,
+      serverUpdatedAt: after.serverUpdatedAt ?? null,
+      macSyncedAt: after.macSyncedAt ?? null,
       tags: Array.isArray(after.tags) ? after.tags : [],
       parentType: after.parentType || null,
       parentId: after.parentId || null,
@@ -12816,6 +13351,218 @@ async function recordAiLog(uid, event, status, message, metadata = {}) {
     console.error('Failed to write AI log', { event, status, message, metadata, error });
   }
 }
+
+const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
+const YOUTUBE_LONGFORM_THRESHOLD_SEC = 30 * 60;
+
+function parseIsoDurationToSeconds(value) {
+  if (!value || typeof value !== 'string') return null;
+  const match = value.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return null;
+  const hours = Number(match[1] || 0);
+  const minutes = Number(match[2] || 0);
+  const seconds = Number(match[3] || 0);
+  if (![hours, minutes, seconds].every((n) => Number.isFinite(n))) return null;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function pickThumbnail(thumbnails = {}) {
+  return thumbnails.maxres?.url || thumbnails.standard?.url || thumbnails.high?.url || thumbnails.medium?.url || thumbnails.default?.url || null;
+}
+
+async function fetchYouTubeWatchLater(accessToken, opts = {}) {
+  const maxPages = Math.max(1, Math.min(10, Number(opts?.maxPages || 6)));
+  let pageToken = null;
+  const items = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const params = new URLSearchParams({
+      part: 'snippet,contentDetails',
+      maxResults: '50',
+      playlistId: 'WL',
+    });
+    if (pageToken) params.append('pageToken', pageToken);
+    const data = await fetchJson(`${YOUTUBE_API_BASE}/playlistItems?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const batch = Array.isArray(data?.items) ? data.items : [];
+    items.push(...batch);
+    pageToken = data?.nextPageToken || null;
+    if (!pageToken) break;
+  }
+  return items;
+}
+
+async function fetchYouTubeDurations(accessToken, videoIds = []) {
+  const map = new Map();
+  for (let i = 0; i < videoIds.length; i += 50) {
+    const chunk = videoIds.slice(i, i + 50);
+    if (!chunk.length) continue;
+    const params = new URLSearchParams({
+      part: 'contentDetails',
+      id: chunk.join(','),
+      maxResults: '50',
+    });
+    const data = await fetchJson(`${YOUTUBE_API_BASE}/videos?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const rows = Array.isArray(data?.items) ? data.items : [];
+    rows.forEach((row) => {
+      const vid = row?.id;
+      const dur = parseIsoDurationToSeconds(row?.contentDetails?.duration);
+      if (vid) map.set(vid, dur);
+    });
+  }
+  return map;
+}
+
+exports.syncYouTubeWatchLater = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const startedAt = Date.now();
+  const accessToken = await getYouTubeAccessToken(uid);
+  const items = await fetchYouTubeWatchLater(accessToken, { maxPages: req?.data?.maxPages || 6 });
+  const videoIds = Array.from(new Set(items.map((item) => item?.contentDetails?.videoId).filter(Boolean)));
+  const durations = await fetchYouTubeDurations(accessToken, videoIds);
+
+  const db = admin.firestore();
+  let written = 0;
+  let longformCount = 0;
+
+  for (let i = 0; i < items.length; i += 400) {
+    const batch = db.batch();
+    const slice = items.slice(i, i + 400);
+    for (const item of slice) {
+      const videoId = item?.contentDetails?.videoId;
+      if (!videoId) continue;
+      const durationSec = durations.get(videoId);
+      const hasDuration = Number.isFinite(durationSec);
+      const isLongform = hasDuration && durationSec >= YOUTUBE_LONGFORM_THRESHOLD_SEC;
+      if (isLongform) longformCount += 1;
+      const snippet = item?.snippet || {};
+      const publishedAt = toMillis(snippet?.publishedAt) || null;
+      const docId = `${uid}_yt_${videoId}`;
+      const ref = db.collection('youtube').doc(docId);
+      batch.set(ref, {
+        id: docId,
+        ownerUid: uid,
+        videoId,
+        title: snippet?.title || 'YouTube video',
+        channelTitle: snippet?.videoOwnerChannelTitle || snippet?.channelTitle || null,
+        publishedAt,
+        thumbnailUrl: pickThumbnail(snippet?.thumbnails || {}),
+        durationSec: hasDuration ? durationSec : null,
+        durationMinutes: hasDuration ? Math.round(durationSec / 60) : null,
+        watchLater: true,
+        list: 'watch-later',
+        longformCandidate: isLongform,
+        persona: 'personal',
+        source: 'youtube',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      written += 1;
+    }
+    await batch.commit();
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    youtubeLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    youtubeWatchLaterCount: items.length,
+    youtubeLongformCount: longformCount,
+    youtubeConnected: true,
+  }, { merge: true });
+
+  await recordIntegrationLog(uid, 'youtube', 'success', `Synced ${written} watch-later videos`, {
+    totalItems: items.length,
+    longformCount,
+    durationMs: Date.now() - startedAt,
+  });
+
+  return { ok: true, written, total: items.length, longform: longformCount };
+});
+
+exports.importYouTubeTakeout = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const items = Array.isArray(req?.data?.items) ? req.data.items : [];
+  if (!items.length) return { ok: true, written: 0, skipped: 0, total: 0 };
+
+  const startedAt = Date.now();
+  const db = admin.firestore();
+
+  let accessToken = null;
+  try {
+    accessToken = await getYouTubeAccessToken(uid);
+  } catch (e) {
+    console.warn('[youtube_takeout] no access token; skipping duration lookup');
+  }
+
+  const rawVideoIds = items.map((i) => i?.videoId).filter(Boolean);
+  const uniqueVideoIds = Array.from(new Set(rawVideoIds));
+  let durations = new Map();
+  if (accessToken && uniqueVideoIds.length) {
+    try {
+      durations = await fetchYouTubeDurations(accessToken, uniqueVideoIds);
+    } catch (e) {
+      console.warn('[youtube_takeout] duration fetch failed', e?.message || e);
+    }
+  }
+
+  let written = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < items.length; i += 400) {
+    const batch = db.batch();
+    const slice = items.slice(i, i + 400);
+    for (const item of slice) {
+      const videoId = String(item?.videoId || '').trim();
+      const watchedAtMs = Number(item?.watchedAtMs || item?.watchedAt || 0);
+      if (!videoId || !Number.isFinite(watchedAtMs) || watchedAtMs <= 0) {
+        skipped += 1;
+        continue;
+      }
+      const title = String(item?.title || 'YouTube video');
+      const channelTitle = item?.channelTitle ? String(item.channelTitle) : null;
+      const titleUrl = item?.titleUrl ? String(item.titleUrl) : null;
+      const durationSec = durations.get(videoId) ?? null;
+      const docId = `${uid}_yt_hist_${videoId}_${watchedAtMs}`;
+      const ref = db.collection('youtube').doc(docId);
+      batch.set(ref, {
+        id: docId,
+        ownerUid: uid,
+        videoId,
+        title,
+        channelTitle,
+        titleUrl,
+        watchedAt: watchedAtMs,
+        durationSec,
+        durationMinutes: durationSec ? Math.round(durationSec / 60) : null,
+        watchTimeSec: null,
+        watchTimeMinutes: null,
+        watchLater: false,
+        list: 'history',
+        persona: 'personal',
+        source: 'youtube_takeout',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      written += 1;
+    }
+    await batch.commit();
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    youtubeTakeoutLastImportAt: admin.firestore.FieldValue.serverTimestamp(),
+    youtubeWatchHistoryCount: written,
+    youtubeConnected: true,
+  }, { merge: true });
+
+  await recordIntegrationLog(uid, 'youtube_takeout', 'success', `Imported ${written} watch history rows`, {
+    total: items.length,
+    skipped,
+    durationMs: Date.now() - startedAt,
+  });
+
+  return { ok: true, written, skipped, total: items.length };
+});
 
 exports.traktDeviceCodeStart = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
   if (!req?.auth?.uid) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
@@ -15819,14 +16566,36 @@ async function buildTaskContext(db, task) {
   let goalId = task.goalId || null;
   let storyId = task.storyId || task.parentId || null;
   if (storyId && !goalId) {
-    try { const s = await db.collection('stories').doc(String(storyId)).get(); if (s.exists) { const d = s.data() || {}; goalId = d.goalId || goalId; ctx.storyRef = d.ref || null; if (d.sprintId) { try { const sp = await db.collection('sprints').doc(String(d.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data() || {}).ref || (sp.data() || {}).name || sp.id; } catch { } } } } catch { }
+    try {
+      const s = await db.collection('stories').doc(String(storyId)).get();
+      if (s.exists) {
+        const d = s.data() || {};
+        goalId = d.goalId || goalId;
+        ctx.storyRef = d.ref || null;
+        if (d.sprintId) {
+          try {
+            const sp = await db.collection('sprints').doc(String(d.sprintId)).get();
+            if (sp.exists) {
+              const spd = sp.data() || {};
+              ctx.sprintRef = spd.name || spd.title || spd.ref || sp.id;
+            }
+          } catch { }
+        }
+      }
+    } catch { }
   }
   if (goalId) {
     try { const g = await db.collection('goals').doc(String(goalId)).get(); if (g.exists) { const gd = g.data() || {}; ctx.goalRef = gd.ref || g.id; if (!ctx.themeName && gd.theme != null) ctx.themeName = themeLabelFromValue(gd.theme); } } catch { }
   }
   // Fallback sprint from task
   if (!ctx.sprintRef && task.sprintId) {
-    try { const sp = await db.collection('sprints').doc(String(task.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data() || {}).ref || (sp.data() || {}).name || sp.id; } catch { }
+    try {
+      const sp = await db.collection('sprints').doc(String(task.sprintId)).get();
+      if (sp.exists) {
+        const spd = sp.data() || {};
+        ctx.sprintRef = spd.name || spd.title || spd.ref || sp.id;
+      }
+    } catch { }
   }
   return ctx;
 }
@@ -15841,25 +16610,115 @@ function mergeTags(existing, toAdd) {
   return Array.from(set).slice(0, 12);
 }
 
+function normalizeTaskTagKey(value) {
+  return String(value || '').trim().replace(/^#/, '').toLowerCase();
+}
+
+function buildSprintTagValue(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const digits = text.match(/\d+/g);
+  if (digits && digits.length) {
+    return `sprint${digits.join('')}`;
+  }
+  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return slug ? `sprint${slug}` : null;
+}
+
+function normalizeTaskTagsForSystem({
+  tags = [],
+  type,
+  persona,
+  sprintRef,
+  themeLabel,
+  goalRef,
+  storyRef,
+  themeLabels = [],
+}) {
+  const cleaned = [];
+  const seen = new Set();
+  const goalKey = goalRef ? normalizeTaskTagKey(goalRef) : null;
+  const storyKey = storyRef ? normalizeTaskTagKey(storyRef) : null;
+  const themeKeys = new Set(themeLabels.map((label) => normalizeTaskTagKey(label)));
+  const typeKey = normalizeTaskTagKey(type);
+  const personaKey = normalizeTaskTagKey(persona);
+
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    const raw = String(tag || '').trim();
+    if (!raw) continue;
+    const key = normalizeTaskTagKey(raw);
+    if (['task', 'chore', 'habit', 'habitual', 'routine'].includes(key)) continue;
+    if (['work', 'personal'].includes(key)) continue;
+    if (key.startsWith('goal-') || key.startsWith('story-')) continue;
+    if (goalKey && key === goalKey) continue;
+    if (storyKey && key === storyKey) continue;
+    if (key.startsWith('sprint')) continue;
+    if (key.startsWith('theme-')) continue;
+    if (themeKeys.has(key)) continue;
+    if (!seen.has(key)) {
+      seen.add(key);
+      cleaned.push(raw);
+    }
+  }
+
+  const append = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    const key = normalizeTaskTagKey(raw);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(raw);
+  };
+
+  if (['task', 'chore', 'habit', 'habitual', 'routine'].includes(typeKey)) {
+    append(typeKey === 'habitual' ? 'habit' : typeKey);
+  }
+  if (['work', 'personal'].includes(personaKey)) append(personaKey);
+  append(buildSprintTagValue(sprintRef));
+  append(themeLabel);
+
+  return cleaned;
+}
+
 exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30 minutes', timeZone: 'UTC' }, async () => {
   const db = admin.firestore();
   const now = Date.now();
   const cutoff = now - 24 * 60 * 60 * 1000; // process tasks touched in last 24h
   let processed = 0, updated = 0;
+  const themeCache = new Map();
   try {
     const snap = await db.collection('tasks').orderBy('updatedAt', 'desc').limit(500).get();
     const batch = db.batch();
     for (const docSnap of snap.docs) {
       const t = docSnap.data() || {};
       processed += 1;
+      const ownerUid = t.ownerUid || t.userId;
+      if (!ownerUid) continue;
       // Skip very old if updatedAt is numeric and older than cutoff
       if (typeof t.updatedAt === 'number' && t.updatedAt < cutoff) continue;
+      if (!themeCache.has(ownerUid)) {
+        try {
+          const themes = await loadThemesForUser(ownerUid);
+          const labels = Array.isArray(themes)
+            ? themes.map((th) => th.label || th.name || String(th.id))
+            : [];
+          themeCache.set(ownerUid, labels);
+        } catch {
+          themeCache.set(ownerUid, []);
+        }
+      }
+      const themeLabels = themeCache.get(ownerUid) || [];
       const ctx = await buildTaskContext(db, t);
-      const themeTag = ctx.themeName ? `theme-${ctx.themeName}` : null;
-      const sprintTag = ctx.sprintRef ? `sprint-${ctx.sprintRef}` : null;
-      const storyTag = ctx.storyRef ? `story-${ctx.storyRef}` : null;
-      const goalTag = ctx.goalRef ? `goal-${ctx.goalRef}` : null;
-      const newTags = mergeTags(t.tags, [themeTag, sprintTag, storyTag, goalTag].filter(Boolean));
+      const newTags = normalizeTaskTagsForSystem({
+        tags: t.tags || [],
+        type: t.type || t.task_type || t.taskType || null,
+        persona: t.persona || null,
+        sprintRef: ctx.sprintRef || null,
+        themeLabel: ctx.themeName || null,
+        goalRef: ctx.goalRef || null,
+        storyRef: ctx.storyRef || null,
+        themeLabels,
+      });
 
       // Deep links (absolute) for task + parents
       const taskRef = t.ref || t.referenceNumber || t.reference || t.id;

@@ -3,9 +3,8 @@ import { Card, Button, ButtonGroup, Form, Badge, Row, Col, Table, Modal } from '
 import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Sprint } from '../types';
+import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 
@@ -33,9 +32,10 @@ interface ConvertPayload {
   sprintId: string | null;
   targetDate: string;
   rating: number;
+  goalId?: string | null;
 }
 
-const LONGFORM_THRESHOLD_SEC = 20 * 60;
+const LONGFORM_THRESHOLD_SEC = 30 * 60;
 
 const formatDuration = (seconds?: number | null) => {
   if (!seconds || Number.isNaN(seconds)) return '—';
@@ -49,15 +49,16 @@ const formatDuration = (seconds?: number | null) => {
 
 const VideosBacklog: React.FC = () => {
   const { currentUser } = useAuth();
-  const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const persona = 'personal' as const;
 
   const [videos, setVideos] = useState<YouTubeItem[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'watch-later' | 'longform' | 'converted' | 'unconverted'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'watch-later' | 'longform' | 'converted' | 'unconverted'>('longform');
   const [selected, setSelected] = useState<YouTubeItem | null>(null);
-  const [convertForm, setConvertForm] = useState<ConvertPayload>({ sprintId: null, targetDate: '', rating: 3 });
+  const [convertForm, setConvertForm] = useState<ConvertPayload>({ sprintId: null, targetDate: '', rating: 3, goalId: null });
   const [savingConversion, setSavingConversion] = useState(false);
 
   useEffect(() => {
@@ -78,6 +79,20 @@ const VideosBacklog: React.FC = () => {
     });
     return unsub;
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', persona)
+    );
+    const unsub = onSnapshot(goalsQuery, (snap) => {
+      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Goal[];
+      setGoals(rows);
+    });
+    return unsub;
+  }, [currentUser, persona]);
 
   const getDurationSec = (item: YouTubeItem) => {
     if (typeof item.durationSec === 'number') return item.durationSec;
@@ -122,7 +137,7 @@ const VideosBacklog: React.FC = () => {
 
   const openConvert = (video: YouTubeItem) => {
     setSelected(video);
-    setConvertForm({ sprintId: null, targetDate: '', rating: video.rating ?? 3 });
+    setConvertForm({ sprintId: null, targetDate: '', rating: video.rating ?? 3, goalId: null });
   };
 
   const handleConvert = async () => {
@@ -147,7 +162,7 @@ const VideosBacklog: React.FC = () => {
         ref: storyRef,
         title,
         description: `Watch ${title}.${channel}${durationLine}${watchTimeLine}`,
-        goalId: '',
+        goalId: convertForm.goalId || '',
         sprintId: sprintId || null,
         dueDate: dueDateMs || null,
         status: 0,
@@ -155,9 +170,9 @@ const VideosBacklog: React.FC = () => {
         points: 3,
         wipLimit: 3,
         tags: ['youtube', 'video'],
-        persona: currentPersona,
-        personaKey: currentPersona,
-        ownerPersona: currentPersona,
+        persona,
+        personaKey: persona,
+        ownerPersona: persona,
         ownerUid: currentUser.uid,
         orderIndex: Date.now(),
         createdAt: serverTimestamp(),
@@ -179,7 +194,7 @@ const VideosBacklog: React.FC = () => {
         lastConvertedAt: serverTimestamp(),
         completedAt: dueDateMs || null,
         rating: convertForm.rating,
-        persona: currentPersona,
+        persona,
       });
       setSelected(null);
     } catch (e) {
@@ -337,6 +352,15 @@ const VideosBacklog: React.FC = () => {
         <Modal.Header closeButton><Modal.Title>Generate Story</Modal.Title></Modal.Header>
         <Modal.Body>
           <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Goal (optional)</Form.Label>
+              <Form.Select value={convertForm.goalId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, goalId: e.target.value || null }))}>
+                <option value="">No goal</option>
+                {goals.map((g: Goal) => (
+                  <option key={g.id} value={g.id}>{g.title}</option>
+                ))}
+              </Form.Select>
+            </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Sprint (optional)</Form.Label>
               <Form.Select value={convertForm.sprintId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, sprintId: e.target.value || null }))}>

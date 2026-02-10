@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { Goal, Story } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import GoalsCardView from './GoalsCardView';
+import AddGoalModal from './AddGoalModal';
 import EditGoalModal from './EditGoalModal';
 import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
@@ -28,14 +29,33 @@ const GoalsManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('cards');
-  const [cardLayout, setCardLayout] = useState<'grid' | 'comfortable'>('grid');
+  const [showAddGoal, setShowAddGoal] = useState(false);
+  const [showGoalDescriptions, setShowGoalDescriptions] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('bob_goals_show_descriptions');
+      if (stored === null || stored === undefined) return true;
+      return stored === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [showNoPotOnly, setShowNoPotOnly] = useState(false);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
+  const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
   const { isCollapsed, toggleCollapse } = useSidebar();
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bob_goals_show_descriptions', String(showGoalDescriptions));
+    } catch {
+      // noop
+    }
+  }, [showGoalDescriptions]);
 
   // Load goals from Firestore
   useEffect(() => {
@@ -147,6 +167,22 @@ const GoalsManagement: React.FC = () => {
     });
     return unsub;
   }, [currentUser, currentPersona, selectedSprintId, activeSprintId]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const potQuery = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(potQuery, (snap) => {
+      const map: Record<string, { name: string; balance: number }> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const id = data.potId || d.id;
+        if (!id) return;
+        map[id] = { name: data.name || id, balance: data.balance || 0 };
+      });
+      setPots(map);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
 
   // Handler functions for ModernGoalsTable
   const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
@@ -293,6 +329,10 @@ const GoalsManagement: React.FC = () => {
     }
     if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
     if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
+    if (showNoPotOnly) {
+      const potId = (goal as any).linkedPotId || (goal as any).potId;
+      if (potId) return false;
+    }
     const derivedYear =
       (goal as any).targetYear ||
       ((goal as any).endDate ? new Date((goal as any).endDate as any).getFullYear() : undefined) ||
@@ -317,6 +357,38 @@ const GoalsManagement: React.FC = () => {
     paused: orderedFilteredGoals.filter(g => g.status === 3).length // Blocked
   };
 
+  const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
+
+  const savingsMetrics = useMemo(() => {
+    let totalEstimated = 0;
+    let totalSavedPence = 0;
+    const seenPotIds = new Set<string>();
+
+    orderedFilteredGoals.forEach((goal) => {
+      const est = Number((goal as any).estimatedCost || 0);
+      totalEstimated += Number.isFinite(est) ? est : 0;
+
+      const rawPotId = (goal as any).linkedPotId || (goal as any).potId;
+      if (!rawPotId) return;
+      const raw = String(rawPotId);
+      const candidates = [raw];
+      if (currentUser?.uid && raw.startsWith(`${currentUser.uid}_`)) {
+        candidates.push(raw.replace(`${currentUser.uid}_`, ''));
+      }
+      const potId = candidates.find((id) => pots[id]);
+      if (!potId || seenPotIds.has(potId)) return;
+      seenPotIds.add(potId);
+      const balance = Number(pots[potId]?.balance || 0);
+      totalSavedPence += Number.isFinite(balance) ? balance : 0;
+    });
+
+    return {
+      totalEstimated,
+      totalSavedPence,
+      linkedPotCount: seenPotIds.size
+    };
+  }, [orderedFilteredGoals, pots, currentUser?.uid]);
+
   const availableYears = useMemo(() => {
     const years = new Set<string>();
     goals.forEach(g => {
@@ -331,25 +403,25 @@ const GoalsManagement: React.FC = () => {
 
   return (
     <div style={{
-      padding: '24px',
+      padding: '16px',
       backgroundColor: 'var(--notion-bg)',
       color: 'var(--notion-text)',
       minHeight: '100vh',
       width: '100%'
     }}>
-      <div style={{ maxWidth: '100%', margin: '0' }}>
+      <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: 'calc(100vh - 32px)' }}>
         {/* Header */}
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '24px'
+          marginBottom: '8px'
         }}>
           <div>
-            <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
+            <h2 style={{ margin: '0 0 4px 0', fontSize: '24px', fontWeight: '600' }}>
               Goals Management
             </h2>
-            <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '16px' }}>
+            <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px' }}>
               Manage your life goals across different themes
             </p>
           </div>
@@ -383,41 +455,21 @@ const GoalsManagement: React.FC = () => {
                 Cards
               </Button>
             </div>
-            {viewMode === 'cards' && (
-              <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
-                <Button
-                  size="sm"
-                  variant={cardLayout === 'grid' ? 'primary' : 'outline-secondary'}
-                  onClick={() => setCardLayout('grid')}
-                  style={{ borderRadius: 0 }}
-                >
-                  4 × 5 Grid
-                </Button>
-                <Button
-                  size="sm"
-                  variant={cardLayout === 'comfortable' ? 'primary' : 'outline-secondary'}
-                  onClick={() => setCardLayout('comfortable')}
-                  style={{ borderRadius: 0 }}
-                >
-                  Comfortable
-                </Button>
-              </div>
-            )}
-            <Button variant="primary" onClick={() => alert('Add new goal - coming soon')}>
+            <Button variant="primary" onClick={() => setShowAddGoal(true)}>
               Add Goal
             </Button>
           </div>
         </div>
 
         {/* Dashboard Cards */}
-        <Row className="mb-4">
+        <Row className="mb-1">
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--notion-text)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
                   {goalCounts.total}
                 </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
                   Total Goals
                 </p>
               </Card.Body>
@@ -425,11 +477,11 @@ const GoalsManagement: React.FC = () => {
           </Col>
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--notion-text)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
                   {goalCounts.active}
                 </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
                   Active
                 </p>
               </Card.Body>
@@ -437,11 +489,11 @@ const GoalsManagement: React.FC = () => {
           </Col>
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--notion-text)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
                   {goalCounts.done}
                 </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
                   Done
                 </p>
               </Card.Body>
@@ -449,12 +501,38 @@ const GoalsManagement: React.FC = () => {
           </Col>
           <Col lg={3} md={6} className="mb-3">
             <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '24px' }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '32px', fontWeight: '700', color: 'var(--notion-text)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
                   {goalCounts.paused}
                 </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px', fontWeight: '500' }}>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
                   Paused
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+        <Row className="mb-1">
+          <Col lg={6} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
+                  {formatMoney(savingsMetrics.totalEstimated)}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
+                  Total Estimated Cost (Filtered)
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={6} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
+                  {formatMoney(savingsMetrics.totalSavedPence / 100)}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
+                  Total Saved (Linked Pots{`${savingsMetrics.linkedPotCount ? ` • ${savingsMetrics.linkedPotCount}` : ''}`})
                 </p>
               </Card.Body>
             </Card>
@@ -462,14 +540,15 @@ const GoalsManagement: React.FC = () => {
         </Row>
 
         {/* Filters */}
-        <Card style={{ marginBottom: '24px', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-          <Card.Body style={{ padding: '24px', color: 'var(--notion-text)' }}>
-            <Row>
+        <Card style={{ marginBottom: '8px', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+          <Card.Body style={{ padding: '8px', color: 'var(--notion-text)' }}>
+            <Row className="g-2 align-items-end">
               <Col md={3}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Goals</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Search Goals</Form.Label>
                   <InputGroup>
                     <Form.Control
+                      size="sm"
                       type="text"
                       placeholder="Search by title..."
                       value={searchTerm}
@@ -479,10 +558,11 @@ const GoalsManagement: React.FC = () => {
                   </InputGroup>
                 </Form.Group>
               </Col>
-              <Col md={3}>
+              <Col md={2}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Status</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Status</Form.Label>
                   <Form.Select
+                    size="sm"
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
                     style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
@@ -496,10 +576,11 @@ const GoalsManagement: React.FC = () => {
                   </Form.Select>
                 </Form.Group>
               </Col>
-              <Col md={3}>
+              <Col md={2}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Theme</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Theme</Form.Label>
                   <Form.Select
+                    size="sm"
                     value={filterTheme}
                     onChange={(e) => setFilterTheme(e.target.value)}
                     style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
@@ -511,10 +592,11 @@ const GoalsManagement: React.FC = () => {
                   </Form.Select>
                 </Form.Group>
               </Col>
-              <Col md={3}>
+              <Col md={2}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Year</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Year</Form.Label>
                   <Form.Select
+                    size="sm"
                     value={filterYear}
                     onChange={(e) => setFilterYear(e.target.value)}
                     style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
@@ -527,9 +609,9 @@ const GoalsManagement: React.FC = () => {
                   </Form.Select>
                 </Form.Group>
               </Col>
-              <Col md={3}>
+              <Col md={2}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Sprint</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Sprint</Form.Label>
                   <div>
                     <SprintSelector
                       selectedSprintId={selectedSprintId}
@@ -538,37 +620,54 @@ const GoalsManagement: React.FC = () => {
                   </div>
                 </Form.Group>
               </Col>
-            </Row>
-            <Row style={{ marginTop: '16px' }}>
-              <Col>
-                <Button
-                  variant="outline-secondary"
-                  onClick={() => {
-                    setFilterStatus('all');
-                    setFilterTheme('all');
-                    setSearchTerm('');
-                  }}
-                  style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
-                >
-                  Clear Filters
-                </Button>
+              <Col md="auto">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Button
+                    size="sm"
+                    variant="outline-secondary"
+                    onClick={() => {
+                      setFilterStatus('all');
+                      setFilterTheme('all');
+                      setSearchTerm('');
+                    }}
+                    style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
+                  >
+                    Clear Filters
+                  </Button>
+                  <Form.Check
+                    type="switch"
+                    id="toggle-goal-descriptions"
+                    label="Show goal descriptions"
+                    checked={showGoalDescriptions}
+                    onChange={(e) => setShowGoalDescriptions(e.target.checked)}
+                    className="text-muted"
+                  />
+                  <Form.Check
+                    type="switch"
+                    id="toggle-goals-no-pots"
+                    label="Only goals without pots"
+                    checked={showNoPotOnly}
+                    onChange={(e) => setShowNoPotOnly(e.target.checked)}
+                    className="text-muted"
+                  />
+                </div>
               </Col>
             </Row>
           </Card.Body>
         </Card>
 
         {/* Modern Goals Table - Full Width */}
-        <Card style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', minHeight: '600px' }}>
+        <Card style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', flex: 1, minHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
           <Card.Header style={{
             backgroundColor: 'var(--notion-bg)',
             borderBottom: '1px solid var(--notion-border)',
-            padding: '20px 24px'
+            padding: '12px 16px'
           }}>
             <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: 'var(--notion-text)' }}>
               Goals ({orderedFilteredGoals.length})
             </h5>
           </Card.Header>
-          <Card.Body style={{ padding: 0 }}>
+          <Card.Body style={{ padding: 0, flex: 1, minHeight: 0 }}>
             {loading ? (
               <div style={{
                 textAlign: 'center',
@@ -582,7 +681,7 @@ const GoalsManagement: React.FC = () => {
                 <p style={{ margin: 0, color: 'var(--muted)' }}>Loading goals...</p>
               </div>
             ) : (
-              <div style={{ height: '600px', overflow: 'auto' }}>
+              <div style={{ height: '100%', overflow: 'auto' }}>
                 {viewMode === 'list' ? (
                   <ModernGoalsTable
                     goals={orderedFilteredGoals}
@@ -599,7 +698,8 @@ const GoalsManagement: React.FC = () => {
                     onGoalDelete={handleGoalDelete}
                     onGoalPriorityChange={handleGoalPriorityChange}
                     themes={globalThemes}
-                    cardLayout={cardLayout}
+                    cardLayout="grid"
+                    showDescriptions={showGoalDescriptions}
                   />
                 )}
               </div>
@@ -608,12 +708,17 @@ const GoalsManagement: React.FC = () => {
         </Card>
 
         {/* Shared Edit Goal Modal */}
-        <EditGoalModal
-          goal={editGoal}
-          show={!!editGoal}
-          onClose={() => setEditGoal(null)}
-          currentUserId={currentUser?.uid || ''}
-        />
+      <EditGoalModal
+        goal={editGoal}
+        show={!!editGoal}
+        onClose={() => setEditGoal(null)}
+        currentUserId={currentUser?.uid || ''}
+      />
+
+      <AddGoalModal
+        show={showAddGoal}
+        onClose={() => setShowAddGoal(false)}
+      />
 
         <ConfirmDialog
           show={!!confirmDelete}

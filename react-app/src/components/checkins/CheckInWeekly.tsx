@@ -50,6 +50,35 @@ const CheckInWeekly: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isIndexError = (err: any): boolean => {
+    const msg = String(err?.message || err || '').toLowerCase();
+    return msg.includes('index') || msg.includes('failed_precondition');
+  };
+  const isPermissionDenied = (err: any): boolean => {
+    const code = String(err?.code || '').toLowerCase();
+    const msg = String(err?.message || err || '').toLowerCase();
+    return code === 'permission-denied' || msg.includes('permission-denied') || msg.includes('insufficient permissions');
+  };
+
+  const resolveTimestampMs = (value: any): number | null => {
+    if (!value) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (value instanceof Date) return value.getTime();
+    if (typeof value?.toMillis === 'function') return value.toMillis();
+    if (typeof value?.toDate === 'function') {
+      const dateValue = value.toDate();
+      return dateValue instanceof Date ? dateValue.getTime() : null;
+    }
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (value.seconds != null) {
+      return (value.seconds * 1000) + Math.floor((value.nanoseconds || 0) / 1e6);
+    }
+    return null;
+  };
+
   const weekEnd = useMemo(() => endOfWeek(weekStart, { weekStartsOn: 1 }), [weekStart]);
   const weekKey = useMemo(() => format(weekStart, WEEK_FORMAT), [weekStart]);
 
@@ -68,7 +97,22 @@ const CheckInWeekly: React.FC = () => {
           where('dateKey', '>=', startKey),
           where('dateKey', '<=', endKey),
         ),
-      );
+      ).catch(async (err) => {
+        if (isPermissionDenied(err)) {
+          console.warn('CheckInWeekly: daily_checkins permission denied, skipping');
+          return { docs: [] } as any;
+        }
+        if (!isIndexError(err)) throw err;
+        const fallbackSnap = await getDocs(
+          query(collection(db, 'daily_checkins'), where('ownerUid', '==', ownerUid)),
+        );
+        const filtered = fallbackSnap.docs.filter((docSnap) => {
+          const data = docSnap.data() as any;
+          const key = String(data?.dateKey || '');
+          return key >= startKey && key <= endKey;
+        });
+        return { docs: filtered } as typeof fallbackSnap;
+      });
       const checkins = checkinsSnap.docs.map((docSnap) => docSnap.data() as any);
 
       const themeMap = new Map<string, { planned: number; completed: number }>();
@@ -86,7 +130,10 @@ const CheckInWeekly: React.FC = () => {
             if (item.completed) themeRow.completed += 1;
             themeMap.set(label, themeRow);
           }
-          if (item.type === 'instance' || item.type === 'habit') {
+          const taskKind = String(item.taskType || item.type || '').toLowerCase();
+          const isRoutineLike = ['instance', 'habit', 'chore', 'routine'].includes(String(item.type || '').toLowerCase())
+            || (item.type === 'task' && ['habit', 'chore', 'routine', 'habitual'].includes(taskKind));
+          if (isRoutineLike) {
             const routineLabel = item.title || (item.type === 'habit' ? 'Habit' : 'Routine');
             const routineRow = routineMap.get(routineLabel) || { planned: 0, completed: 0 };
             routineRow.planned += 1;
@@ -119,7 +166,23 @@ const CheckInWeekly: React.FC = () => {
           where('createdAt', '>=', new Date(weekEnd.getTime() - 2 * 24 * 60 * 60 * 1000)),
           orderBy('createdAt', 'desc'),
         ),
-      );
+      ).catch(async (err) => {
+        if (isPermissionDenied(err)) {
+          console.warn('CheckInWeekly: monzo_transactions (3 days) permission denied, skipping');
+          return { docs: [] } as any;
+        }
+        if (!isIndexError(err)) throw err;
+        const fallbackSnap = await getDocs(
+          query(collection(db, 'monzo_transactions'), where('ownerUid', '==', ownerUid)),
+        );
+        const cutoff = weekEnd.getTime() - 2 * 24 * 60 * 60 * 1000;
+        const filtered = fallbackSnap.docs.filter((docSnap) => {
+          const data = docSnap.data() as any;
+          const createdAt = resolveTimestampMs(data?.createdAt);
+          return createdAt != null && createdAt >= cutoff;
+        });
+        return { docs: filtered } as typeof fallbackSnap;
+      });
       let spendLast3DaysPence = 0;
       spendLast3Days.docs.forEach((docSnap) => {
         const data = docSnap.data() as any;
@@ -134,7 +197,23 @@ const CheckInWeekly: React.FC = () => {
           where('createdAt', '>=', weekStart),
           orderBy('createdAt', 'desc'),
         ),
-      );
+      ).catch(async (err) => {
+        if (isPermissionDenied(err)) {
+          console.warn('CheckInWeekly: monzo_transactions (7 days) permission denied, skipping');
+          return { docs: [] } as any;
+        }
+        if (!isIndexError(err)) throw err;
+        const fallbackSnap = await getDocs(
+          query(collection(db, 'monzo_transactions'), where('ownerUid', '==', ownerUid)),
+        );
+        const cutoff = weekStart.getTime();
+        const filtered = fallbackSnap.docs.filter((docSnap) => {
+          const data = docSnap.data() as any;
+          const createdAt = resolveTimestampMs(data?.createdAt);
+          return createdAt != null && createdAt >= cutoff;
+        });
+        return { docs: filtered } as typeof fallbackSnap;
+      });
       let spendLast7DaysPence = 0;
       spendLast7Days.docs.forEach((docSnap) => {
         const data = docSnap.data() as any;
@@ -219,144 +298,228 @@ const CheckInWeekly: React.FC = () => {
         </div>
       ) : (
         <>
-          <Row className="g-3 mb-3">
-            <Col lg={6}>
-              <Card className="shadow-sm border-0">
-                <Card.Header className="fw-semibold">Planned vs completed (Themes)</Card.Header>
-                <Card.Body>
-                  {metrics.themes.length === 0 ? (
-                    <div className="text-muted">No themed blocks this week.</div>
-                  ) : (
-                    metrics.themes.map((row) => (
-                      <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">
-                        <span>{row.label}</span>
-                        <Badge bg={row.completed === row.planned ? 'success' : 'secondary'}>
-                          {row.completed}/{row.planned}
-                        </Badge>
-                      </div>
-                    ))
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col lg={6}>
-              <Card className="shadow-sm border-0">
-                <Card.Header className="fw-semibold">Habits</Card.Header>
-                <Card.Body>
-                  {metrics.routines.length === 0 ? (
-                    <div className="text-muted">No habits logged.</div>
-                  ) : (
-                    metrics.routines.map((row) => (
-                      <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">
-                        <span>{row.label}</span>
-                        <Badge bg={row.completed === row.planned ? 'success' : 'secondary'}>
-                          {row.completed}/{row.planned}
-                        </Badge>
-                      </div>
-                    ))
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-
-          <Row className="g-3 mb-3">
-            <Col lg={6}>
-              <Card className="shadow-sm border-0">
-                <Card.Header className="fw-semibold">Stories worked on</Card.Header>
-                <Card.Body>
-                  {metrics.stories.length === 0 ? (
-                    <div className="text-muted">No story blocks logged.</div>
-                  ) : (
-                    metrics.stories.map((row) => (
-                      <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">
-                        <span>{row.label}</span>
-                        <span className="text-muted small">
-                          {row.completed}/{row.planned} · {row.minutes} min
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col lg={6}>
-              <Card className="shadow-sm border-0">
-                <Card.Header className="fw-semibold">Tasks worked on</Card.Header>
-                <Card.Body>
-                  {metrics.tasks.length === 0 ? (
-                    <div className="text-muted">No task blocks logged.</div>
-                  ) : (
-                    metrics.tasks.map((row) => (
-                      <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">
-                        <span>{row.label}</span>
-                        <span className="text-muted small">
-                          {row.completed}/{row.planned} · {row.minutes} min
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-
-          <Row className="g-3 mb-3">
-            <Col lg={6}>
-              <Card className="shadow-sm border-0">
-                <Card.Header className="fw-semibold">Spend (Monzo)</Card.Header>
-                <Card.Body>
-                  <div className="d-flex justify-content-between">
-                    <span>Last 3 days</span>
-                    <span className="fw-semibold">
-                      {metrics.spendLast3DaysPence != null ? formatMoney(metrics.spendLast3DaysPence) : '—'}
-                    </span>
+          <div className="d-md-none">
+            <div className="mb-3 p-2 border rounded">
+              <div className="fw-semibold mb-1">Themes</div>
+              {metrics.themes.length === 0 ? (
+                <div className="text-muted small">No themed blocks this week.</div>
+              ) : (
+                metrics.themes.map((row) => (
+                  <div key={row.label} className="d-flex justify-content-between align-items-center mb-1">
+                    <span className="small">{row.label}</span>
+                    <Badge bg={row.completed === row.planned ? 'success' : 'secondary'}>
+                      {row.completed}/{row.planned}
+                    </Badge>
                   </div>
-                  <div className="d-flex justify-content-between">
-                    <span>Last 7 days</span>
-                    <span className="fw-semibold">
-                      {metrics.spendLast7DaysPence != null ? formatMoney(metrics.spendLast7DaysPence) : '—'}
-                    </span>
+                ))
+              )}
+            </div>
+            <div className="mb-3 p-2 border rounded">
+              <div className="fw-semibold mb-1">Habits</div>
+              {metrics.routines.length === 0 ? (
+                <div className="text-muted small">No habits logged.</div>
+              ) : (
+                metrics.routines.map((row) => (
+                  <div key={row.label} className="d-flex justify-content-between align-items-center mb-1">
+                    <span className="small">{row.label}</span>
+                    <Badge bg={row.completed === row.planned ? 'success' : 'secondary'}>
+                      {row.completed}/{row.planned}
+                    </Badge>
                   </div>
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col lg={6}>
-              <Card className="shadow-sm border-0">
-                <Card.Header className="fw-semibold">Reflection</Card.Header>
-                <Card.Body className="d-flex flex-column gap-2">
-                  <Form.Control
-                    as="textarea"
-                    rows={2}
-                    placeholder="What went well?"
-                    value={reflection.wentWell}
-                    onChange={(e) => setReflection((prev) => ({ ...prev, wentWell: e.target.value }))}
-                  />
-                  <Form.Control
-                    as="textarea"
-                    rows={2}
-                    placeholder="What could be improved?"
-                    value={reflection.toImprove}
-                    onChange={(e) => setReflection((prev) => ({ ...prev, toImprove: e.target.value }))}
-                  />
-                  <Form.Control
-                    as="textarea"
-                    rows={2}
-                    placeholder="Blockers or friction?"
-                    value={reflection.blockers}
-                    onChange={(e) => setReflection((prev) => ({ ...prev, blockers: e.target.value }))}
-                  />
-                  <Form.Control
-                    as="textarea"
-                    rows={2}
-                    placeholder="Next week focus"
-                    value={reflection.nextFocus}
-                    onChange={(e) => setReflection((prev) => ({ ...prev, nextFocus: e.target.value }))}
-                  />
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
+                ))
+              )}
+            </div>
+            <div className="mb-3 p-2 border rounded">
+              <div className="fw-semibold mb-1">Stories & Tasks</div>
+              {metrics.stories.map((row) => (
+                <div key={`story-${row.label}`} className="d-flex justify-content-between align-items-center mb-1">
+                  <span className="small">Story {row.label}</span>
+                  <span className="text-muted small">{row.completed}/{row.planned}</span>
+                </div>
+              ))}
+              {metrics.tasks.map((row) => (
+                <div key={`task-${row.label}`} className="d-flex justify-content-between align-items-center mb-1">
+                  <span className="small">Task {row.label}</span>
+                  <span className="text-muted small">{row.completed}/{row.planned}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mb-3 p-2 border rounded">
+              <div className="fw-semibold mb-1">Reflection</div>
+              <Form.Control
+                as="textarea"
+                rows={2}
+                placeholder="What went well?"
+                value={reflection.wentWell}
+                onChange={(e) => setReflection((prev) => ({ ...prev, wentWell: e.target.value }))}
+                className="mb-2"
+              />
+              <Form.Control
+                as="textarea"
+                rows={2}
+                placeholder="What could be improved?"
+                value={reflection.toImprove}
+                onChange={(e) => setReflection((prev) => ({ ...prev, toImprove: e.target.value }))}
+                className="mb-2"
+              />
+              <Form.Control
+                as="textarea"
+                rows={2}
+                placeholder="Blockers or friction?"
+                value={reflection.blockers}
+                onChange={(e) => setReflection((prev) => ({ ...prev, blockers: e.target.value }))}
+                className="mb-2"
+              />
+              <Form.Control
+                as="textarea"
+                rows={2}
+                placeholder="Next week focus"
+                value={reflection.nextFocus}
+                onChange={(e) => setReflection((prev) => ({ ...prev, nextFocus: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div className="d-none d-md-block">
+            <Row className="g-3 mb-3">
+              <Col lg={6}>
+                <Card className="shadow-sm border-0">
+                  <Card.Header className="fw-semibold">Planned vs completed (Themes)</Card.Header>
+                  <Card.Body>
+                    {metrics.themes.length === 0 ? (
+                      <div className="text-muted">No themed blocks this week.</div>
+                    ) : (
+                      metrics.themes.map((row) => (
+                        <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">
+                          <span>{row.label}</span>
+                          <Badge bg={row.completed === row.planned ? 'success' : 'secondary'}>
+                            {row.completed}/{row.planned}
+                          </Badge>
+                        </div>
+                      ))
+                    )}
+                  </Card.Body>
+                </Card>
+              </Col>
+              <Col lg={6}>
+                <Card className="shadow-sm border-0">
+                  <Card.Header className="fw-semibold">Habits</Card.Header>
+                  <Card.Body>
+                    {metrics.routines.length === 0 ? (
+                      <div className="text-muted">No habits logged.</div>
+                    ) : (
+                      metrics.routines.map((row) => (
+                        <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">
+                          <span>{row.label}</span>
+                          <Badge bg={row.completed === row.planned ? 'success' : 'secondary'}>
+                            {row.completed}/{row.planned}
+                          </Badge>
+                        </div>
+                      ))
+                    )}
+                  </Card.Body>
+                </Card>
+              </Col>
+            </Row>
+
+            <Row className="g-3 mb-3">
+              <Col lg={6}>
+                <Card className="shadow-sm border-0">
+                  <Card.Header className="fw-semibold">Stories worked on</Card.Header>
+                  <Card.Body>
+                    {metrics.stories.length === 0 ? (
+                      <div className="text-muted">No story blocks logged.</div>
+                    ) : (
+                      metrics.stories.map((row) => (
+                        <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">
+                          <span>{row.label}</span>
+                          <span className="text-muted small">
+                            {row.completed}/{row.planned} · {row.minutes} min
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </Card.Body>
+                </Card>
+              </Col>
+              <Col lg={6}>
+                <Card className="shadow-sm border-0">
+                  <Card.Header className="fw-semibold">Tasks worked on</Card.Header>
+                  <Card.Body>
+                    {metrics.tasks.length === 0 ? (
+                      <div className="text-muted">No task blocks logged.</div>
+                    ) : (
+                      metrics.tasks.map((row) => (
+                        <div key={row.label} className="d-flex justify-content-between align-items-center mb-2">
+                          <span>{row.label}</span>
+                          <span className="text-muted small">
+                            {row.completed}/{row.planned} · {row.minutes} min
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </Card.Body>
+                </Card>
+              </Col>
+            </Row>
+
+            <Row className="g-3 mb-3">
+              <Col lg={6}>
+                <Card className="shadow-sm border-0">
+                  <Card.Header className="fw-semibold">Spend (Monzo)</Card.Header>
+                  <Card.Body>
+                    <div className="d-flex justify-content-between">
+                      <span>Last 3 days</span>
+                      <span className="fw-semibold">
+                        {metrics.spendLast3DaysPence != null ? formatMoney(metrics.spendLast3DaysPence) : '—'}
+                      </span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span>Last 7 days</span>
+                      <span className="fw-semibold">
+                        {metrics.spendLast7DaysPence != null ? formatMoney(metrics.spendLast7DaysPence) : '—'}
+                      </span>
+                    </div>
+                  </Card.Body>
+                </Card>
+              </Col>
+              <Col lg={6}>
+                <Card className="shadow-sm border-0">
+                  <Card.Header className="fw-semibold">Reflection</Card.Header>
+                  <Card.Body className="d-flex flex-column gap-2">
+                    <Form.Control
+                      as="textarea"
+                      rows={2}
+                      placeholder="What went well?"
+                      value={reflection.wentWell}
+                      onChange={(e) => setReflection((prev) => ({ ...prev, wentWell: e.target.value }))}
+                    />
+                    <Form.Control
+                      as="textarea"
+                      rows={2}
+                      placeholder="What could be improved?"
+                      value={reflection.toImprove}
+                      onChange={(e) => setReflection((prev) => ({ ...prev, toImprove: e.target.value }))}
+                    />
+                    <Form.Control
+                      as="textarea"
+                      rows={2}
+                      placeholder="Blockers or friction?"
+                      value={reflection.blockers}
+                      onChange={(e) => setReflection((prev) => ({ ...prev, blockers: e.target.value }))}
+                    />
+                    <Form.Control
+                      as="textarea"
+                      rows={2}
+                      placeholder="Next week focus"
+                      value={reflection.nextFocus}
+                      onChange={(e) => setReflection((prev) => ({ ...prev, nextFocus: e.target.value }))}
+                    />
+                  </Card.Body>
+                </Card>
+              </Col>
+            </Row>
+          </div>
         </>
       )}
     </div>

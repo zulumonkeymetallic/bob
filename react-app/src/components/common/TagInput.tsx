@@ -7,9 +7,10 @@ interface TagInputProps {
     onChange: (tags: string[]) => void;
     placeholder?: string;
     suggestions?: string[];
+    formatTag?: (tag: string) => string;
 }
 
-const TagInput: React.FC<TagInputProps> = ({ value = [], onChange, placeholder = "Add tag...", suggestions = [] }) => {
+const TagInput: React.FC<TagInputProps> = ({ value = [], onChange, placeholder = "Add tag...", suggestions = [], formatTag }) => {
     const [input, setInput] = useState('');
 
     const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -35,12 +36,23 @@ const TagInput: React.FC<TagInputProps> = ({ value = [], onChange, placeholder =
 
     return (
         <div className="form-control d-flex flex-wrap gap-2 align-items-center" style={{ minHeight: '38px', padding: '4px 8px' }}>
-            {value.map((tag, index) => (
-                <Badge key={index} bg="secondary" className="d-flex align-items-center gap-1" style={{ fontSize: '12px', fontWeight: 500 }}>
-                    #{tag}
-                    <X size={12} style={{ cursor: 'pointer' }} onClick={() => removeTag(index)} />
-                </Badge>
-            ))}
+            {value.map((tag, index) => {
+                const formatted = formatTag ? formatTag(tag) : tag;
+                const display = formatted && String(formatted).trim().length > 0 ? formatted : tag;
+                const title = display !== tag ? `#${tag}` : undefined;
+                return (
+                    <Badge
+                        key={index}
+                        bg="secondary"
+                        title={title}
+                        className="d-flex align-items-center gap-1"
+                        style={{ fontSize: '12px', fontWeight: 500 }}
+                    >
+                        #{display}
+                        <X size={12} style={{ cursor: 'pointer' }} onClick={() => removeTag(index)} />
+                    </Badge>
+                );
+            })}
             <input
                 type="text"
                 value={input}

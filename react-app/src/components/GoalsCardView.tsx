@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Card, Badge, Button, Modal, Alert, Toast, ToastContainer, Form } from 'react-bootstrap';
+import React, { useState, useEffect, useMemo, useLayoutEffect, useRef } from 'react';
+import { startOfWeek, endOfWeek, format } from 'date-fns';
+import { Card, Badge, Button, Modal, Alert, Toast, ToastContainer } from 'react-bootstrap';
 import { Edit3, Target, Calendar, User, CalendarPlus, Wand2, Activity } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -29,6 +30,7 @@ interface GoalsCardViewProps {
   selectedGoalId?: string | null; // New prop for highlighting selected goal
   themes?: GlobalTheme[];
   cardLayout?: 'grid' | 'comfortable';
+  showDescriptions?: boolean;
 }
 
 const GoalsCardView: React.FC<GoalsCardViewProps> = ({
@@ -39,7 +41,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   onGoalSelect,
   selectedGoalId,
   themes,
-  cardLayout = 'grid'
+  cardLayout = 'grid',
+  showDescriptions
 }) => {
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
@@ -53,25 +56,12 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [isSchedulingGoal, setIsSchedulingGoal] = useState<string | null>(null);
   const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
   const [generatingForGoal, setGeneratingForGoal] = useState<string | null>(null);
+  const [habitAdherenceData, setHabitAdherenceData] = useState<Record<string, { planned: number; completed: number; progress: number }>>({});
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [toastVariant, setToastVariant] = useState<'success' | 'danger' | 'info'>('success');
-  const [showDescriptions, setShowDescriptions] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('bob_goals_show_descriptions');
-      if (stored === null || stored === undefined) return true;
-      return stored === 'true';
-    } catch {
-      return true;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('bob_goals_show_descriptions', String(showDescriptions));
-    } catch {
-      // noop: localStorage may be unavailable in some environments
-    }
-  }, [showDescriptions]);
+  const [rowSpans, setRowSpans] = useState<Record<string, number>>({});
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const showDescriptionsResolved = typeof showDescriptions === 'boolean' ? showDescriptions : true;
 
   const themePalette = useMemo(() => (themes && themes.length ? themes : GLOBAL_THEMES), [themes]);
   const themeMap = useMemo(() => {
@@ -182,6 +172,60 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     return [...goals].sort((a, b) => getTargetMillis(a) - getTargetMillis(b));
   }, [goals]);
 
+  useLayoutEffect(() => {
+    const gridEl = gridRef.current;
+    if (!gridEl || typeof ResizeObserver === 'undefined') return;
+
+    const style = getComputedStyle(gridEl);
+    const rowGap = parseFloat(style.rowGap || '0');
+    const rowHeight = parseFloat(style.gridAutoRows || '0');
+    if (!rowHeight) return;
+
+    const updateSpans = (updates: Record<string, number>) => {
+      if (!Object.keys(updates).length) return;
+      setRowSpans((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [id, span] of Object.entries(updates)) {
+          if (next[id] !== span) {
+            next[id] = span;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    };
+
+    const measureTile = (tile: HTMLElement) => {
+      const id = tile.dataset.goalId;
+      if (!id) return;
+      const height = tile.getBoundingClientRect().height;
+      const span = Math.max(1, Math.ceil((height + rowGap) / (rowHeight + rowGap)));
+      updateSpans({ [id]: span });
+    };
+
+    const observer = new ResizeObserver((entries) => {
+      const updates: Record<string, number> = {};
+      entries.forEach((entry) => {
+        const tile = entry.target as HTMLElement;
+        const id = tile.dataset.goalId;
+        if (!id) return;
+        const height = entry.contentRect.height;
+        const span = Math.max(1, Math.ceil((height + rowGap) / (rowHeight + rowGap)));
+        updates[id] = span;
+      });
+      updateSpans(updates);
+    });
+
+    const tiles = Array.from(gridEl.querySelectorAll<HTMLElement>('.goals-card-tile'));
+    tiles.forEach((tile) => {
+      observer.observe(tile);
+      measureTile(tile);
+    });
+
+    return () => observer.disconnect();
+  }, [sortedGoals, showDescriptionsResolved, showDetailed, gridClassName]);
+
   // Theme colors mapping via CSS variables (no hardcoded hex)
   // Status colors via tokens
   const statusColors = {
@@ -257,6 +301,47 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
         map[id] = { name: data.name || id, balance: data.balance || 0 };
       });
       setPots(map);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Aggregate habit/chore/routine adherence per goal for the current week
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+    const weekEnd = endOfWeek(weekStart, { weekStartsOn: 1 });
+    const startKey = format(weekStart, 'yyyyMMdd');
+    const endKey = format(weekEnd, 'yyyyMMdd');
+    const q = query(
+      collection(db, 'daily_checkins'),
+      where('ownerUid', '==', currentUser.uid),
+      where('dateKey', '>=', startKey),
+      where('dateKey', '<=', endKey),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const adherence: Record<string, { planned: number; completed: number; progress: number }> = {};
+      snap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        (data.items || []).forEach((item: any) => {
+          const goalId = item.goalId;
+          if (!goalId) return;
+          const type = String(item.type || '').toLowerCase();
+          const taskType = String(item.taskType || '').toLowerCase();
+          const isHabitLike = ['habit', 'chore', 'routine'].includes(type)
+            || (type === 'task' && ['habit', 'chore', 'routine', 'habitual'].includes(taskType));
+          if (!isHabitLike) return;
+          if (!adherence[goalId]) adherence[goalId] = { planned: 0, completed: 0, progress: 0 };
+          adherence[goalId].planned += 1;
+          if (item.completed) adherence[goalId].completed += 1;
+        });
+      });
+      Object.keys(adherence).forEach((gid) => {
+        const row = adherence[gid];
+        row.progress = row.planned > 0 ? (row.completed / row.planned) * 100 : 0;
+      });
+      setHabitAdherenceData(adherence);
+    }, (err) => {
+      console.warn('GoalsCardView: habit adherence load failed', err);
     });
     return () => unsub();
   }, [currentUser?.uid]);
@@ -448,7 +533,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   }
 
   return (
-    <div className="goals-card-view" style={{ padding: '20px' }}>
+    <div className="goals-card-view" style={{ padding: '12px 16px', height: '100%' }}>
       <ToastContainer position="bottom-end" className="p-3">
         <Toast bg={toastVariant === 'success' ? 'success' : toastVariant === 'danger' ? 'danger' : 'info'} onClose={() => setToastMsg(null)} show={!!toastMsg} delay={2200} autohide>
           <Toast.Body style={{ color: toastVariant === 'info' ? themeVars.text : themeVars.onAccent }}>
@@ -456,17 +541,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           </Toast.Body>
         </Toast>
       </ToastContainer>
-      <div className="d-flex justify-content-end align-items-center mb-2">
-        <Form.Check
-          type="switch"
-          id="toggle-goal-descriptions"
-          label="Show goal descriptions"
-          checked={showDescriptions}
-          onChange={(e) => setShowDescriptions(e.target.checked)}
-          className="text-muted"
-        />
-      </div>
-      <div className={gridClassName}>
+      <div className={gridClassName} ref={gridRef}>
         {sortedGoals.map((goal) => {
           const goalThemeValue = (goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id;
           const themeDef = resolveTheme(goalThemeValue);
@@ -490,10 +565,18 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const estimated = (goal as any).estimatedCost || 0;
           const savingsPct = estimated > 0 ? Math.min(100, Math.round(((potBalance / 100) / estimated) * 100)) : 0;
           const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
-          const progressPercent = totalStories && totalStories > 0
+          const storyProgress = totalStories && totalStories > 0
             ? Math.max(0, Math.min(100, Math.round(((doneStories ?? 0) / totalStories) * 100)))
             : 0;
-          const shouldShowDescription = showDescriptions && !!goal.description;
+          const habitData = habitAdherenceData[goal.id];
+          const habitProgress = habitData && habitData.planned > 0
+            ? Math.max(0, Math.min(100, Math.round(habitData.progress)))
+            : 0;
+          const components = [storyProgress, habitProgress].filter((v, idx) => (idx === 0 ? (totalStories && totalStories > 0) : (habitData && habitData.planned > 0)));
+          const progressPercent = components.length
+            ? Math.round(components.reduce((a, b) => a + b, 0) / components.length)
+            : 0;
+          const shouldShowDescription = showDescriptionsResolved && !!goal.description;
           const latestActivityLabel = latestActivity
             ? latestActivity.activityType === 'note_added'
               ? 'Latest Comment'
@@ -520,8 +603,14 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             ? ActivityStreamService.formatTimestamp(latestActivity.timestamp)
             : '';
           const latestActivityUser = latestActivity?.userEmail ? latestActivity.userEmail.split('@')[0] : '';
+          const rowSpan = rowSpans[goal.id];
           return (
-            <div key={goal.id} className="goals-card-tile">
+            <div
+              key={goal.id}
+              className="goals-card-tile"
+              data-goal-id={goal.id}
+              style={rowSpan ? { gridRowEnd: `span ${rowSpan}` } : undefined}
+            >
               <Card
                 className={`h-100 goals-card goals-card--${showDetailed ? 'comfortable' : 'grid'}`}
                 style={{

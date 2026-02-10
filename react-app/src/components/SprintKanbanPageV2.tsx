@@ -15,12 +15,14 @@ import GLOBAL_THEMES from '../constants/globalThemes';
 import SprintSelector from './SprintSelector';
 import EditStoryModal from './EditStoryModal';
 import EditTaskModal from './EditTaskModal';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 const SprintKanbanPageV2: React.FC = () => {
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
     const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
     const { isCollapsed, toggleCollapse, showSidebar } = useSidebar();
+    const { themes: globalThemes } = useGlobalThemes();
 
     const [stories, setStories] = useState<Story[]>([]);
     const [tasks, setTasks] = useState<Task[]>([]);
@@ -35,9 +37,21 @@ const SprintKanbanPageV2: React.FC = () => {
     const [showLatestNotes, setShowLatestNotes] = useState(false);
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
-    const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue'>('all');
+    const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('top3');
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('ai');
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
+
+    const resolveTimestampMs = (value: any): number | null => {
+        if (!value) return null;
+        if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+        if (typeof value?.toDate === 'function') {
+            const d = value.toDate();
+            return d instanceof Date ? d.getTime() : null;
+        }
+        if (typeof value?.seconds === 'number') return value.seconds * 1000;
+        const parsed = Date.parse(String(value));
+        return Number.isNaN(parsed) ? null : parsed;
+    };
 
     useEffect(() => {
         const handleFullscreenChange = () => {
@@ -166,6 +180,15 @@ const SprintKanbanPageV2: React.FC = () => {
     });
 
     const sprintTasks = tasks; // Already filtered by query if sprintId is set
+    const sprintStartMs = resolveTimestampMs(currentSprint?.startDate);
+    const sprintEndMs = resolveTimestampMs(currentSprint?.endDate);
+    const sprintTasksForMetrics = sprintTasks.filter((task) => {
+        if (!filterSprintId) return true;
+        if (sprintStartMs == null || sprintEndMs == null) return true;
+        const dueMs = resolveTimestampMs((task as any).dueDate ?? (task as any).targetDate ?? (task as any).endDate ?? (task as any).dueDateMs);
+        if (dueMs == null) return false;
+        return dueMs >= sprintStartMs && dueMs <= sprintEndMs;
+    });
 
     // Sprint metrics
     const getSprintMetrics = () => {
@@ -184,8 +207,8 @@ const SprintKanbanPageV2: React.FC = () => {
 
         const totalStories = sprintStories.length;
         const completedStories = sprintStories.filter(storyCompleted).length;
-        const totalTasks = sprintTasks.length;
-        const completedTasks = sprintTasks.filter(taskCompleted).length;
+        const totalTasks = sprintTasksForMetrics.length;
+        const completedTasks = sprintTasksForMetrics.filter(taskCompleted).length;
         const normalizePoints = (story: Story) => {
             const val = Number((story as any).points);
             return Number.isFinite(val) ? val : 0;
@@ -334,12 +357,22 @@ const SprintKanbanPageV2: React.FC = () => {
 
                             <Dropdown>
                                 <Dropdown.Toggle variant="outline-secondary" size="sm">
-                                    {dueFilter === 'today' ? 'Due Today' : dueFilter === 'overdue' ? 'Overdue' : 'All Due'}
+                                    {dueFilter === 'today'
+                                        ? 'Due Today'
+                                        : dueFilter === 'overdue'
+                                            ? 'Overdue'
+                                            : dueFilter === 'top3'
+                                                ? 'Top 3'
+                                                : dueFilter === 'critical'
+                                                    ? 'Critical'
+                                                    : 'All Due'}
                                 </Dropdown.Toggle>
                                 <Dropdown.Menu>
                                     <Dropdown.Item active={dueFilter === 'all'} onClick={() => setDueFilter('all')}>All</Dropdown.Item>
                                     <Dropdown.Item active={dueFilter === 'today'} onClick={() => setDueFilter('today')}>Due Today</Dropdown.Item>
                                     <Dropdown.Item active={dueFilter === 'overdue'} onClick={() => setDueFilter('overdue')}>Overdue</Dropdown.Item>
+                                    <Dropdown.Item active={dueFilter === 'top3'} onClick={() => setDueFilter('top3')}>Top 3</Dropdown.Item>
+                                    <Dropdown.Item active={dueFilter === 'critical'} onClick={() => setDueFilter('critical')}>Critical</Dropdown.Item>
                                 </Dropdown.Menu>
                             </Dropdown>
 
@@ -500,6 +533,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     showLatestNotes={showLatestNotes}
                                     dueFilter={dueFilter}
                                     sortBy={sortBy}
+                                    themes={globalThemes}
                                 />
                         </Card.Body>
                     </Card>

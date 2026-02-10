@@ -122,6 +122,9 @@ export interface Task {
   startDate?: number;
   dueDate?: number;
   dueDateMs?: number;
+  dueDateLocked?: boolean;
+  dueDateReason?: string;
+  lockDueDate?: boolean;
   targetDate?: number | string;
   labels?: string[];
   blockedBy?: string[];
@@ -162,7 +165,7 @@ export interface Task {
   aiPriorityLabel?: string;
   aiTop3Reason?: string;
   iosPriority?: string;
-  type?: 'task' | 'chore' | 'routine' | string;
+  type?: 'task' | 'chore' | 'routine' | 'habit' | string;
   repeatFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
   repeatInterval?: number | null;
   daysOfWeek?: string[] | null;
@@ -244,6 +247,8 @@ export interface CalendarBlock {
   subTheme?: string;
   persona: 'personal' | 'work';
   theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home' | string;
+  theme_id?: number | string;
+  themeId?: number | string;
   category: 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep' | 'Work Shift' | 'Work (Main Gig)' | 'Side Gig';
   start: number; // timestamp
   end: number; // timestamp

@@ -3,6 +3,23 @@
   padding: 20px;
 }
 
+.dashboard-compact {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+.dashboard-compact .card-header {
+  padding: 8px 12px;
+}
+
+.dashboard-compact .card-body {
+  padding: 10px 12px;
+}
+
+.dashboard-compact .alert {
+  margin-bottom: 8px;
+}
+
 .dashboard-header {
   margin-bottom: 30px;
 }
@@ -76,6 +93,16 @@
 
 .dashboard-key-metrics .text-muted.small {
   font-size: 11px;
+}
+
+.calendar-dashboard-wrap .rbc-current-time-indicator {
+  background-color: #dc3545;
+  height: 2px;
+  z-index: 3;
+}
+
+.calendar-dashboard-wrap .rbc-current-time-indicator::before {
+  background-color: #dc3545;
 }
 
 @media (max-width: 768px) {

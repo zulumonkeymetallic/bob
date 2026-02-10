@@ -136,20 +136,20 @@ const GoalsManagement: React.FC = () => {
         />
 
         {/* Dashboard Cards */}
-        <Row className="mb-4">
+        <Row className="mb-2">
           {loading ? (
             <>
               <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard />
+                <SkeletonStatCard compact />
               </Col>
               <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard />
+                <SkeletonStatCard compact />
               </Col>
               <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard />
+                <SkeletonStatCard compact />
               </Col>
               <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard />
+                <SkeletonStatCard compact />
               </Col>
             </>
           ) : (
@@ -160,6 +160,7 @@ const GoalsManagement: React.FC = () => {
                   value={goalCounts.total}
                   icon={Target}
                   iconColor={colors.brand.primary}
+                  compact
                 />
               </Col>
               <Col lg={3} md={6} className="mb-3">
@@ -168,6 +169,7 @@ const GoalsManagement: React.FC = () => {
                   value={goalCounts.active}
                   icon={TrendingUp}
                   iconColor={colors.info.primary}
+                  compact
                 />
               </Col>
               <Col lg={3} md={6} className="mb-3">
@@ -176,6 +178,7 @@ const GoalsManagement: React.FC = () => {
                   value={goalCounts.done}
                   icon={CheckCircle}
                   iconColor={colors.success.primary}
+                  compact
                 />
               </Col>
               <Col lg={3} md={6} className="mb-3">
@@ -184,6 +187,7 @@ const GoalsManagement: React.FC = () => {
                   value={goalCounts.paused}
                   icon={PauseCircle}
                   iconColor={colors.warning.primary}
+                  compact
                 />
               </Col>
             </>
@@ -191,14 +195,15 @@ const GoalsManagement: React.FC = () => {
         </Row>
 
         {/* Filters */}
-        <Card className="mb-4">
-          <Card.Body>
+        <Card className="mb-3">
+          <Card.Body style={{ padding: '8px' }}>
             <Row>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label>Search Goals</Form.Label>
+                  <Form.Label className="small mb-0">Search Goals</Form.Label>
                   <InputGroup>
                     <Form.Control
+                      size="sm"
                       type="text"
                       placeholder="Search by title..."
                       value={searchTerm}
@@ -209,8 +214,9 @@ const GoalsManagement: React.FC = () => {
               </Col>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label>Status</Form.Label>
+                  <Form.Label className="small mb-0">Status</Form.Label>
                   <Form.Select
+                    size="sm"
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
                   >
@@ -225,8 +231,9 @@ const GoalsManagement: React.FC = () => {
               </Col>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label>Theme</Form.Label>
+                  <Form.Label className="small mb-0">Theme</Form.Label>
                   <Form.Select
+                    size="sm"
                     value={filterTheme}
                     onChange={(e) => setFilterTheme(e.target.value)}
                   >
@@ -240,9 +247,10 @@ const GoalsManagement: React.FC = () => {
                 </Form.Group>
               </Col>
             </Row>
-            <Row className="mt-3">
+            <Row className="mt-1">
               <Col>
                 <Button
+                  size="sm"
                   variant="outline-secondary"
                   onClick={() => {
                     setFilterStatus('all');

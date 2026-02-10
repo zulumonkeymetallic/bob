@@ -6,7 +6,7 @@ import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Sprint } from '../types';
+import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 
@@ -39,6 +39,7 @@ interface ConvertPayload {
   sprintId: string | null;
   targetDate: string;
   rating: number;
+  goalId?: string | null;
 }
 
 const ShowsBacklog: React.FC = () => {
@@ -47,11 +48,12 @@ const ShowsBacklog: React.FC = () => {
   const { sprints } = useSprint();
 
   const [shows, setShows] = useState<TraktShowItem[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'converted' | 'unconverted'>('all');
   const [selected, setSelected] = useState<TraktShowItem | null>(null);
-  const [convertForm, setConvertForm] = useState<ConvertPayload>({ sprintId: null, targetDate: '', rating: 3 });
+  const [convertForm, setConvertForm] = useState<ConvertPayload>({ sprintId: null, targetDate: '', rating: 3, goalId: null });
   const [savingConversion, setSavingConversion] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -72,6 +74,20 @@ const ShowsBacklog: React.FC = () => {
     });
     return unsub;
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(goalsQuery, (snap) => {
+      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Goal[];
+      setGoals(rows);
+    });
+    return unsub;
+  }, [currentUser, currentPersona]);
 
   const filteredShows = useMemo(() => {
     return shows.filter(show => {
@@ -94,7 +110,7 @@ const ShowsBacklog: React.FC = () => {
 
   const openConvert = (show: TraktShowItem) => {
     setSelected(show);
-    setConvertForm({ sprintId: null, targetDate: '', rating: show.rating ?? 3 });
+    setConvertForm({ sprintId: null, targetDate: '', rating: show.rating ?? 3, goalId: null });
   };
 
   const handleConvert = async () => {
@@ -113,7 +129,7 @@ const ShowsBacklog: React.FC = () => {
         ref: storyRef,
         title: selected.title,
         description: `Watch ${selected.title}${selected.year ? ` (${selected.year})` : ''}. Imported from Trakt watchlist.`,
-        goalId: '',
+        goalId: convertForm.goalId || '',
         sprintId: sprintId || null,
         dueDate: dueDateMs || null,
         status: 0,
@@ -297,6 +313,15 @@ const ShowsBacklog: React.FC = () => {
         <Modal.Header closeButton><Modal.Title>Generate Story</Modal.Title></Modal.Header>
         <Modal.Body>
           <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Goal (optional)</Form.Label>
+              <Form.Select value={convertForm.goalId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, goalId: e.target.value || null }))}>
+                <option value="">No goal</option>
+                {goals.map((g: Goal) => (
+                  <option key={g.id} value={g.id}>{g.title}</option>
+                ))}
+              </Form.Select>
+            </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Sprint (optional)</Form.Label>
               <Form.Select value={convertForm.sprintId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, sprintId: e.target.value || null }))}>

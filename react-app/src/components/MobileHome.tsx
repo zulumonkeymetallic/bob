@@ -12,6 +12,7 @@ import { ChoiceHelper, StoryStatus } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
 import { storyStatusText, taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
+import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 
 type TabKey = 'overview' | 'tasks' | 'stories' | 'goals';
 
@@ -58,6 +59,10 @@ const MobileHome: React.FC = () => {
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
   const [replanLoading, setReplanLoading] = useState(false);
   const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
+  const [choresDueToday, setChoresDueToday] = useState<Task[]>([]);
+  const [choresLoading, setChoresLoading] = useState(false);
+  const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
   const activePlanningSprints = useMemo(
     () => sprints.filter((s) => s.status === 0 || s.status === 1),
     [sprints]
@@ -83,6 +88,54 @@ const MobileHome: React.FC = () => {
       ''
     );
   };
+
+  const getTaskDueMs = useCallback((task: Task): number | null => resolveTaskDueMs(task), []);
+
+  const getTaskLastDoneMs = useCallback((task: Task): number | null => {
+    const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
+    if (!raw) return null;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+      const parsed = new Date(raw).getTime();
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (raw instanceof Date) return raw.getTime();
+    if (typeof raw.toDate === 'function') {
+      const d = raw.toDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    if (typeof raw.toMillis === 'function') return raw.toMillis();
+    if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
+    return null;
+  }, []);
+
+  const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const normalized = raw === 'habitual' ? 'habit' : raw;
+    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
+    const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
+    if (tagKeys.includes('chore')) return 'chore';
+    if (tagKeys.includes('routine')) return 'routine';
+    if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
+    return null;
+  }, []);
+
+  const formatDueLabel = useCallback((dueMs?: number | null) => {
+    if (!dueMs) return 'today';
+    const date = new Date(dueMs);
+    const hasTime = date.getHours() !== 0 || date.getMinutes() !== 0;
+    if (hasTime) {
+      return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }, []);
+
+  const todayStartMs = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -188,6 +241,53 @@ const MobileHome: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid, selectedSprintId, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setChoresDueToday([]);
+      setChoresLoading(false);
+      return;
+    }
+    setChoresLoading(true);
+    const q = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const todayDate = new Date();
+      todayDate.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+      const rows = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }) as Task)
+        .filter((task) => !task.deleted)
+        .filter((task) => {
+          const due = getTaskDueMs(task);
+          if (due) return due <= todayEnd.getTime();
+          return !!getChoreKind(task) && isRecurringDueOnDate(task, todayDate, due);
+        })
+        .filter((task) => (task.status ?? 0) !== 2)
+        .filter((task) => !!getChoreKind(task))
+        .filter((task) => {
+          const lastDone = getTaskLastDoneMs(task);
+          if (!lastDone) return true;
+          return lastDone < todayDate.getTime() || lastDone > todayEnd.getTime();
+        });
+      rows.sort((a, b) => {
+        const aDue = resolveRecurringDueMs(a, new Date(), todayStartMs) ?? 0;
+        const bDue = resolveRecurringDueMs(b, new Date(), todayStartMs) ?? 0;
+        return aDue - bDue;
+      });
+      setChoresDueToday(rows);
+      setChoresLoading(false);
+    }, (err) => {
+      console.warn('Mobile: failed to load chores due today', err);
+      setChoresDueToday([]);
+      setChoresLoading(false);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona, getTaskDueMs, getChoreKind, getTaskLastDoneMs, todayStartMs]);
+
   const storiesById = useMemo(() => new Map(stories.map(s => [s.id, s])), [stories]);
   const storiesByRef = useMemo(() => new Map(stories.map(s => [(s.ref || s.id || '').toUpperCase(), s])), [stories]);
   const tasksByRef = useMemo(() => new Map(tasks.map(t => [(t.ref || t.id || '').toUpperCase(), t])), [tasks]);
@@ -219,6 +319,25 @@ const MobileHome: React.FC = () => {
   const getStoryAiScore = useCallback((story: Story) => {
     return normalizeAiScore((story.metadata?.aiScore ?? story.metadata?.aiCriticalityScore ?? (story as any).aiCriticalityScore ?? null));
   }, [normalizeAiScore]);
+
+  const isTop3Task = useCallback((task: Task) => {
+    const flagged = (task as any).aiTop3ForDay === true
+      || (task as any).aiFlaggedTop === true
+      || Number((task as any).aiPriorityRank || 0) > 0;
+    if (!flagged) return false;
+    const aiDate = (task as any).aiTop3Date;
+    if (!aiDate) return true;
+    return String(aiDate).slice(0, 10) === todayIso;
+  }, [todayIso]);
+
+  const isTop3Story = useCallback((story: Story) => {
+    const flagged = (story as any).aiTop3ForDay === true
+      || Number((story as any).aiFocusStoryRank || 0) > 0;
+    if (!flagged) return false;
+    const aiDate = (story as any).aiTop3Date;
+    if (!aiDate) return true;
+    return String(aiDate).slice(0, 10) === todayIso;
+  }, [todayIso]);
 
   const sprintDaysLeft = useMemo(() => {
     if (!currentSprint) return null;
@@ -346,6 +465,28 @@ const MobileHome: React.FC = () => {
     }
   };
 
+  const handleCompleteChoreTask = useCallback(async (task: Task) => {
+    if (!currentUser) return;
+    const taskId = task.id;
+    if (!taskId || choreCompletionBusy[taskId]) return;
+    setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      const fn = httpsCallable(functions, 'completeChoreTask');
+      await fn({ taskId });
+    } catch (err) {
+      console.warn('Mobile: failed to complete chore task', err);
+      setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: false }));
+      return;
+    }
+    setTimeout(() => {
+      setChoreCompletionBusy((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }, 1500);
+  }, [currentUser, choreCompletionBusy]);
+
   const updateStoryField = async (story: Story, updates: Partial<Story>) => {
     try {
       await updateDoc(doc(db, 'stories', story.id), { ...updates, updatedAt: serverTimestamp() });
@@ -439,6 +580,39 @@ const MobileHome: React.FC = () => {
     });
   }, [filteredStories, getStoryAiScore]);
 
+  const top3Tasks = useMemo(() => {
+    return tasks
+      .filter(t => !t.deleted)
+      .filter(t => t.status !== 2)
+      .filter(isTop3Task)
+      .sort((a, b) => {
+        const ar = Number((a as any).aiPriorityRank || 0) || 99;
+        const br = Number((b as any).aiPriorityRank || 0) || 99;
+        if (ar !== br) return ar - br;
+        const as = getTaskAiScore(a) ?? 0;
+        const bs = getTaskAiScore(b) ?? 0;
+        if (as !== bs) return bs - as;
+        return String(a.title || '').localeCompare(String(b.title || ''));
+      })
+      .slice(0, 3);
+  }, [tasks, isTop3Task, getTaskAiScore]);
+
+  const top3Stories = useMemo(() => {
+    return stories
+      .filter(s => s.status !== 4)
+      .filter(isTop3Story)
+      .sort((a, b) => {
+        const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
+        const br = Number((b as any).aiFocusStoryRank || 0) || 99;
+        if (ar !== br) return ar - br;
+        const as = getStoryAiScore(a) ?? 0;
+        const bs = getStoryAiScore(b) ?? 0;
+        if (as !== bs) return bs - as;
+        return String(a.title || '').localeCompare(String(b.title || ''));
+      })
+      .slice(0, 3);
+  }, [stories, isTop3Story, getStoryAiScore]);
+
   return (
     <Container fluid className="p-2" style={{ maxWidth: 480, width: '100%', overflowX: 'hidden' }}>
       {/* Header + Sprint/Actions */}
@@ -451,12 +625,22 @@ const MobileHome: React.FC = () => {
             </div>
           )}
         </div>
-        <div className="d-flex align-items-center gap-2 flex-wrap justify-content-end" style={{ minWidth: 0 }}>
+        <div
+          className="d-flex align-items-center gap-2 flex-nowrap justify-content-end"
+          style={{ minWidth: 0, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}
+        >
           <Form.Select
             size="sm"
             value={currentPersona}
             onChange={(e) => setPersona(e.target.value as any)}
-            style={{ width: isSmallScreen ? 120 : 140, WebkitAppearance: 'none', appearance: 'none', backgroundImage: 'none' as any }}
+            style={{
+              width: isSmallScreen ? 100 : 120,
+              fontSize: 12,
+              padding: '2px 6px',
+              WebkitAppearance: 'none',
+              appearance: 'none',
+              backgroundImage: 'none' as any
+            }}
             title="Persona"
           >
             <option value="personal">Personal</option>
@@ -466,13 +650,26 @@ const MobileHome: React.FC = () => {
             size="sm"
             value={selectedSprintId || ''}
             onChange={(e) => setSelectedSprintId(e.target.value)}
-            style={{ width: isSmallScreen ? 150 : 200, WebkitAppearance: 'none', appearance: 'none', backgroundImage: 'none' as any }}
+            style={{
+              width: isSmallScreen ? 130 : 170,
+              fontSize: 12,
+              padding: '2px 6px',
+              WebkitAppearance: 'none',
+              appearance: 'none',
+              backgroundImage: 'none' as any
+            }}
           >
             {(activePlanningSprints.length ? activePlanningSprints : sprints).map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </Form.Select>
-          <Button size="sm" variant="outline-primary" disabled={replanLoading} onClick={handleReplan}>
+          <Button
+            size="sm"
+            variant="outline-primary"
+            disabled={replanLoading}
+            onClick={handleReplan}
+            style={{ fontSize: 12, padding: '4px 8px', whiteSpace: 'nowrap' }}
+          >
             {replanLoading && <Spinner animation="border" size="sm" className="me-1" role="status" />}
             {replanLoading ? 'Replanning…' : 'Replan'}
           </Button>
@@ -481,17 +678,17 @@ const MobileHome: React.FC = () => {
 
       {/* Key metrics condensed into a single horizontal row */}
       <div
-        className="d-flex gap-2 mb-2 flex-wrap"
-        style={{ paddingBottom: 4 }}
+        className="d-flex gap-2 mb-2 flex-nowrap"
+        style={{ paddingBottom: 4, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}
       >
         <div
           style={{
             backgroundColor: 'rgba(59,130,246,0.08)',
             color: '#0b152c',
-            padding: '6px 10px',
+            padding: '4px 8px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 90,
+            minWidth: 84,
             display: 'inline-block'
           }}
         >
@@ -502,10 +699,10 @@ const MobileHome: React.FC = () => {
           style={{
             backgroundColor: 'rgba(14,116,144,0.08)',
             color: '#0c4a5a',
-            padding: '6px 10px',
+            padding: '4px 8px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 90,
+            minWidth: 84,
             display: 'inline-block'
           }}
         >
@@ -516,10 +713,10 @@ const MobileHome: React.FC = () => {
           style={{
             backgroundColor: 'rgba(16,185,129,0.08)',
             color: '#065f46',
-            padding: '6px 10px',
+            padding: '4px 8px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 100,
+            minWidth: 84,
             display: 'inline-block'
           }}
         >
@@ -530,10 +727,10 @@ const MobileHome: React.FC = () => {
           style={{
             backgroundColor: 'rgba(237,100,166,0.08)',
             color: '#831843',
-            padding: '6px 10px',
+            padding: '4px 8px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 100,
+            minWidth: 84,
             display: 'inline-block'
           }}
         >
@@ -544,16 +741,50 @@ const MobileHome: React.FC = () => {
           style={{
             backgroundColor: sprintMetricsSummary.behind ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)',
             color: sprintMetricsSummary.behind ? '#991b1b' : '#065f46',
-            padding: '6px 10px',
+            padding: '4px 8px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 100,
+            minWidth: 84,
             display: 'inline-block'
           }}
         >
           <div style={{ fontSize: 10, textTransform: 'uppercase' }}>Status</div>
           <div>{sprintMetricsSummary.behind ? 'Behind' : 'On track'}</div>
         </div>
+      </div>
+
+      <div
+        className="d-flex gap-2 mb-2 flex-nowrap"
+        style={{ paddingBottom: 4, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}
+      >
+        <Card style={{ background: '#ecfeff', minWidth: 120, flex: '0 0 auto' }}>
+          <Card.Body className="p-2">
+            <div className="small text-muted">Tasks today</div>
+            <div className="fs-6 fw-semibold">
+              {tasks.filter(t => t.status !== 2 && t.dueDate && new Date(t.dueDate).toDateString() === new Date().toDateString()).length}
+            </div>
+          </Card.Body>
+        </Card>
+        <Card style={{ background: '#fef3c7', minWidth: 120, flex: '0 0 auto' }}>
+          <Card.Body className="p-2">
+            <div className="small text-muted">Overdue</div>
+            <div className="fs-6 fw-semibold">
+              {tasks.filter(t => t.status !== 2 && t.dueDate && t.dueDate < Date.now() - 86400000).length}
+            </div>
+          </Card.Body>
+        </Card>
+        <Card style={{ background: '#dcfce7', minWidth: 120, flex: '0 0 auto' }}>
+          <Card.Body className="p-2">
+            <div className="small text-muted">Stories done</div>
+            <div className="fs-6 fw-semibold">{stories.filter(s => s.status === 4).length}</div>
+          </Card.Body>
+        </Card>
+        <Card style={{ background: '#fee2e2', minWidth: 140, flex: '0 0 auto' }}>
+          <Card.Body className="p-2">
+            <div className="small text-muted">Chores/Routines</div>
+            <div className="fs-6">{(summary?.choresDue?.length || 0) + (summary?.routinesDue?.length || 0)} due</div>
+          </Card.Body>
+        </Card>
       </div>
       {replanFeedback && (
         <div className="text-muted small mb-2">
@@ -570,55 +801,68 @@ const MobileHome: React.FC = () => {
       {/* AI Daily Summary + Focus */}
       {/* Tabs: Overview | Tasks | Stories | Goals */}
       <div className="mobile-filter-tabs mb-3">
-        <div className="btn-group w-100 flex-wrap" role="group">
-          {(['overview','tasks','stories','goals'] as TabKey[]).map(key => (
-            <Button
-              key={key}
-              variant={activeTab === key ? 'primary' : 'outline-primary'}
-              size="sm"
-              onClick={() => setActiveTab(key)}
-            >
-              {key === 'overview' ? 'Overview' : key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : 'Goals'}
-            </Button>
-          ))}
+        <div className="d-flex align-items-center gap-1 flex-nowrap" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          <div className="btn-group flex-nowrap" role="group" style={{ flex: '1 1 auto' }}>
+            {(['overview','tasks','stories','goals'] as TabKey[]).map(key => (
+              <Button
+                key={key}
+                variant={activeTab === key ? 'primary' : 'outline-primary'}
+                size="sm"
+                onClick={() => setActiveTab(key)}
+                style={{ padding: '4px 8px', fontSize: 12, whiteSpace: 'nowrap' }}
+              >
+                {key === 'overview' ? 'Overview' : key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : 'Goals'}
+              </Button>
+            ))}
+          </div>
+          <Button
+            size="sm"
+            variant="outline-secondary"
+            href="/chores/checklist"
+            style={{ padding: '4px 8px', fontSize: 12, whiteSpace: 'nowrap' }}
+          >
+            Chores
+          </Button>
         </div>
       </div>
 
-      <div className="d-flex flex-wrap gap-2 mb-3 align-items-center">
-        <Form.Check
-          type="switch"
-          id="mobile-ai-focus"
-          label={`AI score ≥ ${aiThreshold}`}
-          checked={aiFocusOnly}
-          onChange={(e) => setAiFocusOnly(e.target.checked)}
-        />
-        <Form.Group className="d-flex align-items-center gap-1 mb-0" style={{ minWidth: 120 }}>
-          <Form.Label className="mb-0 small text-muted">AI threshold</Form.Label>
-          <Form.Control
-            type="number"
-            min={0}
-            max={100}
-            value={aiThreshold}
-            onChange={(e) => {
-              const val = Number(e.target.value);
-              if (Number.isNaN(val)) {
-                setAiThreshold(0);
-                return;
-              }
-              setAiThreshold(Math.min(100, Math.max(0, val)));
-            }}
-            size="sm"
-            style={{ width: 72 }}
+      {activeTab !== 'overview' && (
+        <div className="d-flex flex-wrap gap-2 mb-3 align-items-center">
+          <Form.Check
+            type="switch"
+            id="mobile-ai-focus"
+            label={`AI score ≥ ${aiThreshold}`}
+            checked={aiFocusOnly}
+            onChange={(e) => setAiFocusOnly(e.target.checked)}
           />
-        </Form.Group>
-        <Form.Check
-          type="switch"
-          id="mobile-show-completed"
-          label="Show completed"
-          checked={showCompleted}
-          onChange={(e) => setShowCompleted(e.target.checked)}
-        />
-      </div>
+          <Form.Group className="d-flex align-items-center gap-1 mb-0" style={{ minWidth: 120 }}>
+            <Form.Label className="mb-0 small text-muted">AI threshold</Form.Label>
+            <Form.Control
+              type="number"
+              min={0}
+              max={100}
+              value={aiThreshold}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (Number.isNaN(val)) {
+                  setAiThreshold(0);
+                  return;
+                }
+                setAiThreshold(Math.min(100, Math.max(0, val)));
+              }}
+              size="sm"
+              style={{ width: 72 }}
+            />
+          </Form.Group>
+          <Form.Check
+            type="switch"
+            id="mobile-show-completed"
+            label="Show completed"
+            checked={showCompleted}
+            onChange={(e) => setShowCompleted(e.target.checked)}
+          />
+        </div>
+      )}
 
       {/* Overview */}
       {activeTab === 'overview' && (
@@ -719,24 +963,68 @@ const MobileHome: React.FC = () => {
             </Card>
           )}
 
-          <div className="d-grid gap-2 mb-3" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
-            <Card style={{ background: '#ecfeff' }}><Card.Body>
-              <div className="small text-muted">Tasks today</div>
-              <div className="fs-5 fw-semibold">{tasks.filter(t => t.status !== 2 && t.dueDate && new Date(t.dueDate).toDateString() === new Date().toDateString()).length}</div>
-            </Card.Body></Card>
-            <Card style={{ background: '#fef3c7' }}><Card.Body>
-              <div className="small text-muted">Overdue</div>
-              <div className="fs-5 fw-semibold">{tasks.filter(t => t.status !== 2 && t.dueDate && t.dueDate < Date.now() - 86400000).length}</div>
-            </Card.Body></Card>
-            <Card style={{ background: '#dcfce7' }}><Card.Body>
-              <div className="small text-muted">Stories done</div>
-              <div className="fs-5 fw-semibold">{stories.filter(s => s.status === 4).length}</div>
-            </Card.Body></Card>
-            <Card style={{ background: '#fee2e2' }}><Card.Body>
-              <div className="small text-muted">Chores/Routines</div>
-              <div className="fs-6">{(summary?.choresDue?.length || 0) + (summary?.routinesDue?.length || 0)} due</div>
-            </Card.Body></Card>
-          </div>
+          <Card className="mb-3" style={{ background: '#f8fafc' }}>
+            <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
+              <strong>Top 3 priorities</strong>
+              <span className="text-muted ms-2" style={{ fontSize: 12 }}>{currentPersona === 'work' ? 'Work' : 'Personal'}</span>
+            </Card.Header>
+            <Card.Body className="pt-0">
+              {top3Tasks.length === 0 && top3Stories.length === 0 ? (
+                <div className="text-muted small">No Top 3 items flagged yet.</div>
+              ) : (
+                <>
+                  <div className="mb-2">
+                    <div className="text-uppercase text-muted small fw-semibold">Tasks</div>
+                    {top3Tasks.length === 0 ? (
+                      <div className="text-muted small">No tasks flagged.</div>
+                    ) : (
+                      <ListGroup variant="flush">
+                        {top3Tasks.map((task, idx) => {
+                          const label = task.ref ? `${task.ref} — ${task.title}` : task.title;
+                          const href = `/tasks/${task.ref || task.id}`;
+                          const score = getTaskAiScore(task);
+                          return (
+                            <ListGroup.Item key={task.id} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
+                              <span>
+                                <a href={href} className="text-decoration-none">{label}</a>
+                              </span>
+                              <Badge bg={idx === 0 ? 'danger' : idx === 1 ? 'warning' : 'secondary'}>
+                                {score != null ? Math.round(score) : '—'}
+                              </Badge>
+                            </ListGroup.Item>
+                          );
+                        })}
+                      </ListGroup>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-uppercase text-muted small fw-semibold">Stories</div>
+                    {top3Stories.length === 0 ? (
+                      <div className="text-muted small">No stories flagged.</div>
+                    ) : (
+                      <ListGroup variant="flush">
+                        {top3Stories.map((story, idx) => {
+                          const label = story.ref ? `${story.ref} — ${story.title}` : story.title;
+                          const href = `/stories/${story.ref || story.id}`;
+                          const score = getStoryAiScore(story);
+                          return (
+                            <ListGroup.Item key={story.id} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
+                              <span>
+                                <a href={href} className="text-decoration-none">{label}</a>
+                              </span>
+                              <Badge bg={idx === 0 ? 'danger' : idx === 1 ? 'warning' : 'secondary'}>
+                                {score != null ? Math.round(score) : '—'}
+                              </Badge>
+                            </ListGroup.Item>
+                          );
+                        })}
+                      </ListGroup>
+                    )}
+                  </div>
+                </>
+              )}
+            </Card.Body>
+          </Card>
 
           <Card className="mb-3" style={{ background: '#eef2ff' }}>
             <Card.Body>
@@ -749,6 +1037,54 @@ const MobileHome: React.FC = () => {
                   {plannerStats?.source || 'replan'}
                 </Badge>
               </div>
+            </Card.Body>
+          </Card>
+
+          <Card className="mb-3" style={{ background: '#f0fdf4' }}>
+            <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+              <div>
+                <strong>Chores &amp; Habits</strong>
+                <Badge bg="secondary" pill className="ms-2">{choresDueToday.length}</Badge>
+              </div>
+              <Button size="sm" variant="outline-secondary" href="/chores/checklist">Checklist</Button>
+            </Card.Header>
+            <Card.Body className="pt-0">
+              {choresLoading ? (
+                <div className="text-muted small">Loading chores…</div>
+              ) : choresDueToday.length === 0 ? (
+                <div className="text-muted small">No chores, habits, or routines due today.</div>
+              ) : (
+                <ListGroup variant="flush">
+                  {choresDueToday.map((task) => {
+                    const kind = getChoreKind(task) || 'chore';
+                    const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                    const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                    const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
+                    const dueLabel = formatDueLabel(dueMs);
+                    const isOverdue = !!dueMs && dueMs < todayStartMs;
+                    const busy = !!choreCompletionBusy[task.id];
+                    return (
+                      <ListGroup.Item key={task.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
+                        <Form.Check
+                          type="checkbox"
+                          checked={busy}
+                          disabled={busy}
+                          onChange={() => handleCompleteChoreTask(task)}
+                          aria-label={`Complete ${task.title}`}
+                        />
+                        <div className="flex-grow-1">
+                          <div className="fw-semibold">{task.title}</div>
+                          <div className="text-muted small">{isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}</div>
+                        </div>
+                        <div className="d-flex flex-column align-items-end gap-1">
+                          {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                          <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                        </div>
+                      </ListGroup.Item>
+                    );
+                  })}
+                </ListGroup>
+              )}
             </Card.Body>
           </Card>
 

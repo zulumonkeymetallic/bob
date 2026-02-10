@@ -6,23 +6,27 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Story, Task, Goal, Sprint } from '../types';
+import type { GlobalTheme } from '../constants/globalThemes';
 import KanbanColumnV2 from './KanbanColumnV2';
 import KanbanCardV2 from './KanbanCardV2';
 import { themeVars } from '../utils/themeVars';
 import { isStatus } from '../utils/statusHelpers';
+import { isCriticalPriority } from '../utils/priorityUtils';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
 
-    interface KanbanBoardV2Props {
-        sprintId?: string | null;
-        themeFilter?: number | null;
-        goalFilter?: string | null;
-        onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
-        onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
-        showDescriptions?: boolean;
-        showLatestNotes?: boolean;
-        dueFilter?: 'all' | 'today' | 'overdue';
-        sortBy?: 'ai' | 'due' | 'priority' | 'default';
-    }
+interface KanbanBoardV2Props {
+    sprintId?: string | null;
+    themeFilter?: number | null;
+    goalFilter?: string | null;
+    onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
+    onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
+    showDescriptions?: boolean;
+    showLatestNotes?: boolean;
+    dueFilter?: 'all' | 'today' | 'overdue' | 'top3' | 'critical';
+    sortBy?: 'ai' | 'due' | 'priority' | 'default';
+    themes?: GlobalTheme[];
+}
 
 const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     sprintId,
@@ -31,9 +35,10 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     onItemSelect,
     onEdit,
     showDescriptions = false,
-        showLatestNotes = false,
-        dueFilter = 'all',
-        sortBy = 'ai'
+    showLatestNotes = false,
+    dueFilter = 'all',
+    sortBy = 'ai',
+    themes
     }) => {
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
@@ -47,6 +52,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const [latestNotesById, setLatestNotesById] = useState<Record<string, string>>({});
     const [steamByAppId, setSteamByAppId] = useState<Record<string, any>>({});
     const [steamLastSyncAt, setSteamLastSyncAt] = useState<any>(null);
+    const formatTag = (tag: string) => formatTaskTagLabel(tag, goals, sprints);
 
     // Data fetching
     useEffect(() => {
@@ -242,24 +248,44 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     };
 
     // Filtering and Grouping
-    const filteredStories = useMemo(() => {
-        let result = stories;
-        if (sprintId) {
-            result = result.filter(s => (s as any).sprintId === sprintId);
+
+    const isTop3Task = (task: Task): boolean => {
+        return (task as any).aiTop3ForDay === true
+            || (task as any).aiFlaggedTop === true
+            || Number((task as any).aiPriorityRank || 0) > 0;
+    };
+
+    const isTop3Story = (story: Story): boolean => {
+        return (story as any).aiTop3ForDay === true
+            || Number((story as any).aiFocusStoryRank || 0) > 0;
+    };
+
+    const getItemDueMs = (item: any): number | null => {
+        const raw = item?.dueDate ?? item?.targetDate ?? item?.endDate ?? item?.dueDateMs ?? null;
+        if (!raw) return null;
+        if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+        if (typeof raw === 'object' && typeof raw?.toDate === 'function') {
+            const d = raw.toDate();
+            return d instanceof Date ? d.getTime() : null;
         }
-        if (goalFilter) {
-            result = result.filter(s => s.goalId === goalFilter);
-        }
-        if (themeFilter) {
-            result = result.filter(s => {
-                if (s.theme === themeFilter) return true;
-                // Fallback to goal lookup if theme not on story
-                const g = goals.find(g => g.id === s.goalId);
-                return g?.theme === themeFilter;
-            });
-        }
-        return result;
-    }, [stories, goals, sprintId, goalFilter, themeFilter]);
+        const parsed = Date.parse(String(raw));
+        return Number.isNaN(parsed) ? null : parsed;
+    };
+
+    const matchesDueFilter = (item: any, isTop3: boolean): boolean => {
+        if (dueFilter === 'all') return true;
+        if (dueFilter === 'top3') return isTop3;
+        if (dueFilter === 'critical') return isCriticalPriority(item?.priority);
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(todayStart);
+        todayEnd.setHours(23, 59, 59, 999);
+        const dueMs = getItemDueMs(item);
+        if (!dueMs) return false;
+        if (dueFilter === 'today') return dueMs >= todayStart.getTime() && dueMs <= todayEnd.getTime();
+        if (dueFilter === 'overdue') return dueMs < todayStart.getTime();
+        return true;
+    };
 
     const filteredTasks = useMemo(() => {
         let result = tasks;
@@ -300,23 +326,31 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             });
         }
 
-        if (dueFilter !== 'all') {
-            const todayStart = new Date();
-            todayStart.setHours(0, 0, 0, 0);
-            const todayEnd = new Date(todayStart);
-            todayEnd.setHours(23, 59, 59, 999);
-            result = result.filter((t) => {
-                const due = (t as any).dueDate || (t as any).targetDate || null;
-                if (!due) return false;
-                const dueMs = typeof due === 'number' ? due : (typeof due === 'string' ? Date.parse(due) : null);
-                if (!dueMs) return false;
-                if (dueFilter === 'today') return dueMs >= todayStart.getTime() && dueMs <= todayEnd.getTime();
-                if (dueFilter === 'overdue') return dueMs < todayStart.getTime();
-                return true;
-            });
-        }
+        result = result.filter((t) => matchesDueFilter(t, isTop3Task(t)));
         return result;
     }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter]);
+
+    const filteredStories = useMemo(() => {
+        let result = stories;
+        if (sprintId) {
+            result = result.filter(s => (s as any).sprintId === sprintId);
+        }
+        if (goalFilter) {
+            result = result.filter(s => (s as any).goalId === goalFilter);
+        }
+        if (themeFilter) {
+            result = result.filter(s => {
+                if ((s as any).theme === themeFilter) return true;
+                if ((s as any).goalId) {
+                    const g = goals.find(g => g.id === (s as any).goalId);
+                    return g?.theme === themeFilter;
+                }
+                return false;
+            });
+        }
+        result = result.filter((s) => matchesDueFilter(s, isTop3Story(s)));
+        return result;
+    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter]);
 
     const visibleEntityIds = useMemo(() => {
         const ids = new Set<string>();
@@ -550,6 +584,8 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 latestNote={latestNotesById[item.id]}
                                 steamMeta={steamMeta}
                                 onEdit={() => onEdit?.(item, type)}
+                                formatTag={formatTag}
+                                themes={themes}
                             />
                         );
                     })}

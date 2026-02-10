@@ -89,6 +89,20 @@ service cloud.firestore {
       );
       allow read, update, delete: if activityOwned();
     }
+    // Automation activity feeds (read-only for clients)
+    match /automation_events/{id} {
+      allow read: if activityOwned();
+      allow create, update, delete: if false;
+    }
+    match /automation_alerts/{id} {
+      allow read: if activityOwned();
+      allow create, update, delete: if false;
+    }
+    // Legacy automation activity collection
+    match /activity/{id} {
+      allow read: if activityOwned();
+      allow create, update, delete: if false;
+    }
     // Materialized view: sprint task index (server-managed)
     match /sprint_task_index/{id} {
       allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
@@ -103,10 +117,30 @@ service cloud.firestore {
         id.matches('.*' + request.auth.uid)
       );
     }
+    // Daily/weekly check-ins (per-user, id is uid_dateKey / uid_weekKey)
+    match /daily_checkins/{id} {
+      allow create: if isOwnerForCreate();
+      // Allow read by UID-prefixed id even when the doc doesn't exist yet.
+      allow read: if isSignedIn() && (
+        id.matches('^' + request.auth.uid + '_.*') ||
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid)
+      );
+      allow update, delete: if isOwner();
+    }
+    match /weekly_checkins/{id} {
+      allow create: if isOwnerForCreate();
+      // Allow read by UID-prefixed id even when the doc doesn't exist yet.
+      allow read: if isSignedIn() && (
+        id.matches('^' + request.auth.uid + '_.*') ||
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid)
+      );
+      allow update, delete: if isOwner();
+    }
     match /ai_usage_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /steam/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /youtube/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     // Hardcover books (per-user library + backlog)
     match /hardcover/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 

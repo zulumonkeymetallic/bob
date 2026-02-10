@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
 import { updateDoc, doc, serverTimestamp, collection, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -12,6 +12,7 @@ import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
+import { useNavigate } from 'react-router-dom';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -30,6 +31,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   onStoryUpdated,
   container
 }) => {
+  const navigate = useNavigate();
   const { sprints } = useSprint();
   const { currentPersona } = usePersona();
   const [editedStory, setEditedStory] = useState({
@@ -66,6 +68,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const selectedSprintStatus = selectedSprint
     ? (isStatus(selectedSprint.status, 'closed') ? 'Completed' : (isStatus(selectedSprint.status, 'cancelled') ? 'Cancelled' : ''))
     : '';
+  const linkedGoal = useMemo(
+    () => (editedStory.goalId ? goals.find((g) => g.id === editedStory.goalId) : null),
+    [editedStory.goalId, goals],
+  );
 
   // Initialize form when story changes
   useEffect(() => {
@@ -321,6 +327,18 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                         <option key={g.id} value={g.title} />
                       ))}
                     </datalist>
+                    {editedStory.goalId ? (
+                      <div className="form-text">
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0"
+                          onClick={() => navigate(`/goals/${(linkedGoal as any)?.ref || editedStory.goalId}`)}
+                        >
+                          View linked goal
+                        </Button>
+                      </div>
+                    ) : null}
                   </Form.Group>
                 </Col>
 

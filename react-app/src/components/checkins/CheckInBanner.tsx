@@ -15,27 +15,49 @@ const CheckInBanner: React.FC = () => {
   const navigate = useNavigate();
   const [showDaily, setShowDaily] = useState(false);
   const [showWeekly, setShowWeekly] = useState(false);
+  const [dailyMessage, setDailyMessage] = useState('Review today’s planned items and mark what you completed.');
+  const [dailyKey, setDailyKey] = useState('');
+  const [refreshTick, setRefreshTick] = useState(0);
 
   const today = useMemo(() => new Date(), []);
-  const dateKey = useMemo(() => format(today, 'yyyyMMdd'), [today]);
   const weekStart = useMemo(() => startOfWeek(addDays(today, -7), { weekStartsOn: 1 }), [today]);
   const weekKey = useMemo(() => format(weekStart, "yyyy-'W'II"), [weekStart]);
 
   useEffect(() => {
+    const now = new Date();
+    const next = new Date(now);
+    if (now.getHours() < 18) {
+      next.setHours(18, 0, 0, 0);
+    } else {
+      next.setDate(now.getDate() + 1);
+      next.setHours(0, 0, 0, 0);
+    }
+    const delay = Math.max(60 * 1000, next.getTime() - now.getTime());
+    const timer = setTimeout(() => setRefreshTick((prev) => prev + 1), delay);
+    return () => clearTimeout(timer);
+  }, [refreshTick]);
+
+  useEffect(() => {
     const run = async () => {
       if (!currentUser) return;
-      const dailyDismissed = localStorage.getItem(DAILY_DISMISS_KEY(dateKey));
+      const now = new Date();
+      const isAfterSix = now.getHours() >= 18;
+      const targetDate = isAfterSix ? now : addDays(now, -1);
+      const targetKey = format(targetDate, 'yyyyMMdd');
+      const message = isAfterSix
+        ? 'Review today’s planned items and mark what you completed.'
+        : 'Review yesterday’s planned items.';
+      setDailyKey(targetKey);
+      setDailyMessage(message);
+
+      const dailyDismissed = localStorage.getItem(DAILY_DISMISS_KEY(targetKey));
       const weeklyDismissed = localStorage.getItem(WEEKLY_DISMISS_KEY(weekKey));
 
-      const dailySnap = await getDoc(doc(db, 'daily_checkins', `${currentUser.uid}_${dateKey}`));
+      const dailySnap = await getDoc(doc(db, 'daily_checkins', `${currentUser.uid}_${targetKey}`));
       if (!dailySnap.exists()) {
         setShowDaily(!dailyDismissed);
       } else {
-        const dailyData = dailySnap.data() as any;
-        const plannedCount = Number(dailyData?.plannedCount || 0);
-        const completedCount = Number(dailyData?.completedCount || 0);
-        const hasIncomplete = plannedCount > 0 && completedCount < plannedCount;
-        setShowDaily(hasIncomplete);
+        setShowDaily(false);
       }
 
       const weeklySnap = await getDoc(doc(db, 'weekly_checkins', `${currentUser.uid}_${weekKey}`));
@@ -43,7 +65,7 @@ const CheckInBanner: React.FC = () => {
       setShowWeekly(weekShouldPrompt && !weeklySnap.exists() && !weeklyDismissed);
     };
     run();
-  }, [currentUser, dateKey, weekKey, today]);
+  }, [currentUser, weekKey, today, refreshTick]);
 
   if (!showDaily && !showWeekly) return null;
 
@@ -54,7 +76,9 @@ const CheckInBanner: React.FC = () => {
           variant="info"
           dismissible
           onClose={() => {
-            localStorage.setItem(DAILY_DISMISS_KEY(dateKey), 'true');
+            if (dailyKey) {
+              localStorage.setItem(DAILY_DISMISS_KEY(dailyKey), 'true');
+            }
             setShowDaily(false);
           }}
           className="border-0 shadow-sm"
@@ -64,7 +88,7 @@ const CheckInBanner: React.FC = () => {
               <CalendarCheck size={20} />
               <div>
                 <div className="fw-semibold">Daily check-in</div>
-                <div className="text-muted small">Review today’s planned items and mark what you completed.</div>
+                <div className="text-muted small">{dailyMessage}</div>
               </div>
             </div>
             <Button size="sm" variant="primary" onClick={() => navigate('/checkin/daily')}>

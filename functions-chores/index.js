@@ -42,13 +42,15 @@ function toISODate(date) {
 }
 function dayOfWeekKey(date) { return ['sun','mon','tue','wed','thu','fri','sat'][date.getDay()]; }
 function* iterateNextDays(startDate, count) { const d = new Date(startDate); for (let i=0;i<count;i++){ yield new Date(d.getTime()+i*24*60*60*1000);} }
+function isSameDay(a, b) { return startOfDay(new Date(a)).getTime() === startOfDay(new Date(b)).getTime(); }
 
 function inferTaskType(data) {
   const rawTitle = String(data?.title || '').toLowerCase();
   const rawList = String(data?.reminderListName || data?.reminderListId || '').toLowerCase();
-  const tags = Array.isArray(data?.tags) ? data.tags.map((t) => String(t || '').toLowerCase()) : [];
+  const tags = Array.isArray(data?.tags) ? data.tags.map((t) => String(t || '').toLowerCase().replace(/^#/, '')) : [];
   const note = String(data?.note || '').toLowerCase();
   const candidates = [rawTitle, rawList, note, ...tags];
+  if (candidates.some((s) => s.includes('habit'))) return 'habit';
   if (candidates.some((s) => s.includes('routine'))) return 'routine';
   if (candidates.some((s) => s.includes('chore'))) return 'chore';
   return null;
@@ -82,7 +84,11 @@ function normaliseRecurrence(data) {
 function shouldScheduleOnDay(task, date) {
   const freq = task?.repeatFrequency;
   const interval = Number(task?.repeatInterval || 1) || 1;
-  if (!freq) return false;
+  if (!freq) {
+    const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    if (!dueMs) return false;
+    return isSameDay(date, dueMs);
+  }
   if (freq === 'daily') {
     const base = toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now();
     const daysDiff = Math.floor((startOfDay(date).getTime() - startOfDay(new Date(base)).getTime()) / (24*60*60*1000));
@@ -103,12 +109,68 @@ function shouldScheduleOnDay(task, date) {
   return false;
 }
 
+function hasTimeComponent(ms) {
+  if (!ms) return false;
+  const d = new Date(ms);
+  return d.getHours() !== 0 || d.getMinutes() !== 0 || d.getSeconds() !== 0;
+}
+
+function applyTimeOfDay(day, timeMs) {
+  const base = new Date(timeMs);
+  const d = new Date(day.getTime());
+  d.setHours(base.getHours(), base.getMinutes(), 0, 0);
+  return d.getTime();
+}
+
+function durationMinutesFromTask(task) {
+  const points = Number(task?.points || 0);
+  const estimateMin = Number(task?.estimateMin || 0);
+  const choreMin = 10;
+  if (estimateMin > 0) return Math.min(180, Math.max(choreMin, Math.round(estimateMin)));
+  if (points > 0) return Math.min(240, Math.max(choreMin, Math.round(points * 60)));
+  return choreMin;
+}
+
+async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
+  const busy = [];
+  const snap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', ownerUid)
+    .where('start', '>=', dayStartMs)
+    .where('start', '<=', dayEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+  snap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const start = toMillis(data.start);
+    const end = toMillis(data.end) || (start ? start + durationMs : null);
+    if (start && end) busy.push([start, end]);
+  });
+  busy.sort((a, b) => a[0] - b[0]);
+  let cursor = dayStartMs + (8 * 60 * 60 * 1000); // default to 08:00
+  const windowEnd = dayEndMs - durationMs;
+  for (let i = 0; i <= busy.length; i++) {
+    const nextBusyStart = i < busy.length ? busy[i][0] : dayEndMs;
+    if (cursor + durationMs <= nextBusyStart) {
+      if (cursor <= windowEnd) return cursor;
+      return null;
+    }
+    if (i < busy.length) {
+      cursor = Math.max(cursor, busy[i][1] || cursor);
+    }
+  }
+  return null;
+}
+
 async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
   if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
   const ownerUid = task.ownerUid;
   const today = startOfDay(new Date());
   const snoozedUntil = toMillis(task?.snoozedUntil) || 0;
   let created = 0, updated = 0;
+  const durationMin = durationMinutesFromTask(task);
+  const durationMs = durationMin * 60000;
+  const taskDueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+  const dueHasTime = hasTimeComponent(taskDueMs);
   for (const day of iterateNextDays(today, lookaheadDays)) {
     if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
     if (!shouldScheduleOnDay(task, day)) continue;
@@ -117,6 +179,17 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     const docId = `chore_${task.id}_${dayKey}`;
     const ref = db.collection('calendar_blocks').doc(docId);
     const snap = await ref.get();
+    const dayStartMs = startOfDay(day).getTime();
+    const dayEndMs = dayStartMs + (24 * 60 * 60 * 1000) - 1;
+    let startMs = dayStartMs;
+    if (taskDueMs && dueHasTime) {
+      startMs = applyTimeOfDay(day, taskDueMs);
+    } else {
+      const slot = await findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs);
+      startMs = slot || (dayStartMs + (9 * 60 * 60 * 1000));
+    }
+    const endMs = startMs + durationMs;
+  const checklistLink = `/chores/checklist?date=${encodeURIComponent(iso)}&taskId=${encodeURIComponent(task.id)}`;
   const base = {
       ownerUid,
       entityType: 'chore',
@@ -124,7 +197,11 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
       date: iso,
       title: task.title || 'Chore',
       status: 'planned',
-      start: startOfDay(day).getTime(),
+      start: startMs,
+      end: endMs,
+      source: 'chore',
+      syncToGoogle: false,
+      deepLink: checklistLink,
       metadata: {
         frequency: task.repeatFrequency || null,
         interval: Number(task.repeatInterval || 1) || 1,
@@ -133,7 +210,12 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     };
     if (snap.exists) {
       const existing = snap.data() || {};
-      const needsUpdate = existing.title !== base.title || existing.ownerUid !== ownerUid || existing.status === undefined || existing.start !== base.start;
+      const needsUpdate = existing.title !== base.title
+        || existing.ownerUid !== ownerUid
+        || existing.status === undefined
+        || existing.start !== base.start
+        || existing.syncToGoogle !== base.syncToGoogle
+        || existing.deepLink !== base.deepLink;
       if (needsUpdate) {
         await ref.set({ ...existing, ...base, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         updated++;
@@ -176,7 +258,7 @@ exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async
 
   const type = String(after?.type || patch?.type || '').toLowerCase();
   const active = Number(afterStatus) !== 2;
-  const isChoreLike = type === 'chore' || type === 'routine';
+  const isChoreLike = type === 'chore' || type === 'routine' || type === 'habit';
   if (isChoreLike && active) {
     const task = { id, ...(after || {}), ...(patch || {}) };
     await upsertChoreBlocksForTask(db, task, 14);
@@ -217,7 +299,7 @@ exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async 
   const db = admin.firestore();
   await ensureBudget(db, 'ensureChoreBlocksHourly', { reads: 2000, writes: 500 });
   let scanned = 0, created = 0, updated = 0;
-  for (const t of ['chore','routine']) {
+  for (const t of ['chore','routine','habit']) {
     const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
     for (const doc of snap.docs) { scanned++; const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data()||{}) }, 14); created += res.created; updated += res.updated; }
   }
@@ -234,9 +316,21 @@ exports.completeChoreTask = httpsV2.onCall(async (req) => {
   const taskRef = db.collection('tasks').doc(taskId);
   const snap = await taskRef.get(); if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
   const task = snap.data() || {}; if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
-  const type = String(task?.type || '').toLowerCase(); if (type !== 'chore' && type !== 'routine') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine');
-  const todayKey = toDayKey(new Date()); const blockId = `chore_${taskId}_${todayKey}`;
-  await db.collection('calendar_blocks').doc(blockId).set({ ownerUid: uid, taskId, entityType: 'chore', status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const type = String(task?.type || '').toLowerCase(); if (type !== 'chore' && type !== 'routine' && type !== 'habit') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine/habit');
+  const today = new Date();
+  const todayKey = toDayKey(today);
+  const todayIso = today.toISOString().slice(0, 10);
+  const blockId = `chore_${taskId}_${todayKey}`;
+  await db.collection('calendar_blocks').doc(blockId).set({
+    ownerUid: uid,
+    taskId,
+    entityType: 'chore',
+    status: 'done',
+    source: 'chore',
+    syncToGoogle: false,
+    deepLink: `/chores/checklist?date=${encodeURIComponent(todayIso)}&taskId=${encodeURIComponent(taskId)}`,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
   await taskRef.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
   return { ok: true };
 });

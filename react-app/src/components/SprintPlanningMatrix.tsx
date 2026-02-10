@@ -10,10 +10,13 @@ import { Story, Sprint, Goal } from '../types';
 import { Calendar, Filter, Plus, ArrowUpDown, ArrowRight, Target, Maximize2, Minimize2, LayoutGrid } from 'lucide-react';
 import KanbanCardV2 from './KanbanCardV2';
 import GLOBAL_THEMES from '../constants/globalThemes';
+import type { GlobalTheme } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import '../styles/KanbanCards.css';
 import { goalThemeColor } from '../utils/storyCardFormatting';
 import { useNavigate } from 'react-router-dom';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -40,7 +43,9 @@ const SprintColumn: React.FC<{
   placeholderLabel?: string;
   droppableId: string;
   showDescriptions: boolean;
-}> = ({ sprint, stories, goals, isBacklog = false, placeholderLabel, droppableId, showDescriptions }) => {
+  formatTag?: (tag: string) => string;
+  themes?: GlobalTheme[];
+}> = ({ sprint, stories, goals, isBacklog = false, placeholderLabel, droppableId, showDescriptions, formatTag, themes }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [isOver, setIsOver] = useState(false);
 
@@ -134,7 +139,7 @@ const SprintColumn: React.FC<{
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {stories.map(story => {
             const goal = goals.find(g => g.id === story.goalId);
-            const themeColor = goalThemeColor(goal);
+            const themeColor = goalThemeColor(goal, themes);
             return (
               <KanbanCardV2
                 key={story.id}
@@ -144,6 +149,8 @@ const SprintColumn: React.FC<{
                 themeColor={themeColor || undefined}
                 taskCount={0}
                 showDescription={showDescriptions}
+                formatTag={formatTag}
+                themes={themes}
               />
             );
           })}
@@ -169,6 +176,7 @@ const SprintPlanningMatrix: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -179,6 +187,7 @@ const SprintPlanningMatrix: React.FC = () => {
   const [moveError, setMoveError] = useState<string | null>(null);
   const [showDescriptions, setShowDescriptions] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const formatTag = (tag: string) => formatTaskTagLabel(tag, goals, sprints);
   
   // Filters
   const [filterGoal, setFilterGoal] = useState<string>('all');
@@ -555,6 +564,8 @@ const SprintPlanningMatrix: React.FC = () => {
           isBacklog={true}
           droppableId="backlog"
           showDescriptions={showDescriptions}
+          formatTag={formatTag}
+          themes={globalThemes}
         />
         {visibleSprints.map((sprint) => (
           <SprintColumn
@@ -565,6 +576,8 @@ const SprintPlanningMatrix: React.FC = () => {
             placeholderLabel={undefined}
             droppableId={sprint.id}
             showDescriptions={showDescriptions}
+            formatTag={formatTag}
+            themes={globalThemes}
           />
         ))}
       </div>

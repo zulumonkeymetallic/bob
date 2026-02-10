@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { startOfWeek, endOfWeek, format } from 'date-fns';
 import { Card, Button, Badge, Form, Modal, Alert, Dropdown } from 'react-bootstrap';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import {
@@ -187,6 +188,7 @@ interface SortableRowProps {
   storyCounts: Record<string, number>;
   sprintStoryCounts: Record<string, number>;
   storyPointsData: Record<string, { total: number; completed: number; progress: number }>;
+  habitAdherenceData: Record<string, { planned: number; completed: number; progress: number }>;
   highlightStoryId?: string;
 }
 
@@ -210,6 +212,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   storyCounts,
   sprintStoryCounts,
   storyPointsData,
+  habitAdherenceData,
   highlightStoryId
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
@@ -405,9 +408,21 @@ const SortableRow: React.FC<SortableRowProps> = ({
       return `${sprintStoryCounts[goal.id] || 0}`;
     }
     if (key === 'progress') {
-      const data = storyPointsData[goal.id];
-      if (!data || data.total === 0) return '0%';
-      return `${Math.round(data.progress)}% (${data.completed}/${data.total} pts)`;
+      const storyData = storyPointsData[goal.id];
+      const habitData = habitAdherenceData[goal.id];
+      const parts: string[] = [];
+      const components: number[] = [];
+      if (storyData && storyData.total > 0) {
+        components.push(storyData.progress);
+        parts.push(`Story ${storyData.completed}/${storyData.total} pts`);
+      }
+      if (habitData && habitData.planned > 0) {
+        components.push(habitData.progress);
+        parts.push(`Habits ${habitData.completed}/${habitData.planned}`);
+      }
+      if (!components.length) return '0%';
+      const combined = Math.round(components.reduce((a, b) => a + b, 0) / components.length);
+      return `${combined}% (${parts.join(' · ')})`;
     }
     if (key === 'status') {
       return getStatusName(value);
@@ -866,6 +881,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
   const [sprintStoryCounts, setSprintStoryCounts] = useState<Record<string, number>>({});
   const [storyPointsData, setStoryPointsData] = useState<Record<string, { total: number; completed: number; progress: number }>>({});
+  const [habitAdherenceData, setHabitAdherenceData] = useState<Record<string, { planned: number; completed: number; progress: number }>>({});
   const { selectedSprintId } = useSprint();
   const [sortConfig, setSortConfig] = useState<{ key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear'; direction: 'asc' | 'desc' }>({
     key: 'startDate',
@@ -1034,6 +1050,47 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     });
     return unsub;
   }, [currentUser, currentPersona, selectedSprintId]);
+
+  // Aggregate habit/chore/routine adherence per goal for the current week
+  useEffect(() => {
+    if (!currentUser) return;
+    const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+    const weekEnd = endOfWeek(weekStart, { weekStartsOn: 1 });
+    const startKey = format(weekStart, 'yyyyMMdd');
+    const endKey = format(weekEnd, 'yyyyMMdd');
+    const q = query(
+      collection(db, 'daily_checkins'),
+      where('ownerUid', '==', currentUser.uid),
+      where('dateKey', '>=', startKey),
+      where('dateKey', '<=', endKey),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const adherence: Record<string, { planned: number; completed: number; progress: number }> = {};
+      snap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        (data.items || []).forEach((item: any) => {
+          const goalId = item.goalId;
+          if (!goalId) return;
+          const type = String(item.type || '').toLowerCase();
+          const taskType = String(item.taskType || '').toLowerCase();
+          const isHabitLike = ['habit', 'chore', 'routine'].includes(type)
+            || (type === 'task' && ['habit', 'chore', 'routine', 'habitual'].includes(taskType));
+          if (!isHabitLike) return;
+          if (!adherence[goalId]) adherence[goalId] = { planned: 0, completed: 0, progress: 0 };
+          adherence[goalId].planned += 1;
+          if (item.completed) adherence[goalId].completed += 1;
+        });
+      });
+      Object.keys(adherence).forEach((gid) => {
+        const row = adherence[gid];
+        row.progress = row.planned > 0 ? (row.completed / row.planned) * 100 : 0;
+      });
+      setHabitAdherenceData(adherence);
+    }, (err) => {
+      console.warn('ModernGoalsTable: habit adherence load failed', err);
+    });
+    return unsub;
+  }, [currentUser]);
 
   const handleEditModal = (goal: Goal) => {
     trackClick({
@@ -1391,6 +1448,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       storyCounts={storyCounts}
                       sprintStoryCounts={sprintStoryCounts}
                       storyPointsData={storyPointsData}
+                      habitAdherenceData={habitAdherenceData}
                       globalThemes={globalThemes}
                       availableGoals={allGoals}
                       expandedGoalId={expandedGoalId}

@@ -4,6 +4,7 @@ import { Routes, Route, BrowserRouter as Router, Navigate, useLocation, useNavig
 import Dashboard from './components/Dashboard';
 import TaskListView from './components/TaskListView';
 import GoalsManagement from './components/GoalsManagement';
+import GoalsYearPlanner from './components/GoalsYearPlanner';
 import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import PlanningDashboard from './components/PlanningDashboard';
@@ -63,6 +64,8 @@ import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
 import MobileHome from './components/MobileHome';
 import ChoresTasksPage from './components/ChoresTasksPage';
+import ChoreChecklistPage from './components/ChoreChecklistPage';
+import HabitsChoresDashboard from './components/HabitsChoresDashboard';
 import HabitsManagement from './components/HabitsManagement';
 import AIUsageDashboard from './components/AIUsageDashboard';
 import SprintPlannerMatrix from './components/SprintPlannerMatrix';
@@ -95,6 +98,7 @@ import StravaSettings from './components/settings/integrations/StravaSettings';
 import SteamSettings from './components/settings/integrations/SteamSettings';
 import HardcoverSettings from './components/settings/integrations/HardcoverSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
+import YoutubeSettings from './components/settings/integrations/YoutubeSettings';
 import { useEntityAudit } from './hooks/useEntityAudit';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
@@ -285,6 +289,7 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/dashboard/habits-chores" element={<HabitsChoresDashboard />} />
             <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
             <Route path="/metrics" element={<AdvancedOverview />} />
             <Route path="/overview/advanced" element={<Navigate to="/metrics" replace />} />
@@ -327,9 +332,11 @@ function AppContent() {
             <Route path="/checkin/daily" element={<CheckInDaily />} />
             <Route path="/checkin/weekly" element={<CheckInWeekly />} />
             <Route path="/sprints/capacity" element={<CapacityDashboard />} />
+            <Route path="/capacity" element={<Navigate to="/sprints/capacity" replace />} />
 
             <Route path="/tasks-management" element={<TasksManagement />} />
             <Route path="/chores" element={<ChoresTasksPage />} />
+            <Route path="/chores/checklist" element={<ChoreChecklistPage />} />
             <Route path="/mobile" element={<MobileHome />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
@@ -354,6 +361,7 @@ function AppContent() {
             />
             <Route path="/goals/:id" element={<DeepLinkGoal />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
+            <Route path="/goals/year-planner" element={<GoalsYearPlanner />} />
             <Route path="/goals/roadmap" element={<GoalRoadmapV5 />} />
             <Route path="/goals/roadmap-legacy" element={<GoalRoadmapV3 />} />
             <Route path="/goals/roadmap-v5" element={<GoalRoadmapV5 />} />
@@ -406,6 +414,7 @@ function AppContent() {
             <Route path="/settings/integrations/steam" element={<SteamSettings />} />
             <Route path="/settings/integrations/hardcover" element={<HardcoverSettings />} />
             <Route path="/settings/integrations/trakt" element={<TraktSettings />} />
+            <Route path="/settings/integrations/youtube" element={<YoutubeSettings />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
             <Route path="/admin" element={<Navigate to="/settings/integrations" replace />} />
             {/* Removed by request: Test Suite and Changelog routes */}

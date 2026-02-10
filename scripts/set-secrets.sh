@@ -52,6 +52,10 @@ read -r -p "TRAKT_CLIENT_ID: " TRAKT_CLIENT_ID || true
 if [ -n "${TRAKT_CLIENT_ID:-}" ]; then
   printf "%s" "$TRAKT_CLIENT_ID" | firebase functions:secrets:set TRAKT_CLIENT_ID
 fi
+read -r -p "TRAKT_CLIENT_SECRET: " TRAKT_CLIENT_SECRET || true
+if [ -n "${TRAKT_CLIENT_SECRET:-}" ]; then
+  printf "%s" "$TRAKT_CLIENT_SECRET" | firebase functions:secrets:set TRAKT_CLIENT_SECRET
+fi
 read -r -p "STEAM_WEB_API_KEY: " STEAM_WEB_API_KEY || true
 if [ -n "${STEAM_WEB_API_KEY:-}" ]; then
   printf "%s" "$STEAM_WEB_API_KEY" | firebase functions:secrets:set STEAM_WEB_API_KEY

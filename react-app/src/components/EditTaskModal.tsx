@@ -1,17 +1,23 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
-import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
-import { db } from '../firebase';
+import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, setDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { useNavigate } from 'react-router-dom';
+import { db, functions } from '../firebase';
 import { useSprint } from '../contexts/SprintContext';
-import { Task, Sprint, Story } from '../types';
+import { Task, Sprint, Story, Goal } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
 import TagInput from './common/TagInput';
 import { cascadeTaskPersona } from '../utils/personaCascade';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
+import { normalizeTaskTags } from '../utils/taskTagging';
+import { findSprintForDate } from '../utils/taskSprintHelpers';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -59,9 +65,11 @@ const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
 };
 
 const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpdated, container }) => {
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     title: '',
@@ -72,8 +80,9 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     points: 1 as number,
     dueDate: '' as string,
     storyId: '' as string,
+    goalId: '' as string,
     tags: [] as string[],
-    type: 'task' as 'task' | 'chore' | 'routine',
+    type: 'task' as 'task' | 'chore' | 'routine' | 'habit',
     repeatFrequency: '' as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
     repeatInterval: 1 as number,
     daysOfWeek: [] as string[],
@@ -81,6 +90,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   });
   const [storyInput, setStoryInput] = useState('');
   const [stories, setStories] = useState<Story[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [converting, setConverting] = useState(false);
   const visibleSprints = sprints.filter((sprint) => !isHiddenSprint(sprint));
   const selectedSprint = form.sprintId ? sprints.find((sprint) => sprint.id === form.sprintId) : null;
   const selectedSprintStatus = selectedSprint
@@ -91,6 +102,16 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     (task as any).macSyncedAt != null
     || (task as any).source === 'MacApp'
     || (task as any).createdBy === 'mac_app'
+  );
+
+  const linkedStory = useMemo(
+    () => (form.storyId ? stories.find((s) => s.id === form.storyId) : null),
+    [form.storyId, stories],
+  );
+  const linkedGoalId = form.goalId || linkedStory?.goalId || '';
+  const linkedGoal = useMemo(
+    () => (linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null),
+    [linkedGoalId, goals],
   );
 
   useEffect(() => {
@@ -106,6 +127,23 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       const persona = (task as any)?.persona || currentPersona;
       const filtered = persona ? rows.filter((s) => !s.persona || s.persona === persona) : rows;
       setStories(filtered);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona, task]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('createdAt', 'desc'),
+      limit(500)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[];
+      const persona = (task as any)?.persona || currentPersona;
+      const filtered = persona ? rows.filter((g) => !g.persona || g.persona === persona) : rows;
+      setGoals(filtered);
     });
     return () => unsub();
   }, [currentUser?.uid, currentPersona, task]);
@@ -135,8 +173,9 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       points: (task as any).points ?? 1,
       dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
       storyId: linkedStoryId,
+      goalId: (task as any).goalId || linkedStory?.goalId || '',
       tags: Array.isArray((task as any).tags) ? (task as any).tags : [],
-      type: ((task as any).type || 'task') as 'task' | 'chore' | 'routine',
+      type: ((task as any).type || 'task') as 'task' | 'chore' | 'routine' | 'habit',
       repeatFrequency: ((task as any).repeatFrequency || '') as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
       repeatInterval: Number((task as any).repeatInterval || 1) || 1,
       daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
@@ -156,7 +195,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       return s.id === value || s.title === value || ref === value || storyLabel(s) === value;
     });
     if (match) {
-      setForm((prev) => ({ ...prev, storyId: match.id }));
+      setForm((prev) => ({ ...prev, storyId: match.id, goalId: match.goalId || prev.goalId }));
       setStoryInput(storyLabel(match));
     } else if (finalize) {
       setForm((prev) => ({ ...prev, storyId: '' }));
@@ -166,25 +205,41 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   const handleSave = async () => {
     if (!task) return;
     setSaving(true);
+    const linkedStory = form.storyId ? stories.find((s) => s.id === form.storyId) : null;
+    const effectiveGoalId = form.goalId || linkedStory?.goalId || null;
+    const requiresGoal = ['chore', 'routine', 'habit'].includes(form.type);
+    if (requiresGoal && !effectiveGoalId) {
+      alert('Please link this habit/chores/routine to a goal before saving.');
+      setSaving(false);
+      return;
+    }
     try {
-      const isRecurringType = form.type === 'chore' || form.type === 'routine';
+      const isRecurringType = form.type === 'chore' || form.type === 'routine' || form.type === 'habit';
       const normalizedFrequency = isRecurringType ? (form.repeatFrequency || null) : null;
       const normalizedInterval = isRecurringType ? Math.max(1, Number(form.repeatInterval) || 1) : null;
       const normalizedDays = isRecurringType && form.repeatFrequency === 'weekly'
         ? Array.isArray(form.daysOfWeek) ? form.daysOfWeek : []
         : [];
+      const originalDueDateMs = resolveTimestampMs((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate);
       const dueDateMs = form.dueDate ? new Date(`${form.dueDate}T00:00:00`).getTime() : null;
+      const dueDateChanged = (originalDueDateMs ?? null) !== (dueDateMs ?? null);
+      let nextSprintId = form.sprintId || null;
+      if (dueDateChanged) {
+        const matched = findSprintForDate(sprints, dueDateMs);
+        nextSprintId = matched?.id ?? null;
+      }
       const updates: any = {
         title: form.title.trim() || task.title,
         description: form.description,
         status: typeof form.status === 'string' ? Number(form.status) || form.status : form.status,
         priority: typeof form.priority === 'string' ? Number(form.priority) || form.priority : form.priority,
         points: Number(form.points) || 1,
-        sprintId: form.sprintId || null,
+        sprintId: nextSprintId,
         dueDate: dueDateMs,
         storyId: form.storyId || null,
         parentType: form.storyId ? 'story' : null,
         parentId: form.storyId || null,
+        goalId: form.goalId || null,
         tags: Array.isArray(form.tags) ? form.tags.map((tag) => tag.trim()).filter(Boolean) : [],
         type: form.type || 'task',
         repeatFrequency: normalizedFrequency,
@@ -193,12 +248,65 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         persona: form.persona || 'personal',
         updatedAt: serverTimestamp(),
       };
+      if (dueDateChanged) {
+        updates.dueDateLocked = true;
+        updates.dueDateReason = 'user';
+      }
       if (form.storyId) {
         const linked = stories.find((s) => s.id === form.storyId);
         if (linked?.goalId) updates.goalId = linked.goalId;
-        if (!updates.sprintId && (linked as any)?.sprintId) updates.sprintId = (linked as any).sprintId;
+        if ((linked as any)?.sprintId) updates.sprintId = (linked as any).sprintId;
       }
+      const storySprintId = linkedStory?.sprintId || (linkedStory as any)?.sprintId || null;
+      const resolvedGoalId = updates.goalId || linkedStory?.goalId || null;
+      const resolvedGoal = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : null;
+      const sprintForTag = (updates.sprintId || storySprintId)
+        ? sprints.find((sprint) => sprint.id === (updates.sprintId || storySprintId))
+        : null;
+      const themeValue = (resolvedGoal as any)?.theme
+        ?? (linkedStory as any)?.theme
+        ?? (task as any)?.theme
+        ?? (task as any)?.themeId
+        ?? (task as any)?.theme_id
+        ?? null;
+      updates.tags = normalizeTaskTags({
+        tags: updates.tags || [],
+        type: updates.type,
+        persona: updates.persona,
+        sprint: sprintForTag || null,
+        themeValue,
+        goalRef: (resolvedGoal as any)?.ref || null,
+        storyRef: (linkedStory as any)?.ref || null,
+        themes: globalThemes,
+      });
       await updateDoc(doc(db, 'tasks', task.id), updates);
+      if (currentUser?.uid) {
+        const sprintKey = (updates.sprintId || storySprintId || '') || '__none__';
+        const statusValue = updates.status;
+        const isDone = typeof statusValue === 'number'
+          ? statusValue >= 2
+          : String(statusValue || '').toLowerCase().includes('done') || String(statusValue || '').toLowerCase().includes('complete');
+        const indexPayload: any = {
+          id: task.id,
+          ownerUid: currentUser.uid,
+          persona: updates.persona || (task as any).persona || 'personal',
+          sprintId: sprintKey,
+          status: updates.status,
+          isOpen: !isDone,
+          dueDate: updates.dueDate ?? null,
+          priority: updates.priority ?? null,
+          title: updates.title,
+          description: updates.description || null,
+          goalId: updates.goalId || null,
+          storyId: updates.storyId || null,
+          parentType: updates.parentType || null,
+          parentId: updates.parentId || null,
+          tags: updates.tags || [],
+          ref: (task as any).ref || (task as any).reference || null,
+          updatedAt: Date.now(),
+        };
+        await setDoc(doc(db, 'sprint_task_index', task.id), indexPayload, { merge: true });
+      }
       const prevPersona = (((task as any).persona) || 'personal') as 'personal' | 'work';
       const nextPersona = (updates.persona || prevPersona) as 'personal' | 'work';
       if (prevPersona !== nextPersona && currentUser?.uid) {
@@ -215,6 +323,50 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       alert('Failed to update task. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleConvertToStory = async () => {
+    if (!task || converting) return;
+    const linkedStory = (form.storyId || (task as any).storyId || (task as any).parentId) ? true : false;
+    if (linkedStory) {
+      alert('This task is already linked to a story.');
+      return;
+    }
+    const confirmed = window.confirm('Convert this task to a story? The task will be marked complete and removed from tasks.');
+    if (!confirmed) return;
+    setConverting(true);
+    try {
+      const suggestCallable = httpsCallable(functions, 'suggestTaskStoryConversions');
+      const convertCallable = httpsCallable(functions, 'convertTasksToStories');
+      const response: any = await suggestCallable({
+        persona: form.persona || (task as any).persona || 'personal',
+        taskIds: [task.id],
+        limit: 1,
+      });
+      const suggestions: any[] = Array.isArray(response?.data?.suggestions) ? response.data.suggestions : [];
+      const suggestion = suggestions.find(item => item.taskId === task.id) || suggestions[0] || null;
+      const storyTitle = (suggestion?.storyTitle || form.title || task.title || 'New Story').slice(0, 140);
+      const storyDescription = (suggestion?.storyDescription || form.description || (task as any).description || '').slice(0, 1200);
+      const goalId = suggestion?.goalId || (task as any).goalId || null;
+      const sprintId = suggestion?.sprintId || (task as any).sprintId || null;
+
+      await convertCallable({
+        conversions: [{
+          taskId: task.id,
+          storyTitle,
+          storyDescription,
+          goalId,
+          sprintId,
+        }],
+      });
+      onUpdated?.();
+      onHide();
+    } catch (error) {
+      console.error('Error converting task to story:', error);
+      alert('Could not convert this task to a story. Please try again.');
+    } finally {
+      setConverting(false);
     }
   };
 
@@ -251,20 +403,22 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                     value={form.tags}
                     onChange={(tags) => setForm({ ...form, tags })}
                     placeholder="Add tags..."
+                    formatTag={(tag) => formatTaskTagLabel(tag, goals, sprints)}
                   />
                 </Form.Group>
                 <Form.Group className="mb-3">
                   <Form.Label>Task type</Form.Label>
                   <Form.Select
                     value={form.type}
-                    onChange={(e) => setForm({ ...form, type: e.target.value as 'task' | 'chore' | 'routine' })}
+                    onChange={(e) => setForm({ ...form, type: e.target.value as 'task' | 'chore' | 'routine' | 'habit' })}
                   >
                     <option value="task">Task</option>
                     <option value="chore">Chore</option>
                     <option value="routine">Routine</option>
+                    <option value="habit">Habit</option>
                   </Form.Select>
                 </Form.Group>
-                {(form.type === 'chore' || form.type === 'routine') && (
+                {(form.type === 'chore' || form.type === 'routine' || form.type === 'habit') && (
                   <div className="mb-3">
                     <Row className="g-3 align-items-end">
                       <Col md={4}>
@@ -409,7 +563,40 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       />
                     </Form.Group>
                   </Col>
-                  <Col md={8}>
+                  <Col md={4}>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Link to goal</Form.Label>
+                      <Form.Select
+                        value={form.goalId || ''}
+                        onChange={(e) => setForm({ ...form, goalId: e.target.value })}
+                      >
+                        <option value="">No goal</option>
+                        {goals.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.title || g.id.slice(-6).toUpperCase()}
+                          </option>
+                        ))}
+                      </Form.Select>
+                      {linkedGoalId ? (
+                        <div className="form-text">
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0"
+                            onClick={() => navigate(`/goals/${(linkedGoal as any)?.ref || linkedGoalId}`)}
+                          >
+                            View linked goal
+                          </Button>
+                        </div>
+                      ) : null}
+                      {(form.type === 'habit' || form.type === 'chore' || form.type === 'routine') && (
+                        <div className="form-text">Habits, chores, and routines must be linked to a goal.</div>
+                      )}
+                    </Form.Group>
+                  </Col>
+                </Row>
+                <Row>
+                  <Col md={12}>
                     <Form.Group className="mb-3">
                       <Form.Label>Link to story</Form.Label>
                       <Form.Control
@@ -428,6 +615,18 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                           <option key={s.id} value={storyLabel(s)} />
                         ))}
                       </datalist>
+                      {linkedStory ? (
+                        <div className="form-text">
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0"
+                            onClick={() => navigate(`/stories/${(linkedStory as any).ref || linkedStory.id}`)}
+                          >
+                            View linked story
+                          </Button>
+                        </div>
+                      ) : null}
                       <div className="form-text">
                         Selecting a story will also inherit its goal and sprint when available.
                       </div>
@@ -467,6 +666,20 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         ) : null}
       </Modal.Body>
       <Modal.Footer>
+        <Button
+          variant="outline-danger"
+          onClick={handleConvertToStory}
+          disabled={
+            converting
+            || saving
+            || !task
+            || !!(task as any)?.convertedToStoryId
+            || !!(task as any)?.deleted
+            || !!form.storyId
+          }
+        >
+          {converting ? 'Converting...' : 'Convert to Story'}
+        </Button>
         <Button variant="secondary" onClick={onHide}>
           Cancel
         </Button>

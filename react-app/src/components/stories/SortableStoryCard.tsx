@@ -12,12 +12,14 @@ import { displayRefForEntity, validateRef } from '../../utils/referenceGenerator
 import { storyStatusText, priorityLabel as formatPriorityLabel, priorityPillClass } from '../../utils/storyCardFormatting';
 import { colorWithAlpha, goalThemeColor } from '../../utils/storyCardFormatting';
 import { themeVars } from '../../utils/themeVars';
+import type { GlobalTheme } from '../../constants/globalThemes';
 
 interface SortableStoryCardProps {
   story: Story;
   goal?: Goal;
   taskCount?: number;
   themeColor?: string;
+  themes?: GlobalTheme[];
   onEdit?: (story: Story) => void;
   onDelete?: (story: Story) => void;
   onItemClick?: (story: Story) => void;
@@ -39,6 +41,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   goal,
   taskCount = 0,
   themeColor,
+  themes,
   onEdit,
   onDelete,
   onItemClick,
@@ -52,7 +55,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
     transition,
   };
 
-  const resolvedThemeColor = themeColor || goalThemeColor(goal) || '#2563eb';
+  const resolvedThemeColor = themeColor || goalThemeColor(goal, themes) || '#2563eb';
 
   const handleCardClick = () => {
     if (onItemClick) {

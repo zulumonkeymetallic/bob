@@ -2,7 +2,7 @@
   display: grid;
   gap: 16px;
   align-items: start;
-  grid-auto-rows: auto;
+  grid-auto-rows: 8px;
 }
 
 .goals-card-grid--grid {

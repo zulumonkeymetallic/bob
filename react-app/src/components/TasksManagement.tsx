@@ -36,6 +36,7 @@ const TasksManagement: React.FC = () => {
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [filterSprint, setFilterSprint] = useState<string>('all');
   const [initializedSprintDefault, setInitializedSprintDefault] = useState<boolean>(false);
+  const [filterType, setFilterType] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -124,6 +125,9 @@ const TasksManagement: React.FC = () => {
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     if (filterStatus !== 'all' && (task.status !== undefined ? task.status : 0).toString() !== filterStatus) return false;
     if (filterSprint !== 'all' && task.sprintId !== filterSprint) return false;
+    const rawType = String((task as any)?.type || (task as any)?.task_type || 'task').toLowerCase();
+    const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
+    if (filterType !== 'all' && normalizedType !== filterType) return false;
 
     // Filter by story
     if (filterStory !== 'all') {
@@ -383,6 +387,25 @@ const TasksManagement: React.FC = () => {
                 <Col md={2}>
                   <Form.Group>
                     <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                      <FolderOpen size={14} style={{ marginRight: '6px' }} />
+                      Type
+                    </Form.Label>
+                    <Form.Select
+                      value={filterType}
+                      onChange={(e) => setFilterType(e.target.value)}
+                      size="sm"
+                    >
+                      <option value="all">All Types</option>
+                      <option value="task">Task</option>
+                      <option value="chore">Chore</option>
+                      <option value="habit">Habit</option>
+                      <option value="routine">Routine</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={2}>
+                  <Form.Group>
+                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
                       <Filter size={14} style={{ marginRight: '6px' }} />
                       Status
                     </Form.Label>
@@ -408,6 +431,7 @@ const TasksManagement: React.FC = () => {
                         setFilterStory('all');
                         setFilterGoal('all');
                         setFilterSprint('all');
+                        setFilterType('all');
                         setFilterStatus('all');
                         setSearchTerm('');
                       }}

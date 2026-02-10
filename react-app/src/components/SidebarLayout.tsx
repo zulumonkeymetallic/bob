@@ -69,6 +69,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         icon: 'chart-bar',
         items: [
           { label: 'Overview', path: '/dashboard', icon: 'home' },
+          { label: 'Habits & Chores', path: '/dashboard/habits-chores', icon: 'check-square' },
           { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
           { label: 'Calendar', path: '/calendar', icon: 'calendar' },
           { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
@@ -87,6 +88,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'target',
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
+        { label: 'Goal Planner', path: '/goals/year-planner', icon: 'columns' },
         { label: 'Goals Roadmap', path: '/goals/roadmap-v6', icon: 'sparkles' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
@@ -153,27 +155,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       ]
     },
     {
-      label: 'Habits & Chores',
-      icon: 'check-circle',
-      items: [
-        { label: 'Chores & Recurring Tasks', path: '/chores', icon: 'clipboard-check' },
-        { label: 'Daily Habits', path: '/habits', icon: 'check' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Mobile Checklist', path: '/mobile-checklist', icon: 'mobile' }
-      ]
-    },
-    {
       label: 'Travel',
       icon: 'globe',
       items: [
         { label: 'Travel Map', path: '/travel', icon: 'map' }
-      ]
-    },
-    {
-      label: 'Planning & AI',
-      icon: 'cpu',
-      items: [
-        { label: 'AI Planner', path: '/ai-planner', icon: 'cpu' }
       ]
     },
     // (Removed Data Management per request)
@@ -185,6 +170,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
         { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
         { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
+        { label: 'YouTube', path: '/settings/integrations/youtube', icon: 'video' },
         { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
         { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
         { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
@@ -254,7 +240,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           }}>
             {/* Brand */}
             <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <img src="/logo-bob.svg" alt="BOB Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+              <img src="/logo192.png" alt="BOB Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               <div>
                 <h4 className="mb-0" style={{ color: 'var(--notion-text)', fontWeight: '600', fontSize: '1rem', lineHeight: '1.2' }}>blueprint.<br />organize.build</h4>
               </div>
@@ -469,7 +455,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             Menu
           </Button>
           <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem' }}>
-            <img src="/logo-bob.svg" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            <img src="/logo192.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
             blueprint.organize.build
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
@@ -492,7 +478,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       >
         <Offcanvas.Header closeButton closeVariant="white">
           <Offcanvas.Title className="d-flex align-items-center gap-2">
-            <img src="/logo-bob.svg" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            <img src="/logo192.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
             blueprint.organize.build
           </Offcanvas.Title>
         </Offcanvas.Header>
