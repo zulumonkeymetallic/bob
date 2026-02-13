@@ -41,6 +41,12 @@ const THEME_COLORS = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#F
 const EMPTY_LIST: any[] = [];
 
 const toPounds = (pence: number) => (Number.isFinite(pence) ? pence / 100 : 0);
+const txAmountMinor = (tx: any) => {
+    if (Number.isFinite(Number(tx?.amountMinor))) return Math.round(Number(tx.amountMinor));
+    const rawAmount = Number(tx?.amount || 0);
+    if (!Number.isFinite(rawAmount)) return 0;
+    return Math.round(rawAmount * 100);
+};
 
 const parseTxDate = (tx: any): Date | null => {
     const createdAt = tx?.createdAt;
@@ -421,6 +427,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         .filter(([key]) => key !== 'bank_transfer' && key !== 'unknown')
         .map(([key, value]: [string, any]) => ({ name: key, value: Math.abs(value) / 100 }))
         .sort((a, b) => b.value - a.value);
+    const topCategoryData = categoryData.slice(0, 10);
 
     const timeSeriesSourceRaw = viewMode === 'bucket' ? data?.timeSeriesByBucket : data?.timeSeriesByCategory;
     const timeSeriesSource = Object.fromEntries(Object.entries(timeSeriesSourceRaw || {}).filter(([key]) => key !== 'bank_transfer'));
@@ -460,23 +467,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
         })),
     };
 
-    const bucketOption = {
-        tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
-        legend: { orient: 'horizontal', bottom: 0 },
-        series: [
-            {
-                type: 'pie',
-                radius: ['40%', '70%'],
-                label: { show: false },
-                data: bucketData.map((entry: any, idx: number) => ({
-                    value: entry.value,
-                    name: entry.name,
-                    itemStyle: { color: THEME_COLORS[idx % THEME_COLORS.length] },
-                })),
-            },
-        ],
-    };
-
     const localDistribution = ((data?.recentTransactions || []) as any[])
         .filter((tx) => {
             const cat = (tx.userCategoryKey || tx.aiCategoryKey || tx.categoryKey || tx.categoryType || '').toLowerCase();
@@ -484,15 +474,17 @@ const FinanceDashboardAdvanced: React.FC = () => {
         })
         .reduce((acc: Record<string, number>, tx: any) => {
             const label = tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType || 'Uncategorised';
-            const rawAmt = typeof tx.amount === 'number' && Math.abs(tx.amount) < 10 ? tx.amount * 100 : tx.amount;
-            const amt = Math.abs(rawAmt || 0) / 100;
+            const amt = Math.abs(txAmountMinor(tx)) / 100;
             acc[label] = (acc[label] || 0) + amt;
             return acc;
         }, {} as Record<string, number>);
 
     const distributionSource = (() => {
-        const local = Object.entries(localDistribution).map(([name, value]) => ({ name, value }));
-        const aggregate = viewMode === 'bucket' ? bucketData : categoryData;
+        const local = Object.entries(localDistribution)
+            .map(([name, value]) => ({ name, value: Number(value || 0) }))
+            .sort((a, b) => Number(b.value) - Number(a.value))
+            .slice(0, 10);
+        const aggregate = viewMode === 'bucket' ? bucketData : topCategoryData;
         if (aggregate.length) return aggregate;
         return local;
     })();
@@ -520,10 +512,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
         .filter((tx: any) => {
             const bucket = (tx.userCategoryType || tx.aiBucket || tx.categoryType || '').toLowerCase();
             return bucket !== 'bank_transfer' && bucket !== 'unknown';
-        })
-        .map((tx: any) => {
-            const amt = typeof tx.amount === 'number' && Math.abs(tx.amount) < 10 ? tx.amount * 100 : tx.amount;
-            return { ...tx, amount: amt };
         });
 
     const spendTrackingSeries = enhancementData?.spendTrackingSeries ?? EMPTY_LIST;
@@ -728,7 +716,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     }, [analysisGrouped]);
 
     const analysisPieOption = useMemo(() => {
-        const groups = analysisGrouped.groups.slice(0, 12);
+        const groups = analysisGrouped.groups.slice(0, 10);
         return {
             tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
             legend: { orient: 'horizontal', bottom: 0 },
@@ -881,7 +869,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </Col>
                 <Col lg={4}>
                     <PremiumCard
-                        title="Distribution"
+                        title="Top 10 Distribution"
                         icon={PieIcon}
                         height={350}
                         action={
@@ -892,14 +880,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         }
                     >
                         <ReactECharts option={distributionOption} style={{ height: '100%' }} />
-                    </PremiumCard>
-                </Col>
-            </Row>
-
-            <Row className="mb-4">
-                <Col>
-                    <PremiumCard title="Spend by Bucket" icon={PieIcon} height={340}>
-                        <ReactECharts option={bucketOption} style={{ height: '100%' }} />
                     </PremiumCard>
                 </Col>
             </Row>
@@ -934,8 +914,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                                         {tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || 'Uncategorised'}
                                                     </Badge>
                                                 </td>
-                                                <td className="text-end fw-bold" style={{ color: tx.amount < 0 ? colors.text : colors.success }}>
-                                                    {formatCurrency(Math.abs(tx.amount || 0) / 100)}
+                                                <td className="text-end fw-bold" style={{ color: Number(txAmountMinor(tx)) < 0 ? colors.text : colors.success }}>
+                                                    {formatCurrency(Math.abs(txAmountMinor(tx)) / 100)}
                                                 </td>
                                             </tr>
                                         );
@@ -962,7 +942,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                             <tr key={tx.id} style={{ borderColor: colors.grid }}>
                                                 <td>{tx.merchantName || 'Unknown'}</td>
                                                 <td className="small text-muted">{tx.aiAnomalyReason || 'Anomaly'}</td>
-                                                <td className="text-end fw-bold">{formatCurrency(Math.abs(tx.amount || 0))}</td>
+                                                <td className="text-end fw-bold">{formatCurrency(Math.abs(txAmountMinor(tx)) / 100)}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -1751,6 +1731,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
             {opsMessage && (
                 <Alert variant="success" className="mb-3">
                     {opsMessage}
+                </Alert>
+            )}
+            {!enhancementData && (
+                <Alert variant="warning" className="mb-3">
+                    Advanced analytics data is unavailable. Run a Monzo sync and refresh.
                 </Alert>
             )}
 

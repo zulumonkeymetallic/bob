@@ -7,6 +7,7 @@ const { normaliseMerchantName } = require('../monzo/shared');
 const { mergeFinanceCategories } = require('./categories');
 
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
+const FUNCTION_REGION = 'europe-west2';
 const EXTERNAL_SOURCES = new Set(['barclays', 'paypal', 'other']);
 const MANUAL_ACCOUNT_TYPES = new Set(['asset', 'debt', 'investment', 'cash', 'savings']);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -292,7 +293,7 @@ async function callGeminiActionRefinement({ uid, actions }) {
   return list;
 }
 
-const importExternalFinanceTransactions = httpsV2.onCall(async (req) => {
+const importExternalFinanceTransactions = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const source = normalizeExternalSource(req.data?.source);
@@ -349,7 +350,7 @@ const importExternalFinanceTransactions = httpsV2.onCall(async (req) => {
   };
 });
 
-const matchExternalToMonzoTransactions = httpsV2.onCall(async (req) => {
+const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const source = req.data?.source ? normalizeExternalSource(req.data?.source) : null;
@@ -495,7 +496,7 @@ const matchExternalToMonzoTransactions = httpsV2.onCall(async (req) => {
   return { ok: true, source, windowDays, amountTolerancePence, matched, unmatched, bySource };
 });
 
-const recomputeDebtServiceBreakdown = httpsV2.onCall(async (req) => {
+const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const source = normalizeExternalSource(req.data?.source || 'barclays');
@@ -603,7 +604,7 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall(async (req) => {
   return { ok: true, source, perMonth, totals };
 });
 
-const generateFinanceActionInsights = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const source = normalizeExternalSource(req.data?.source || 'barclays');
@@ -761,7 +762,7 @@ const generateFinanceActionInsights = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
   return { ok: true, source, actions };
 });
 
-const convertFinanceActionToStory = httpsV2.onCall(async (req) => {
+const convertFinanceActionToStory = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const actionId = String(req.data?.actionId || '').trim();
@@ -839,7 +840,7 @@ const convertFinanceActionToStory = httpsV2.onCall(async (req) => {
   };
 });
 
-const upsertManualFinanceAccount = httpsV2.onCall(async (req) => {
+const upsertManualFinanceAccount = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const name = String(req.data?.name || '').trim();
@@ -896,7 +897,7 @@ const upsertManualFinanceAccount = httpsV2.onCall(async (req) => {
   };
 });
 
-const deleteManualFinanceAccount = httpsV2.onCall(async (req) => {
+const deleteManualFinanceAccount = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const accountId = String(req.data?.accountId || '').trim();
@@ -911,7 +912,7 @@ const deleteManualFinanceAccount = httpsV2.onCall(async (req) => {
   return { ok: true, deleted: true, accountId };
 });
 
-const fetchFinanceEnhancementData = httpsV2.onCall(async (req) => {
+const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const startMs = Date.parse(String(req.data?.startDate || '2018-01-01T00:00:00.000Z'));

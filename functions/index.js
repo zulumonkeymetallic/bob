@@ -5215,14 +5215,18 @@ exports.monzoIntegrationMonitor = schedulerV2.onSchedule('every 60 minutes', asy
   return { stale: snap.size };
 });
 
-async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since }) {
+async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since, fullRefresh = false, historyStart = null }) {
   const db = admin.firestore();
   const transactionsCol = db.collection('monzo_transactions');
   const limit = 200;
-  let cursor = since || null;
-  let prevCursor = cursor || null;
+  let sinceCursor = since || null;
+  let refreshSinceCursor = fullRefresh ? (historyStart || null) : null;
+  let beforeCursor = null;
+  let fullRefreshDirection = null; // asc | desc
   let total = 0;
   let lastCreated = since || null;
+  let firstCreated = null;
+  const historyFloorMs = historyStart ? Date.parse(historyStart) : null;
 
   // Preload merchant mappings for this user to auto-apply categorisation
   const merchantMappingsSnap = await db.collection('merchant_mappings')
@@ -5261,7 +5265,12 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     const params = new URLSearchParams();
     params.set('account_id', accountId);
     params.set('limit', String(limit));
-    if (cursor) params.set('since', cursor);
+    if (fullRefresh) {
+      if (refreshSinceCursor) params.set('since', refreshSinceCursor);
+      if (beforeCursor) params.set('before', beforeCursor);
+    } else if (sinceCursor) {
+      params.set('since', sinceCursor);
+    }
     params.append('expand[]', 'merchant');
 
     const data = await monzoApi(accessToken, '/transactions', params);
@@ -5269,6 +5278,9 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     if (!transactions.length) break;
 
     const batch = db.batch();
+    let pageNewestCreated = null;
+    let pageOldestCreated = null;
+
     for (const tx of transactions) {
       const docRef = transactionsCol.doc(`${uid}_${tx.id}`);
       const defaultCategoryType = inferDefaultCategoryType(tx);
@@ -5361,18 +5373,51 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
       }
 
       batch.set(docRef, docData, { merge: true });
+
+      if (tx.created) {
+        if (!pageNewestCreated || tx.created > pageNewestCreated) pageNewestCreated = tx.created;
+        if (!pageOldestCreated || tx.created < pageOldestCreated) pageOldestCreated = tx.created;
+      }
     }
 
     await batch.commit();
 
     total += transactions.length;
+    if (pageNewestCreated && (!lastCreated || pageNewestCreated > lastCreated)) lastCreated = pageNewestCreated;
+    if (pageOldestCreated && (!firstCreated || pageOldestCreated < firstCreated)) firstCreated = pageOldestCreated;
+
+    if (fullRefresh) {
+      if (!fullRefreshDirection && transactions.length >= 2) {
+        const firstMs = Date.parse(transactions[0]?.created || '');
+        const lastMs = Date.parse(transactions[transactions.length - 1]?.created || '');
+        if (Number.isFinite(firstMs) && Number.isFinite(lastMs)) {
+          fullRefreshDirection = firstMs >= lastMs ? 'desc' : 'asc';
+        }
+      }
+      if (transactions.length < limit) break;
+
+      if (fullRefreshDirection === 'asc') {
+        if (!pageNewestCreated) break;
+        const nextSince = new Date(new Date(pageNewestCreated).getTime() + 1).toISOString();
+        if (nextSince === refreshSinceCursor) break;
+        refreshSinceCursor = nextSince;
+      } else {
+        if (!pageOldestCreated) break;
+        const oldestMs = Date.parse(pageOldestCreated);
+        if (Number.isFinite(historyFloorMs) && Number.isFinite(oldestMs) && oldestMs <= historyFloorMs) break;
+        const nextBefore = new Date(oldestMs - 1).toISOString();
+        if (nextBefore === beforeCursor) break;
+        beforeCursor = nextBefore;
+      }
+      continue;
+    }
+
     const lastTx = transactions[transactions.length - 1];
     if (lastTx?.created) {
-      lastCreated = lastTx.created;
-      prevCursor = cursor;
       const nextDate = new Date(lastTx.created);
-      cursor = new Date(nextDate.getTime() + 1).toISOString();
-      if (cursor === prevCursor) break;
+      const nextSince = new Date(nextDate.getTime() + 1).toISOString();
+      if (nextSince === sinceCursor) break;
+      sinceCursor = nextSince;
     } else {
       break;
     }
@@ -5380,7 +5425,7 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     if (transactions.length < limit) break;
   }
 
-  return { count: total, lastCreated };
+  return { count: total, lastCreated, firstCreated };
 }
 
 const loadFinanceCategoriesForUser = async (db, uid) => {
@@ -5925,8 +5970,23 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     const syncSnap = await syncStateRef.get();
     const stateData = syncSnap.data() || {};
     const sinceCursor = fullRefresh ? null : (since || stateData.lastTransactionCreated || null);
+    const historyFloorISO = '2018-01-01T00:00:00.000Z';
+    const parsedAccountCreatedMs = Date.parse(String(account?.created || ''));
+    const accountCreatedISO = Number.isNaN(parsedAccountCreatedMs)
+      ? null
+      : new Date(parsedAccountCreatedMs).toISOString();
+    const historyStart = fullRefresh
+      ? (accountCreatedISO && accountCreatedISO > historyFloorISO ? accountCreatedISO : historyFloorISO)
+      : null;
 
-    const txSummary = await syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since: sinceCursor });
+    const txSummary = await syncMonzoTransactionsForAccount({
+      uid,
+      accountId,
+      accessToken,
+      since: sinceCursor,
+      fullRefresh: !!fullRefresh,
+      historyStart,
+    });
     summary.transactions += txSummary.count;
     summary.accountsSynced.push({ accountId, transactions: txSummary.count, lastCreated: txSummary.lastCreated || null });
 
@@ -5940,6 +6000,10 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     if (txSummary.lastCreated) {
       update.lastTransactionCreated = txSummary.lastCreated;
       update.lastTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.lastCreated));
+    }
+    if (txSummary.firstCreated) {
+      update.firstTransactionCreated = txSummary.firstCreated;
+      update.firstTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.firstCreated));
     }
 
     await syncStateRef.set(update, { merge: true });
