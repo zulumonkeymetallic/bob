@@ -43,7 +43,7 @@ type DisplayRow =
   | { kind: 'row'; row: TxRow };
 
 const PAGE_SIZE = 150;
-const COLUMN_STORAGE_KEY = 'finance_tx_columns';
+const COLUMN_STORAGE_KEY = 'finance_tx_columns_v2';
 const COLUMN_OPTIONS = [
   { key: 'date', label: 'Date', width: '1.1fr' },
   { key: 'merchant', label: 'Merchant', width: '1.3fr' },
@@ -56,7 +56,7 @@ const COLUMN_OPTIONS = [
   { key: 'amount', label: 'Amount', width: '0.95fr' },
   { key: 'actions', label: 'Actions', width: '1.25fr' },
 ];
-const DEFAULT_VISIBLE_COLUMNS = ['date', 'merchant', 'description', 'bucket', 'category', 'aiCategory', 'amount', 'actions'];
+const DEFAULT_VISIBLE_COLUMNS = ['date', 'merchant', 'description', 'category', 'amount', 'actions'];
 type SortableColumn = 'date' | 'merchant' | 'description' | 'bucket' | 'category' | 'aiCategory' | 'aiSuggestion' | 'anomaly' | 'amount';
 type SortDirection = 'asc' | 'desc';
 
@@ -82,6 +82,42 @@ const DEFAULT_SORT_DIRECTION: Record<SortableColumn, SortDirection> = {
   aiSuggestion: 'asc',
   anomaly: 'desc',
   amount: 'desc',
+};
+
+const toText = (value: any, fallback = ''): string => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || fallback;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const candidates = [
+      value.name,
+      value.label,
+      value.title,
+      value.displayName,
+      value.merchantName,
+      value.categoryLabel,
+      value.categoryKey,
+      value.id,
+      value.key,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed) return trimmed;
+      } else if (typeof candidate === 'number' || typeof candidate === 'boolean') {
+        return String(candidate);
+      }
+    }
+  }
+  return fallback;
+};
+
+const toNullableText = (value: any): string | null => {
+  const text = toText(value, '');
+  return text || null;
 };
 
 const TransactionsList: React.FC = () => {
@@ -128,21 +164,21 @@ const TransactionsList: React.FC = () => {
     const createdAt = data.createdAt instanceof Timestamp ? data.createdAt.toDate() : null;
     return {
       id: d.id,
-      transactionId: data.transactionId || d.id,
+      transactionId: toText(data.transactionId, d.id),
       createdISO: createdAt ? createdAt.toISOString() : data.createdISO || null,
       amount: typeof data.amount === 'number' ? data.amount : (data.amountMinor || 0) / 100,
-      description: data.description || data.defaultCategoryLabel || 'Transaction',
-      merchant: data.merchant?.name || data.counterparty?.name || null,
-      merchantLogo: data.merchant?.logo || null,
-      merchantKey: data.merchantKey || null,
-      userCategoryKey: data.userCategoryKey || null,
-      userCategoryLabel: data.userCategoryLabel || data.defaultCategoryLabel || null,
-      userCategoryType: data.userCategoryType || data.defaultCategoryType || null,
-      defaultCategoryType: data.defaultCategoryType || null,
-      aiCategoryKey: data.aiCategoryKey || null,
-      aiCategoryLabel: data.aiCategoryLabel || null,
-      aiBucket: data.aiBucket || null,
-      aiReduceSuggestion: data.aiReduceSuggestion || null,
+      description: toText(data.description || data.defaultCategoryLabel, 'Transaction'),
+      merchant: toNullableText(data.merchant?.name || data.merchant || data.counterparty?.name),
+      merchantLogo: toNullableText(data.merchant?.logo),
+      merchantKey: toNullableText(data.merchantKey),
+      userCategoryKey: toNullableText(data.userCategoryKey),
+      userCategoryLabel: toNullableText(data.userCategoryLabel || data.defaultCategoryLabel),
+      userCategoryType: toNullableText(data.userCategoryType || data.defaultCategoryType),
+      defaultCategoryType: toNullableText(data.defaultCategoryType),
+      aiCategoryKey: toNullableText(data.aiCategoryKey),
+      aiCategoryLabel: toNullableText(data.aiCategoryLabel),
+      aiBucket: toNullableText(data.aiBucket),
+      aiReduceSuggestion: toNullableText(data.aiReduceSuggestion),
       aiAnomalyFlag: !!data.aiAnomalyFlag,
       aiAnomalyReason: data.aiAnomalyReason || null,
       aiAnomalyScore: data.aiAnomalyScore || null,
@@ -212,7 +248,10 @@ const TransactionsList: React.FC = () => {
         const arr = Array.isArray(data?.categories) ? data.categories : [];
         setCustomCategories(arr.filter((c) => c?.key) as FinanceCategory[]);
       },
-      (err) => console.error('Failed to load finance categories', err)
+      (err) => {
+        console.error('Failed to load finance categories', err);
+        setErrorMsg((err as any)?.message || 'Missing permission to load finance categories.');
+      }
     );
     return () => unsub();
   }, [currentUser]);
@@ -220,20 +259,27 @@ const TransactionsList: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     const potsQuery = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
-    const unsub = onSnapshot(potsQuery, (snap) => {
-      const map: Record<string, { name: string; balance: number; currency: string }> = {};
-      snap.docs.forEach((d) => {
-        const data = d.data() as any;
-        const id = data.potId || d.id;
-        if (!id) return;
-        map[String(id)] = {
-          name: data.name || id,
-          balance: data.balance || 0,
-          currency: data.currency || 'GBP',
-        };
-      });
-      setPots(map);
-    });
+    const unsub = onSnapshot(
+      potsQuery,
+      (snap) => {
+        const map: Record<string, { name: string; balance: number; currency: string }> = {};
+        snap.docs.forEach((d) => {
+          const data = d.data() as any;
+          const id = data.potId || d.id;
+          if (!id) return;
+          map[String(id)] = {
+            name: data.name || id,
+            balance: data.balance || 0,
+            currency: data.currency || 'GBP',
+          };
+        });
+        setPots(map);
+      },
+      (err) => {
+        console.error('Failed to load Monzo pots snapshot', err);
+        setErrorMsg((err as any)?.message || 'Missing permission to load Monzo pots.');
+      }
+    );
     return () => unsub();
   }, [currentUser]);
 
@@ -258,9 +304,9 @@ const TransactionsList: React.FC = () => {
       const isTransferToPot = Boolean(meta.destination_pot_id) || (!meta.source_pot_id && r.amount < 0);
       const transferLabel = potName ? `Transfer ${isTransferToPot ? 'to' : 'from'} ${potName}` : null;
       const displayDescription =
-        transferLabel && (r.description || '').startsWith('pot_') ? transferLabel : r.description;
-      const displayCategoryLabel = transferLabel || r.aiCategoryLabel || r.userCategoryLabel || null;
-      const displayBucket = isPotTransfer ? 'bank_transfer' : (r.aiBucket || r.userCategoryType || r.defaultCategoryType || null);
+        transferLabel && toText(r.description, '').startsWith('pot_') ? transferLabel : toText(r.description, 'Transaction');
+      const displayCategoryLabel = transferLabel || toNullableText(r.aiCategoryLabel || r.userCategoryLabel);
+      const displayBucket = isPotTransfer ? 'bank_transfer' : toNullableText(r.aiBucket || r.userCategoryType || r.defaultCategoryType);
       return {
         ...r,
         potName,
@@ -283,11 +329,11 @@ const TransactionsList: React.FC = () => {
       if (potFilter !== 'all' && (r.potId || '') !== potFilter) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${r.description || ''} ${r.merchant || ''} ${r.userCategoryLabel || ''} ${r.aiCategoryLabel || ''} ${r.displayCategoryLabel || ''} ${r.aiReduceSuggestion || ''} ${r.potName || ''}`.toLowerCase();
+        const hay = `${toText(r.description, '')} ${toText(r.merchant, '')} ${toText(r.userCategoryLabel, '')} ${toText(r.aiCategoryLabel, '')} ${toText(r.displayCategoryLabel, '')} ${toText(r.aiReduceSuggestion, '')} ${toText(r.potName, '')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      if (merchantFilter.trim() && !(r.merchant || '').toLowerCase().includes(merchantFilter.toLowerCase())) return false;
-      if (descFilter.trim() && !(r.displayDescription || r.description || '').toLowerCase().includes(descFilter.toLowerCase())) return false;
+      if (merchantFilter.trim() && !toText(r.merchant, '').toLowerCase().includes(merchantFilter.toLowerCase())) return false;
+      if (descFilter.trim() && !toText(r.displayDescription || r.description, '').toLowerCase().includes(descFilter.toLowerCase())) return false;
       if (missingOnly && (r.userCategoryKey || r.userCategoryLabel)) return false;
       const amt = Math.abs(r.amount);
       if (amountMin && amt < Number(amountMin)) return false;
@@ -305,12 +351,12 @@ const TransactionsList: React.FC = () => {
       const bucketLabel = BUCKET_LABELS[bucketKey as keyof typeof BUCKET_LABELS] || bucketKey || 'unknown';
 
       if (key === 'date') return row.createdISO ? new Date(row.createdISO).getTime() : 0;
-      if (key === 'merchant') return (row.merchant || '').toLowerCase();
-      if (key === 'description') return (row.displayDescription || row.description || '').toLowerCase();
+      if (key === 'merchant') return toText(row.merchant, '').toLowerCase();
+      if (key === 'description') return toText(row.displayDescription || row.description, '').toLowerCase();
       if (key === 'bucket') return bucketLabel.toLowerCase();
       if (key === 'category') return selectedCategoryLabel.toLowerCase();
-      if (key === 'aiCategory') return (row.displayCategoryLabel || row.aiCategoryLabel || row.aiCategoryKey || '').toLowerCase();
-      if (key === 'aiSuggestion') return (row.aiReduceSuggestion || '').toLowerCase();
+      if (key === 'aiCategory') return toText(row.displayCategoryLabel || row.aiCategoryLabel || row.aiCategoryKey, '').toLowerCase();
+      if (key === 'aiSuggestion') return toText(row.aiReduceSuggestion, '').toLowerCase();
       if (key === 'anomaly') return row.aiAnomalyFlag ? (row.aiAnomalyScore || 1) : 0;
       return Math.abs(row.amount || 0);
     };
@@ -355,7 +401,8 @@ const TransactionsList: React.FC = () => {
     const widths = visibleColumns
       .map((key) => visibleColumnOptions.get(key)?.width)
       .filter(Boolean) as string[];
-    return widths.length ? widths.join(' ') : COLUMN_OPTIONS.map((c) => c.width).join(' ');
+    const sized = widths.length ? widths : COLUMN_OPTIONS.map((c) => c.width);
+    return sized.map((width) => `minmax(0, ${width})`).join(' ');
   }, [visibleColumnOptions, visibleColumns]);
 
   useEffect(() => {
@@ -491,7 +538,7 @@ const TransactionsList: React.FC = () => {
     </button>
   );
 
-  const tableWidth = Math.max(bounds.width || 1200, 1320);
+  const tableWidth = Math.max(Math.floor(bounds.width || 0), 320);
 
   const renderCategoryControl = (tx: TxRow, currentKey: string) => {
     return (
@@ -732,7 +779,7 @@ const TransactionsList: React.FC = () => {
           </div>
         </div>
         <div className="finance-table-shell">
-          <div className="finance-grid-header" style={{ gridTemplateColumns, minWidth: tableWidth }}>
+          <div className="finance-grid-header" style={{ gridTemplateColumns }}>
             {visibleColumns.includes('date') && renderSortHeader('date')}
             {visibleColumns.includes('merchant') && renderSortHeader('merchant')}
             {visibleColumns.includes('description') && renderSortHeader('description')}
@@ -797,18 +844,18 @@ const TransactionsList: React.FC = () => {
                               <div className="finance-avatar-placeholder" />
                             )}
                             <div>
-                              <div className="finance-label">{tx.merchant || '—'}</div>
-                              <div className="finance-subtext">{tx.merchantKey || '—'}</div>
+                              <div className="finance-label">{toText(tx.merchant, '—')}</div>
+                              <div className="finance-subtext">{toText(tx.merchantKey, '—')}</div>
                             </div>
                           </div>
                         </div>
                         )}
                         {visibleColumns.includes('description') && (
                           <div className="finance-cell">
-                          <div className="finance-label text-truncate" title={tx.displayDescription || tx.description}>
-                            {tx.displayDescription || tx.description}
+                          <div className="finance-label text-truncate" title={toText(tx.displayDescription || tx.description, 'Transaction')}>
+                            {toText(tx.displayDescription || tx.description, 'Transaction')}
                           </div>
-                          <div className="finance-subtext">{tx.potName || 'No pot'}</div>
+                          <div className="finance-subtext">{toText(tx.potName, 'No pot')}</div>
                         </div>
                         )}
                         {visibleColumns.includes('bucket') && (
@@ -828,8 +875,8 @@ const TransactionsList: React.FC = () => {
                         )}
                         {visibleColumns.includes('aiCategory') && (
                           <div className="finance-cell">
-                            <div className="finance-label">{tx.displayCategoryLabel || tx.aiCategoryLabel || tx.aiCategoryKey || '—'}</div>
-                            <div className="finance-subtext">{tx.displayBucket || tx.aiBucket || 'Unassigned'}</div>
+                            <div className="finance-label">{toText(tx.displayCategoryLabel || tx.aiCategoryLabel || tx.aiCategoryKey, '—')}</div>
+                            <div className="finance-subtext">{toText(tx.displayBucket || tx.aiBucket, 'Unassigned')}</div>
                           </div>
                         )}
                         {visibleColumns.includes('aiSuggestion') && (
@@ -866,7 +913,7 @@ const TransactionsList: React.FC = () => {
                               }
                             >
                               {savingId === tx.id ? <Spinner size="sm" animation="border" className="me-1" /> : null}
-                              Save row
+                              Save
                             </Button>
                             <Button
                               size="sm"
@@ -880,7 +927,7 @@ const TransactionsList: React.FC = () => {
                                 )
                               }
                             >
-                              Save + Apply
+                              Apply
                             </Button>
                           </div>
                         </div>

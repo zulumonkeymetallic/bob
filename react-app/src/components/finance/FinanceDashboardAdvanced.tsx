@@ -76,6 +76,46 @@ const normalizeManualType = (type: string): ManualAccountType => {
     return 'asset';
 };
 
+const toText = (value: any, fallback = ''): string => {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed || fallback;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) {
+        const first = value.find((item) => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean');
+        return first !== undefined ? toText(first, fallback) : fallback;
+    }
+    if (typeof value === 'object') {
+        const candidates = [
+            value.name,
+            value.label,
+            value.title,
+            value.displayName,
+            value.merchantName,
+            value.categoryLabel,
+            value.categoryKey,
+            value.id,
+            value.key,
+        ];
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string') {
+                const trimmed = candidate.trim();
+                if (trimmed) return trimmed;
+            } else if (typeof candidate === 'number' || typeof candidate === 'boolean') {
+                return String(candidate);
+            }
+        }
+    }
+    return fallback;
+};
+
+const toKeyText = (value: any, fallback = 'unknown') => {
+    const text = toText(value, fallback);
+    return text || fallback;
+};
+
 const FinanceDashboardAdvanced: React.FC = () => {
     const { currentUser } = useAuth();
     const { theme } = useTheme();
@@ -478,7 +518,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
             return cat && cat !== 'bank_transfer' && cat !== 'unknown';
         })
         .reduce((acc: Record<string, number>, tx: any) => {
-            const label = tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType || 'Uncategorised';
+            const label = toText(
+                tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
+                'Uncategorised'
+            );
             const amt = Math.abs(txAmountMinor(tx)) / 100;
             acc[label] = (acc[label] || 0) + amt;
             return acc;
@@ -517,12 +560,31 @@ const FinanceDashboardAdvanced: React.FC = () => {
         .filter((tx: any) => {
             const bucket = (tx.userCategoryType || tx.aiBucket || tx.categoryType || '').toLowerCase();
             return bucket !== 'bank_transfer' && bucket !== 'unknown';
-        });
+        })
+        .map((tx: any) => ({
+            ...tx,
+            __merchantLabel: toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown merchant'),
+            __potLabel: toText(tx.potName, '—'),
+            __categoryLabel: toText(
+                tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
+                'Uncategorised'
+            ),
+        }));
 
     const spendTrackingSeries = enhancementData?.spendTrackingSeries ?? EMPTY_LIST;
     const cashflowSeries = enhancementData?.cashflowSeries ?? EMPTY_LIST;
-    const optionalSpendCards = enhancementData?.optionalSpendCards ?? EMPTY_LIST;
-    const actions = enhancementData?.actions ?? EMPTY_LIST;
+    const optionalSpendCards = (enhancementData?.optionalSpendCards ?? EMPTY_LIST).map((item: any, index: number) => ({
+        ...item,
+        __merchantKey: toKeyText(item.merchantKey || item.merchantName, `merchant-${index}`),
+        __merchantName: toText(item.merchantName || item.merchantKey, 'Unknown merchant'),
+    }));
+    const actions = (enhancementData?.actions ?? EMPTY_LIST).map((action: any) => ({
+        ...action,
+        __title: toText(action.title || action.merchantName || action.merchantKey, 'Finance action'),
+        __reason: toText(action.reason, 'No detail provided.'),
+        __merchantName: toText(action.merchantName || action.merchantKey, 'Unknown merchant'),
+        __merchantKey: toKeyText(action.merchantKey || action.merchantName, 'unknown'),
+    }));
     const externalSummary = enhancementData?.externalSummary ?? EMPTY_LIST;
     const matchSummary = enhancementData?.matchSummary ?? EMPTY_LIST;
     const debtService = enhancementData?.debtService?.totals || null;
@@ -630,28 +692,30 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const analysisBucketOptions = useMemo(() => {
         const set = new Set<string>();
-        analysisRows.forEach((row: any) => set.add(row.bucket || 'unknown'));
+        analysisRows.forEach((row: any) => set.add(toText(row.bucket, 'unknown')));
         return Array.from(set).sort((a, b) => a.localeCompare(b));
     }, [analysisRows]);
 
     const analysisCategoryOptions = useMemo(() => {
         const set = new Set<string>();
-        analysisRows.forEach((row: any) => set.add(row.categoryKey || row.categoryLabel || 'uncategorized'));
+        analysisRows.forEach((row: any) => set.add(toText(row.categoryKey || row.categoryLabel, 'uncategorized')));
         return Array.from(set).sort((a, b) => a.localeCompare(b));
     }, [analysisRows]);
 
     const analysisMerchantOptions = useMemo(() => {
         const set = new Set<string>();
-        analysisRows.forEach((row: any) => set.add(row.merchantName || 'Unknown'));
+        analysisRows.forEach((row: any) => set.add(toText(row.merchantName || row.merchant, 'Unknown')));
         return Array.from(set).sort((a, b) => a.localeCompare(b));
     }, [analysisRows]);
 
     const filteredAnalysisRows = useMemo(() => {
         return analysisRows.filter((row: any) => {
-            if (analysisBucketFilter !== 'all' && (row.bucket || 'unknown') !== analysisBucketFilter) return false;
-            const categoryKey = row.categoryKey || row.categoryLabel || 'uncategorized';
+            const bucketLabel = toText(row.bucket, 'unknown');
+            if (analysisBucketFilter !== 'all' && bucketLabel !== analysisBucketFilter) return false;
+            const categoryKey = toText(row.categoryKey || row.categoryLabel, 'uncategorized');
             if (analysisCategoryFilter !== 'all' && categoryKey !== analysisCategoryFilter) return false;
-            if (analysisMerchantFilter !== 'all' && (row.merchantName || 'Unknown') !== analysisMerchantFilter) return false;
+            const merchantName = toText(row.merchantName || row.merchant, 'Unknown');
+            if (analysisMerchantFilter !== 'all' && merchantName !== analysisMerchantFilter) return false;
             return true;
         });
     }, [analysisRows, analysisBucketFilter, analysisCategoryFilter, analysisMerchantFilter]);
@@ -673,12 +737,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
         const monthsSet = new Set<string>();
 
         filteredAnalysisRows.forEach((row: any) => {
-            const month = row.month || 'unknown';
+            const month = toText(row.month, 'unknown');
             const key = analysisDimension === 'bucket'
-                ? (row.bucket || 'unknown')
+                ? toText(row.bucket, 'unknown')
                 : analysisDimension === 'category'
-                    ? (row.categoryLabel || row.categoryKey || 'uncategorized')
-                    : (row.merchantName || 'Unknown');
+                    ? toText(row.categoryLabel || row.categoryKey, 'uncategorized')
+                    : toText(row.merchantName || row.merchant, 'Unknown');
 
             const amount = Number(row.amountPence || 0);
             groupedTotals[key] = (groupedTotals[key] || 0) + amount;
@@ -906,17 +970,18 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                 <tbody>
                                     {filteredRecentTransactions.map((tx: any) => {
                                         const date = parseTxDate(tx);
+                                        const rowKey = toKeyText(tx.id || tx.transactionId, `${tx.__merchantLabel}-${tx.__categoryLabel}-${txAmountMinor(tx)}`);
                                         return (
-                                            <tr key={tx.id || tx.transactionId} style={{ borderColor: colors.grid }}>
+                                            <tr key={rowKey} style={{ borderColor: colors.grid }}>
                                                 <td>{date ? date.toLocaleDateString('en-GB') : '—'}</td>
                                                 <td>
-                                                    <div className="fw-bold">{tx.merchantName || tx.merchant?.name || 'Unknown merchant'}</div>
+                                                    <div className="fw-bold">{tx.__merchantLabel}</div>
                                                     {tx.isSubscription && <Badge bg="warning" text="dark" className="mt-1">Sub</Badge>}
                                                 </td>
-                                                <td>{tx.potName || '—'}</td>
+                                                <td>{tx.__potLabel}</td>
                                                 <td>
                                                     <Badge bg="light" text="dark" className="border">
-                                                        {tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || 'Uncategorised'}
+                                                        {tx.__categoryLabel}
                                                     </Badge>
                                                 </td>
                                                 <td className="text-end fw-bold" style={{ color: Number(txAmountMinor(tx)) < 0 ? colors.text : colors.success }}>
@@ -944,8 +1009,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                     </thead>
                                     <tbody>
                                         {data.anomalyTransactions.map((tx: any) => (
-                                            <tr key={tx.id} style={{ borderColor: colors.grid }}>
-                                                <td>{tx.merchantName || 'Unknown'}</td>
+                                            <tr key={toKeyText(tx.id, `anomaly-${toText(tx.merchantName || tx.merchant?.name, 'unknown')}-${txAmountMinor(tx)}`)} style={{ borderColor: colors.grid }}>
+                                                <td>{toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown')}</td>
                                                 <td className="small text-muted">{tx.aiAnomalyReason || 'Anomaly'}</td>
                                                 <td className="text-end fw-bold">{formatCurrency(Math.abs(txAmountMinor(tx)) / 100)}</td>
                                             </tr>
@@ -1090,7 +1155,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                     <tbody>
                                         {(budgetHealth.byCategory || []).slice(0, 12).map((item: any) => (
                                             <tr key={item.categoryKey}>
-                                                <td>{item.categoryLabel || item.categoryKey}</td>
+                                                <td>{toText(item.categoryLabel || item.categoryKey, 'Uncategorised')}</td>
                                                 <td className="text-end">{formatCurrency(toPounds(item.budgetPence || 0))}</td>
                                                 <td className="text-end">{formatCurrency(toPounds(item.actualPence || 0))}</td>
                                                 <td className="text-end">{Number(item.utilizationPct || 0).toFixed(0)}%</td>
@@ -1211,8 +1276,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     </Col>
                 )}
                 {optionalSpendCards.map((item: any) => (
-                    <Col key={item.merchantKey} xl={3} lg={4} md={6}>
-                        <PremiumCard title={item.merchantName} icon={Layers} className="finance-optional-card">
+                    <Col key={item.__merchantKey} xl={3} lg={4} md={6}>
+                        <PremiumCard title={item.__merchantName} icon={Layers} className="finance-optional-card">
                             <div className="d-flex justify-content-between small text-muted mb-2">
                                 <span>Monthly avg</span>
                                 <strong>{formatCurrency(toPounds(item.avgMonthlySpendPence || 0))}</strong>
@@ -1294,10 +1359,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                         </tr>
                                     )}
                                     {actions.map((action: any) => (
-                                        <tr key={action.id}>
+                                        <tr key={toKeyText(action.id, `${action.__merchantKey}-${action.type || 'review'}`)}>
                                             <td>
-                                                <div className="fw-semibold">{action.title || action.merchantName || action.merchantKey}</div>
-                                                <div className="small text-muted">{action.reason || 'No detail provided.'}</div>
+                                                <div className="fw-semibold">{action.__title}</div>
+                                                <div className="small text-muted">{action.__reason}</div>
                                             </td>
                                             <td>
                                                 <Badge bg="light" text="dark" className="border text-uppercase">{action.type || 'review'}</Badge>
