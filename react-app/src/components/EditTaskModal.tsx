@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
-import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, setDoc, addDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
@@ -149,7 +149,28 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   }, [currentUser?.uid, currentPersona, task]);
 
   useEffect(() => {
-    if (!task) return;
+    if (!show) return;
+    if (!task) {
+      setForm({
+        title: '',
+        description: '',
+        status: 0,
+        priority: 2,
+        sprintId: '',
+        points: 1,
+        dueDate: '',
+        storyId: '',
+        goalId: '',
+        tags: [],
+        type: 'task',
+        repeatFrequency: '',
+        repeatInterval: 1,
+        daysOfWeek: [],
+        persona: ((currentPersona || 'personal') as 'personal' | 'work'),
+      });
+      setStoryInput('');
+      return;
+    }
     const storyLabel = (s: Story) => {
       const ref = (s as any).ref || (s as any).referenceNumber || (s as any).reference || s.id.slice(-6).toUpperCase();
       return `${ref} — ${s.title}`;
@@ -182,7 +203,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       persona: ((task as any).persona || 'personal') as 'personal' | 'work',
     });
     setStoryInput(linkedStory ? storyLabel(linkedStory) : '');
-  }, [task, show, stories]);
+  }, [task, show, stories, currentPersona]);
 
   const storyLabel = (s: Story) => {
     const ref = (s as any).ref || (s as any).referenceNumber || (s as any).reference || s.id.slice(-6).toUpperCase();
@@ -203,13 +224,10 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   };
 
   const handleSave = async () => {
-    if (!task) return;
     setSaving(true);
     const linkedStory = form.storyId ? stories.find((s) => s.id === form.storyId) : null;
-    const effectiveGoalId = form.goalId || linkedStory?.goalId || null;
-    const requiresGoal = ['chore', 'routine', 'habit'].includes(form.type);
-    if (requiresGoal && !effectiveGoalId) {
-      alert('Please link this habit/chores/routine to a goal before saving.');
+    if (!form.title.trim()) {
+      alert('Please add a task title.');
       setSaving(false);
       return;
     }
@@ -220,16 +238,19 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       const normalizedDays = isRecurringType && form.repeatFrequency === 'weekly'
         ? Array.isArray(form.daysOfWeek) ? form.daysOfWeek : []
         : [];
-      const originalDueDateMs = resolveTimestampMs((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate);
       const dueDateMs = form.dueDate ? new Date(`${form.dueDate}T00:00:00`).getTime() : null;
-      const dueDateChanged = (originalDueDateMs ?? null) !== (dueDateMs ?? null);
       let nextSprintId = form.sprintId || null;
-      if (dueDateChanged) {
+      let dueDateChanged = false;
+      if (task) {
+        const originalDueDateMs = resolveTimestampMs((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate);
+        dueDateChanged = (originalDueDateMs ?? null) !== (dueDateMs ?? null);
+      }
+      if (dueDateChanged || (!task && dueDateMs && !nextSprintId)) {
         const matched = findSprintForDate(sprints, dueDateMs);
         nextSprintId = matched?.id ?? null;
       }
-      const updates: any = {
-        title: form.title.trim() || task.title,
+      const basePayload: any = {
+        title: form.title.trim(),
         description: form.description,
         status: typeof form.status === 'string' ? Number(form.status) || form.status : form.status,
         priority: typeof form.priority === 'string' ? Number(form.priority) || form.priority : form.priority,
@@ -246,22 +267,17 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         repeatInterval: normalizedInterval,
         daysOfWeek: normalizedDays,
         persona: form.persona || 'personal',
-        updatedAt: serverTimestamp(),
       };
-      if (dueDateChanged) {
-        updates.dueDateLocked = true;
-        updates.dueDateReason = 'user';
-      }
       if (form.storyId) {
         const linked = stories.find((s) => s.id === form.storyId);
-        if (linked?.goalId) updates.goalId = linked.goalId;
-        if ((linked as any)?.sprintId) updates.sprintId = (linked as any).sprintId;
+        if (linked?.goalId) basePayload.goalId = linked.goalId;
+        if ((linked as any)?.sprintId) basePayload.sprintId = (linked as any).sprintId;
       }
       const storySprintId = linkedStory?.sprintId || (linkedStory as any)?.sprintId || null;
-      const resolvedGoalId = updates.goalId || linkedStory?.goalId || null;
+      const resolvedGoalId = basePayload.goalId || linkedStory?.goalId || null;
       const resolvedGoal = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : null;
-      const sprintForTag = (updates.sprintId || storySprintId)
-        ? sprints.find((sprint) => sprint.id === (updates.sprintId || storySprintId))
+      const sprintForTag = (basePayload.sprintId || storySprintId)
+        ? sprints.find((sprint) => sprint.id === (basePayload.sprintId || storySprintId))
         : null;
       const themeValue = (resolvedGoal as any)?.theme
         ?? (linkedStory as any)?.theme
@@ -269,47 +285,78 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         ?? (task as any)?.themeId
         ?? (task as any)?.theme_id
         ?? null;
-      updates.tags = normalizeTaskTags({
-        tags: updates.tags || [],
-        type: updates.type,
-        persona: updates.persona,
+      basePayload.tags = normalizeTaskTags({
+        tags: basePayload.tags || [],
+        type: basePayload.type,
+        persona: basePayload.persona,
         sprint: sprintForTag || null,
         themeValue,
         goalRef: (resolvedGoal as any)?.ref || null,
         storyRef: (linkedStory as any)?.ref || null,
         themes: globalThemes,
       });
-      await updateDoc(doc(db, 'tasks', task.id), updates);
-      if (currentUser?.uid) {
-        const sprintKey = (updates.sprintId || storySprintId || '') || '__none__';
-        const statusValue = updates.status;
+
+      let savedTaskId = task?.id || null;
+      const existingRef = (task as any)?.ref || (task as any)?.reference || null;
+      const prevPersona = (((task as any)?.persona) || 'personal') as 'personal' | 'work';
+      if (task) {
+        const updates: any = {
+          ...basePayload,
+          title: basePayload.title || task.title,
+          updatedAt: serverTimestamp(),
+        };
+        if (dueDateChanged) {
+          updates.dueDateLocked = true;
+          updates.dueDateReason = 'user';
+        }
+        await updateDoc(doc(db, 'tasks', task.id), updates);
+      } else {
+        if (!currentUser?.uid) {
+          throw new Error('You must be signed in to create tasks.');
+        }
+        const createPayload: any = {
+          ...basePayload,
+          ownerUid: currentUser.uid,
+          persona: basePayload.persona || (currentPersona || 'personal'),
+          deleted: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          dueDateLocked: dueDateMs != null,
+          dueDateReason: dueDateMs != null ? 'user' : null,
+        };
+        const createdRef = await addDoc(collection(db, 'tasks'), createPayload);
+        savedTaskId = createdRef.id;
+      }
+
+      if (currentUser?.uid && savedTaskId) {
+        const sprintKey = (basePayload.sprintId || storySprintId || '') || '__none__';
+        const statusValue = basePayload.status;
         const isDone = typeof statusValue === 'number'
           ? statusValue >= 2
           : String(statusValue || '').toLowerCase().includes('done') || String(statusValue || '').toLowerCase().includes('complete');
         const indexPayload: any = {
-          id: task.id,
+          id: savedTaskId,
           ownerUid: currentUser.uid,
-          persona: updates.persona || (task as any).persona || 'personal',
+          persona: basePayload.persona || prevPersona,
           sprintId: sprintKey,
-          status: updates.status,
+          status: basePayload.status,
           isOpen: !isDone,
-          dueDate: updates.dueDate ?? null,
-          priority: updates.priority ?? null,
-          title: updates.title,
-          description: updates.description || null,
-          goalId: updates.goalId || null,
-          storyId: updates.storyId || null,
-          parentType: updates.parentType || null,
-          parentId: updates.parentId || null,
-          tags: updates.tags || [],
-          ref: (task as any).ref || (task as any).reference || null,
+          dueDate: basePayload.dueDate ?? null,
+          priority: basePayload.priority ?? null,
+          title: basePayload.title,
+          description: basePayload.description || null,
+          goalId: basePayload.goalId || null,
+          storyId: basePayload.storyId || null,
+          parentType: basePayload.parentType || null,
+          parentId: basePayload.parentId || null,
+          tags: basePayload.tags || [],
+          ref: existingRef,
           updatedAt: Date.now(),
         };
-        await setDoc(doc(db, 'sprint_task_index', task.id), indexPayload, { merge: true });
+        await setDoc(doc(db, 'sprint_task_index', savedTaskId), indexPayload, { merge: true });
       }
-      const prevPersona = (((task as any).persona) || 'personal') as 'personal' | 'work';
-      const nextPersona = (updates.persona || prevPersona) as 'personal' | 'work';
-      if (prevPersona !== nextPersona && currentUser?.uid) {
+      const nextPersona = (basePayload.persona || prevPersona) as 'personal' | 'work';
+      if (task?.id && prevPersona !== nextPersona && currentUser?.uid) {
         try {
           await cascadeTaskPersona(currentUser.uid, task.id, nextPersona);
         } catch (err) {
@@ -373,11 +420,10 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   return (
     <Modal show={show} onHide={onHide} size="lg" container={container || undefined}>
       <Modal.Header closeButton>
-        <Modal.Title>Edit Task</Modal.Title>
+        <Modal.Title>{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        {task ? (
-          <Row className="g-3">
+        <Row className="g-3">
             <Col lg={8}>
               <Form>
                 <Form.Group className="mb-3">
@@ -590,7 +636,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                         </div>
                       ) : null}
                       {(form.type === 'habit' || form.type === 'chore' || form.type === 'routine') && (
-                        <div className="form-text">Habits, chores, and routines must be linked to a goal.</div>
+                        <div className="form-text">Linking a goal is recommended for better planner/theme placement.</div>
                       )}
                     </Form.Group>
                   </Col>
@@ -633,7 +679,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                     </Form.Group>
                   </Col>
                 </Row>
-                {(task as Task).aiCriticalityScore != null && (
+                {task && (task as Task).aiCriticalityScore != null && (
                   <div className="mb-3">
                     <strong>AI Score:</strong>{' '}
                     {Number.isFinite(Number((task as Task).aiCriticalityScore))
@@ -655,15 +701,16 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                 )}
               </Form>
             </Col>
-            <Col lg={4}>
-              <ActivityStreamPanel
-                entityId={task?.id}
-                entityType="task"
-                referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
-              />
-            </Col>
+            {task && (
+              <Col lg={4}>
+                <ActivityStreamPanel
+                  entityId={task?.id}
+                  entityType="task"
+                  referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
+                />
+              </Col>
+            )}
           </Row>
-        ) : null}
       </Modal.Body>
       <Modal.Footer>
         <Button
@@ -684,7 +731,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
           Cancel
         </Button>
         <Button variant="primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving...' : 'Save'}
+          {saving ? 'Saving...' : task ? 'Save' : 'Create task'}
         </Button>
       </Modal.Footer>
     </Modal>

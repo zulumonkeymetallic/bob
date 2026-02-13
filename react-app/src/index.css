@@ -103,3 +103,57 @@ code {
 .rbc-event-label, .rbc-event-content {
   color: inherit;
 }
+
+/* Mobile fit: keep summaries/widgets within viewport on small screens */
+@media (max-width: 768px) {
+  html {
+    font-size: 94%;
+  }
+
+  body,
+  #root {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .container,
+  .container-fluid {
+    max-width: 100vw;
+  }
+
+  img,
+  svg,
+  canvas,
+  video {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .card,
+  .alert,
+  .list-group-item,
+  .badge,
+  .btn,
+  .navbar,
+  .navbar-brand,
+  .dropdown-item,
+  .form-control,
+  .form-select,
+  .table,
+  .modal-body {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .d-flex > * {
+    min-width: 0;
+  }
+
+  .btn,
+  .badge,
+  .form-control,
+  .form-select {
+    font-size: 0.94rem;
+  }
+}

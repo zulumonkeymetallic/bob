@@ -619,6 +619,18 @@ const renderFinanceSummary = (summary, currency = 'GBP') => {
 
   const spent = formatPence(summary.totalSpendPence || 0, currency) || '£0.00';
   const income = formatPence(summary.totalIncomePence || 0, currency) || '£0.00';
+  const mandatorySpendPence = Number.isFinite(Number(summary.mandatorySpendPence))
+    ? Number(summary.mandatorySpendPence)
+    : Math.abs(Math.min(Number(summary?.buckets?.mandatory || 0), 0));
+  const discretionarySpendPence = Number.isFinite(Number(summary.discretionarySpendPence))
+    ? Number(summary.discretionarySpendPence)
+    : Math.abs(Math.min(Number(summary?.buckets?.discretionary || summary?.buckets?.optional || 0), 0));
+  const uncategorisedFromBuckets = ['unknown', 'uncategorized', 'uncategorised']
+    .reduce((sum, key) => sum + Math.abs(Math.min(Number(summary?.buckets?.[key] || 0), 0)), 0);
+  const uncategorisedSpendPence = Number.isFinite(Number(summary.uncategorisedSpendPence))
+    ? Number(summary.uncategorisedSpendPence)
+    : uncategorisedFromBuckets;
+  const lastSync = summary.lastSyncDisplay || summary.lastSyncAt || null;
   const bucketRows = Object.entries(summary.buckets || {})
     .filter(([bucket]) => bucket !== 'bank_transfer' && bucket !== 'unknown')
     .map(([bucket, amount]) => ({
@@ -677,6 +689,12 @@ const renderFinanceSummary = (summary, currency = 'GBP') => {
         <strong>Total spent:</strong> ${escape(spent)} •
         <strong style="margin-left:8px;">Income:</strong> ${escape(income)}
       </p>
+      <p style="margin:0 0 6px;">
+        <strong>Mandatory:</strong> ${escape(formatPence(mandatorySpendPence, currency) || '£0.00')} •
+        <strong style="margin-left:8px;">Discretionary:</strong> ${escape(formatPence(discretionarySpendPence, currency) || '£0.00')} •
+        <strong style="margin-left:8px;">Uncategorised:</strong> ${escape(formatPence(uncategorisedSpendPence, currency) || '£0.00')}
+      </p>
+      ${lastSync ? `<p style="margin:0 0 6px;color:#6b7280;font-size:12px;"><strong>Last sync:</strong> ${escape(lastSync)}</p>` : ''}
       <p style="margin:0;color:#6b7280;font-size:12px;">${summary.transactionCount} transactions · ${summary.spendCount} spend · ${summary.incomeCount} income</p>
       ${bucketHtml}
       <h4 style="margin:12px 0 4px;font-size:14px;color:#111827;">Top Merchants</h4>
@@ -975,6 +993,8 @@ const renderDuplicateTable = (items) => {
 
 const renderDailySummaryEmail = (data) => {
   const profileName = data.profile?.displayName || data.profile?.name || data.profile?.email || 'BOB Member';
+  const financeWindowDays = Number(data?.metadata?.financeWindowDays || 5);
+  const financeWindowLabel = data?.metadata?.financeWindowLabel || `last ${financeWindowDays} days`;
   return `
 <!DOCTYPE html>
 <html>
@@ -1004,7 +1024,8 @@ const renderDailySummaryEmail = (data) => {
 
       ${data.financeDaily ? `
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Daily Spend Summary</h2>
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Spend Summary (Last ${financeWindowDays} Days)</h2>
+        <p style="margin-top:0;color:#6b7280;font-size:12px;">Window: ${escape(financeWindowLabel)}</p>
         ${renderFinanceSummary(data.financeDaily, data.monzo?.currency || 'GBP')}
         ${data.financeCommentary ? `<div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:10px;color:#334155;font-size:13px;">${escape(data.financeCommentary)}</div>` : ''}
       </section>

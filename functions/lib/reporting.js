@@ -50,6 +50,9 @@ const buildFinanceSummary = (transactions = []) => {
   const summary = {
     totalSpendPence: 0,
     totalIncomePence: 0,
+    mandatorySpendPence: 0,
+    discretionarySpendPence: 0,
+    uncategorisedSpendPence: 0,
     buckets: {},
     topMerchants: [],
     anomalies: [],
@@ -64,8 +67,16 @@ const buildFinanceSummary = (transactions = []) => {
     const bucket = resolveFinanceBucket(tx);
     const isIncome = ['income', 'net_salary', 'irregular_income'].includes(bucket);
     if (amount < 0 && !isIncome) {
-      summary.totalSpendPence += Math.abs(amount);
+      const spendPence = Math.abs(amount);
+      summary.totalSpendPence += spendPence;
       summary.spendCount += 1;
+      if (bucket === 'mandatory') {
+        summary.mandatorySpendPence += spendPence;
+      } else if (bucket === 'discretionary') {
+        summary.discretionarySpendPence += spendPence;
+      } else if (bucket === 'unknown' || bucket === 'uncategorized' || bucket === 'uncategorised') {
+        summary.uncategorisedSpendPence += spendPence;
+      }
     }
     if (amount > 0 && isIncome) {
       summary.totalIncomePence += amount;
@@ -387,6 +398,9 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const { start, end } = computeDayWindow({ day, timezone: zone });
   const startMs = start.toMillis();
   const endMs = end.toMillis();
+  const financeWindowDays = 5;
+  const financeWindowStart = start.minus({ days: financeWindowDays - 1 }).startOf('day');
+  const financeWindowLabel = `${isoDate(financeWindowStart)} → ${isoDate(end)}`;
 
   const [
     tasksSnap,
@@ -417,7 +431,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
     db.collection('monzo_transactions')
       .where('ownerUid', '==', userId)
-      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(start.toJSDate()))
+      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(financeWindowStart.toJSDate()))
       .where('createdAt', '<', admin.firestore.Timestamp.fromDate(end.toJSDate()))
       .orderBy('createdAt', 'desc')
       .limit(400)
@@ -1041,6 +1055,19 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     console.warn('[reporting] monzo lookup failed', error?.message || error);
   }
 
+  const monzoLastSyncDt = toDateTime(
+    profile?.monzoLastSyncAt || profile?.monzoLastSyncedAt || monzo?.updatedAt || null,
+    { zone, defaultValue: null },
+  );
+  const monzoLastSyncAt = monzoLastSyncDt ? monzoLastSyncDt.toISO() : null;
+  const monzoLastSyncDisplay = monzoLastSyncDt
+    ? formatDateTime(monzoLastSyncDt, { locale, includeTimeZone: true })
+    : null;
+  if (financeDaily) {
+    financeDaily.lastSyncAt = monzoLastSyncAt;
+    financeDaily.lastSyncDisplay = monzoLastSyncDisplay;
+  }
+
   let goalProgress = null;
   if (goalsAll.length) {
     const counts = {
@@ -1195,6 +1222,12 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       locale,
       start: start.toISO(),
       end: end.toISO(),
+      financeWindowDays,
+      financeWindowStart: financeWindowStart.toISO(),
+      financeWindowEnd: end.toISO(),
+      financeWindowLabel,
+      monzoLastSyncAt,
+      monzoLastSyncDisplay,
       generatedAt: new Date().toISOString(),
       manualCallable: manualRerunCallable,
     },

@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Task } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import { isRecurringDueOnDate, resolveRecurringDueMs } from '../utils/recurringTaskDue';
 
 interface Occurrence {
   id: string;
@@ -22,12 +22,11 @@ interface TaskStats {
   completedCount: number;
   totalCount: number;
   streak: number;
+  expectedSlots: { dayMs: number; done: boolean }[];
 }
 
-const LOOKBACK_DAYS = 60;
-const MAX_OCCURRENCES = 10;
-
-const getTaskDueMs = (task: Task): number | null => resolveTaskDueMs(task);
+const LOOKBACK_DAYS = 180;
+const TARGET_OCCURRENCES = 15;
 
 const getLastDoneMs = (task: Task): number | null => {
   const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
@@ -47,13 +46,12 @@ const getLastDoneMs = (task: Task): number | null => {
   return null;
 };
 
-const getChoreKind = (task: Task): 'chore' | 'routine' | 'habit' | null => {
+const getHabitKind = (task: Task): 'routine' | 'habit' | null => {
   const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
   const normalized = raw === 'habitual' ? 'habit' : raw;
-  if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+  if (normalized === 'routine' || normalized === 'habit') return normalized as any;
   const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
   const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
-  if (tagKeys.includes('chore')) return 'chore';
   if (tagKeys.includes('routine')) return 'routine';
   if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
   return null;
@@ -155,7 +153,7 @@ const HabitsChoresDashboard: React.FC = () => {
         snap.docs.forEach((docSnap) => {
           const data = docSnap.data() as any;
           const entityType = String(data.entityType || '').toLowerCase();
-          if (entityType !== 'chore') return;
+          if (!['routine', 'habit', 'chore'].includes(entityType)) return;
           const taskId = String(data.taskId || '').trim();
           if (!taskId) return;
           const start = typeof data.start === 'number' ? data.start : null;
@@ -168,7 +166,7 @@ const HabitsChoresDashboard: React.FC = () => {
         });
         Object.keys(map).forEach((taskId) => {
           map[taskId].sort((a, b) => b.start - a.start);
-          map[taskId] = map[taskId].slice(0, MAX_OCCURRENCES);
+          map[taskId] = map[taskId].slice(0, LOOKBACK_DAYS);
         });
         setOccurrenceMap(map);
         setLoadingBlocks(false);
@@ -183,21 +181,50 @@ const HabitsChoresDashboard: React.FC = () => {
       .filter((task) => !task.deleted)
       .filter((task) => (task.status ?? 0) !== 2)
       .filter((task) => !currentPersona || !task.persona || task.persona === currentPersona)
-      .filter((task) => !!getChoreKind(task));
+      .filter((task) => !!getHabitKind(task));
   }, [tasks, currentPersona]);
 
   const taskStats = useMemo(() => {
     const stats: Record<string, TaskStats> = {};
     filteredTasks.forEach((task) => {
       const occurrences = occurrenceMap[task.id] || [];
-      const completedCount = occurrences.filter((o) => o.done).length;
-      const totalCount = occurrences.length;
+      const doneDaySet = new Set<number>();
+      occurrences.forEach((occ) => {
+        if (!occ.done) return;
+        doneDaySet.add(startOfDay(new Date(occ.start)).getTime());
+      });
+      const lastDoneMs = getLastDoneMs(task);
+      if (lastDoneMs) {
+        doneDaySet.add(startOfDay(new Date(lastDoneMs)).getTime());
+      }
+
+      const expectedDays: number[] = [];
+      const anchor = startOfDay(new Date());
+      for (let i = 0; i < LOOKBACK_DAYS && expectedDays.length < TARGET_OCCURRENCES; i += 1) {
+        const day = subDays(anchor, i);
+        if (isRecurringDueOnDate(task, day)) {
+          expectedDays.push(startOfDay(day).getTime());
+        }
+      }
+      if (expectedDays.length === 0) {
+        const fallbackDays = occurrences
+          .map((occ) => startOfDay(new Date(occ.start)).getTime())
+          .filter((value, idx, arr) => arr.indexOf(value) === idx)
+          .slice(0, TARGET_OCCURRENCES);
+        expectedDays.push(...fallbackDays);
+      }
+      const expectedSlots = expectedDays.map((dayMs) => ({
+        dayMs,
+        done: doneDaySet.has(dayMs),
+      }));
+      const completedCount = expectedSlots.filter((slot) => slot.done).length;
+      const totalCount = expectedSlots.length;
       let streak = 0;
-      for (const occ of occurrences) {
-        if (occ.done) streak += 1;
+      for (const slot of expectedSlots) {
+        if (slot.done) streak += 1;
         else break;
       }
-      stats[task.id] = { occurrences, completedCount, totalCount, streak };
+      stats[task.id] = { occurrences, completedCount, totalCount, streak, expectedSlots };
     });
     return stats;
   }, [filteredTasks, occurrenceMap]);
@@ -246,8 +273,8 @@ const HabitsChoresDashboard: React.FC = () => {
     <div className="container py-3" style={{ maxWidth: 1200 }}>
       <div className="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-3">
         <div>
-          <h4 className="mb-1">Habits & Chores</h4>
-          <div className="text-muted small">Track recurring chores, routines, and habits grouped by goal.</div>
+          <h4 className="mb-1">Habit Tracking</h4>
+          <div className="text-muted small">Track routines and habits only, with a 15-instance completion view by expected cadence.</div>
         </div>
         <div className="d-flex gap-2">
           <Button variant="outline-secondary" size="sm" onClick={() => navigate('/chores/checklist')}>Open today’s checklist</Button>
@@ -258,12 +285,12 @@ const HabitsChoresDashboard: React.FC = () => {
       {loading ? (
         <Card className="mb-3">
           <Card.Body className="d-flex align-items-center gap-2 text-muted">
-            <Spinner size="sm" animation="border" /> Loading habits and chores…
+            <Spinner size="sm" animation="border" /> Loading habits and routines…
           </Card.Body>
         </Card>
       ) : grouped.length === 0 ? (
         <Card>
-          <Card.Body className="text-muted">No chores, routines, or habits found for this persona.</Card.Body>
+          <Card.Body className="text-muted">No routines or habits found for this persona.</Card.Body>
         </Card>
       ) : (
         grouped.map((group) => {
@@ -282,17 +309,17 @@ const HabitsChoresDashboard: React.FC = () => {
                         <th style={{ width: 260 }}>Item</th>
                         <th>Next Due</th>
                         <th>Last Done</th>
-                        <th>Recent</th>
+                        <th>Last 15</th>
                         <th>Status</th>
                         <th style={{ width: 120 }}>Today</th>
                       </tr>
                     </thead>
                     <tbody>
                       {group.tasks.map((task) => {
-                        const kind = getChoreKind(task) || 'chore';
-                        const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
-                        const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
-                        const stats = taskStats[task.id] || { occurrences: [], completedCount: 0, totalCount: 0, streak: 0 };
+                        const kind = getHabitKind(task) || 'habit';
+                        const badgeVariant = kind === 'routine' ? 'success' : 'secondary';
+                        const badgeLabel = kind === 'routine' ? 'Routine' : 'Habit';
+                        const stats = taskStats[task.id] || { occurrences: [], completedCount: 0, totalCount: 0, streak: 0, expectedSlots: [] };
                         const consistency = getConsistencyBadge(stats.completedCount, stats.totalCount);
                         const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
                         const lastDoneMs = getLastDoneMs(task);
@@ -313,19 +340,24 @@ const HabitsChoresDashboard: React.FC = () => {
                             <td>{dueLabel}</td>
                             <td>{lastLabel}</td>
                             <td>
-                              {stats.totalCount === 0 ? (
+                              {stats.expectedSlots.length === 0 ? (
                                 <span className="text-muted">—</span>
                               ) : (
                                 <div className="d-flex align-items-center gap-2">
                                   <span className="small text-muted">{stats.completedCount}/{stats.totalCount}</span>
                                   <div className="d-flex gap-1">
-                                    {stats.occurrences.map((occ, idx) => (
-                                      <Form.Check
-                                        key={occ.id || idx}
-                                        type="checkbox"
-                                        checked={occ.done}
-                                        disabled
-                                        aria-label="completed"
+                                    {stats.expectedSlots.map((slot, idx) => (
+                                      <span
+                                        key={`${task.id}-${slot.dayMs}-${idx}`}
+                                        title={`${format(new Date(slot.dayMs), 'EEE d MMM')}: ${slot.done ? 'completed' : 'not completed'}`}
+                                        style={{
+                                          width: 12,
+                                          height: 12,
+                                          borderRadius: 999,
+                                          display: 'inline-block',
+                                          backgroundColor: slot.done ? '#16a34a' : '#dc2626',
+                                          border: '1px solid rgba(15, 23, 42, 0.2)',
+                                        }}
                                       />
                                     ))}
                                   </div>

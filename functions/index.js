@@ -1513,6 +1513,9 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
     const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
     if (startMs && endMs) {
+      const sourceType = String(instance.sourceType || 'routine').toLowerCase();
+      const hasThemeContext = instance.theme != null || instance.goalId != null;
+      const syncRoutineLikeToGoogle = (sourceType === 'routine' || sourceType === 'habit') && hasThemeContext;
       batch.set(blockRef, {
         ownerUid: uid,
         title: instance.title || 'Routine',
@@ -1526,9 +1529,12 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
         placementReason: (instance.schedulingContext && instance.schedulingContext.policyMode) || 'routine',
         theme: instance.theme || null,
         goalId: instance.goalId || null,
+        choreId: sourceType === 'chore' ? instance.sourceId || null : null,
+        routineId: sourceType === 'routine' ? instance.sourceId || null : null,
+        habitId: sourceType === 'habit' ? instance.sourceId || null : null,
         updatedAt: nowMs,
         createdAt: nowMs,
-        syncToGoogle: false,
+        syncToGoogle: syncRoutineLikeToGoogle,
       }, { merge: true });
     }
   }
@@ -9244,6 +9250,9 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
     const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
     const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
     if (startMs && endMs) {
+      const sourceType = String(instance.sourceType || 'routine').toLowerCase();
+      const hasThemeContext = instance.theme != null || instance.goalId != null;
+      const syncRoutineLikeToGoogle = (sourceType === 'routine' || sourceType === 'habit') && hasThemeContext;
       batch.set(blockRef, {
         ownerUid: userId,
         title: instance.title || 'Routine',
@@ -9257,9 +9266,12 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
         placementReason: (instance.schedulingContext && instance.schedulingContext.policyMode) || 'routine',
         theme: instance.theme || null,
         goalId: instance.goalId || null,
+        choreId: sourceType === 'chore' ? instance.sourceId || null : null,
+        routineId: sourceType === 'routine' ? instance.sourceId || null : null,
+        habitId: sourceType === 'habit' ? instance.sourceId || null : null,
         updatedAt: nowMs,
         createdAt: nowMs,
-        syncToGoogle: false,
+        syncToGoogle: syncRoutineLikeToGoogle,
       }, { merge: true });
     }
   }
@@ -13441,7 +13453,7 @@ exports.syncYouTubeWatchLater = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_I
       const snippet = item?.snippet || {};
       const publishedAt = toMillis(snippet?.publishedAt) || null;
       const docId = `${uid}_yt_${videoId}`;
-      const ref = db.collection('youtube').doc(docId);
+      const ref = db.collection('youtube_history').doc(docId);
       batch.set(ref, {
         id: docId,
         ownerUid: uid,
@@ -15225,7 +15237,7 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
     summaryData.financeCommentary = await buildFinanceCommentary({
       summary: summaryData.financeDaily,
       userId,
-      windowLabel: summaryData.metadata.dayIso || 'today',
+      windowLabel: summaryData.metadata.financeWindowLabel || `last ${summaryData.metadata.financeWindowDays || 5} days`,
     });
   }
 

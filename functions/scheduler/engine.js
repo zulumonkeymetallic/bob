@@ -250,6 +250,8 @@ function inferThemeFromItem(item, type) {
   // 1. Explicit theme (user-selected)
   if (item.theme != null) return item.theme;
   if (item.themeId != null) return item.themeId;
+  if (item.goalTheme != null) return item.goalTheme;
+  if (item.goalThemeId != null) return item.goalThemeId;
 
   // 2. Chores always get "Chores" theme (ID: 10)
   if (type === 'chore') return 10;
@@ -857,17 +859,39 @@ async function planSchedule({
     isFixed: true // New flag to indicate this shouldn't be moved easily
   }));
 
+  const goalsSnap = await db
+    .collection('goals')
+    .where('ownerUid', '==', userId)
+    .get()
+    .catch(() => ({ docs: [] }));
+  const goalThemeById = new Map(
+    goalsSnap.docs.map((goalDoc) => {
+      const data = goalDoc.data() || {};
+      return [goalDoc.id, { theme: data.theme ?? null, themeId: data.themeId ?? data.theme_id ?? data.theme ?? null }];
+    }),
+  );
+  const attachGoalTheme = (item) => {
+    if (!item || !item.goalId) return item;
+    const fromGoal = goalThemeById.get(String(item.goalId));
+    if (!fromGoal) return item;
+    return {
+      ...item,
+      goalTheme: fromGoal.theme,
+      goalThemeId: fromGoal.themeId,
+    };
+  };
+
   const choresSnap = await db
     .collection('chores')
     .where('ownerUid', '==', userId)
     .get();
-  const chores = choresSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const chores = choresSnap.docs.map((doc) => attachGoalTheme({ id: doc.id, ...doc.data() }));
 
   const routinesSnap = await db
     .collection('routines')
     .where('ownerUid', '==', userId)
     .get();
-  const routines = routinesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const routines = routinesSnap.docs.map((doc) => attachGoalTheme({ id: doc.id, ...doc.data() }));
 
   // Treat habits as routines for scheduling
   let habits = [];
@@ -878,7 +902,7 @@ async function planSchedule({
       .get();
     habits = habitsSnap.docs.map((doc) => {
       const data = doc.data() || {};
-      return {
+      return attachGoalTheme({
         id: doc.id,
         ownerUid: userId,
         title: data.title || data.name || 'Habit',
@@ -888,7 +912,7 @@ async function planSchedule({
         tags: data.tags || [],
         goalId: data.goalId || null,
         theme: data.theme || data.themeId || null,
-      };
+      });
     });
   } catch (e) {
     console.warn('[scheduler] failed to load habits', e?.message || e);

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Card, Col, Container, Form, InputGroup, Modal, Row } from 'react-bootstrap';
+import { Badge, Button, Card, Col, Container, Dropdown, Form, InputGroup, Modal, Row } from 'react-bootstrap';
 import { dropTargetForElements, monitorForElements, draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -381,7 +381,10 @@ const GoalsYearPlanner: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTheme, setFilterTheme] = useState('all');
-  const [filterYear, setFilterYear] = useState('current');
+  const currentYear = useMemo(() => new Date().getFullYear(), []);
+  const [allYears, setAllYears] = useState(false);
+  const [selectedYears, setSelectedYears] = useState<number[]>([currentYear]);
+  const [showNoYear, setShowNoYear] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showGoalDescriptions, setShowGoalDescriptions] = useState(true);
   const [showNoPotOnly, setShowNoPotOnly] = useState(false);
@@ -452,8 +455,18 @@ const GoalsYearPlanner: React.FC = () => {
     return active?.id || null;
   }, [sprints]);
 
+  const isCurrentYearOnly = useMemo(() => {
+    return !allYears && !showNoYear && selectedYears.length === 1 && selectedYears[0] === currentYear;
+  }, [allYears, showNoYear, selectedYears, currentYear]);
+
   useEffect(() => {
-    if (filterYear !== 'current') {
+    if (!allYears && selectedYears.length === 0) {
+      setSelectedYears([currentYear]);
+    }
+  }, [allYears, selectedYears, currentYear]);
+
+  useEffect(() => {
+    if (!isCurrentYearOnly) {
       if (applyActiveSprintFilter) setApplyActiveSprintFilter(false);
       if (selectedSprintId !== '') setSelectedSprintId('');
       return;
@@ -470,7 +483,7 @@ const GoalsYearPlanner: React.FC = () => {
     if (selectedSprintId === '' && activeSprintId && !hasSavedPreference) {
       setSelectedSprintId(activeSprintId);
     }
-  }, [filterYear, applyActiveSprintFilter, selectedSprintId, setSelectedSprintId, activeSprintId]);
+  }, [isCurrentYearOnly, applyActiveSprintFilter, selectedSprintId, setSelectedSprintId, activeSprintId]);
 
   useEffect(() => {
     const sprintId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
@@ -507,11 +520,12 @@ const GoalsYearPlanner: React.FC = () => {
       if (potId) return false;
     }
     const derivedYear = resolveGoalYear(goal);
-    if (filterYear === 'current') {
-      const cy = new Date().getFullYear();
-      if (derivedYear && derivedYear !== cy) return false;
-    } else if (filterYear !== 'all') {
-      if (derivedYear && String(derivedYear) !== filterYear) return false;
+    if (allYears) {
+      if (!derivedYear && !showNoYear) return false;
+    } else {
+      const yearMatch = derivedYear != null && selectedYears.includes(derivedYear);
+      const noYearMatch = derivedYear == null && showNoYear;
+      if (!yearMatch && !noYearMatch) return false;
     }
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
@@ -562,18 +576,25 @@ const GoalsYearPlanner: React.FC = () => {
       const yr = resolveGoalYear(g);
       if (yr) years.add(yr);
     });
-    years.add(new Date().getFullYear());
+    years.add(currentYear);
     return Array.from(years).sort((a, b) => a - b);
-  }, [goals]);
+  }, [goals, currentYear]);
 
   const yearColumns = useMemo(() => {
-    if (filterYear === 'current') return [new Date().getFullYear()];
-    if (filterYear !== 'all') {
-      const parsed = Number(filterYear);
-      return Number.isFinite(parsed) ? [parsed] : [];
-    }
-    return availableYears;
-  }, [filterYear, availableYears]);
+    let years = allYears ? [...availableYears] : [...selectedYears];
+    if (!years.length) years = [currentYear];
+    years.sort((a, b) => a - b);
+    const cols: Array<number | null> = [...years];
+    if (showNoYear) cols.push(null);
+    return cols;
+  }, [allYears, availableYears, selectedYears, showNoYear, currentYear]);
+
+  const yearFilterLabel = useMemo(() => {
+    if (allYears) return showNoYear ? 'All + No Year' : 'All years';
+    const sorted = [...selectedYears].sort((a, b) => a - b);
+    const label = sorted.length ? sorted.join(', ') : 'Select years';
+    return showNoYear ? `${label} + No Year` : label;
+  }, [allYears, selectedYears, showNoYear]);
 
   const goalsByYear = useMemo(() => {
     const map = new Map<string, Goal[]>();
@@ -816,18 +837,66 @@ const GoalsYearPlanner: React.FC = () => {
             <Col md={2}>
               <Form.Group>
                 <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Year</Form.Label>
-                <Form.Select
-                  size="sm"
-                  value={filterYear}
-                  onChange={(e) => setFilterYear(e.target.value)}
-                  style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
-                >
-                  <option value="current">Current Year</option>
-                  <option value="all">All Years</option>
-                  {availableYears.map((y) => (
-                    <option key={y} value={String(y)}>{y}</option>
-                  ))}
-                </Form.Select>
+                <Dropdown autoClose="outside">
+                  <Dropdown.Toggle
+                    size="sm"
+                    variant="outline-secondary"
+                    style={{
+                      border: '1px solid var(--notion-border)',
+                      background: 'var(--notion-bg)',
+                      color: 'var(--notion-text)',
+                      width: '100%',
+                      textAlign: 'left',
+                    }}
+                  >
+                    {yearFilterLabel}
+                  </Dropdown.Toggle>
+                  <Dropdown.Menu style={{ padding: 8, minWidth: 220 }}>
+                    <Form.Check
+                      type="checkbox"
+                      id="year-filter-all"
+                      label="All years"
+                      checked={allYears}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setAllYears(checked);
+                        if (!checked && selectedYears.length === 0) {
+                          setSelectedYears([currentYear]);
+                        }
+                      }}
+                      className="mb-1"
+                    />
+                    <Form.Check
+                      type="checkbox"
+                      id="year-filter-no-year"
+                      label="Include no year"
+                      checked={showNoYear}
+                      onChange={(e) => setShowNoYear(e.target.checked)}
+                      className="mb-2"
+                    />
+                    <Dropdown.Divider />
+                    {availableYears.map((y) => {
+                      const checked = selectedYears.includes(y);
+                      return (
+                        <Form.Check
+                          key={y}
+                          type="checkbox"
+                          id={`year-filter-${y}`}
+                          label={String(y)}
+                          checked={checked}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                              ? [...selectedYears, y]
+                              : selectedYears.filter((val) => val !== y);
+                            setSelectedYears(next);
+                            setAllYears(false);
+                          }}
+                          className="mb-1"
+                        />
+                      );
+                    })}
+                  </Dropdown.Menu>
+                </Dropdown>
               </Form.Group>
             </Col>
             <Col md={2}>
@@ -878,17 +947,6 @@ const GoalsYearPlanner: React.FC = () => {
       </Card>
 
       <div style={{ display: 'flex', gap: 16, overflowX: 'auto', paddingBottom: 16 }}>
-        {filterYear === 'all' && goalsByYear.get('none') && goalsByYear.get('none')!.length > 0 && (
-          <GoalYearColumn
-            year={null}
-            goals={goalsByYear.get('none') || []}
-            pots={pots}
-            themePalette={themes}
-            droppableId="year-none"
-            showDescriptions={showGoalDescriptions}
-            onEdit={(g) => setEditGoal(g)}
-          />
-        )}
         {yearColumns.map((year) => (
           <GoalYearColumn
             key={year}
