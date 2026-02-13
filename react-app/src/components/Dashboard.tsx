@@ -219,15 +219,6 @@ const Dashboard: React.FC = () => {
     return null;
   }, []);
 
-  const formatMinutes = useCallback((minutes?: number | null) => {
-    if (minutes == null || !Number.isFinite(minutes)) return '—';
-    const total = Math.max(0, Math.round(minutes));
-    if (total < 60) return `${total}m`;
-    const hrs = Math.floor(total / 60);
-    const mins = total % 60;
-    return `${hrs}h ${mins}m`;
-  }, []);
-
   const formatPotBalance = useCallback((value: number, currency = 'GBP') => {
     const minor = Number(value || 0);
     const pounds = minor / 100;

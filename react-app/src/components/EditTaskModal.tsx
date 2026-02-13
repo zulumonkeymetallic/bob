@@ -238,7 +238,6 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       const normalizedDays = isRecurringType && form.repeatFrequency === 'weekly'
         ? Array.isArray(form.daysOfWeek) ? form.daysOfWeek : []
         : [];
-      const originalDueDateMs = resolveTimestampMs((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate);
       const dueDateMs = form.dueDate ? new Date(`${form.dueDate}T00:00:00`).getTime() : null;
       let nextSprintId = form.sprintId || null;
       let dueDateChanged = false;
@@ -269,10 +268,6 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         daysOfWeek: normalizedDays,
         persona: form.persona || 'personal',
       };
-      if (dueDateChanged) {
-        updates.dueDateLocked = true;
-        updates.dueDateReason = 'user';
-      }
       if (form.storyId) {
         const linked = stories.find((s) => s.id === form.storyId);
         if (linked?.goalId) basePayload.goalId = linked.goalId;
