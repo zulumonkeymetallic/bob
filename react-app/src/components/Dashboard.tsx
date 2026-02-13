@@ -2217,42 +2217,46 @@ const Dashboard: React.FC = () => {
                       </Card>
                     </Col>
                     <Col md={12} className="today-plan-col today-plan-col-calendar">
-                      {unscheduledToday.length > 0 && (
-                        <Alert variant="warning" className="py-2">
-                          <div className="fw-semibold mb-1">Scheduling issues</div>
-                          <ul className="mb-0 small">
-                            {unscheduledSummary.map((item) => (
-                              <li key={item.id}>{item.title || item.sourceId}</li>
-                            ))}
-                            {unscheduledToday.length > unscheduledSummary.length && (
-                              <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
-                            )}
-                          </ul>
-                        </Alert>
-                      )}
-                      <div className="fw-semibold mb-2">Calendar</div>
-                      <div className="calendar-dashboard-wrap">
-                        <DragAndDropCalendar
-                          localizer={localizer}
-                          events={calendarEvents}
-                          startAccessor="start"
-                          endAccessor="end"
-                          views={['day', 'week', 'month']}
-                          view={calendarView}
-                          date={calendarDate}
-                          defaultView={Views.DAY}
-                          onView={(view) => setCalendarView(view as 'day' | 'week' | 'month')}
-                          onNavigate={(date) => setCalendarDate(date)}
-                          onEventDrop={handleCalendarEventMove}
-                          onEventResize={handleCalendarEventResize}
-                          resizable
-                          popup
-                          scrollToTime={calendarScrollTime}
-                          getNow={() => new Date()}
-                          style={{ height: 460 }}
-                          eventPropGetter={calendarEventStyleGetter}
-                        />
-                      </div>
+                      <Card className="shadow-sm border-0 h-100 dashboard-calendar-card">
+                        <Card.Header className="fw-semibold">Calendar</Card.Header>
+                        <Card.Body className="p-2 d-flex flex-column">
+                          {unscheduledToday.length > 0 && (
+                            <Alert variant="warning" className="py-2 mb-2">
+                              <div className="fw-semibold mb-1">Scheduling issues</div>
+                              <ul className="mb-0 small">
+                                {unscheduledSummary.map((item) => (
+                                  <li key={item.id}>{item.title || item.sourceId}</li>
+                                ))}
+                                {unscheduledToday.length > unscheduledSummary.length && (
+                                  <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
+                                )}
+                              </ul>
+                            </Alert>
+                          )}
+                          <div className="calendar-dashboard-wrap flex-grow-1">
+                            <DragAndDropCalendar
+                              localizer={localizer}
+                              events={calendarEvents}
+                              startAccessor="start"
+                              endAccessor="end"
+                              views={['day', 'week', 'month']}
+                              view={calendarView}
+                              date={calendarDate}
+                              defaultView={Views.DAY}
+                              onView={(view) => setCalendarView(view as 'day' | 'week' | 'month')}
+                              onNavigate={(date) => setCalendarDate(date)}
+                              onEventDrop={handleCalendarEventMove}
+                              onEventResize={handleCalendarEventResize}
+                              resizable
+                              popup
+                              scrollToTime={calendarScrollTime}
+                              getNow={() => new Date()}
+                              style={{ height: '100%' }}
+                              eventPropGetter={calendarEventStyleGetter}
+                            />
+                          </div>
+                        </Card.Body>
+                      </Card>
                     </Col>
                     <Col md={6} className="today-plan-col today-plan-col-due">
                       <Card className="shadow-sm border-0 h-100 dashboard-due-card">

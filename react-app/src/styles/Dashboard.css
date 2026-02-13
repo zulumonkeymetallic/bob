@@ -99,6 +99,14 @@
   width: 100%;
 }
 
+.dashboard-calendar-card .card-body {
+  min-height: 0;
+}
+
+.dashboard-calendar-card .calendar-dashboard-wrap {
+  min-height: 520px;
+}
+
 .dashboard-task-status-select {
   width: 104px;
   font-size: 12px;
@@ -132,6 +140,10 @@
     width: 31%;
   }
 
+  .dashboard-calendar-card .calendar-dashboard-wrap {
+    min-height: 640px;
+  }
+
   .today-plan-layout > .today-plan-col-due {
     width: 25%;
   }
@@ -149,6 +161,10 @@
 
   .today-plan-layout > .today-plan-col-calendar {
     width: 34%;
+  }
+
+  .dashboard-calendar-card .calendar-dashboard-wrap {
+    min-height: 620px;
   }
 
   .today-plan-layout > .today-plan-col-due {
