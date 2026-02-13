@@ -226,7 +226,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
             await fetchData();
             setOpsMessage('Monzo sync completed and dashboard refreshed.');
         } catch (e: any) {
-            setError(e?.message || 'Sync failed');
+            const message = String(e?.message || 'Sync failed');
+            if (/monzo connection expired|missing monzo refresh token/i.test(message)) {
+                setError('Monzo connection expired. Reconnect Monzo in Integrations, then run sync again.');
+            } else {
+                setError(message);
+            }
         } finally {
             setSyncing(false);
         }
