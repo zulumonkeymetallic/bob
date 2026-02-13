@@ -619,6 +619,18 @@ const renderFinanceSummary = (summary, currency = 'GBP') => {
 
   const spent = formatPence(summary.totalSpendPence || 0, currency) || '£0.00';
   const income = formatPence(summary.totalIncomePence || 0, currency) || '£0.00';
+  const mandatorySpendPence = Number.isFinite(Number(summary.mandatorySpendPence))
+    ? Number(summary.mandatorySpendPence)
+    : Math.abs(Math.min(Number(summary?.buckets?.mandatory || 0), 0));
+  const discretionarySpendPence = Number.isFinite(Number(summary.discretionarySpendPence))
+    ? Number(summary.discretionarySpendPence)
+    : Math.abs(Math.min(Number(summary?.buckets?.discretionary || summary?.buckets?.optional || 0), 0));
+  const uncategorisedFromBuckets = ['unknown', 'uncategorized', 'uncategorised']
+    .reduce((sum, key) => sum + Math.abs(Math.min(Number(summary?.buckets?.[key] || 0), 0)), 0);
+  const uncategorisedSpendPence = Number.isFinite(Number(summary.uncategorisedSpendPence))
+    ? Number(summary.uncategorisedSpendPence)
+    : uncategorisedFromBuckets;
+  const lastSync = summary.lastSyncDisplay || summary.lastSyncAt || null;
   const bucketRows = Object.entries(summary.buckets || {})
     .filter(([bucket]) => bucket !== 'bank_transfer' && bucket !== 'unknown')
     .map(([bucket, amount]) => ({
@@ -677,6 +689,12 @@ const renderFinanceSummary = (summary, currency = 'GBP') => {
         <strong>Total spent:</strong> ${escape(spent)} •
         <strong style="margin-left:8px;">Income:</strong> ${escape(income)}
       </p>
+      <p style="margin:0 0 6px;">
+        <strong>Mandatory:</strong> ${escape(formatPence(mandatorySpendPence, currency) || '£0.00')} •
+        <strong style="margin-left:8px;">Discretionary:</strong> ${escape(formatPence(discretionarySpendPence, currency) || '£0.00')} •
+        <strong style="margin-left:8px;">Uncategorised:</strong> ${escape(formatPence(uncategorisedSpendPence, currency) || '£0.00')}
+      </p>
+      ${lastSync ? `<p style="margin:0 0 6px;color:#6b7280;font-size:12px;"><strong>Last sync:</strong> ${escape(lastSync)}</p>` : ''}
       <p style="margin:0;color:#6b7280;font-size:12px;">${summary.transactionCount} transactions · ${summary.spendCount} spend · ${summary.incomeCount} income</p>
       ${bucketHtml}
       <h4 style="margin:12px 0 4px;font-size:14px;color:#111827;">Top Merchants</h4>
