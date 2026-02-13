@@ -1018,7 +1018,7 @@ const TransactionsList: React.FC = () => {
                               }
                             >
                               {savingId === tx.id ? <Spinner size="sm" animation="border" className="me-1" /> : null}
-                              Save
+                              Save row
                             </Button>
                             <Button
                               size="sm"
@@ -1032,7 +1032,7 @@ const TransactionsList: React.FC = () => {
                                 )
                               }
                             >
-                              Apply
+                              Save + Apply
                             </Button>
                           </div>
                         </div>
