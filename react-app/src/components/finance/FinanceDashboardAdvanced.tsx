@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Row, Col, Spinner, Alert, Form, Button, Badge, ButtonGroup } from 'react-bootstrap';
 import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc } from 'firebase/firestore';
+import { useSearchParams } from 'react-router-dom';
 import { db, functions } from '../../firebase';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -31,8 +32,8 @@ import './FinanceDashboardAdvanced.css';
 
 type DateFilter = 'month' | 'quarter' | 'year' | 'all' | 'custom';
 type ViewMode = 'category' | 'bucket';
-type FinanceView = 'overview' | 'spend' | 'cashflow' | 'optional' | 'actions' | 'sources' | 'assets';
-type ExternalSource = 'barclays' | 'paypal' | 'other';
+type FinanceView = 'overview' | 'spend' | 'optional' | 'actions' | 'sources' | 'assets';
+type ExternalSource = 'barclays' | 'paypal' | 'other' | 'monzo_csv';
 type AnalysisDimension = 'bucket' | 'category' | 'merchant';
 type AnalysisChartType = 'trend' | 'pie' | 'breakdown';
 type ManualAccountType = 'asset' | 'debt' | 'investment' | 'cash' | 'savings';
@@ -116,10 +117,23 @@ const toKeyText = (value: any, fallback = 'unknown') => {
     return text || fallback;
 };
 
+const parseFinanceView = (tab: string | null): FinanceView | null => {
+    if (!tab) return null;
+    if (tab === 'cashflow') return 'spend';
+    if (tab === 'overview') return 'overview';
+    if (tab === 'spend') return 'spend';
+    if (tab === 'optional') return 'optional';
+    if (tab === 'actions') return 'actions';
+    if (tab === 'sources') return 'sources';
+    if (tab === 'assets') return 'assets';
+    return null;
+};
+
 const FinanceDashboardAdvanced: React.FC = () => {
     const { currentUser } = useAuth();
     const { theme } = useTheme();
     const isDark = theme === 'dark';
+    const [searchParams, setSearchParams] = useSearchParams();
 
     const [data, setData] = useState<any>(null);
     const [enhancementData, setEnhancementData] = useState<any>(null);
@@ -140,7 +154,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
     });
     const [viewMode, setViewMode] = useState<ViewMode>('category');
-    const [activeView, setActiveView] = useState<FinanceView>('overview');
+    const [activeView, setActiveView] = useState<FinanceView>(() => parseFinanceView(searchParams.get('tab')) || 'overview');
 
     const [externalSource, setExternalSource] = useState<ExternalSource>('barclays');
     const [csvText, setCsvText] = useState('');
@@ -257,6 +271,21 @@ const FinanceDashboardAdvanced: React.FC = () => {
         };
     }, [fetchData]);
 
+    useEffect(() => {
+        const tabFromUrl = parseFinanceView(searchParams.get('tab'));
+        if (tabFromUrl && tabFromUrl !== activeView) {
+            setActiveView(tabFromUrl);
+        }
+    }, [searchParams, activeView]);
+
+    const handleViewChange = useCallback((nextView: FinanceView) => {
+        setActiveView(nextView);
+        const nextParams = new URLSearchParams(searchParams);
+        if (nextView === 'overview') nextParams.delete('tab');
+        else nextParams.set('tab', nextView);
+        setSearchParams(nextParams, { replace: true });
+    }, [searchParams, setSearchParams]);
+
     const handleSync = async () => {
         setSyncing(true);
         setOpsMessage(null);
@@ -296,6 +325,20 @@ const FinanceDashboardAdvanced: React.FC = () => {
         setError(null);
         setOpsMessage(null);
         try {
+            if (externalSource === 'monzo_csv') {
+                const importMonzoFn = httpsCallable(functions, 'importMonzoTransactionsCsv');
+                const recomputeFn = httpsCallable(functions, 'recomputeMonzoAnalytics');
+                const importRes = (await importMonzoFn({ csv: csvText })).data as any;
+                await recomputeFn({});
+                await fetchData();
+                const inserted = Number(importRes?.inserted || 0);
+                const skipped = Number(importRes?.skippedExisting || 0);
+                const start = importRes?.coverageStartISO ? new Date(importRes.coverageStartISO).toLocaleDateString('en-GB') : '—';
+                const end = importRes?.coverageEndISO ? new Date(importRes.coverageEndISO).toLocaleDateString('en-GB') : '—';
+                setOpsMessage(`Monzo import inserted ${inserted} row(s), skipped ${skipped} existing rows, coverage ${start} → ${end}.`);
+                return;
+            }
+
             const importFn = httpsCallable(functions, 'importExternalFinanceTransactions');
             const matchFn = httpsCallable(functions, 'matchExternalToMonzoTransactions');
             const debtFn = httpsCallable(functions, 'recomputeDebtServiceBreakdown');
@@ -324,6 +367,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
     };
 
     const handleRematch = async () => {
+        if (externalSource === 'monzo_csv') {
+            setOpsMessage('Rematching is only used for external card imports (Barclays/PayPal/Other).');
+            return;
+        }
         setBusy(true);
         setError(null);
         setOpsMessage(null);
@@ -345,6 +392,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
     };
 
     const handleRegenerateActions = async () => {
+        if (externalSource === 'monzo_csv') {
+            setOpsMessage('Action generation is based on external card debt sources, not Monzo CSV backfill.');
+            return;
+        }
         setBusy(true);
         setError(null);
         setOpsMessage(null);
@@ -1168,6 +1219,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     </Col>
                 </Row>
             )}
+
+            {renderCashflow()}
         </>
     );
 
@@ -1209,7 +1262,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
                 <Row className="mb-4">
                     <Col>
-                        <PremiumCard title="Cashflow Trend" icon={TrendingUp} height={380}>
+                        <PremiumCard title="Spend Flow Trend" icon={TrendingUp} height={380}>
                             <ReactECharts option={cashflowOption} style={{ height: '100%' }} />
                         </PremiumCard>
                     </Col>
@@ -1411,6 +1464,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         <Form.Group className="mb-3">
                             <Form.Label>Source</Form.Label>
                             <Form.Select value={externalSource} onChange={(event) => setExternalSource(event.target.value as ExternalSource)}>
+                                <option value="monzo_csv">Monzo (historical CSV backfill)</option>
                                 <option value="barclays">Barclays / Barclaycard</option>
                                 <option value="paypal">PayPal</option>
                                 <option value="other">Other</option>
@@ -1421,41 +1475,47 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             <Form.Label>CSV file</Form.Label>
                             <Form.Control type="file" accept=".csv,text/csv" onChange={handleCsvFileUpload} />
                             <div className="small text-muted mt-1">
-                                {csvFileName ? `Loaded: ${csvFileName}` : 'Choose a source export CSV to import.'}
+                                {csvFileName
+                                    ? `Loaded: ${csvFileName}`
+                                    : externalSource === 'monzo_csv'
+                                        ? 'Choose a Monzo export CSV (Transaction ID, Date, Time, Amount, Category, etc.).'
+                                        : 'Choose a source export CSV to import.'}
                             </div>
                         </Form.Group>
 
-                        <Row className="g-2 mb-3">
-                            <Col>
-                                <Form.Label>Date window (days)</Form.Label>
-                                <Form.Control
-                                    type="number"
-                                    min={1}
-                                    max={30}
-                                    value={windowDays}
-                                    onChange={(event) => setWindowDays(Number(event.target.value || 5))}
-                                />
-                            </Col>
-                            <Col>
-                                <Form.Label>Amount tolerance (pence)</Form.Label>
-                                <Form.Control
-                                    type="number"
-                                    min={1}
-                                    max={2_000}
-                                    value={amountTolerancePence}
-                                    onChange={(event) => setAmountTolerancePence(Number(event.target.value || 150))}
-                                />
-                            </Col>
-                        </Row>
+                        {externalSource !== 'monzo_csv' && (
+                            <Row className="g-2 mb-3">
+                                <Col>
+                                    <Form.Label>Date window (days)</Form.Label>
+                                    <Form.Control
+                                        type="number"
+                                        min={1}
+                                        max={30}
+                                        value={windowDays}
+                                        onChange={(event) => setWindowDays(Number(event.target.value || 5))}
+                                    />
+                                </Col>
+                                <Col>
+                                    <Form.Label>Amount tolerance (pence)</Form.Label>
+                                    <Form.Control
+                                        type="number"
+                                        min={1}
+                                        max={2_000}
+                                        value={amountTolerancePence}
+                                        onChange={(event) => setAmountTolerancePence(Number(event.target.value || 150))}
+                                    />
+                                </Col>
+                            </Row>
+                        )}
 
                         <div className="d-flex flex-wrap gap-2">
                             <Button variant="primary" onClick={handleImportAndRebuild} disabled={busy}>
-                                {busy ? 'Running…' : 'Import + Match + Rebuild'}
+                                {busy ? 'Running…' : externalSource === 'monzo_csv' ? 'Import + Rebuild analytics' : 'Import + Match + Rebuild'}
                             </Button>
-                            <Button variant="outline-secondary" onClick={handleRematch} disabled={busy}>
+                            <Button variant="outline-secondary" onClick={handleRematch} disabled={busy || externalSource === 'monzo_csv'}>
                                 Match only
                             </Button>
-                            <Button variant="outline-secondary" onClick={handleRegenerateActions} disabled={busy}>
+                            <Button variant="outline-secondary" onClick={handleRegenerateActions} disabled={busy || externalSource === 'monzo_csv'}>
                                 Rebuild actions
                             </Button>
                         </div>
@@ -1709,8 +1769,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const viewButtons: Array<{ key: FinanceView; label: string }> = [
         { key: 'overview', label: 'Overview' },
-        { key: 'spend', label: 'Spend analysis' },
-        { key: 'cashflow', label: 'Cashflow + Goals' },
+        { key: 'spend', label: 'Spend analysis + Forecast' },
         { key: 'optional', label: 'Optional spend' },
         { key: 'actions', label: 'Actions' },
         { key: 'sources', label: 'Data sources' },
@@ -1785,7 +1844,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         <Button
                             key={button.key}
                             variant={activeView === button.key ? 'primary' : 'outline-secondary'}
-                            onClick={() => setActiveView(button.key)}
+                            onClick={() => handleViewChange(button.key)}
                         >
                             {button.label}
                         </Button>
@@ -1811,7 +1870,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
             {activeView === 'overview' && renderOverview()}
             {activeView === 'spend' && renderSpendAnalysis()}
-            {activeView === 'cashflow' && renderCashflow()}
             {activeView === 'optional' && renderOptionalSpend()}
             {activeView === 'actions' && renderActions()}
             {activeView === 'sources' && renderDataSources()}

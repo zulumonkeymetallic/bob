@@ -3,7 +3,7 @@ const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { normaliseMerchantName } = require('../monzo/shared');
+const { normaliseMerchantName, inferDefaultCategoryType, inferDefaultCategoryLabel } = require('../monzo/shared');
 const { mergeFinanceCategories } = require('./categories');
 
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
@@ -194,6 +194,103 @@ function buildExternalRowsFromCsv(csvText, source) {
   return result;
 }
 
+function normalizeMonzoCategoryKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function buildMonzoRowsFromCsv(csvText) {
+  const rows = parseCsvRows(csvText);
+  if (!rows.length) return [];
+  const header = rows[0].map(normalizeHeader);
+  const idx = (needles, fallback = -1) => {
+    for (let i = 0; i < header.length; i += 1) {
+      if (needles.some((needle) => header[i].includes(needle))) return i;
+    }
+    return fallback;
+  };
+
+  const transactionIdIdx = idx(['transaction id', 'transactionid']);
+  const dateIdx = idx(['date']);
+  const timeIdx = idx(['time']);
+  const typeIdx = idx(['type']);
+  const nameIdx = idx(['name', 'merchant'], 4);
+  const emojiIdx = idx(['emoji']);
+  const categoryIdx = idx(['category']);
+  const amountIdx = idx(['amount']);
+  const currencyIdx = idx(['currency']);
+  const localAmountIdx = idx(['local amount']);
+  const localCurrencyIdx = idx(['local currency']);
+  const notesIdx = idx(['notes and tags', 'notes']);
+  const addressIdx = idx(['address']);
+  const receiptIdx = idx(['receipt']);
+  const descriptionIdx = idx(['description']);
+  const categorySplitIdx = idx(['category split']);
+
+  if (dateIdx < 0 || amountIdx < 0) {
+    return [];
+  }
+
+  const dataRows = rows.slice(1);
+  const parsedRows = [];
+  dataRows.forEach((row, index) => {
+    if (!row || !row.length) return;
+    const dateText = String(dateIdx >= 0 ? row[dateIdx] || '' : '').trim();
+    const timeText = String(timeIdx >= 0 ? row[timeIdx] || '' : '').trim();
+    const dateMs = parseDateMs(`${dateText} ${timeText}`.trim()) || parseDateMs(dateText);
+    if (!dateMs) return;
+
+    const amountMinorRaw = parseMoneyMinor(amountIdx >= 0 ? row[amountIdx] : null);
+    const localAmountMinorRaw = parseMoneyMinor(localAmountIdx >= 0 ? row[localAmountIdx] : null);
+    const amountMinor = Number.isFinite(amountMinorRaw) ? amountMinorRaw : localAmountMinorRaw;
+    if (!Number.isFinite(amountMinor) || amountMinor === 0) return;
+
+    const transactionIdRaw = String(transactionIdIdx >= 0 ? row[transactionIdIdx] || '' : '').trim();
+    const merchantName = String(nameIdx >= 0 ? row[nameIdx] || '' : '').trim();
+    const description = String(descriptionIdx >= 0 ? row[descriptionIdx] || '' : '').trim();
+    const categoryLabel = String(categoryIdx >= 0 ? row[categoryIdx] || '' : '').trim();
+    const categoryKey = normalizeMonzoCategoryKey(categoryLabel);
+    const currency = String(currencyIdx >= 0 ? row[currencyIdx] || '' : '').trim() || 'GBP';
+    const localCurrency = String(localCurrencyIdx >= 0 ? row[localCurrencyIdx] || '' : '').trim() || currency;
+    const fallbackFingerprint = `${dateMs}|${amountMinor}|${merchantName}|${description}|${index}`;
+    const transactionId = transactionIdRaw || `csv_${crypto.createHash('sha1').update(fallbackFingerprint).digest('hex').slice(0, 20)}`;
+    const merchant = merchantName || description || categoryLabel || 'Transaction';
+    const inferredLabel = categoryLabel || inferDefaultCategoryLabel({
+      merchant: { name: merchant },
+      description,
+      category: categoryKey,
+      amount: amountMinor / 100,
+    });
+
+    parsedRows.push({
+      transactionId,
+      createdISO: new Date(dateMs).toISOString(),
+      createdMs: dateMs,
+      amountMinor,
+      amount: amountMinor / 100,
+      currency,
+      localAmountMinor: Number.isFinite(localAmountMinorRaw) ? localAmountMinorRaw : amountMinor,
+      localCurrency,
+      type: String(typeIdx >= 0 ? row[typeIdx] || '' : '').trim() || null,
+      name: merchantName || null,
+      emoji: String(emojiIdx >= 0 ? row[emojiIdx] || '' : '').trim() || null,
+      categoryLabel: inferredLabel || null,
+      categoryKey: categoryKey || null,
+      notesAndTags: String(notesIdx >= 0 ? row[notesIdx] || '' : '').trim() || null,
+      address: String(addressIdx >= 0 ? row[addressIdx] || '' : '').trim() || null,
+      receipt: String(receiptIdx >= 0 ? row[receiptIdx] || '' : '').trim() || null,
+      description: description || merchantName || inferredLabel || 'Transaction',
+      categorySplit: String(categorySplitIdx >= 0 ? row[categorySplitIdx] || '' : '').trim() || null,
+      merchantKey: normaliseMerchantName(merchant),
+      defaultCategoryType: inferDefaultCategoryType({ category: categoryKey, amount: amountMinor / 100 }),
+    });
+  });
+  return parsedRows;
+}
+
 function normalizeAmountMinor(data) {
   if (Number.isFinite(data?.amountMinor)) return Math.round(Number(data.amountMinor));
   const amount = Number(data?.amount || 0);
@@ -346,6 +443,113 @@ const importExternalFinanceTransactions = httpsV2.onCall({ region: FUNCTION_REGI
     parsed: parsedRows.length,
     upserted,
     skipped: Math.max(0, parseCsvRows(csvText).length - parsedRows.length),
+    sample: parsedRows.slice(0, 5),
+  };
+});
+
+const importMonzoTransactionsCsv = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
+  if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const csvText = String(req.data?.csv || '').trim();
+  if (!csvText) throw new httpsV2.HttpsError('invalid-argument', 'csv is required');
+
+  const parsedRows = buildMonzoRowsFromCsv(csvText);
+  if (!parsedRows.length) {
+    return {
+      ok: true,
+      parsed: 0,
+      inserted: 0,
+      skippedExisting: 0,
+      message: 'No valid Monzo CSV rows detected. Confirm headers include Date and Amount columns.',
+    };
+  }
+
+  const db = admin.firestore();
+  const existingSnap = await db.collection('monzo_transactions').where('ownerUid', '==', uid).get();
+  const existingIds = new Set();
+  existingSnap.docs.forEach((doc) => {
+    const transactionId = String(doc.data()?.transactionId || '').trim();
+    if (transactionId) existingIds.add(transactionId);
+  });
+
+  const seenIds = new Set();
+  let inserted = 0;
+  let skippedExisting = 0;
+  let batch = db.batch();
+  let ops = 0;
+  const maxBatch = 350;
+
+  let insertedStartMs = null;
+  let insertedEndMs = null;
+
+  for (const row of parsedRows) {
+    if (!row?.transactionId) continue;
+    if (seenIds.has(row.transactionId)) continue;
+    seenIds.add(row.transactionId);
+    if (existingIds.has(row.transactionId)) {
+      skippedExisting += 1;
+      continue;
+    }
+
+    const rowMs = Number(row.createdMs || Date.parse(row.createdISO));
+    insertedStartMs = insertedStartMs === null ? rowMs : Math.min(insertedStartMs, rowMs);
+    insertedEndMs = insertedEndMs === null ? rowMs : Math.max(insertedEndMs, rowMs);
+
+    const docId = `${uid}_csv_${crypto.createHash('sha1').update(String(row.transactionId)).digest('hex').slice(0, 24)}`;
+    const ref = db.collection('monzo_transactions').doc(docId);
+    const merchantName = row.name || row.description || row.categoryLabel || 'Transaction';
+    const createdDate = new Date(row.createdISO);
+
+    batch.set(ref, {
+      ownerUid: uid,
+      transactionId: row.transactionId,
+      amountMinor: row.amountMinor,
+      amount: row.amount,
+      currency: row.currency || 'GBP',
+      createdISO: row.createdISO,
+      createdAt: admin.firestore.Timestamp.fromDate(createdDate),
+      description: row.description || merchantName,
+      merchant: {
+        name: merchantName,
+        emoji: row.emoji || null,
+      },
+      merchantKey: row.merchantKey || normaliseMerchantName(merchantName),
+      defaultCategoryLabel: row.categoryLabel || null,
+      defaultCategoryType: row.defaultCategoryType || 'optional',
+      metadata: {
+        source: 'monzo_csv',
+        csvType: row.type || null,
+        csvLocalAmountMinor: row.localAmountMinor || row.amountMinor,
+        csvLocalCurrency: row.localCurrency || row.currency || 'GBP',
+        csvNotesAndTags: row.notesAndTags || null,
+        csvAddress: row.address || null,
+        csvReceipt: row.receipt || null,
+        csvCategorySplit: row.categorySplit || null,
+      },
+      importedFromCsv: true,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      importedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    inserted += 1;
+    ops += 1;
+    if (ops >= maxBatch) {
+      await batch.commit();
+      batch = db.batch();
+      ops = 0;
+    }
+  }
+
+  if (ops > 0) await batch.commit();
+
+  return {
+    ok: true,
+    parsed: parsedRows.length,
+    inserted,
+    skippedExisting,
+    skippedInvalid: Math.max(0, parseCsvRows(csvText).length - 1 - parsedRows.length),
+    coverageStartISO: insertedStartMs ? new Date(insertedStartMs).toISOString() : null,
+    coverageEndISO: insertedEndMs ? new Date(insertedEndMs).toISOString() : null,
     sample: parsedRows.slice(0, 5),
   };
 });
@@ -1366,6 +1570,7 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION }, 
 
 module.exports = {
   importExternalFinanceTransactions,
+  importMonzoTransactionsCsv,
   matchExternalToMonzoTransactions,
   recomputeDebtServiceBreakdown,
   generateFinanceActionInsights,

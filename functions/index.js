@@ -56,6 +56,7 @@ try {
   const financeEnhancements = require('./finance/enhancements');
   if (financeEnhancements) {
     exports.importExternalFinanceTransactions = financeEnhancements.importExternalFinanceTransactions;
+    exports.importMonzoTransactionsCsv = financeEnhancements.importMonzoTransactionsCsv;
     exports.matchExternalToMonzoTransactions = financeEnhancements.matchExternalToMonzoTransactions;
     exports.recomputeDebtServiceBreakdown = financeEnhancements.recomputeDebtServiceBreakdown;
     exports.generateFinanceActionInsights = financeEnhancements.generateFinanceActionInsights;
@@ -150,7 +151,9 @@ const updateGoalTargetYears = async () => {
   return { updated: updates };
 };
 
-exports.updateGoalTargetYears = schedulerV2.onSchedule('0 3 * * *', async () => {
+exports.updateGoalTargetYears = schedulerV2.onSchedule(
+  { schedule: '0 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  async () => {
   try {
     return await updateGoalTargetYears();
   } catch (e) {
@@ -5889,6 +5892,31 @@ exports.monzoSpendAnomalySweep = schedulerV2.onSchedule({
 });
 
 
+async function findEarliestMonzoTransactionCreated(db, uid, accountId) {
+  const snap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', uid)
+    .where('accountId', '==', accountId)
+    .select('createdISO', 'createdAt')
+    .get();
+
+  let earliestMs = null;
+  snap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    let candidateMs = NaN;
+    if (data.createdAt?.toDate) {
+      candidateMs = data.createdAt.toDate().getTime();
+    } else if (data.createdAt?._seconds) {
+      candidateMs = Number(data.createdAt._seconds) * 1_000;
+    } else if (typeof data.createdISO === 'string' && data.createdISO) {
+      candidateMs = Date.parse(data.createdISO);
+    }
+    if (!Number.isFinite(candidateMs)) return;
+    earliestMs = earliestMs === null ? candidateMs : Math.min(earliestMs, candidateMs);
+  });
+
+  return earliestMs === null ? null : new Date(earliestMs).toISOString();
+}
+
 async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
   const { accessToken } = await ensureMonzoAccessToken(uid);
   const db = admin.firestore();
@@ -5987,8 +6015,17 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
       fullRefresh: !!fullRefresh,
       historyStart,
     });
+    let firstCreated = txSummary.firstCreated || null;
+    if (fullRefresh && !firstCreated) {
+      firstCreated = await findEarliestMonzoTransactionCreated(db, uid, accountId);
+    }
     summary.transactions += txSummary.count;
-    summary.accountsSynced.push({ accountId, transactions: txSummary.count, lastCreated: txSummary.lastCreated || null });
+    summary.accountsSynced.push({
+      accountId,
+      transactions: txSummary.count,
+      lastCreated: txSummary.lastCreated || null,
+      firstCreated,
+    });
 
     const update = {
       ownerUid: uid,
@@ -6001,9 +6038,9 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
       update.lastTransactionCreated = txSummary.lastCreated;
       update.lastTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.lastCreated));
     }
-    if (txSummary.firstCreated) {
-      update.firstTransactionCreated = txSummary.firstCreated;
-      update.firstTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.firstCreated));
+    if (firstCreated) {
+      update.firstTransactionCreated = firstCreated;
+      update.firstTransactionTs = admin.firestore.Timestamp.fromDate(new Date(firstCreated));
     }
 
     await syncStateRef.set(update, { merge: true });
@@ -15852,7 +15889,7 @@ Keep it professional, actionable, and encourage the team.`;
 });
 
 // ===== Theme Allocations =====
-exports.saveThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-central1'] }, async (req) => {
+exports.saveThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const uid = req.auth.uid;
   const allocations = req.data.allocations || [];
@@ -15865,7 +15902,7 @@ exports.saveThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-cen
   return { ok: true };
 });
 
-exports.getThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-central1'] }, async (req) => {
+exports.getThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const uid = req.auth.uid;
   const db = admin.firestore();

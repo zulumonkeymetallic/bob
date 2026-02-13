@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, Col, Container, Form, Modal, ProgressBar, Row, Spinner, Table } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Col, Container, Form, Modal, ProgressBar, Row, Spinner } from 'react-bootstrap';
 import { collection, doc, getDoc, onSnapshot, orderBy, query, setDoc, where, limit } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
@@ -30,6 +30,9 @@ interface TransactionRow {
     merchantLogo?: string | null;
     potName?: string | null;
     potId?: string | null;
+    aiAnomalyFlag?: boolean;
+    aiAnomalyScore?: number | null;
+    aiAnomalyReason?: string | null;
 }
 
 interface BudgetSummaryDoc {
@@ -138,7 +141,7 @@ const FinanceDashboardModern: React.FC = () => {
             collection(db, 'monzo_transactions'),
             where('ownerUid', '==', currentUser.uid),
             orderBy('createdISO', 'desc'),
-            limit(10)
+            limit(40)
         );
 
         const unsubSummary = onSnapshot(summaryRef, (snap) => setSummary(snap.data() as BudgetSummaryDoc));
@@ -166,6 +169,9 @@ const FinanceDashboardModern: React.FC = () => {
                     merchantLogo: data.merchant?.logo,
                     potName,
                     potId,
+                    aiAnomalyFlag: Boolean(data.aiAnomalyFlag),
+                    aiAnomalyScore: Number.isFinite(Number(data.aiAnomalyScore)) ? Number(data.aiAnomalyScore) : null,
+                    aiAnomalyReason: data.aiAnomalyReason || null,
                 } as TransactionRow;
             }));
             setLoading(false);
@@ -404,6 +410,14 @@ const FinanceDashboardModern: React.FC = () => {
         [transactions]
     );
 
+    const anomalyTransactions = useMemo(
+        () => filteredTransactions
+            .filter((t) => t.aiAnomalyFlag)
+            .sort((a, b) => (b.aiAnomalyScore || 0) - (a.aiAnomalyScore || 0))
+            .slice(0, 12),
+        [filteredTransactions]
+    );
+
     const burndownOption = {
         tooltip: {
             trigger: 'axis',
@@ -635,46 +649,80 @@ const FinanceDashboardModern: React.FC = () => {
                     <Card className="border-0 shadow-sm h-100">
                         <Card.Body className="p-2">
                             <Card.Title className="h6">Recent Transactions</Card.Title>
-                            <div className="overflow-auto" style={{ maxHeight: '250px' }}>
-                                <Table hover responsive size="sm" className="align-middle mt-1 mb-0">
-                                    <thead>
-                                        <tr className="text-muted small">
-                                            <th>Date</th>
-                                            <th>Merchant / Pot</th>
-                                            <th>Category</th>
-                                            <th className="text-end">Amount</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {filteredTransactions.map(tx => (
-                                            <tr key={tx.transactionId}>
-                                                <td>
-                                                    <div className="fw-semibold small">{tx.createdISO ? new Date(tx.createdISO).toLocaleDateString() : '—'}</div>
-                                                    <div className="text-muted" style={{ fontSize: '0.7rem' }}>
-                                                        {tx.createdISO ? new Date(tx.createdISO).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    <div className="fw-semibold text-truncate small" style={{ maxWidth: 180 }}>{tx.merchantName || tx.description}</div>
-                                                    <div className="text-muted" style={{ fontSize: '0.7rem' }}>
-                                                        {tx.potName
-                                                            ? `${tx.amount > 0 ? 'Transfer from' : 'Transfer to'} ${tx.potName}`
-                                                            : 'No pot'}
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    <Badge bg="light" text="dark" className="border" style={{ fontSize: '0.7rem' }}>
-                                                        {tx.userCategoryLabel || 'Uncategorised'}
-                                                    </Badge>
-                                                </td>
-                                                <td className={`text-end fw-bold small ${tx.amount > 0 ? 'text-success' : ''}`}>
-                                                    {formatMoney(Math.abs(tx.amount))}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </Table>
+                            <div className="d-flex flex-column gap-2 mt-2 overflow-auto" style={{ maxHeight: '250px' }}>
+                                {filteredTransactions.map(tx => (
+                                    <div
+                                        key={tx.transactionId}
+                                        className="border rounded bg-white p-2"
+                                        style={{
+                                            display: 'grid',
+                                            gridTemplateColumns: '1fr 1.4fr auto auto',
+                                            gap: '8px',
+                                            alignItems: 'center',
+                                        }}
+                                    >
+                                        <div>
+                                            <div className="fw-semibold small">{tx.createdISO ? new Date(tx.createdISO).toLocaleDateString() : '—'}</div>
+                                            <div className="text-muted" style={{ fontSize: '0.7rem' }}>
+                                                {tx.createdISO ? new Date(tx.createdISO).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="fw-semibold text-truncate small">{tx.merchantName || tx.description}</div>
+                                            <div className="text-muted text-truncate" style={{ fontSize: '0.7rem' }}>
+                                                {tx.potName
+                                                    ? `${tx.amount > 0 ? 'Transfer from' : 'Transfer to'} ${tx.potName}`
+                                                    : 'No pot'}
+                                            </div>
+                                        </div>
+                                        <div className="text-nowrap">
+                                            <Badge bg="light" text="dark" className="border" style={{ fontSize: '0.7rem' }}>
+                                                {tx.userCategoryLabel || 'Uncategorised'}
+                                            </Badge>
+                                        </div>
+                                        <div className={`text-end fw-bold small text-nowrap ${tx.amount > 0 ? 'text-success' : ''}`}>
+                                            {formatMoney(Math.abs(tx.amount))}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
+                        </Card.Body>
+                    </Card>
+                </Col>
+            </Row>
+
+            <Row className="g-2 mt-1">
+                <Col>
+                    <Card className="border-0 shadow-sm h-100">
+                        <Card.Body className="p-2">
+                            <div className="d-flex align-items-center justify-content-between mb-1">
+                                <Card.Title className="h6 mb-0">Spend Anomalies</Card.Title>
+                                <Badge bg={anomalyTransactions.length ? 'danger' : 'secondary'}>{anomalyTransactions.length}</Badge>
+                            </div>
+                            {anomalyTransactions.length === 0 ? (
+                                <div className="text-muted small">No anomalous spend flagged in the recent transaction set.</div>
+                            ) : (
+                                <div className="d-flex flex-column gap-2 mt-2 overflow-auto" style={{ maxHeight: '220px' }}>
+                                    {anomalyTransactions.map((tx) => (
+                                        <div
+                                            key={`anomaly-${tx.transactionId}`}
+                                            className="border rounded bg-white p-2"
+                                            style={{
+                                                display: 'grid',
+                                                gridTemplateColumns: '1fr 1.3fr 1.6fr auto auto',
+                                                gap: '8px',
+                                                alignItems: 'center',
+                                            }}
+                                        >
+                                            <div className="small">{tx.createdISO ? new Date(tx.createdISO).toLocaleDateString('en-GB') : '—'}</div>
+                                            <div className="small text-truncate">{tx.merchantName || tx.description || 'Unknown'}</div>
+                                            <div className="small text-muted text-truncate">{tx.aiAnomalyReason || 'AI anomaly flag'}</div>
+                                            <div className="text-end small text-nowrap">{tx.aiAnomalyScore ? tx.aiAnomalyScore.toFixed(2) : '—'}</div>
+                                            <div className="text-end fw-bold small text-nowrap">{formatMoney(Math.abs(tx.amount))}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </Card.Body>
                     </Card>
                 </Col>
