@@ -22,7 +22,43 @@ type MerchantRow = {
   isSubscription?: boolean;
 };
 
+type MerchantSortColumn = 'merchant' | 'spend' | 'transactionsTotal' | 'transactions12' | 'transactions6' | 'category' | 'bucket' | 'subscription' | 'lastTransaction';
+type MerchantSortDirection = 'asc' | 'desc';
+
 const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
+const MERCHANT_SORT_COLUMNS: MerchantSortColumn[] = [
+  'merchant',
+  'spend',
+  'transactionsTotal',
+  'transactions12',
+  'transactions6',
+  'category',
+  'bucket',
+  'subscription',
+  'lastTransaction',
+];
+const MERCHANT_SORT_LABELS: Record<MerchantSortColumn, string> = {
+  merchant: 'Merchant',
+  spend: 'Spend',
+  transactionsTotal: 'Tx (Total)',
+  transactions12: 'Tx (12mo)',
+  transactions6: 'Tx (6mo)',
+  category: 'Category',
+  bucket: 'Bucket',
+  subscription: 'Subscription',
+  lastTransaction: 'Last tx',
+};
+const MERCHANT_DEFAULT_SORT_DIRECTION: Record<MerchantSortColumn, MerchantSortDirection> = {
+  merchant: 'asc',
+  spend: 'desc',
+  transactionsTotal: 'desc',
+  transactions12: 'desc',
+  transactions6: 'desc',
+  category: 'asc',
+  bucket: 'asc',
+  subscription: 'desc',
+  lastTransaction: 'desc',
+};
 
 const MerchantMappings: React.FC = () => {
   const { currentUser } = useAuth();
@@ -36,8 +72,8 @@ const MerchantMappings: React.FC = () => {
   const [subNote, setSubNote] = useState('');
   const [search, setSearch] = useState('');
   const [missingOnly, setMissingOnly] = useState(false);
-  const [sortMode, setSortMode] = useState<'merchant' | 'spend_desc' | 'transactions_desc'>('transactions_desc');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortColumn, setSortColumn] = useState<MerchantSortColumn>('transactions12');
+  const [sortDirection, setSortDirection] = useState<MerchantSortDirection>('desc');
   const [tableRef, bounds] = useMeasure();
   const [pots, setPots] = useState<Record<string, { name: string }>>({});
   const [txSample, setTxSample] = useState<any[]>([]);
@@ -147,23 +183,40 @@ const MerchantMappings: React.FC = () => {
       return { ...r, transactions12: tx12 || tx, transactions6: tx6 || tx };
     });
 
+    const sortableValue = (row: MerchantRow & { transactions12?: number; transactions6?: number }, column: MerchantSortColumn): number | string => {
+      const selectedCategoryKey = edits[row.merchantKey]?.categoryKey || row.primaryCategoryKey || '';
+      const selectedCategoryLabel = selectedCategoryKey
+        ? getCategoryByKey(selectedCategoryKey, allCategories)?.label || selectedCategoryKey
+        : '';
+      const bucketValue = selectedCategoryKey
+        ? BUCKET_LABELS[(getCategoryByKey(selectedCategoryKey, allCategories)?.bucket || 'optional') as keyof typeof BUCKET_LABELS]
+        : (row.primaryCategoryType || 'optional');
+      if (column === 'merchant') return (row.merchantName || row.merchantKey || '').toLowerCase();
+      if (column === 'spend') return row.totalSpend || 0;
+      if (column === 'transactionsTotal') return row.transactions || 0;
+      if (column === 'transactions12') return row.transactions12 || row.transactions || 0;
+      if (column === 'transactions6') return row.transactions6 || row.transactions || 0;
+      if (column === 'category') return selectedCategoryLabel.toLowerCase();
+      if (column === 'bucket') return String(bucketValue || '').toLowerCase();
+      if (column === 'subscription') return edits[row.merchantKey]?.isSubscription ?? row.isSubscription ? 1 : 0;
+      if (column === 'lastTransaction') return row.lastTransactionISO ? new Date(row.lastTransactionISO).getTime() : 0;
+      return 0;
+    };
+
     const sorted = [...decorated];
-    if (sortMode === 'merchant') {
-      sorted.sort((a, b) => {
-        const cmp = (a.merchantName || '').localeCompare(b.merchantName || '');
-        return sortDir === 'asc' ? cmp : -cmp;
-      });
-    } else if (sortMode === 'spend_desc') {
-      sorted.sort((a, b) => (b.totalSpend || 0) - (a.totalSpend || 0));
-    } else if (sortMode === 'transactions_desc') {
-      sorted.sort((a, b) => {
-        const txA = a.transactions12 || a.transactions || 0;
-        const txB = b.transactions12 || b.transactions || 0;
-        return txB - txA;
-      });
-    }
+    sorted.sort((a, b) => {
+      const aVal = sortableValue(a, sortColumn);
+      const bVal = sortableValue(b, sortColumn);
+      let comparison = 0;
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        comparison = aVal - bVal;
+      } else {
+        comparison = String(aVal).localeCompare(String(bVal), undefined, { numeric: true, sensitivity: 'base' });
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
     return sorted;
-  }, [rows, search, missingOnly, sortMode, sortDir]);
+  }, [allCategories, edits, rows, search, missingOnly, sortColumn, sortDirection]);
 
   // Prevent an empty grid when filters hide everything
   useEffect(() => {
@@ -267,8 +320,42 @@ const MerchantMappings: React.FC = () => {
     } finally { setBusy(false); }
   };
 
+  const toggleHeaderSort = (column: MerchantSortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortColumn(column);
+    setSortDirection(MERCHANT_DEFAULT_SORT_DIRECTION[column]);
+  };
+
+  const sortIndicator = (column: MerchantSortColumn) => {
+    if (sortColumn !== column) return '↕';
+    return sortDirection === 'asc' ? '↑' : '↓';
+  };
+
+  const renderSortableHeader = (
+    column: MerchantSortColumn,
+    label: string,
+    tooltip: string,
+    endAligned = false
+  ) => (
+    <OverlayTrigger placement="top" overlay={<Tooltip>{tooltip}</Tooltip>}>
+      <button
+        type="button"
+        className={`merchant-sort-header${endAligned ? ' merchant-sort-header--end' : ''}${sortColumn === column ? ' is-active' : ''}`}
+        onClick={() => toggleHeaderSort(column)}
+      >
+        <span>{label}</span>
+        <span className="merchant-sort-indicator">{sortIndicator(column)}</span>
+      </button>
+    </OverlayTrigger>
+  );
+
+  const tableWidth = Math.max(bounds.width || 1200, 1440);
+
   return (
-    <div className="container py-3" ref={tableRef}>
+    <div className="container-fluid finance-merchant-container py-3" ref={tableRef}>
       <div className="d-flex justify-content-between align-items-center mb-2">
         <span className="small text-muted">Signed in as: <code>{currentUser?.uid || '—'}</code></span>
       </div>
@@ -366,23 +453,21 @@ const MerchantMappings: React.FC = () => {
           <div className="d-flex align-items-center gap-2">
             <Form.Select
               size="sm"
-              value={sortMode}
-              onChange={(e) => setSortMode(e.target.value as 'merchant' | 'spend_desc' | 'transactions_desc')}
+              value={sortColumn}
+              onChange={(e) => setSortColumn(e.target.value as MerchantSortColumn)}
             >
-              <option value="merchant">Sort by merchant A→Z</option>
-              <option value="transactions_desc">Sort by tx count (high → low)</option>
-              <option value="spend_desc">Sort by total spend (high → low)</option>
+              {MERCHANT_SORT_COLUMNS.map((column) => (
+                <option key={column} value={column}>{MERCHANT_SORT_LABELS[column]}</option>
+              ))}
             </Form.Select>
-            {sortMode === 'merchant' && (
-              <Form.Select
-                size="sm"
-                value={sortDir}
-                onChange={(e) => setSortDir(e.target.value as 'asc' | 'desc')}
-              >
-                <option value="asc">Ascending</option>
-                <option value="desc">Descending</option>
-              </Form.Select>
-            )}
+            <Form.Select
+              size="sm"
+              value={sortDirection}
+              onChange={(e) => setSortDirection(e.target.value as MerchantSortDirection)}
+            >
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </Form.Select>
           </div>
         </Card.Header>
         <Card.Body className="p-0">
@@ -399,20 +484,20 @@ const MerchantMappings: React.FC = () => {
             </Alert>
           ) : (
             <div className="merchant-table" style={{ height: 540 }}>
-              <div className="merchant-header">
-                <span>Merchant</span>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Total spend (ex VAT)</Tooltip>}><span>Spend</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Total transactions</Tooltip>}><span>Tx (Total)</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>12mo = projected from months/transactions or YTD if present</Tooltip>}><span>Tx (12mo)</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>6mo = projected from months/transactions</Tooltip>}><span>Tx (6mo)</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Category label to apply</Tooltip>}><span>Category</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Bucket derived from category</Tooltip>}><span>Bucket</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Mark as subscription for override</Tooltip>}><span>Subscription</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Flags and save/apply actions</Tooltip>}><span className="text-end">Actions</span></OverlayTrigger>
+              <div className="merchant-header" style={{ minWidth: tableWidth }}>
+                {renderSortableHeader('merchant', 'Merchant', 'Merchant name')}
+                {renderSortableHeader('spend', 'Spend', 'Total spend (ex VAT)')}
+                {renderSortableHeader('transactionsTotal', 'Tx (Total)', 'Total transactions')}
+                {renderSortableHeader('transactions12', 'Tx (12mo)', '12mo = projected from months/transactions or YTD if present')}
+                {renderSortableHeader('transactions6', 'Tx (6mo)', '6mo = projected from months/transactions')}
+                {renderSortableHeader('category', 'Category', 'Category label to apply')}
+                {renderSortableHeader('bucket', 'Bucket', 'Bucket derived from category')}
+                {renderSortableHeader('subscription', 'Subscription', 'Mark as subscription for override')}
+                <span className="text-end">Actions</span>
               </div>
               <List
                 height={480}
-                width={bounds.width || 1200}
+                width={tableWidth}
                 itemCount={filteredRows.length}
                 itemSize={98}
                 itemKey={(idx) => filteredRows[idx].merchantKey}

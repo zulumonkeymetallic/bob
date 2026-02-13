@@ -51,6 +51,22 @@ try {
 } catch (e) {
   console.warn('[init] dailyDigestGenerator not loaded', e?.message || e);
 }
+
+try {
+  const financeEnhancements = require('./finance/enhancements');
+  if (financeEnhancements) {
+    exports.importExternalFinanceTransactions = financeEnhancements.importExternalFinanceTransactions;
+    exports.matchExternalToMonzoTransactions = financeEnhancements.matchExternalToMonzoTransactions;
+    exports.recomputeDebtServiceBreakdown = financeEnhancements.recomputeDebtServiceBreakdown;
+    exports.generateFinanceActionInsights = financeEnhancements.generateFinanceActionInsights;
+    exports.convertFinanceActionToStory = financeEnhancements.convertFinanceActionToStory;
+    exports.upsertManualFinanceAccount = financeEnhancements.upsertManualFinanceAccount;
+    exports.deleteManualFinanceAccount = financeEnhancements.deleteManualFinanceAccount;
+    exports.fetchFinanceEnhancementData = financeEnhancements.fetchFinanceEnhancementData;
+  }
+} catch (e) {
+  console.warn('[init] financeEnhancements not loaded', e?.message || e);
+}
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
 const crypto = require('crypto');
@@ -4837,8 +4853,13 @@ exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT
   const docIdOverride = String(req.data?.docId || '').trim();
   const categoryKey = String(req.data?.categoryKey || '').trim();
   const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
+  const categoryType = req.data?.categoryType ? String(req.data.categoryType).trim().toLowerCase() : null;
+  const allowedTypes = new Set(['mandatory', 'optional', 'savings', 'income']);
 
   if (!transactionId || !categoryKey) throw new httpsV2.HttpsError('invalid-argument', 'transactionId and categoryKey are required');
+  if (categoryType && !allowedTypes.has(categoryType)) {
+    throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+  }
 
   const db = admin.firestore();
   const col = db.collection('monzo_transactions');
@@ -4858,12 +4879,14 @@ exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT
   if (!snap || !snap.exists) throw new httpsV2.HttpsError('not-found', 'Transaction not found');
   if (snap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your transaction');
 
-  await docRef.update({
+  const updatePayload = {
     userCategoryKey: categoryKey,
     userCategoryLabel: categoryLabel,
     manualCategory: true,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  };
+  if (categoryType) updatePayload.userCategoryType = categoryType;
+  await docRef.update(updatePayload);
 
   return { ok: true };
 });

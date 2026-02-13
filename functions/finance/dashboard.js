@@ -67,7 +67,8 @@ function aggregateTransactions(transactions, startDate, endDate) {
         const minor = Number.isFinite(tx.amountMinor) ? tx.amountMinor : null;
         const rawAmount = typeof tx.amount === 'number' ? tx.amount : 0;
         const amount = minor !== null ? minor / 100 : (Math.abs(rawAmount) < 10 ? rawAmount * 100 : rawAmount);
-        const bucketRaw = potId ? 'bank_transfer' : (tx.aiBucket || tx.userCategoryType || tx.defaultCategoryType || 'unspecified');
+        // User overrides should win over AI for reporting.
+        const bucketRaw = potId ? 'bank_transfer' : (tx.userCategoryType || tx.aiBucket || tx.defaultCategoryType || 'unspecified');
         const bucket = String(bucketRaw).toLowerCase();
         const bucketNormalized = bucket === 'optional' ? 'discretionary' : bucket;
 
@@ -92,7 +93,7 @@ function aggregateTransactions(transactions, startDate, endDate) {
         result.timeSeriesByBucket[bucketNormalized][month] = (result.timeSeriesByBucket[bucketNormalized][month] || 0) + amount;
 
         // Category aggregation
-        const catKey = tx.aiCategoryKey || tx.userCategoryKey || tx.category || 'uncategorized';
+        const catKey = tx.userCategoryKey || tx.aiCategoryKey || tx.category || 'uncategorized';
         result.spendByCategory[catKey] = (result.spendByCategory[catKey] || 0) + amount;
 
         if (!result.timeSeriesByCategory) result.timeSeriesByCategory = {};

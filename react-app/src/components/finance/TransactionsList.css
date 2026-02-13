@@ -4,6 +4,12 @@
      padding: 12px 0 32px;
  }
 
+.finance-table-container {
+     max-width: 1880px;
+     padding-left: 20px;
+     padding-right: 20px;
+}
+
 .finance-filter-card {
      border: 1px solid #e5e7eb;
      border-radius: 16px;
@@ -25,6 +31,7 @@
 .finance-table-shell {
      background: #fff;
      position: relative;
+     overflow-x: auto;
  }
 
 .finance-empty {
@@ -35,11 +42,11 @@
 .finance-list-wrapper {
      height: 620px;
      width: 100%;
- }
+}
 
 .finance-grid-header {
     display: grid;
-    grid-template-columns: 1.05fr 1.2fr 1.55fr 1.05fr 1.4fr 0.85fr 0.95fr;
+    grid-template-columns: 1.1fr 1.3fr 1.8fr 1.05fr 1.7fr 0.95fr 1.25fr;
     gap: 12px;
     padding: 10px 16px;
     background: #f8fafc;
@@ -51,7 +58,7 @@
 
 .finance-row {
      display: grid;
-     grid-template-columns: 1.05fr 1.2fr 1.55fr 1.05fr 1.4fr 0.85fr 0.95fr;
+     grid-template-columns: 1.1fr 1.3fr 1.8fr 1.05fr 1.7fr 0.95fr 1.25fr;
      gap: 12px;
      align-items: center;
      padding: 14px 16px;
@@ -141,9 +148,11 @@
 
 .finance-actions {
      display: flex;
-     flex-direction: column;
-     gap: 6px;
+     flex-direction: row;
+     gap: 8px;
      align-items: flex-end;
+     justify-content: flex-end;
+     flex-wrap: nowrap;
  }
 
 .finance-btn-save {
@@ -151,6 +160,7 @@
      border: none;
      color: #fff;
      padding-inline: 12px;
+     white-space: nowrap;
  }
 
 .finance-btn-apply {
@@ -158,9 +168,37 @@
      border: 1px solid #e5e7eb;
      color: #0f172a;
      padding-inline: 12px;
+     white-space: nowrap;
  }
 
 .finance-btn-save:disabled,
 .finance-btn-apply:disabled {
      opacity: 0.65;
  }
+
+.finance-sort-header {
+     border: none;
+     background: transparent;
+     display: inline-flex;
+     align-items: center;
+     justify-content: flex-start;
+     gap: 6px;
+     width: 100%;
+     font-weight: 600;
+     color: #111827;
+     padding: 0;
+     cursor: pointer;
+}
+
+.finance-sort-header--end {
+     justify-content: flex-end;
+}
+
+.finance-sort-header.is-active {
+     color: #1d4ed8;
+}
+
+.finance-sort-indicator {
+     font-size: 0.75rem;
+     color: #64748b;
+}

@@ -1,13 +1,20 @@
+.finance-merchant-container {
+    max-width: 1880px;
+    padding-left: 20px;
+    padding-right: 20px;
+}
+
 .merchant-table {
     background: #f8fafc;
     border: 1px solid #e5e7eb;
     border-radius: 16px;
     overflow: hidden;
+    overflow-x: auto;
 }
 
 .merchant-header {
     display: grid;
-    grid-template-columns: 1.3fr 1fr 0.8fr 0.8fr 1.2fr 0.9fr 0.8fr 0.7fr 1.1fr;
+    grid-template-columns: 1.35fr 1fr 0.85fr 0.9fr 0.9fr 1.25fr 0.9fr 0.85fr 1.15fr;
     gap: 10px;
     padding: 12px 16px;
     background: #f1f5f9;
@@ -19,7 +26,7 @@
 
 .merchant-row {
     display: grid;
-    grid-template-columns: 1.35fr 1fr 0.8fr 0.8fr 1.2fr 0.9fr 0.8fr 0.7fr 1.1fr;
+    grid-template-columns: 1.35fr 1fr 0.85fr 0.9fr 0.9fr 1.25fr 0.9fr 0.85fr 1.15fr;
     gap: 10px;
     align-items: center;
     padding: 12px 16px;
@@ -55,6 +62,7 @@
     display: flex;
     gap: 6px;
     justify-content: flex-end;
+    flex-wrap: nowrap;
 }
 
 .merchant-chip {
@@ -88,4 +96,36 @@
 .merchant-subtext {
     font-size: 0.82rem;
     color: #6b7280;
+}
+
+.merchant-sort-header {
+    border: none;
+    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+    width: 100%;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #334155;
+    padding: 0;
+    cursor: pointer;
+}
+
+.merchant-sort-header--end {
+    justify-content: flex-end;
+}
+
+.merchant-sort-header.is-active {
+    color: #1d4ed8;
+}
+
+.merchant-sort-indicator {
+    font-size: 0.72rem;
+    color: #64748b;
+}
+
+.merchant-row .btn {
+    white-space: nowrap;
 }

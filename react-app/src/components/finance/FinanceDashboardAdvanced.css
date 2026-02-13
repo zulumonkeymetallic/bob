@@ -1,0 +1,21 @@
+.finance-dashboard-view-switch .btn-group {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+}
+
+.finance-dashboard-view-switch .btn {
+  white-space: nowrap;
+  border-radius: 0.5rem !important;
+}
+
+.finance-optional-card {
+  min-height: 190px;
+}
+
+@media (max-width: 768px) {
+  .finance-dashboard-view-switch .btn-group {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

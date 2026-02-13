@@ -45,18 +45,44 @@ type DisplayRow =
 const PAGE_SIZE = 150;
 const COLUMN_STORAGE_KEY = 'finance_tx_columns';
 const COLUMN_OPTIONS = [
-  { key: 'date', label: 'Date', width: '1.05fr' },
-  { key: 'merchant', label: 'Merchant', width: '1.2fr' },
-  { key: 'description', label: 'Description / Pot', width: '1.55fr' },
-  { key: 'bucket', label: 'Bucket', width: '0.95fr' },
-  { key: 'category', label: 'Category', width: '1.45fr' },
-  { key: 'aiCategory', label: 'AI Category', width: '1.15fr' },
-  { key: 'aiSuggestion', label: 'AI Suggestion', width: '1.2fr' },
+  { key: 'date', label: 'Date', width: '1.1fr' },
+  { key: 'merchant', label: 'Merchant', width: '1.3fr' },
+  { key: 'description', label: 'Description / Pot', width: '1.8fr' },
+  { key: 'bucket', label: 'Bucket', width: '1.05fr' },
+  { key: 'category', label: 'Category', width: '1.7fr' },
+  { key: 'aiCategory', label: 'AI Category', width: '1.3fr' },
+  { key: 'aiSuggestion', label: 'AI Suggestion', width: '1.25fr' },
   { key: 'anomaly', label: 'Anomaly', width: '1.1fr' },
-  { key: 'amount', label: 'Amount', width: '0.85fr' },
-  { key: 'actions', label: 'Actions', width: '0.95fr' },
+  { key: 'amount', label: 'Amount', width: '0.95fr' },
+  { key: 'actions', label: 'Actions', width: '1.25fr' },
 ];
 const DEFAULT_VISIBLE_COLUMNS = ['date', 'merchant', 'description', 'bucket', 'category', 'aiCategory', 'amount', 'actions'];
+type SortableColumn = 'date' | 'merchant' | 'description' | 'bucket' | 'category' | 'aiCategory' | 'aiSuggestion' | 'anomaly' | 'amount';
+type SortDirection = 'asc' | 'desc';
+
+const SORTABLE_COLUMNS: SortableColumn[] = ['date', 'merchant', 'description', 'bucket', 'category', 'aiCategory', 'aiSuggestion', 'anomaly', 'amount'];
+const SORT_COLUMN_LABELS: Record<SortableColumn, string> = {
+  date: 'Date',
+  merchant: 'Merchant',
+  description: 'Description / Pot',
+  bucket: 'Bucket',
+  category: 'Category',
+  aiCategory: 'AI Category',
+  aiSuggestion: 'AI Suggestion',
+  anomaly: 'Anomaly',
+  amount: 'Amount',
+};
+const DEFAULT_SORT_DIRECTION: Record<SortableColumn, SortDirection> = {
+  date: 'desc',
+  merchant: 'asc',
+  description: 'asc',
+  bucket: 'asc',
+  category: 'asc',
+  aiCategory: 'asc',
+  aiSuggestion: 'asc',
+  anomaly: 'desc',
+  amount: 'desc',
+};
 
 const TransactionsList: React.FC = () => {
   const { currentUser } = useAuth();
@@ -78,7 +104,8 @@ const TransactionsList: React.FC = () => {
   const [pageIndex, setPageIndex] = useState(0);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [hasPrevPage, setHasPrevPage] = useState(false);
-  const [sortKey, setSortKey] = useState<'date_desc' | 'amount_desc' | 'amount_asc'>('date_desc');
+  const [sortColumn, setSortColumn] = useState<SortableColumn>('date');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [groupByMerchant, setGroupByMerchant] = useState(false);
   const [tableRef, bounds] = useMeasure();
   const [customCategories, setCustomCategories] = useState<FinanceCategory[]>([]);
@@ -268,12 +295,36 @@ const TransactionsList: React.FC = () => {
       return true;
     });
 
+    const sortableValue = (row: TxRow, key: SortableColumn): number | string => {
+      const selectedCategoryKey = categorySelection[row.id] ?? row.userCategoryKey ?? (row.isPotTransfer ? 'pot_transfer' : '');
+      const selectedCategoryLabel = selectedCategoryKey
+        ? getCategoryByKey(selectedCategoryKey, allCategories)?.label || selectedCategoryKey
+        : '';
+      const bucketRaw = row.displayBucket || row.aiBucket || row.userCategoryType || row.defaultCategoryType || 'unknown';
+      const bucketKey = bucketRaw === 'discretionary' ? 'optional' : bucketRaw;
+      const bucketLabel = BUCKET_LABELS[bucketKey as keyof typeof BUCKET_LABELS] || bucketKey || 'unknown';
+
+      if (key === 'date') return row.createdISO ? new Date(row.createdISO).getTime() : 0;
+      if (key === 'merchant') return (row.merchant || '').toLowerCase();
+      if (key === 'description') return (row.displayDescription || row.description || '').toLowerCase();
+      if (key === 'bucket') return bucketLabel.toLowerCase();
+      if (key === 'category') return selectedCategoryLabel.toLowerCase();
+      if (key === 'aiCategory') return (row.displayCategoryLabel || row.aiCategoryLabel || row.aiCategoryKey || '').toLowerCase();
+      if (key === 'aiSuggestion') return (row.aiReduceSuggestion || '').toLowerCase();
+      if (key === 'anomaly') return row.aiAnomalyFlag ? (row.aiAnomalyScore || 1) : 0;
+      return Math.abs(row.amount || 0);
+    };
+
     const sorted = [...subset].sort((a, b) => {
-      if (sortKey === 'amount_desc') return Math.abs(b.amount) - Math.abs(a.amount);
-      if (sortKey === 'amount_asc') return Math.abs(a.amount) - Math.abs(b.amount);
-      const at = a.createdISO ? new Date(a.createdISO).getTime() : 0;
-      const bt = b.createdISO ? new Date(b.createdISO).getTime() : 0;
-      return bt - at;
+      const aVal = sortableValue(a, sortColumn);
+      const bVal = sortableValue(b, sortColumn);
+      let comparison = 0;
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        comparison = aVal - bVal;
+      } else {
+        comparison = String(aVal).localeCompare(String(bVal), undefined, { numeric: true, sensitivity: 'base' });
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
     });
     return sorted;
   }, [
@@ -288,7 +339,10 @@ const TransactionsList: React.FC = () => {
     missingOnly,
     amountMin,
     amountMax,
-    sortKey,
+    allCategories,
+    categorySelection,
+    sortColumn,
+    sortDirection,
   ]);
 
   const visibleColumnOptions = useMemo(() => {
@@ -385,6 +439,7 @@ const TransactionsList: React.FC = () => {
         docId: tx.id,
         categoryKey,
         categoryLabel: cat?.label || categoryKey,
+        categoryType: mapBucketToType(bucket),
       });
 
       if (tx.merchantKey || tx.merchant) {
@@ -411,6 +466,33 @@ const TransactionsList: React.FC = () => {
     return <Alert variant="warning" className="m-3">Sign in to view transactions.</Alert>;
   }
 
+  const toggleHeaderSort = (column: SortableColumn) => {
+    if (sortColumn === column) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortColumn(column);
+    setSortDirection(DEFAULT_SORT_DIRECTION[column]);
+  };
+
+  const sortIndicator = (column: SortableColumn) => {
+    if (sortColumn !== column) return '↕';
+    return sortDirection === 'asc' ? '↑' : '↓';
+  };
+
+  const renderSortHeader = (column: SortableColumn, endAligned = false) => (
+    <button
+      type="button"
+      className={`finance-sort-header${endAligned ? ' finance-sort-header--end' : ''}${sortColumn === column ? ' is-active' : ''}`}
+      onClick={() => toggleHeaderSort(column)}
+    >
+      <span>{SORT_COLUMN_LABELS[column]}</span>
+      <span className="finance-sort-indicator">{sortIndicator(column)}</span>
+    </button>
+  );
+
+  const tableWidth = Math.max(bounds.width || 1200, 1320);
+
   const renderCategoryControl = (tx: TxRow, currentKey: string) => {
     return (
       <div className="finance-category-control">
@@ -435,7 +517,7 @@ const TransactionsList: React.FC = () => {
 
   return (
     <div className="finance-table-page">
-      <div className="container" ref={tableRef}>
+      <div className="container-fluid finance-table-container" ref={tableRef}>
         <div className="d-flex justify-content-between align-items-center mb-2">
           <span className="small text-muted">Signed in as: <code>{currentUser.uid}</code></span>
         </div>
@@ -582,11 +664,27 @@ const TransactionsList: React.FC = () => {
               </Col>
               <Col md={3}>
                 <Form.Label className="text-muted small">Sort</Form.Label>
-                <Form.Select size="sm" className="finance-input" value={sortKey} onChange={(e) => setSortKey(e.target.value as any)}>
-                  <option value="date_desc">Newest first</option>
-                  <option value="amount_desc">Amount (high → low)</option>
-                  <option value="amount_asc">Amount (low → high)</option>
-                </Form.Select>
+                <div className="d-flex gap-2">
+                  <Form.Select
+                    size="sm"
+                    className="finance-input"
+                    value={sortColumn}
+                    onChange={(e) => setSortColumn(e.target.value as SortableColumn)}
+                  >
+                    {SORTABLE_COLUMNS.map((column) => (
+                      <option key={column} value={column}>{SORT_COLUMN_LABELS[column]}</option>
+                    ))}
+                  </Form.Select>
+                  <Form.Select
+                    size="sm"
+                    className="finance-input"
+                    value={sortDirection}
+                    onChange={(e) => setSortDirection(e.target.value as SortDirection)}
+                  >
+                    <option value="asc">Asc</option>
+                    <option value="desc">Desc</option>
+                  </Form.Select>
+                </div>
               </Col>
               <Col md={3} className="d-flex align-items-center gap-3 justify-content-end">
                 <Form.Check
@@ -634,16 +732,16 @@ const TransactionsList: React.FC = () => {
           </div>
         </div>
         <div className="finance-table-shell">
-          <div className="finance-grid-header" style={{ gridTemplateColumns }}>
-            {visibleColumns.includes('date') && <span>Date</span>}
-            {visibleColumns.includes('merchant') && <span>Merchant</span>}
-            {visibleColumns.includes('description') && <span>Description / Pot</span>}
-            {visibleColumns.includes('bucket') && <span>Bucket</span>}
-            {visibleColumns.includes('category') && <span>Category</span>}
-            {visibleColumns.includes('aiCategory') && <span>AI Category</span>}
-            {visibleColumns.includes('aiSuggestion') && <span>AI Suggestion</span>}
-            {visibleColumns.includes('anomaly') && <span>Anomaly</span>}
-            {visibleColumns.includes('amount') && <span className="text-end">Amount</span>}
+          <div className="finance-grid-header" style={{ gridTemplateColumns, minWidth: tableWidth }}>
+            {visibleColumns.includes('date') && renderSortHeader('date')}
+            {visibleColumns.includes('merchant') && renderSortHeader('merchant')}
+            {visibleColumns.includes('description') && renderSortHeader('description')}
+            {visibleColumns.includes('bucket') && renderSortHeader('bucket')}
+            {visibleColumns.includes('category') && renderSortHeader('category')}
+            {visibleColumns.includes('aiCategory') && renderSortHeader('aiCategory')}
+            {visibleColumns.includes('aiSuggestion') && renderSortHeader('aiSuggestion')}
+            {visibleColumns.includes('anomaly') && renderSortHeader('anomaly')}
+            {visibleColumns.includes('amount') && renderSortHeader('amount', true)}
             {visibleColumns.includes('actions') && <span className="text-end">Actions</span>}
           </div>
           {!loading && displayRows.length === 0 ? (
@@ -653,7 +751,7 @@ const TransactionsList: React.FC = () => {
             <div className="finance-list-wrapper">
               <List
                   height={580}
-                  width={bounds.width || 1200}
+                  width={tableWidth}
                   itemCount={displayRows.length}
                   itemSize={92}
                   itemKey={(index) => {
@@ -768,7 +866,7 @@ const TransactionsList: React.FC = () => {
                               }
                             >
                               {savingId === tx.id ? <Spinner size="sm" animation="border" className="me-1" /> : null}
-                              Save
+                              Save row
                             </Button>
                             <Button
                               size="sm"
@@ -782,7 +880,7 @@ const TransactionsList: React.FC = () => {
                                 )
                               }
                             >
-                              Apply
+                              Save + Apply
                             </Button>
                           </div>
                         </div>
