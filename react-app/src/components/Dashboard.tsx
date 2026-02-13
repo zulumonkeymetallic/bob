@@ -88,12 +88,36 @@ interface MonzoSummary {
   updatedAt?: any;
 }
 
+interface FinanceWindowSummary {
+  windowDays: number;
+  mandatoryPence: number;
+  discretionaryPence: number;
+  uncategorisedPence: number;
+}
+
 interface ChecklistSnapshotItem {
   id: string;
   title: string;
   dueAt: Date | null;
   type: 'chore' | 'routine';
 }
+
+const FINANCE_WINDOW_DAYS = 5;
+const FINANCE_INCOME_BUCKETS = new Set(['income', 'net_salary', 'irregular_income']);
+const FINANCE_UNCATEGORISED_BUCKETS = new Set(['unknown', 'uncategorized', 'uncategorised']);
+
+const extractMonzoAmountPence = (tx: any): number => {
+  if (Number.isFinite(tx?.amountMinor)) return Number(tx.amountMinor);
+  const raw = Number(tx?.amount || 0);
+  if (!Number.isFinite(raw)) return 0;
+  return Math.abs(raw) < 10 ? Math.round(raw * 100) : Math.round(raw);
+};
+
+const resolveMonzoBucket = (tx: any): string => {
+  const raw = tx?.aiBucket ?? tx?.userCategoryType ?? tx?.defaultCategoryType ?? tx?.categoryType ?? tx?.category ?? 'unknown';
+  const bucket = String(raw || '').toLowerCase();
+  return bucket === 'optional' ? 'discretionary' : bucket;
+};
 
 const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -147,6 +171,7 @@ const Dashboard: React.FC = () => {
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
+  const [financeWindowSummary, setFinanceWindowSummary] = useState<FinanceWindowSummary | null>(null);
   const [weeklySummary, setWeeklySummary] = useState<{ total: number; byType: Record<string, number> } | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [sprintStories, setSprintStories] = useState<Story[]>([]);
@@ -184,6 +209,15 @@ const Dashboard: React.FC = () => {
     const minor = Number(value || 0);
     const pounds = minor / 100;
     return pounds.toLocaleString('en-GB', { style: 'currency', currency });
+  }, []);
+
+  const formatPenceCompact = useCallback((pence: number, currency = 'GBP') => {
+    const pounds = Number(pence || 0) / 100;
+    return pounds.toLocaleString('en-GB', {
+      style: 'currency',
+      currency,
+      maximumFractionDigits: 0,
+    });
   }, []);
 
   const formatInstanceTime = useCallback((instance: ScheduledInstanceModel) => {
@@ -1204,29 +1238,82 @@ const Dashboard: React.FC = () => {
   const loadMonzoSummary = async () => {
     if (!currentUser) {
       setMonzoSummary(null);
+      setFinanceWindowSummary(null);
       return;
     }
     try {
-      const budgetSnap = await getDoc(doc(db, 'monzo_budget_summary', currentUser.uid));
-      const alignmentSnap = await getDoc(doc(db, 'monzo_goal_alignment', currentUser.uid));
+      const windowStart = startOfDay(addDays(new Date(), -(FINANCE_WINDOW_DAYS - 1)));
+      const windowEnd = startOfDay(addDays(new Date(), 1));
+
+      const [budgetSnap, alignmentSnap, txSnap] = await Promise.all([
+        getDoc(doc(db, 'monzo_budget_summary', currentUser.uid)),
+        getDoc(doc(db, 'monzo_goal_alignment', currentUser.uid)),
+        getDocs(query(
+          collection(db, 'monzo_transactions'),
+          where('ownerUid', '==', currentUser.uid),
+          where('createdAt', '>=', windowStart),
+          where('createdAt', '<', windowEnd),
+          orderBy('createdAt', 'desc'),
+          limit(500),
+        )).catch(() => null),
+      ]);
+
       if (!budgetSnap.exists && !alignmentSnap.exists) {
         setMonzoSummary(null);
-        return;
+      } else {
+        const summary: MonzoSummary = {};
+        if (budgetSnap.exists) {
+          const data = budgetSnap.data() as any;
+          summary.totals = data?.totals || null;
+          summary.categories = Array.isArray(data?.categories) ? data.categories.slice(0, 4) : [];
+          summary.updatedAt = data?.updatedAt || null;
+        }
+        if (alignmentSnap.exists) {
+          summary.goalAlignment = alignmentSnap.data();
+        }
+        setMonzoSummary(summary);
       }
-      const summary: MonzoSummary = {};
-      if (budgetSnap.exists) {
-        const data = budgetSnap.data() as any;
-        summary.totals = data?.totals || null;
-        summary.categories = Array.isArray(data?.categories) ? data.categories.slice(0, 4) : [];
-        summary.updatedAt = data?.updatedAt || null;
+
+      if (!txSnap) {
+        setFinanceWindowSummary(null);
+      } else {
+        let mandatoryPence = 0;
+        let discretionaryPence = 0;
+        let uncategorisedPence = 0;
+
+        txSnap.forEach((docSnap) => {
+          const tx: any = docSnap.data() || {};
+          const amount = extractMonzoAmountPence(tx);
+          if (amount >= 0) return;
+
+          const bucket = resolveMonzoBucket(tx);
+          if (FINANCE_INCOME_BUCKETS.has(bucket)) return;
+
+          const spendPence = Math.abs(amount);
+          if (bucket === 'mandatory') {
+            mandatoryPence += spendPence;
+            return;
+          }
+          if (bucket === 'discretionary') {
+            discretionaryPence += spendPence;
+            return;
+          }
+          if (FINANCE_UNCATEGORISED_BUCKETS.has(bucket)) {
+            uncategorisedPence += spendPence;
+          }
+        });
+
+        setFinanceWindowSummary({
+          windowDays: FINANCE_WINDOW_DAYS,
+          mandatoryPence,
+          discretionaryPence,
+          uncategorisedPence,
+        });
       }
-      if (alignmentSnap.exists) {
-        summary.goalAlignment = alignmentSnap.data();
-      }
-      setMonzoSummary(summary);
     } catch (error) {
       console.warn('Failed to load Monzo summary', error);
       setMonzoSummary(null);
+      setFinanceWindowSummary(null);
     }
   };
 
@@ -1393,12 +1480,28 @@ const Dashboard: React.FC = () => {
   };
 
   const financeSummary = useMemo(() => {
+    if (financeWindowSummary) {
+      const currency = 'GBP';
+      return `Last ${financeWindowSummary.windowDays}d · M ${formatPenceCompact(financeWindowSummary.mandatoryPence, currency)} · D ${formatPenceCompact(financeWindowSummary.discretionaryPence, currency)} · U ${formatPenceCompact(financeWindowSummary.uncategorisedPence, currency)}`;
+    }
     const spent = monzoSummary?.totals?.spent;
     const budget = monzoSummary?.totals?.budget;
     if (spent == null || budget == null) return '£0 spent';
     const remaining = budget - spent;
     return `£${(spent / 100).toFixed(0)} spent · £${(remaining / 100).toFixed(0)} left`;
-  }, [monzoSummary]);
+  }, [financeWindowSummary, formatPenceCompact, monzoSummary]);
+
+  const financeSyncSummary = useMemo(() => {
+    const syncDate = decodeToDate(monzoSummary?.updatedAt);
+    if (!syncDate) return 'Last sync unavailable';
+    const stamp = syncDate.toLocaleString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return `Last sync ${stamp}`;
+  }, [decodeToDate, monzoSummary]);
 
   const plannerSummary = useMemo(() => {
     if (!plannerStats) return 'Not yet run';
@@ -1588,6 +1691,7 @@ const Dashboard: React.FC = () => {
                           <div className="fw-semibold">
                             {financeSummary}
                           </div>
+                          <div className="text-muted small">{financeSyncSummary}</div>
                         </div>
                       </div>
                     </Col>
