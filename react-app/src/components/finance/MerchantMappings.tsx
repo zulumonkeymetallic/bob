@@ -26,6 +26,20 @@ type MerchantSortColumn = 'merchant' | 'spend' | 'transactionsTotal' | 'transact
 type MerchantSortDirection = 'asc' | 'desc';
 
 const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
+const toText = (value: any, fallback = ''): string => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || fallback;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const candidate = value.name || value.label || value.title || value.displayName || value.merchantName || value.id || '';
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    if (typeof candidate === 'number') return String(candidate);
+  }
+  return fallback;
+};
 const MERCHANT_SORT_COLUMNS: MerchantSortColumn[] = [
   'merchant',
   'spend',
@@ -81,33 +95,63 @@ const MerchantMappings: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     const ref = doc(db, 'monzo_budget_summary', currentUser.uid);
-    const unsub = onSnapshot(ref, (snap) => setSummary(snap.exists() ? snap.data() : null));
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setSummary(snap.exists() ? snap.data() : null),
+      (err) => {
+        console.error('Failed to load Monzo budget summary', err);
+        setStatus((err as any)?.message || 'Missing permission to load budget summary.');
+      }
+    );
     const potQ = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
-    const unsubPots = onSnapshot(potQ, (snap) => {
-      const map: Record<string, { name: string }> = {};
-      snap.docs.forEach((d) => {
-        const data = d.data() as any;
-        const id = data.potId || d.id;
-        if (!id) return;
-        map[id] = { name: data.name || id };
-      });
-      setPots(map);
-    });
+    const unsubPots = onSnapshot(
+      potQ,
+      (snap) => {
+        const map: Record<string, { name: string }> = {};
+        snap.docs.forEach((d) => {
+          const data = d.data() as any;
+          const id = data.potId || d.id;
+          if (!id) return;
+          map[id] = { name: data.name || id };
+        });
+        setPots(map);
+      },
+      (err) => {
+        console.error('Failed to load Monzo pots', err);
+        setStatus((err as any)?.message || 'Missing permission to load Monzo pots.');
+      }
+    );
     // Lightweight fallback sample of transactions so UI isn't empty if summary hasn't been built yet
     const txQ = query(collection(db, 'monzo_transactions'), where('ownerUid', '==', currentUser.uid));
-    const unsubTx = onSnapshot(txQ, (snap) => {
-      const rows: any[] = [];
-      snap.docs.slice(0, 500).forEach((d) => {
-        const data = d.data() as any;
-        rows.push({
-          merchantKey: data.merchantKey || data.merchantId || data.merchant || data.merchant_normalized || data.description,
-          merchantName: data.merchant || data.merchantName || data.description,
-          amount: typeof data.amount === 'number' ? data.amount : Number(data.amount || 0),
+    const unsubTx = onSnapshot(
+      txQ,
+      (snap) => {
+        const rows: any[] = [];
+        snap.docs.slice(0, 500).forEach((d) => {
+          const data = d.data() as any;
+          const merchantName = toText(data.merchantName || data.merchant || data.description, 'Unknown merchant');
+          const merchantKey = toText(
+            data.merchantKey || data.merchantId || data.merchant || data.merchant_normalized || merchantName,
+            merchantName
+          );
+          rows.push({
+            merchantKey,
+            merchantName,
+            amount: typeof data.amount === 'number' ? data.amount : Number(data.amount || 0),
+          });
         });
-      });
-      setTxSample(rows);
-    });
-    return () => { unsub(); unsubPots(); unsubTx(); };
+        setTxSample(rows);
+      },
+      (err) => {
+        console.error('Failed to load Monzo transaction sample', err);
+        setStatus((err as any)?.message || 'Missing permission to load transaction sample.');
+      }
+    );
+    return () => {
+      unsub();
+      unsubPots();
+      unsubTx();
+    };
   }, [currentUser]);
 
   useEffect(() => {
@@ -123,7 +167,10 @@ const MerchantMappings: React.FC = () => {
         const arr = Array.isArray(data?.categories) ? data.categories : [];
         setCustomCategories(arr.filter((c) => c?.key) as FinanceCategory[]);
       },
-      (err) => console.error('Failed to load finance categories', err)
+      (err) => {
+        console.error('Failed to load finance categories', err);
+        setStatus((err as any)?.message || 'Missing permission to load finance categories.');
+      }
     );
     return () => unsub();
   }, [currentUser]);
@@ -139,19 +186,29 @@ const MerchantMappings: React.FC = () => {
   }, [allCategories]);
 
   const rows: MerchantRow[] = useMemo(() => {
+    const normalizeRows = (input: any[]): MerchantRow[] => input
+      .map((row: any) => ({
+        ...row,
+        merchantKey: toText(row?.merchantKey || row?.merchantName, ''),
+        merchantName: toText(row?.merchantName || row?.merchantKey, 'Unknown merchant'),
+      }))
+      .filter((row) => !!row.merchantKey);
+
     const list = (summary?.merchantSummary || []) as MerchantRow[];
     if (Array.isArray((summary as any)?.allMerchants)) {
-      return (summary as any).allMerchants as MerchantRow[];
+      return normalizeRows((summary as any).allMerchants as MerchantRow[]);
     }
-    if (list && list.length) return list;
+    if (list && list.length) return normalizeRows(list);
     if (txSample.length) {
       const agg = new Map<string, { spend: number; count: number; name: string }>();
       txSample.forEach((t) => {
-        const key = (t.merchantKey || t.merchantName || 'unknown').toString();
+        const key = toText(t.merchantKey || t.merchantName, 'unknown');
+        const name = toText(t.merchantName || t.merchantKey, key);
         if (!agg.has(key)) agg.set(key, { spend: 0, count: 0, name: t.merchantName || key });
         const entry = agg.get(key)!;
         entry.count += 1;
         entry.spend += Math.abs(t.amount || 0);
+        entry.name = name;
       });
       return Array.from(agg.entries()).map(([merchantKey, val]) => ({
         merchantKey,
@@ -169,7 +226,7 @@ const MerchantMappings: React.FC = () => {
     let list = rows;
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter((r) => (r.merchantName || r.merchantKey || '').toLowerCase().includes(q));
+      list = list.filter((r) => toText(r.merchantName || r.merchantKey, '').toLowerCase().includes(q));
     }
     if (missingOnly) {
       list = list.filter((r) => !r.primaryCategoryKey && !r.primaryCategoryType);
@@ -352,7 +409,7 @@ const MerchantMappings: React.FC = () => {
     </OverlayTrigger>
   );
 
-  const tableWidth = Math.max(bounds.width || 1200, 1440);
+  const tableWidth = Math.max(Math.floor(bounds.width || 0), 980);
 
   return (
     <div className="container-fluid finance-merchant-container py-3" ref={tableRef}>
@@ -513,8 +570,8 @@ const MerchantMappings: React.FC = () => {
                   return (
                     <div style={style} className="merchant-row">
                       <div className="merchant-cell">
-                        <div className="merchant-label text-truncate">{m.merchantName}</div>
-                        <div className="merchant-sub">{m.merchantKey}</div>
+                        <div className="merchant-label text-truncate">{toText(m.merchantName, 'Unknown merchant')}</div>
+                        <div className="merchant-sub">{toText(m.merchantKey, 'unknown')}</div>
                         <div className="merchant-sub">Last: {m.lastTransactionISO ? new Date(m.lastTransactionISO).toLocaleDateString() : '—'}</div>
                       </div>
                       <div className="merchant-cell">
@@ -548,7 +605,7 @@ const MerchantMappings: React.FC = () => {
                         <Form.Control
                           size="sm"
                           className="merchant-input mt-1"
-                          value={edits[m.merchantKey]?.label || m.merchantName}
+                          value={edits[m.merchantKey]?.label || toText(m.merchantName, toText(m.merchantKey, ''))}
                           onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })}
                         />
                       </div>

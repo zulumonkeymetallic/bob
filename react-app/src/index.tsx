@@ -35,6 +35,16 @@ if ('serviceWorker' in navigator) {
 installGlobalErrorHandlers();
 logger.info('global', 'BOB app booting...');
 
+// Keep deployment behavior deterministic: remove any stale service workers
+// so clients do not keep serving outdated bundles after hosting deploys.
+try {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations()
+      .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+      .catch(() => {});
+  }
+} catch {}
+
 try {
   const params = new URLSearchParams(window.location.search);
   if (params.get('perf') === '1' || params.get('log') === '1') {

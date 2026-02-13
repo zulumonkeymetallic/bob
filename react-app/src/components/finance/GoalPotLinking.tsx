@@ -33,6 +33,7 @@ const GoalPotLinking: React.FC = () => {
     const [storyCountsLoaded, setStoryCountsLoaded] = useState(false);
     const [showLinkedOnly, setShowLinkedOnly] = useState(false);
     const [showWithStoriesOnly, setShowWithStoriesOnly] = useState(true);
+    const [error, setError] = useState<string>('');
 
     useEffect(() => {
         if (!currentUser) return;
@@ -43,14 +44,22 @@ const GoalPotLinking: React.FC = () => {
             where('ownerUid', '==', currentUser.uid)
         );
 
-        const unsubGoals = onSnapshot(goalsQuery, (snap) => {
-            const list = snap.docs
-                .map(d => ({ id: d.id, ...(d.data() as any) } as Goal))
-                .filter(g => g.status !== 2) // exclude completed goals
-                .sort((a, b) => (b.estimatedCost || 0) - (a.estimatedCost || 0));
-            setGoals(list);
-            setLoading(false);
-        });
+        const unsubGoals = onSnapshot(
+            goalsQuery,
+            (snap) => {
+                const list = snap.docs
+                    .map(d => ({ id: d.id, ...(d.data() as any) } as Goal))
+                    .filter(g => g.status !== 2) // exclude completed goals
+                    .sort((a, b) => (b.estimatedCost || 0) - (a.estimatedCost || 0));
+                setGoals(list);
+                setLoading(false);
+            },
+            (err) => {
+                console.error('Failed to load goals for linking', err);
+                setError((err as any)?.message || 'Missing permission to load goals.');
+                setLoading(false);
+            }
+        );
 
         // Load Monzo pots
         const potsQuery = query(
@@ -58,19 +67,26 @@ const GoalPotLinking: React.FC = () => {
             where('ownerUid', '==', currentUser.uid)
         );
 
-        const unsubPots = onSnapshot(potsQuery, (snap) => {
-            const list = snap.docs.map(d => {
-                const data = d.data() as any;
-                return {
-                    id: d.id,
-                    potId: data.potId || d.id,
-                    name: data.name || 'Pot',
-                    balance: data.balance || 0,
-                    currency: data.currency || 'GBP'
-                } as MonzoPot;
-            });
-            setPots(list);
-        });
+        const unsubPots = onSnapshot(
+            potsQuery,
+            (snap) => {
+                const list = snap.docs.map(d => {
+                    const data = d.data() as any;
+                    return {
+                        id: d.id,
+                        potId: data.potId || d.id,
+                        name: data.name || 'Pot',
+                        balance: data.balance || 0,
+                        currency: data.currency || 'GBP'
+                    } as MonzoPot;
+                });
+                setPots(list);
+            },
+            (err) => {
+                console.error('Failed to load Monzo pots for linking', err);
+                setError((err as any)?.message || 'Missing permission to load Monzo pots.');
+            }
+        );
 
         return () => {
             unsubGoals();
@@ -157,6 +173,7 @@ const GoalPotLinking: React.FC = () => {
             <p className="text-muted">
                 Link your goals to Monzo pots. This allows the Finance Hub to track progress toward your goals using actual pot balances.
             </p>
+            {error && <Alert variant="danger">{error}</Alert>}
 
             <Card className="mb-3">
                 <Card.Body>
