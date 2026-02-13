@@ -6051,31 +6051,61 @@ exports.syncMonzoNow = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_
 
     return { success: true, summary: result };
   } catch (error) {
+    const normalizedError = error instanceof httpsV2.HttpsError ? error : null;
+    const errorCode = normalizedError?.code || 'internal';
+    const errorMessage = normalizedError?.message || error?.message || String(error);
+    const reconnectRequired =
+      errorCode === 'failed-precondition' &&
+      /missing monzo refresh token|refresh token/i.test(errorMessage);
+    const userMessage = reconnectRequired
+      ? 'Monzo connection expired. Reconnect Monzo in Integrations, then run sync again.'
+      : errorMessage;
+    console.error('[syncMonzoNow] manual sync failed', {
+      uid,
+      errorCode,
+      errorMessage,
+      stack: error?.stack || null,
+    });
+
     const db = admin.firestore();
     await db.collection('integration_logs').add({
       integration: 'monzo',
       type: 'manual_sync',
       status: 'error',
       userId: uid,
-      error: error.message,
+      errorCode,
+      error: userMessage,
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Email admin on failure
-    try {
-      await sendEmail({
-        to: 'support@jc1.tech',
-        subject: `Monzo Manual Sync Failed - ${uid}`,
-        html: `<h3>Monzo manual sync failed</h3>
-               <p><strong>User:</strong> ${uid}</p>
-               <p><strong>Error:</strong> ${error.message}</p>
-               <pre>${JSON.stringify(error, null, 2)}</pre>`
-      });
-    } catch (emailError) {
-      console.error('Failed to send alert email:', emailError);
+    // Email admin only for unexpected server-side failures when Brevo is configured on this revision.
+    if (errorCode === 'internal' || errorCode === 'unknown') {
+      if (process.env.BREVO_API_KEY) {
+        try {
+          await sendEmail({
+            to: 'support@jc1.tech',
+            subject: `Monzo Manual Sync Failed - ${uid}`,
+            html: `<h3>Monzo manual sync failed</h3>
+                 <p><strong>User:</strong> ${uid}</p>
+                 <p><strong>Error:</strong> ${errorMessage}</p>
+                 <pre>${JSON.stringify(error, null, 2)}</pre>`
+          });
+        } catch (emailError) {
+          console.error('Failed to send alert email:', emailError);
+        }
+      } else {
+        console.warn('[syncMonzoNow] Brevo not configured, skipping alert email');
+      }
     }
 
-    throw new httpsV2.HttpsError('internal', `Sync failed: ${error.message}`);
+    if (normalizedError) {
+      if (userMessage !== normalizedError.message) {
+        throw new httpsV2.HttpsError(errorCode, userMessage);
+      }
+      throw normalizedError;
+    }
+
+    throw new httpsV2.HttpsError('internal', `Sync failed: ${userMessage}`);
   }
 });
 
