@@ -387,6 +387,9 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const { start, end } = computeDayWindow({ day, timezone: zone });
   const startMs = start.toMillis();
   const endMs = end.toMillis();
+  const financeWindowDays = 5;
+  const financeWindowStart = start.minus({ days: financeWindowDays - 1 }).startOf('day');
+  const financeWindowLabel = `${isoDate(financeWindowStart)} → ${isoDate(end)}`;
 
   const [
     tasksSnap,
@@ -417,7 +420,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
     db.collection('monzo_transactions')
       .where('ownerUid', '==', userId)
-      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(start.toJSDate()))
+      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(financeWindowStart.toJSDate()))
       .where('createdAt', '<', admin.firestore.Timestamp.fromDate(end.toJSDate()))
       .orderBy('createdAt', 'desc')
       .limit(400)
@@ -1195,6 +1198,10 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       locale,
       start: start.toISO(),
       end: end.toISO(),
+      financeWindowDays,
+      financeWindowStart: financeWindowStart.toISO(),
+      financeWindowEnd: end.toISO(),
+      financeWindowLabel,
       generatedAt: new Date().toISOString(),
       manualCallable: manualRerunCallable,
     },

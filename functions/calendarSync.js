@@ -119,6 +119,122 @@ function toMillis(value) {
   return 0;
 }
 
+function normalizeDayToken(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number') {
+    const idx = Math.max(0, Math.min(6, value % 7));
+    return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][idx];
+  }
+  const raw = String(value).toLowerCase().trim();
+  if (!raw) return null;
+  if (['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(raw)) return raw;
+  if (raw.startsWith('su')) return 'sun';
+  if (raw.startsWith('mo')) return 'mon';
+  if (raw.startsWith('tu')) return 'tue';
+  if (raw.startsWith('we')) return 'wed';
+  if (raw.startsWith('th')) return 'thu';
+  if (raw.startsWith('fr')) return 'fri';
+  if (raw.startsWith('sa')) return 'sat';
+  return null;
+}
+
+function isDoneStatus(value) {
+  if (value === null || value === undefined || value === '') return false;
+  if (typeof value === 'number') return value === 2;
+  const normalized = String(value).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', '2'].includes(normalized);
+}
+
+function getTaskDueMs(task) {
+  return toMillis(task?.dueDateMs ?? task?.dueDate ?? task?.targetDate ?? task?.dueAt ?? task?.due);
+}
+
+function isRecurringDueOnDay(task, dayMs) {
+  const day = new Date(dayMs);
+  const dayStart = new Date(day);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(day);
+  dayEnd.setHours(23, 59, 59, 999);
+  const dueMs = getTaskDueMs(task);
+  if (dueMs) {
+    return dueMs >= dayStart.getTime() && dueMs <= dayEnd.getTime();
+  }
+  const recurrence = task?.recurrence || {};
+  const freq = String(task?.repeatFrequency || recurrence.frequency || recurrence.freq || '').toLowerCase();
+  if (!freq) return false;
+  if (freq === 'daily') return true;
+  const dayToken = normalizeDayToken(day.getDay());
+  const daysRaw = []
+    .concat(task?.daysOfWeek || [])
+    .concat(task?.repeatDaysOfWeek || [])
+    .concat(recurrence?.daysOfWeek || []);
+  const daySet = new Set(daysRaw.map(normalizeDayToken).filter(Boolean));
+  if (freq === 'weekly') {
+    if (dayToken && daySet.size > 0) return daySet.has(dayToken);
+    return false;
+  }
+  if (freq === 'monthly') {
+    const daysOfMonth = []
+      .concat(recurrence?.daysOfMonth || [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    if (!daysOfMonth.length) return false;
+    return daysOfMonth.includes(day.getDate());
+  }
+  return false;
+}
+
+async function buildChecklistItemsForDay(uid, dayMs) {
+  const dayIso = new Date(dayMs).toISOString().slice(0, 10);
+  const dayStart = new Date(dayMs);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayStartMs = dayStart.getTime();
+  const dayEnd = new Date(dayMs);
+  dayEnd.setHours(23, 59, 59, 999);
+  const dayEndMs = dayEnd.getTime();
+
+  try {
+    const tasksSnap = await admin.firestore().collection('tasks')
+      .where('ownerUid', '==', uid)
+      .get();
+    const rows = tasksSnap.docs
+      .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+      .filter((task) => {
+        const type = String(task.type || task.task_type || '').toLowerCase();
+        return ['chore', 'routine', 'habit', 'habitual'].includes(type);
+      })
+      .filter((task) => !task.deleted)
+      .filter((task) => !isDoneStatus(task.status))
+      .filter((task) => isRecurringDueOnDay(task, dayMs))
+      .filter((task) => {
+        const lastDoneMs = toMillis(task.lastDoneAt || task.completedAt || 0);
+        if (!lastDoneMs) return true;
+        return lastDoneMs < dayStartMs || lastDoneMs > dayEndMs;
+      })
+      .map((task) => {
+        const type = String(task.type || task.task_type || '').toLowerCase();
+        const kind = type === 'habitual' ? 'habit' : (type || 'chore');
+        return {
+          id: task.id,
+          title: task.title || 'Checklist item',
+          kind,
+          dueMs: getTaskDueMs(task) || dayStartMs,
+        };
+      })
+      .sort((a, b) => (a.dueMs || dayStartMs) - (b.dueMs || dayStartMs))
+      .slice(0, 12);
+
+    const lines = rows.map((item) => {
+      const label = item.kind === 'routine' ? 'Routine' : item.kind === 'habit' ? 'Habit' : 'Chore';
+      return `${item.title} (${label})`;
+    });
+    return { dayIso, lines };
+  } catch (error) {
+    console.warn('[calendar-sync] failed to build checklist items', error?.message || error);
+    return { dayIso, lines: [] };
+  }
+}
+
 function isValidUrl(value) {
   if (!value) return false;
   try {
@@ -784,6 +900,24 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         }
       } catch { }
       if (!block.storyId && !block.taskId) {
+        const routineType = String(block.entityType || block.sourceType || block.category || '').toLowerCase();
+        const themeLower = String(block.theme || block.theme_label || block.themeLabel || '').toLowerCase();
+        const isChecklistWindow = ['chore', 'routine', 'habit'].some((key) => routineType.includes(key) || themeLower.includes(key));
+        const dayMs = toMillis(block.start);
+        if (isChecklistWindow && dayMs) {
+          const checklist = await buildChecklistItemsForDay(uid, dayMs);
+          const checklistUrl = buildAbsoluteUrl(`/chores/checklist?date=${encodeURIComponent(checklist.dayIso)}`);
+          const checklistLines = [
+            `Checklist Link: ${checklistUrl}`,
+          ];
+          if (checklist.lines.length) {
+            checklistLines.push('', 'Expected items in this block:');
+            checklist.lines.forEach((line) => checklistLines.push(`- ${line}`));
+          }
+          const checklistBlock = checklistLines.join('\n');
+          enrichedDesc = enrichedDesc ? `${enrichedDesc}\n${checklistBlock}` : checklistBlock;
+          eventDeepLink = checklistUrl;
+        }
         if (eventDeepLink) {
           const linkLabel = block.taskId
             ? 'Task Link'

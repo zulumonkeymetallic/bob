@@ -95,6 +95,71 @@
   font-size: 11px;
 }
 
+.today-plan-layout > .today-plan-col {
+  width: 100%;
+}
+
+.dashboard-task-status-select {
+  width: 104px;
+  font-size: 12px;
+  line-height: 1.1;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-left: 6px;
+  padding-right: 20px;
+}
+
+.dashboard-task-status-select option {
+  font-size: 12px;
+}
+
+.dashboard-due-item {
+  min-height: 116px;
+}
+
+@media (min-width: 992px) {
+  .today-plan-layout > .today-plan-col {
+    flex: 0 0 auto;
+    max-width: none;
+  }
+
+  /* MacBook-class widths: due card +50%, chores +20%, calendar narrower */
+  .today-plan-layout > .today-plan-col-summary {
+    width: 24%;
+  }
+
+  .today-plan-layout > .today-plan-col-calendar {
+    width: 31%;
+  }
+
+  .today-plan-layout > .today-plan-col-due {
+    width: 25%;
+  }
+
+  .today-plan-layout > .today-plan-col-chores {
+    width: 20%;
+  }
+}
+
+@media (min-width: 1400px) {
+  /* Wider desktops: give calendar a bit more horizontal room */
+  .today-plan-layout > .today-plan-col-summary {
+    width: 23%;
+  }
+
+  .today-plan-layout > .today-plan-col-calendar {
+    width: 34%;
+  }
+
+  .today-plan-layout > .today-plan-col-due {
+    width: 24%;
+  }
+
+  .today-plan-layout > .today-plan-col-chores {
+    width: 19%;
+  }
+}
+
 .calendar-dashboard-wrap .rbc-current-time-indicator {
   background-color: #dc3545;
   height: 2px;

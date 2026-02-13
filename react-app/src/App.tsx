@@ -21,6 +21,7 @@ import GamesBacklog from './components/GamesBacklog';
 import BooksBacklog from './components/BooksBacklog';
 import ShowsBacklog from './components/ShowsBacklog';
 import VideosBacklog from './components/VideosBacklog';
+import YouTubeHistoryDashboard from './components/YouTubeHistoryDashboard';
 import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
@@ -289,7 +290,8 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/dashboard/habits-chores" element={<HabitsChoresDashboard />} />
+            <Route path="/dashboard/habit-tracking" element={<HabitsChoresDashboard />} />
+            <Route path="/dashboard/habits-chores" element={<Navigate to="/dashboard/habit-tracking" replace />} />
             <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
             <Route path="/metrics" element={<AdvancedOverview />} />
             <Route path="/overview/advanced" element={<Navigate to="/metrics" replace />} />
@@ -307,6 +309,7 @@ function AppContent() {
             <Route path="/books-backlog" element={<BooksBacklog />} />
             <Route path="/shows-backlog" element={<ShowsBacklog />} />
             <Route path="/videos-backlog" element={<VideosBacklog />} />
+            <Route path="/youtube-history" element={<YouTubeHistoryDashboard />} />
             {/* <Route path="/modern-table" element={<ModernTableDemo />} /> */}
             {/* Legacy sprint routes - redirect to consolidated */}
             <Route path="/kanban" element={<Navigate to="/sprints/kanban" replace />} />

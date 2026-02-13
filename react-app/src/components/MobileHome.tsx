@@ -14,7 +14,9 @@ import { storyStatusText, taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 
-type TabKey = 'overview' | 'tasks' | 'stories' | 'goals';
+type TabKey = 'overview' | 'tasks' | 'stories' | 'goals' | 'chores';
+type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
+type GoalsViewFilter = 'active_sprint' | 'year';
 
 const THEME_COLORS: Record<number, string> = {
   1: '#22c55e', // Health
@@ -22,6 +24,21 @@ const THEME_COLORS: Record<number, string> = {
   3: '#facc15', // Wealth
   4: '#ec4899', // Tribe
   5: '#fb923c', // Home
+};
+
+const THEME_COLORS_BY_NAME: Record<string, string> = {
+  'health & fitness': '#22c55e',
+  'career & professional': '#6366f1',
+  'finance & wealth': '#facc15',
+  'learning & education': '#3b82f6',
+  'family & relationships': '#ec4899',
+  'hobbies & interests': '#f97316',
+  'home & living': '#fb923c',
+  'spiritual & personal growth': '#8b5cf6',
+  chores: '#16a34a',
+  routine: '#0ea5e9',
+  'work (main gig)': '#1f2937',
+  'side gig': '#14b8a6',
 };
 
 const formatShortDate = (value?: number) => {
@@ -56,6 +73,8 @@ const MobileHome: React.FC = () => {
   const [aiFocusOnly, setAiFocusOnly] = useState(true);
   const [aiThreshold, setAiThreshold] = useState(90);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [tasksViewFilter, setTasksViewFilter] = useState<TaskViewFilter>('top3');
+  const [goalsViewFilter, setGoalsViewFilter] = useState<GoalsViewFilter>('active_sprint');
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
   const [replanLoading, setReplanLoading] = useState(false);
   const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
@@ -77,6 +96,15 @@ const MobileHome: React.FC = () => {
       : 'Unknown time';
     return `${when} · +${ps.created || 0} created · ${ps.replaced || 0} replaced · ${ps.blocked || 0} blocked`;
   };
+
+  const resolveThemeColor = useCallback((value: any): string | undefined => {
+    if (value == null) return undefined;
+    if (typeof value === 'number' && Number.isFinite(value)) return THEME_COLORS[value] || undefined;
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber)) return THEME_COLORS[asNumber] || undefined;
+    const normalized = String(value || '').trim().toLowerCase();
+    return THEME_COLORS_BY_NAME[normalized];
+  }, []);
   const renderBriefText = (value: any): string => {
     if (typeof value === 'string' || typeof value === 'number') return String(value);
     if (!value || typeof value !== 'object') return '';
@@ -613,6 +641,105 @@ const MobileHome: React.FC = () => {
       .slice(0, 3);
   }, [stories, isTop3Story, getStoryAiScore]);
 
+  const top3TaskIdSet = useMemo(() => new Set(top3Tasks.map((task) => task.id)), [top3Tasks]);
+
+  const tasksDueTodayForMobile = useMemo(() => {
+    const today = new Date();
+    const start = new Date(today);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(today);
+    end.setHours(23, 59, 59, 999);
+    return sortedPendingTasks.filter((task) => {
+      const due = resolveRecurringDueMs(task, today, start.getTime()) ?? getTaskDueMs(task);
+      return !!due && due >= start.getTime() && due <= end.getTime();
+    });
+  }, [sortedPendingTasks, getTaskDueMs]);
+
+  const tasksOverdueForMobile = useMemo(() => {
+    const today = new Date();
+    const start = new Date(today);
+    start.setHours(0, 0, 0, 0);
+    return sortedPendingTasks.filter((task) => {
+      const due = resolveRecurringDueMs(task, today, start.getTime()) ?? getTaskDueMs(task);
+      return !!due && due < start.getTime();
+    });
+  }, [sortedPendingTasks, getTaskDueMs]);
+
+  const visibleTaskRows = useMemo(() => {
+    if (tasksViewFilter === 'top3') {
+      return sortedPendingTasks.filter((task) => top3TaskIdSet.has(task.id));
+    }
+    if (tasksViewFilter === 'due_today') {
+      return tasksDueTodayForMobile;
+    }
+    if (tasksViewFilter === 'overdue') {
+      return tasksOverdueForMobile;
+    }
+    return sortedPendingTasks;
+  }, [tasksViewFilter, sortedPendingTasks, top3TaskIdSet, tasksDueTodayForMobile, tasksOverdueForMobile]);
+
+  const filteredGoalsForMobile = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    if (goalsViewFilter === 'year') {
+      return goals.filter((goal) => Number(goal.targetYear) === currentYear);
+    }
+    const sprintId = selectedSprintId || currentSprint?.id || '';
+    if (!sprintId) return [];
+    return goals.filter((goal) => {
+      const linked = storiesByGoal.get(goal.id) || [];
+      return linked.some((story) => String(story.sprintId || '') === sprintId && story.status !== 4);
+    });
+  }, [goals, goalsViewFilter, storiesByGoal, selectedSprintId, currentSprint]);
+
+  const renderChoresHabitsWidget = () => (
+    <Card className="mb-3" style={{ background: '#f0fdf4' }}>
+      <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+        <div>
+          <strong>Chores &amp; Habits</strong>
+          <Badge bg="secondary" pill className="ms-2">{choresDueToday.length}</Badge>
+        </div>
+      </Card.Header>
+      <Card.Body className="pt-0">
+        {choresLoading ? (
+          <div className="text-muted small">Loading chores…</div>
+        ) : choresDueToday.length === 0 ? (
+          <div className="text-muted small">No chores, habits, or routines due today.</div>
+        ) : (
+          <ListGroup variant="flush">
+            {choresDueToday.map((task) => {
+              const kind = getChoreKind(task) || 'chore';
+              const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+              const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+              const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
+              const dueLabel = formatDueLabel(dueMs);
+              const isOverdue = !!dueMs && dueMs < todayStartMs;
+              const busy = !!choreCompletionBusy[task.id];
+              return (
+                <ListGroup.Item key={task.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
+                  <Form.Check
+                    type="checkbox"
+                    checked={busy}
+                    disabled={busy}
+                    onChange={() => handleCompleteChoreTask(task)}
+                    aria-label={`Complete ${task.title}`}
+                  />
+                  <div className="flex-grow-1">
+                    <div className="fw-semibold">{task.title}</div>
+                    <div className="text-muted small">{isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}</div>
+                  </div>
+                  <div className="d-flex flex-column align-items-end gap-1">
+                    {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                    <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                  </div>
+                </ListGroup.Item>
+              );
+            })}
+          </ListGroup>
+        )}
+      </Card.Body>
+    </Card>
+  );
+
   return (
     <Container fluid className="p-2" style={{ maxWidth: 480, width: '100%', overflowX: 'hidden' }}>
       {/* Header + Sprint/Actions */}
@@ -634,9 +761,9 @@ const MobileHome: React.FC = () => {
             value={currentPersona}
             onChange={(e) => setPersona(e.target.value as any)}
             style={{
-              width: isSmallScreen ? 100 : 120,
-              fontSize: 12,
-              padding: '2px 6px',
+              width: isSmallScreen ? 92 : 112,
+              fontSize: 11,
+              padding: '2px 5px',
               WebkitAppearance: 'none',
               appearance: 'none',
               backgroundImage: 'none' as any
@@ -651,9 +778,9 @@ const MobileHome: React.FC = () => {
             value={selectedSprintId || ''}
             onChange={(e) => setSelectedSprintId(e.target.value)}
             style={{
-              width: isSmallScreen ? 130 : 170,
-              fontSize: 12,
-              padding: '2px 6px',
+              width: isSmallScreen ? 120 : 160,
+              fontSize: 11,
+              padding: '2px 5px',
               WebkitAppearance: 'none',
               appearance: 'none',
               backgroundImage: 'none' as any
@@ -668,7 +795,7 @@ const MobileHome: React.FC = () => {
             variant="outline-primary"
             disabled={replanLoading}
             onClick={handleReplan}
-            style={{ fontSize: 12, padding: '4px 8px', whiteSpace: 'nowrap' }}
+            style={{ fontSize: 11, padding: '3px 6px', whiteSpace: 'nowrap' }}
           >
             {replanLoading && <Spinner animation="border" size="sm" className="me-1" role="status" />}
             {replanLoading ? 'Replanning…' : 'Replan'}
@@ -678,111 +805,111 @@ const MobileHome: React.FC = () => {
 
       {/* Key metrics condensed into a single horizontal row */}
       <div
-        className="d-flex gap-2 mb-2 flex-nowrap"
+        className="d-flex gap-1 mb-2 flex-nowrap"
         style={{ paddingBottom: 4, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}
       >
         <div
           style={{
             backgroundColor: 'rgba(59,130,246,0.08)',
             color: '#0b152c',
-            padding: '4px 8px',
+            padding: '3px 6px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 84,
+            minWidth: 74,
             display: 'inline-block'
           }}
         >
-          <div style={{ fontSize: 10, textTransform: 'uppercase' }}>Sprint days</div>
+          <div style={{ fontSize: 9, textTransform: 'uppercase' }}>Sprint days</div>
           <div>{sprintDaysLeft != null ? `${sprintDaysLeft}d` : '—'}</div>
         </div>
         <div
           style={{
             backgroundColor: 'rgba(14,116,144,0.08)',
             color: '#0c4a5a',
-            padding: '4px 8px',
+            padding: '3px 6px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 84,
+            minWidth: 74,
             display: 'inline-block'
           }}
         >
-          <div style={{ fontSize: 10, textTransform: 'uppercase' }}>Progress</div>
+          <div style={{ fontSize: 9, textTransform: 'uppercase' }}>Progress</div>
           <div>{sprintMetricsSummary.progressPercent}%</div>
         </div>
         <div
           style={{
             backgroundColor: 'rgba(16,185,129,0.08)',
             color: '#065f46',
-            padding: '4px 8px',
+            padding: '3px 6px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 84,
+            minWidth: 74,
             display: 'inline-block'
           }}
         >
-          <div style={{ fontSize: 10, textTransform: 'uppercase' }}>Expected</div>
+          <div style={{ fontSize: 9, textTransform: 'uppercase' }}>Expected</div>
           <div>{sprintMetricsSummary.expectedProgress}%</div>
         </div>
         <div
           style={{
             backgroundColor: 'rgba(237,100,166,0.08)',
             color: '#831843',
-            padding: '4px 8px',
+            padding: '3px 6px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 84,
+            minWidth: 74,
             display: 'inline-block'
           }}
         >
-          <div style={{ fontSize: 10, textTransform: 'uppercase' }}>Open pts</div>
+          <div style={{ fontSize: 9, textTransform: 'uppercase' }}>Open pts</div>
           <div>{sprintMetricsSummary.totalOpenPoints}</div>
         </div>
         <div
           style={{
             backgroundColor: sprintMetricsSummary.behind ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)',
             color: sprintMetricsSummary.behind ? '#991b1b' : '#065f46',
-            padding: '4px 8px',
+            padding: '3px 6px',
             borderRadius: 10,
             fontWeight: 600,
-            minWidth: 84,
+            minWidth: 74,
             display: 'inline-block'
           }}
         >
-          <div style={{ fontSize: 10, textTransform: 'uppercase' }}>Status</div>
+          <div style={{ fontSize: 9, textTransform: 'uppercase' }}>Status</div>
           <div>{sprintMetricsSummary.behind ? 'Behind' : 'On track'}</div>
         </div>
       </div>
 
       <div
-        className="d-flex gap-2 mb-2 flex-nowrap"
+        className="d-flex gap-1 mb-2 flex-nowrap"
         style={{ paddingBottom: 4, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}
       >
-        <Card style={{ background: '#ecfeff', minWidth: 120, flex: '0 0 auto' }}>
-          <Card.Body className="p-2">
-            <div className="small text-muted">Tasks today</div>
-            <div className="fs-6 fw-semibold">
+        <Card style={{ background: '#ecfeff', minWidth: 88, flex: '0 0 auto' }}>
+          <Card.Body className="p-1">
+            <div className="text-muted" style={{ fontSize: 11 }}>Tasks today</div>
+            <div className="fw-semibold" style={{ fontSize: 13 }}>
               {tasks.filter(t => t.status !== 2 && t.dueDate && new Date(t.dueDate).toDateString() === new Date().toDateString()).length}
             </div>
           </Card.Body>
         </Card>
-        <Card style={{ background: '#fef3c7', minWidth: 120, flex: '0 0 auto' }}>
-          <Card.Body className="p-2">
-            <div className="small text-muted">Overdue</div>
-            <div className="fs-6 fw-semibold">
+        <Card style={{ background: '#fef3c7', minWidth: 88, flex: '0 0 auto' }}>
+          <Card.Body className="p-1">
+            <div className="text-muted" style={{ fontSize: 11 }}>Overdue</div>
+            <div className="fw-semibold" style={{ fontSize: 13 }}>
               {tasks.filter(t => t.status !== 2 && t.dueDate && t.dueDate < Date.now() - 86400000).length}
             </div>
           </Card.Body>
         </Card>
-        <Card style={{ background: '#dcfce7', minWidth: 120, flex: '0 0 auto' }}>
-          <Card.Body className="p-2">
-            <div className="small text-muted">Stories done</div>
-            <div className="fs-6 fw-semibold">{stories.filter(s => s.status === 4).length}</div>
+        <Card style={{ background: '#dcfce7', minWidth: 88, flex: '0 0 auto' }}>
+          <Card.Body className="p-1">
+            <div className="text-muted" style={{ fontSize: 11 }}>Stories done</div>
+            <div className="fw-semibold" style={{ fontSize: 13 }}>{stories.filter(s => s.status === 4).length}</div>
           </Card.Body>
         </Card>
-        <Card style={{ background: '#fee2e2', minWidth: 140, flex: '0 0 auto' }}>
-          <Card.Body className="p-2">
-            <div className="small text-muted">Chores/Routines</div>
-            <div className="fs-6">{(summary?.choresDue?.length || 0) + (summary?.routinesDue?.length || 0)} due</div>
+        <Card style={{ background: '#fee2e2', minWidth: 100, flex: '0 0 auto' }}>
+          <Card.Body className="p-1">
+            <div className="text-muted" style={{ fontSize: 11 }}>Chores/Routines</div>
+            <div style={{ fontSize: 13 }}>{(summary?.choresDue?.length || 0) + (summary?.routinesDue?.length || 0)} due</div>
           </Card.Body>
         </Card>
       </div>
@@ -799,34 +926,26 @@ const MobileHome: React.FC = () => {
       )}
 
       {/* AI Daily Summary + Focus */}
-      {/* Tabs: Overview | Tasks | Stories | Goals */}
+      {/* Tabs: Overview | Tasks | Stories | Goals | Chores */}
       <div className="mobile-filter-tabs mb-3">
         <div className="d-flex align-items-center gap-1 flex-nowrap" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <div className="btn-group flex-nowrap" role="group" style={{ flex: '1 1 auto' }}>
-            {(['overview','tasks','stories','goals'] as TabKey[]).map(key => (
+          <div className="btn-group flex-nowrap w-100" role="group">
+            {(['overview','tasks','stories','goals','chores'] as TabKey[]).map(key => (
               <Button
                 key={key}
                 variant={activeTab === key ? 'primary' : 'outline-primary'}
                 size="sm"
                 onClick={() => setActiveTab(key)}
-                style={{ padding: '4px 8px', fontSize: 12, whiteSpace: 'nowrap' }}
+                style={{ padding: '3px 6px', fontSize: 11, whiteSpace: 'nowrap' }}
               >
-                {key === 'overview' ? 'Overview' : key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : 'Goals'}
+                {key === 'overview' ? 'Overview' : key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : key === 'goals' ? 'Goals' : 'Chores'}
               </Button>
             ))}
           </div>
-          <Button
-            size="sm"
-            variant="outline-secondary"
-            href="/chores/checklist"
-            style={{ padding: '4px 8px', fontSize: 12, whiteSpace: 'nowrap' }}
-          >
-            Chores
-          </Button>
         </div>
       </div>
 
-      {activeTab !== 'overview' && (
+      {(activeTab === 'tasks' || activeTab === 'stories' || activeTab === 'goals') && (
         <div className="d-flex flex-wrap gap-2 mb-3 align-items-center">
           <Form.Check
             type="switch"
@@ -861,6 +980,21 @@ const MobileHome: React.FC = () => {
             checked={showCompleted}
             onChange={(e) => setShowCompleted(e.target.checked)}
           />
+          {activeTab === 'tasks' && (
+            <Form.Group className="d-flex align-items-center gap-1 mb-0" style={{ minWidth: 170 }}>
+              <Form.Label className="mb-0 small text-muted">Tasks view</Form.Label>
+              <Form.Select
+                size="sm"
+                value={tasksViewFilter}
+                onChange={(e) => setTasksViewFilter(e.target.value as TaskViewFilter)}
+              >
+                <option value="top3">Top 3</option>
+                <option value="due_today">Due today</option>
+                <option value="overdue">Overdue</option>
+                <option value="all">All tasks</option>
+              </Form.Select>
+            </Form.Group>
+          )}
         </div>
       )}
 
@@ -974,17 +1108,17 @@ const MobileHome: React.FC = () => {
               ) : (
                 <>
                   <div className="mb-2">
-                    <div className="text-uppercase text-muted small fw-semibold">Tasks</div>
-                    {top3Tasks.length === 0 ? (
-                      <div className="text-muted small">No tasks flagged.</div>
+                    <div className="text-uppercase text-muted small fw-semibold">Stories</div>
+                    {top3Stories.length === 0 ? (
+                      <div className="text-muted small">No stories flagged.</div>
                     ) : (
                       <ListGroup variant="flush">
-                        {top3Tasks.map((task, idx) => {
-                          const label = task.ref ? `${task.ref} — ${task.title}` : task.title;
-                          const href = `/tasks/${task.ref || task.id}`;
-                          const score = getTaskAiScore(task);
+                        {top3Stories.map((story, idx) => {
+                          const label = story.ref ? `${story.ref} — ${story.title}` : story.title;
+                          const href = `/stories/${story.ref || story.id}`;
+                          const score = getStoryAiScore(story);
                           return (
-                            <ListGroup.Item key={task.id} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
+                            <ListGroup.Item key={story.id} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
                               <span>
                                 <a href={href} className="text-decoration-none">{label}</a>
                               </span>
@@ -998,17 +1132,17 @@ const MobileHome: React.FC = () => {
                     )}
                   </div>
                   <div>
-                    <div className="text-uppercase text-muted small fw-semibold">Stories</div>
-                    {top3Stories.length === 0 ? (
-                      <div className="text-muted small">No stories flagged.</div>
+                    <div className="text-uppercase text-muted small fw-semibold">Tasks</div>
+                    {top3Tasks.length === 0 ? (
+                      <div className="text-muted small">No tasks flagged.</div>
                     ) : (
                       <ListGroup variant="flush">
-                        {top3Stories.map((story, idx) => {
-                          const label = story.ref ? `${story.ref} — ${story.title}` : story.title;
-                          const href = `/stories/${story.ref || story.id}`;
-                          const score = getStoryAiScore(story);
+                        {top3Tasks.map((task, idx) => {
+                          const label = task.ref ? `${task.ref} — ${task.title}` : task.title;
+                          const href = `/tasks/${task.ref || task.id}`;
+                          const score = getTaskAiScore(task);
                           return (
-                            <ListGroup.Item key={story.id} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
+                            <ListGroup.Item key={task.id} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
                               <span>
                                 <a href={href} className="text-decoration-none">{label}</a>
                               </span>
@@ -1037,54 +1171,6 @@ const MobileHome: React.FC = () => {
                   {plannerStats?.source || 'replan'}
                 </Badge>
               </div>
-            </Card.Body>
-          </Card>
-
-          <Card className="mb-3" style={{ background: '#f0fdf4' }}>
-            <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
-              <div>
-                <strong>Chores &amp; Habits</strong>
-                <Badge bg="secondary" pill className="ms-2">{choresDueToday.length}</Badge>
-              </div>
-              <Button size="sm" variant="outline-secondary" href="/chores/checklist">Checklist</Button>
-            </Card.Header>
-            <Card.Body className="pt-0">
-              {choresLoading ? (
-                <div className="text-muted small">Loading chores…</div>
-              ) : choresDueToday.length === 0 ? (
-                <div className="text-muted small">No chores, habits, or routines due today.</div>
-              ) : (
-                <ListGroup variant="flush">
-                  {choresDueToday.map((task) => {
-                    const kind = getChoreKind(task) || 'chore';
-                    const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
-                    const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
-                    const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
-                    const dueLabel = formatDueLabel(dueMs);
-                    const isOverdue = !!dueMs && dueMs < todayStartMs;
-                    const busy = !!choreCompletionBusy[task.id];
-                    return (
-                      <ListGroup.Item key={task.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
-                        <Form.Check
-                          type="checkbox"
-                          checked={busy}
-                          disabled={busy}
-                          onChange={() => handleCompleteChoreTask(task)}
-                          aria-label={`Complete ${task.title}`}
-                        />
-                        <div className="flex-grow-1">
-                          <div className="fw-semibold">{task.title}</div>
-                          <div className="text-muted small">{isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}</div>
-                        </div>
-                        <div className="d-flex flex-column align-items-end gap-1">
-                          {isOverdue && <Badge bg="danger">Overdue</Badge>}
-                          <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                        </div>
-                      </ListGroup.Item>
-                    );
-                  })}
-                </ListGroup>
-              )}
             </Card.Body>
           </Card>
 
@@ -1121,6 +1207,8 @@ const MobileHome: React.FC = () => {
             </Card>
           )}
 
+          {renderChoresHabitsWidget()}
+
           {summary?.worldSummary && (
             <Card className="mb-3" style={{ background: '#fff7ed' }}>
               <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
@@ -1144,19 +1232,27 @@ const MobileHome: React.FC = () => {
         <div>
           {loading ? (
             <div className="text-center p-4"><Spinner animation="border" size="sm" /></div>
-          ) : pendingTasks.length === 0 ? (
+          ) : visibleTaskRows.length === 0 ? (
             <Card className="text-center p-4">
               <Card.Body>
-                <div className="text-muted">No tasks pending.</div>
+                <div className="text-muted">
+                  {tasksViewFilter === 'top3'
+                    ? 'No Top 3 tasks flagged right now.'
+                    : tasksViewFilter === 'due_today'
+                      ? 'No tasks due today.'
+                      : tasksViewFilter === 'overdue'
+                        ? 'No overdue tasks.'
+                        : 'No tasks pending.'}
+                </div>
               </Card.Body>
             </Card>
           ) : (
             <ListGroup>
-              {sortedPendingTasks.map(task => {
+              {visibleTaskRows.map(task => {
                 const story = task.parentType === 'story' ? storiesById.get(task.parentId) : undefined;
                 const goal = story?.goalId ? goalsById.get(story.goalId) : undefined;
                 const pr = getPriorityBadge(task.priority);
-                const themeColor = THEME_COLORS[goal?.theme || story?.theme || 0];
+                const themeColor = resolveThemeColor(goal?.theme ?? story?.theme ?? (task as any).theme);
                 const storyLabel = story ? `${story.ref} · ${story.title}` : task.ref;
                 const goalLabel = goal ? `Goal: ${goal.title}` : 'Unlinked goal';
                 const aiScore = getTaskAiScore(task);
@@ -1237,7 +1333,7 @@ const MobileHome: React.FC = () => {
         <ListGroup>
           {sortedStories.map(story => {
             const goal = goalsById.get(story.goalId);
-            const themeColor = THEME_COLORS[goal?.theme || story.theme || 0];
+            const themeColor = resolveThemeColor(goal?.theme ?? story.theme);
             const acceptance = story.acceptanceCriteria?.slice(0, 2).join(' · ');
             const isCriticalStory = (story.priority || 0) >= 4;
             const aiScore = getStoryAiScore(story);
@@ -1312,71 +1408,105 @@ const MobileHome: React.FC = () => {
       )}
 
       {activeTab === 'goals' && (
-        <ListGroup>
-          {goals.map(goal => {
-            const themeColor = THEME_COLORS[goal.theme];
-            const relatedStories = storiesByGoal.get(goal.id) || [];
-            const doneStories = relatedStories.filter((s) => s.status === 4).length;
-            const progressPercent = relatedStories.length ? Math.round((doneStories / relatedStories.length) * 100) : 0;
-            return (
-              <ListGroup.Item
-                key={goal.id}
-                className="mobile-task-item d-flex align-items-start"
-                style={themeColor ? { borderLeft: `4px solid ${themeColor}` } : undefined}
-              >
-                <div className="flex-grow-1">
-                  <div className="d-flex justify-content-between align-items-start">
-                    <div>
-                      <div className="fw-semibold">{goal.title}</div>
-                      <div className="text-muted small">{goal.description || 'No description yet'}</div>
-                      <div className="text-muted small">
-                        Theme {goal.theme} · Target Year {goal.targetYear || 'N/A'}
+        <div>
+          <div className="d-flex gap-2 mb-2">
+            <Button
+              size="sm"
+              variant={goalsViewFilter === 'active_sprint' ? 'primary' : 'outline-primary'}
+              onClick={() => setGoalsViewFilter('active_sprint')}
+            >
+              Active sprint goals
+            </Button>
+            <Button
+              size="sm"
+              variant={goalsViewFilter === 'year' ? 'primary' : 'outline-primary'}
+              onClick={() => setGoalsViewFilter('year')}
+            >
+              Goals this year
+            </Button>
+          </div>
+          {filteredGoalsForMobile.length === 0 ? (
+            <Card className="text-center p-4">
+              <Card.Body>
+                <div className="text-muted">
+                  {goalsViewFilter === 'year'
+                    ? 'No goals targeting this year.'
+                    : 'No goals with active stories in the selected sprint.'}
+                </div>
+              </Card.Body>
+            </Card>
+          ) : (
+            <ListGroup>
+              {filteredGoalsForMobile.map(goal => {
+                const themeColor = resolveThemeColor(goal.theme);
+                const relatedStories = storiesByGoal.get(goal.id) || [];
+                const doneStories = relatedStories.filter((s) => s.status === 4).length;
+                const progressPercent = relatedStories.length ? Math.round((doneStories / relatedStories.length) * 100) : 0;
+                return (
+                  <ListGroup.Item
+                    key={goal.id}
+                    className="mobile-task-item d-flex align-items-start"
+                    style={themeColor ? { borderLeft: `4px solid ${themeColor}` } : undefined}
+                  >
+                    <div className="flex-grow-1">
+                      <div className="d-flex justify-content-between align-items-start">
+                        <div>
+                          <div className="fw-semibold">{goal.title}</div>
+                          <div className="text-muted small">{goal.description || 'No description yet'}</div>
+                          <div className="text-muted small">
+                            Theme {goal.theme} · Target Year {goal.targetYear || 'N/A'}
+                          </div>
+                        </div>
+                        <Badge bg={getBadgeVariant(goal.status)}>{getStatusName(goal.status)}</Badge>
+                      </div>
+                      <div className="d-flex flex-wrap gap-2 align-items-center mt-2">
+                        <Form.Select
+                          size="sm"
+                          value={Number(goal.status)}
+                          onChange={(e) => updateGoalField(goal, { status: Number(e.target.value) as any })}
+                          style={{ minWidth: 180 }}
+                        >
+                          {ChoiceHelper.getOptions('goal','status').map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </Form.Select>
+                        <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('goal', goal.id)}>Add Note</Button>
+                        <a
+                          href={`https://bob.jc1.tech/goals/${goal.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="small text-decoration-none text-muted"
+                        >
+                          Open goal
+                        </a>
+                      </div>
+                      <div className="d-flex flex-wrap gap-2 mt-2">
+                        <Badge pill bg="dark">{progressPercent}% stories done</Badge>
+                        <Badge pill bg="secondary">{relatedStories.length} stories</Badge>
+                        {sprintDaysLeft != null && (
+                          <Badge
+                            pill
+                            style={{
+                              backgroundColor: themeColor || '#1f2937',
+                              color: '#fff',
+                              fontWeight: 500,
+                            }}
+                          >
+                            {sprintDaysLeft}d sprint
+                          </Badge>
+                        )}
                       </div>
                     </div>
-                    <Badge bg={getBadgeVariant(goal.status)}>{getStatusName(goal.status)}</Badge>
-                  </div>
-                  <div className="d-flex flex-wrap gap-2 align-items-center mt-2">
-                    <Form.Select
-                      size="sm"
-                      value={Number(goal.status)}
-                      onChange={(e) => updateGoalField(goal, { status: Number(e.target.value) as any })}
-                      style={{ minWidth: 180 }}
-                    >
-                      {ChoiceHelper.getOptions('goal','status').map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
-                    </Form.Select>
-                    <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('goal', goal.id)}>Add Note</Button>
-                    <a
-                      href={`https://bob.jc1.tech/goals/${goal.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="small text-decoration-none text-muted"
-                    >
-                      Open goal
-                    </a>
-                  </div>
-                  <div className="d-flex flex-wrap gap-2 mt-2">
-                    <Badge pill bg="dark">{progressPercent}% stories done</Badge>
-                    <Badge pill bg="secondary">{relatedStories.length} stories</Badge>
-                    {sprintDaysLeft != null && (
-                      <Badge
-                        pill
-                        style={{
-                          backgroundColor: themeColor || '#1f2937',
-                          color: '#fff',
-                          fontWeight: 500,
-                        }}
-                      >
-                        {sprintDaysLeft}d sprint
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-              </ListGroup.Item>
-            );
-          })}
-        </ListGroup>
+                  </ListGroup.Item>
+                );
+              })}
+            </ListGroup>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'chores' && (
+        renderChoresHabitsWidget()
       )}
 
       <Modal show={!!noteModal?.show} onHide={() => setNoteModal(null)} centered>

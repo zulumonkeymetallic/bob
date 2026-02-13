@@ -975,6 +975,8 @@ const renderDuplicateTable = (items) => {
 
 const renderDailySummaryEmail = (data) => {
   const profileName = data.profile?.displayName || data.profile?.name || data.profile?.email || 'BOB Member';
+  const financeWindowDays = Number(data?.metadata?.financeWindowDays || 5);
+  const financeWindowLabel = data?.metadata?.financeWindowLabel || `last ${financeWindowDays} days`;
   return `
 <!DOCTYPE html>
 <html>
@@ -1004,7 +1006,8 @@ const renderDailySummaryEmail = (data) => {
 
       ${data.financeDaily ? `
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
-        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Daily Spend Summary</h2>
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Spend Summary (Last ${financeWindowDays} Days)</h2>
+        <p style="margin-top:0;color:#6b7280;font-size:12px;">Window: ${escape(financeWindowLabel)}</p>
         ${renderFinanceSummary(data.financeDaily, data.monzo?.currency || 'GBP')}
         ${data.financeCommentary ? `<div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:10px;color:#334155;font-size:13px;">${escape(data.financeCommentary)}</div>` : ''}
       </section>

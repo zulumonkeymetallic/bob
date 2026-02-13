@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, PlayCircle } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -174,7 +174,6 @@ const Dashboard: React.FC = () => {
   const [capacityData, setCapacityData] = useState<any | null>(null);
   const [capacityLoading, setCapacityLoading] = useState(false);
   const [capacityError, setCapacityError] = useState<string | null>(null);
-  const [youtubeWatchMinutes7d, setYoutubeWatchMinutes7d] = useState<number | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<any | null>(null);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
 
@@ -193,15 +192,6 @@ const Dashboard: React.FC = () => {
       if (!Number.isNaN(parsed)) return new Date(parsed);
     }
     return null;
-  }, []);
-
-  const formatMinutes = useCallback((minutes?: number | null) => {
-    if (minutes == null || !Number.isFinite(minutes)) return '—';
-    const total = Math.max(0, Math.round(minutes));
-    if (total < 60) return `${total}m`;
-    const hrs = Math.floor(total / 60);
-    const mins = total % 60;
-    return `${hrs}h ${mins}m`;
   }, []);
 
   const formatPotBalance = useCallback((value: number, currency = 'GBP') => {
@@ -261,62 +251,6 @@ const Dashboard: React.FC = () => {
     if (!youtubeTakeoutLastImportDate) return true;
     return (youtubeTakeoutAgeDays ?? 0) >= 60;
   }, [currentUser, youtubeTakeoutAgeDays, youtubeTakeoutLastImportDate]);
-
-  useEffect(() => {
-    if (!currentUser) {
-      setYoutubeWatchMinutes7d(null);
-      return;
-    }
-    const sinceMs = Date.now() - (7 * 24 * 60 * 60 * 1000);
-    const q = query(
-      collection(db, 'youtube'),
-      where('ownerUid', '==', currentUser.uid)
-    );
-    const resolveWatchedAtMs = (data: any) => {
-      const raw = data?.watchedAt
-        ?? data?.watchedAtMs
-        ?? data?.lastWatchedAt
-        ?? data?.watchTimeAt
-        ?? data?.watchTimeDate
-        ?? data?.completedAt;
-      const parsed = decodeToDate(raw);
-      return parsed ? parsed.getTime() : null;
-    };
-    const resolveWatchSeconds = (data: any) => {
-      const sec = Number(data?.watchTimeSec);
-      if (Number.isFinite(sec) && sec > 0) return sec;
-      const mins = Number(data?.watchTimeMinutes);
-      if (Number.isFinite(mins) && mins > 0) return mins * 60;
-      const durSec = Number(data?.durationSec);
-      if (Number.isFinite(durSec) && durSec > 0) return durSec;
-      const durMin = Number(data?.durationMinutes);
-      if (Number.isFinite(durMin) && durMin > 0) return durMin * 60;
-      return null;
-    };
-    const unsub = onSnapshot(q, (snap) => {
-      let totalSec = 0;
-      let counted = 0;
-      snap.docs.forEach((docSnap) => {
-        const data = docSnap.data() as any;
-        const watchedAt = resolveWatchedAtMs(data);
-        if (!watchedAt || watchedAt < sinceMs) return;
-        const seconds = resolveWatchSeconds(data);
-        if (!seconds) return;
-        totalSec += seconds;
-        counted += 1;
-      });
-      if (counted === 0) {
-        setYoutubeWatchMinutes7d(null);
-      } else {
-        const minutes = totalSec > 0 ? Math.round(totalSec / 60) : 0;
-        setYoutubeWatchMinutes7d(minutes);
-      }
-    }, (err) => {
-      console.warn('Failed to load YouTube watch time', err);
-      setYoutubeWatchMinutes7d(null);
-    });
-    return () => unsub();
-  }, [currentUser, decodeToDate]);
 
   const handleMonzoReconnect = useCallback(async () => {
     if (!currentUser) return;
@@ -1871,7 +1805,7 @@ const Dashboard: React.FC = () => {
                 <Card.Body className="py-2">
                   <Row className="g-2 mb-2 dashboard-inline-row dashboard-key-metrics">
                     {/* Finance Group */}
-                    <Col xs={12} sm={6} lg={3}>
+                    <Col xs={12} sm={6} lg={4}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -1900,7 +1834,7 @@ const Dashboard: React.FC = () => {
                     </Col>
 
                     {/* Capacity Group */}
-                    <Col xs={12} sm={6} lg={3}>
+                    <Col xs={12} sm={6} lg={4}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -1934,7 +1868,7 @@ const Dashboard: React.FC = () => {
                     </Col>
 
                     {/* Sprint Progress Group */}
-                    <Col xs={12} sm={6} lg={3}>
+                    <Col xs={12} sm={6} lg={4}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -2001,35 +1935,6 @@ const Dashboard: React.FC = () => {
                       </div>
                     </Col>
 
-                    {/* YouTube Watch Time Group */}
-                    <Col xs={12} sm={6} lg={3}>
-                      <div
-                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
-                        style={{
-                          background: 'var(--bs-body-bg)',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
-                        onClick={() => navigate('/videos-backlog')}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-danger-bg-subtle)';
-                          e.currentTarget.style.borderColor = 'var(--bs-danger)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
-                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
-                        }}
-                      >
-                        <PlayCircle size={16} className="text-danger" />
-                        <div className="flex-grow-1">
-                          <div className="text-muted small">YouTube (7d)</div>
-                          <div className="fw-semibold">
-                            {formatMinutes(youtubeWatchMinutes7d)}
-                          </div>
-                          <div className="text-muted small">Time watched</div>
-                        </div>
-                      </div>
-                    </Col>
                   </Row>
 
                   {!metricsCollapsed && hasSelectedSprint && capacitySummary && (
@@ -2169,8 +2074,8 @@ const Dashboard: React.FC = () => {
                   </div>
                 </Card.Header>
                 <Card.Body>
-                  <Row className="g-3">
-                    <Col lg={3} md={12}>
+                  <Row className="g-3 today-plan-layout">
+                    <Col md={12} className="today-plan-col today-plan-col-summary">
                       {(dailySummaryLines.length > 0 || aiFocusItems.length > 0) && (
                         <Card className="shadow-sm border-0 mb-3">
                           <Card.Header className="d-flex align-items-center justify-content-between">
@@ -2259,6 +2164,29 @@ const Dashboard: React.FC = () => {
                             ) : (
                               <>
                                 <div>
+                                  <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
+                                  {top3Stories.length === 0 ? (
+                                    <div className="text-muted small">No stories flagged.</div>
+                                  ) : (
+                                    top3Stories.map((story, idx) => {
+                                      const label = storyLabel(story);
+                                      const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
+                                      const href = `/stories/${(story as any).ref || story.id}`;
+                                      return (
+                                        <div key={story.id} className="border rounded p-2 mb-2">
+                                          <div className="fw-semibold">
+                                            <a href={href} className="text-decoration-none">{label}</a>
+                                          </div>
+                                          <div className="text-muted small d-flex justify-content-between">
+                                            <span>Rank {idx + 1}</span>
+                                            <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                                <div>
                                   <div className="text-uppercase text-muted small fw-semibold mb-1">Tasks</div>
                                   {top3Tasks.length === 0 ? (
                                     <div className="text-muted small">No tasks flagged.</div>
@@ -2282,36 +2210,13 @@ const Dashboard: React.FC = () => {
                                     })
                                   )}
                                 </div>
-                                <div>
-                                  <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
-                                  {top3Stories.length === 0 ? (
-                                    <div className="text-muted small">No stories flagged.</div>
-                                  ) : (
-                                    top3Stories.map((story, idx) => {
-                                      const label = storyLabel(story);
-                                      const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
-                                      const href = `/stories/${(story as any).ref || story.id}`;
-                                      return (
-                                        <div key={story.id} className="border rounded p-2 mb-2">
-                                          <div className="fw-semibold">
-                                            <a href={href} className="text-decoration-none">{label}</a>
-                                          </div>
-                                          <div className="text-muted small d-flex justify-content-between">
-                                            <span>Rank {idx + 1}</span>
-                                            <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
-                                          </div>
-                                        </div>
-                                      );
-                                    })
-                                  )}
-                                </div>
                               </>
                             )}
                           </Card.Body>
                         )}
                       </Card>
                     </Col>
-                    <Col lg={6} md={12}>
+                    <Col md={12} className="today-plan-col today-plan-col-calendar">
                       {unscheduledToday.length > 0 && (
                         <Alert variant="warning" className="py-2">
                           <div className="fw-semibold mb-1">Scheduling issues</div>
@@ -2349,9 +2254,8 @@ const Dashboard: React.FC = () => {
                         />
                       </div>
                     </Col>
-                    <Col lg={3} md={12}>
-                      <div className="d-flex flex-column gap-2">
-                        <Card className="shadow-sm border-0">
+                    <Col md={6} className="today-plan-col today-plan-col-due">
+                      <Card className="shadow-sm border-0 h-100 dashboard-due-card">
                           <Card.Header className="d-flex align-items-center justify-content-between">
                             <div className="fw-semibold d-flex align-items-center gap-2">
                               <Clock size={16} /> Tasks due today & overdue
@@ -2387,9 +2291,9 @@ const Dashboard: React.FC = () => {
                                   const priorityBadge = getPriorityBadge((task as any).priority);
                                   const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
                                   return (
-                                    <div key={item.id} className="border rounded p-2">
+                                    <div key={item.id} className="border rounded p-3 dashboard-due-item">
                                       <div className="d-flex justify-content-between align-items-start gap-2">
-                                        <div>
+                                        <div className="flex-grow-1">
                                           <div className="fw-semibold">{task.title}</div>
                                           {refLabel && (
                                             <div className="text-muted small">
@@ -2402,25 +2306,25 @@ const Dashboard: React.FC = () => {
                                             <Clock size={12} /> Due {dueLabel ?? '—'}
                                           </div>
                                         </div>
+                                      </div>
+                                      <div className="d-flex align-items-end justify-content-between mt-2 gap-2">
+                                        <div className="d-flex align-items-center gap-2 flex-wrap">
+                                          <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
+                                          <span className="text-muted small">
+                                            AI score {aiScore != null ? Math.round(aiScore) : '—'}
+                                          </span>
+                                        </div>
                                         <Form.Select
                                           size="sm"
                                           value={Number(task.status ?? 0)}
                                           onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
                                           aria-label="Update task status"
-                                          style={{ width: 140 }}
+                                          className="dashboard-task-status-select"
                                         >
-                                          <option value={0}>To Do</option>
-                                          <option value={1}>In Progress</option>
+                                          <option value={0}>To do</option>
+                                          <option value={1}>Doing</option>
                                           <option value={2}>Done</option>
                                         </Form.Select>
-                                      </div>
-                                      <div className="d-flex align-items-center justify-content-between mt-2">
-                                        <div className="d-flex align-items-center gap-2 flex-wrap">
-                                          <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
-                                        </div>
-                                        <span className="text-muted small">
-                                          AI score {aiScore != null ? Math.round(aiScore) : '—'}
-                                        </span>
                                       </div>
                                     </div>
                                   );
@@ -2430,63 +2334,63 @@ const Dashboard: React.FC = () => {
                             )}
                           </Card.Body>
                         </Card>
-
-                        <Card className="shadow-sm border-0">
-                          <Card.Header className="d-flex align-items-center justify-content-between">
-                            <div className="fw-semibold d-flex align-items-center gap-2">
-                              <ListChecks size={16} /> Chores & Habits
+                    </Col>
+                    <Col md={6} className="today-plan-col today-plan-col-chores">
+                      <Card className="shadow-sm border-0 h-100 dashboard-chores-card">
+                        <Card.Header className="d-flex align-items-center justify-content-between">
+                          <div className="fw-semibold d-flex align-items-center gap-2">
+                            <ListChecks size={16} /> Chores & Habits
+                          </div>
+                          <div className="d-flex align-items-center gap-2">
+                            <Button size="sm" variant="outline-secondary" href="/chores/checklist">
+                              Checklist
+                            </Button>
+                            <Badge bg={choresDueTodayTasks.length > 0 ? 'info' : 'secondary'} pill>
+                              {choresDueTodayTasks.length}
+                            </Badge>
+                          </div>
+                        </Card.Header>
+                        <Card.Body className="p-3 d-flex flex-column gap-2">
+                          {tasksDueTodayLoading ? (
+                            <div className="d-flex align-items-center gap-2 text-muted">
+                              <Spinner size="sm" animation="border" /> Loading chores…
                             </div>
-                            <div className="d-flex align-items-center gap-2">
-                              <Button size="sm" variant="outline-secondary" href="/chores/checklist">
-                                Checklist
-                              </Button>
-                              <Badge bg={choresDueTodayTasks.length > 0 ? 'info' : 'secondary'} pill>
-                                {choresDueTodayTasks.length}
-                              </Badge>
-                            </div>
-                          </Card.Header>
-                          <Card.Body className="p-3 d-flex flex-column gap-2">
-                            {tasksDueTodayLoading ? (
-                              <div className="d-flex align-items-center gap-2 text-muted">
-                                <Spinner size="sm" animation="border" /> Loading chores…
-                              </div>
-                            ) : choresDueTodayTasks.length === 0 ? (
-                              <div className="text-muted small">No chores, habits, or routines due today.</div>
-                            ) : (
-                              choresDueTodayTasks.map((task) => {
-                                const kind = getChoreKind(task) || 'chore';
-                                const dueMs = resolveRecurringDueMs(task, todayDate, todayStartMs);
-                                const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
-                                const isOverdue = !!dueMs && dueMs < todayStartMs;
-                                const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
-                                const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
-                                const busy = !!choreCompletionBusy[task.id];
-                                return (
-                                  <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
-                                    <Form.Check
-                                      type="checkbox"
-                                      checked={busy}
-                                      disabled={busy}
-                                      onChange={() => handleCompleteChoreTask(task)}
-                                      aria-label={`Complete ${task.title}`}
-                                    />
-                                    <div className="flex-grow-1">
-                                      <div className="fw-semibold">{task.title}</div>
-                                      <div className="text-muted small d-flex align-items-center gap-1">
-                                        <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
-                                      </div>
-                                    </div>
-                                    <div className="d-flex flex-column align-items-end gap-1">
-                                      {isOverdue && <Badge bg="danger">Overdue</Badge>}
-                                      <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                          ) : choresDueTodayTasks.length === 0 ? (
+                            <div className="text-muted small">No chores, habits, or routines due today.</div>
+                          ) : (
+                            choresDueTodayTasks.map((task) => {
+                              const kind = getChoreKind(task) || 'chore';
+                              const dueMs = resolveRecurringDueMs(task, todayDate, todayStartMs);
+                              const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
+                              const isOverdue = !!dueMs && dueMs < todayStartMs;
+                              const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                              const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                              const busy = !!choreCompletionBusy[task.id];
+                              return (
+                                <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
+                                  <Form.Check
+                                    type="checkbox"
+                                    checked={busy}
+                                    disabled={busy}
+                                    onChange={() => handleCompleteChoreTask(task)}
+                                    aria-label={`Complete ${task.title}`}
+                                  />
+                                  <div className="flex-grow-1">
+                                    <div className="fw-semibold">{task.title}</div>
+                                    <div className="text-muted small d-flex align-items-center gap-1">
+                                      <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
                                     </div>
                                   </div>
-                                );
-                              })
-                            )}
-                          </Card.Body>
-                        </Card>
-                      </div>
+                                  <div className="d-flex flex-column align-items-end gap-1">
+                                    {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                                    <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </Card.Body>
+                      </Card>
                     </Col>
                   </Row>
                 </Card.Body>

@@ -64,17 +64,23 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   }, [location]);
 
   const navigationGroups: NavigationGroup[] = [
+    {
+      label: 'Overview',
+      icon: 'home',
+      items: [
+        { label: 'Overview', path: '/dashboard', icon: 'home' },
+      ],
+    },
       {
         label: 'Dashboards',
         icon: 'chart-bar',
-        items: [
-          { label: 'Overview', path: '/dashboard', icon: 'home' },
-          { label: 'Habits & Chores', path: '/dashboard/habits-chores', icon: 'check-square' },
-          { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
-          { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-          { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
-        ]
-      },
+      items: [
+        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
+        { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
+      ]
+    },
     // Health
     {
       label: 'Health',
@@ -123,7 +129,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
         { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
         { label: 'Books', path: '/books-backlog', icon: 'book' },
-        { label: 'Videos', path: '/videos-backlog', icon: 'video' }
+        { label: 'Videos', path: '/videos-backlog', icon: 'video' },
+        { label: 'YouTube History', path: '/youtube-history', icon: 'video' }
       ]
     },
     {

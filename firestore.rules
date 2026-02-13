@@ -141,6 +141,7 @@ service cloud.firestore {
     match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /steam/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /youtube/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /youtube_history/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     // Hardcover books (per-user library + backlog)
     match /hardcover/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
 

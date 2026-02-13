@@ -63,7 +63,11 @@ const VideosBacklog: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    const qRef = query(collection(db, 'youtube'), where('ownerUid', '==', currentUser.uid));
+    const qRef = query(
+      collection(db, 'youtube'),
+      where('ownerUid', '==', currentUser.uid),
+      where('watchLater', '==', true)
+    );
     const unsub = onSnapshot(qRef, (snap) => {
       const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as YouTubeItem[];
       const toMillis = (value?: number | string | null) => {
@@ -327,7 +331,7 @@ const VideosBacklog: React.FC = () => {
       <Card.Header className="bg-white d-flex flex-wrap gap-3 align-items-center justify-content-between">
         <div>
           <h5 className="mb-1">Videos Backlog</h5>
-          <div className="text-muted small">Incoming from YouTube Watch Later and longform picks — generate stories and link goals later.</div>
+          <div className="text-muted small">Watch-later queue only — history entries live in the YouTube History dashboard.</div>
         </div>
         <div className="d-flex flex-wrap gap-2 align-items-center">
           <Form.Control size="sm" placeholder="Search videos" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 220 }} />

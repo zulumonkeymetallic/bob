@@ -1953,7 +1953,8 @@ async function runCalendarPlannerJob() {
 
     const openTasks = tasksSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-      .filter((t) => !isTaskDoneStatus(t.status) && !t.deleted);
+      .filter((t) => !isTaskDoneStatus(t.status) && !t.deleted)
+      .filter((t) => !isRoutineChoreHabit(t));
 
     const todayIso = nowLocal.toISODate();
     const isTopTask = (t) => {
@@ -2365,6 +2366,7 @@ exports.replanCalendarNow = onCall({
   const openTasks = tasksSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((t) => !isTaskDoneStatus(t.status))
+    .filter((t) => !isRoutineChoreHabit(t))
     .filter((t) => !t.sprintId || activeSprintIds.includes(t.sprintId));
 
   const scoredStories = openStories.map((s) => ({

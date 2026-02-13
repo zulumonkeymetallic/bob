@@ -65,6 +65,7 @@ import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
 import { pushDiagnosticLog } from '../../hooks/useDiagnosticsLog';
 import { usePersona } from '../../contexts/PersonaContext';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/statusHelpers';
+import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -306,6 +307,7 @@ const UnifiedPlannerPage: React.FC = () => {
   const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
   const [top3Stories, setTop3Stories] = useState<Story[]>([]);
   const [top3Loading, setTop3Loading] = useState(false);
+  const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setBlockForm((prev) => {
@@ -561,6 +563,36 @@ const UnifiedPlannerPage: React.FC = () => {
     return null;
   }, []);
 
+  const getTaskLastDoneMs = useCallback((task: Task): number | null => {
+    const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
+    if (!raw) return null;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+      const parsed = new Date(raw).getTime();
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (raw instanceof Date) return raw.getTime();
+    if (typeof raw.toDate === 'function') {
+      const d = raw.toDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    if (typeof raw.toMillis === 'function') return raw.toMillis();
+    if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
+    return null;
+  }, []);
+
+  const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const normalized = raw === 'habitual' ? 'habit' : raw;
+    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
+    const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
+    if (tagKeys.includes('chore')) return 'chore';
+    if (tagKeys.includes('routine')) return 'routine';
+    if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
+    return null;
+  }, []);
+
   const formatDueLabel = useCallback((dueMs: number) => {
     const dueDate = new Date(dueMs);
     const dateLabel = format(dueDate, 'MMM d, yyyy');
@@ -586,21 +618,30 @@ const UnifiedPlannerPage: React.FC = () => {
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        const todayStart = startOfDay(new Date()).getTime();
-        const todayEnd = endOfDay(new Date()).getTime();
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        const todayStart = startOfDay(todayDate).getTime();
+        const todayEnd = endOfDay(todayDate).getTime();
         const rows = snap.docs
           .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
           .filter((task) => !task.deleted)
           .filter((task) => {
             const due = getTaskDueMs(task);
-            if (!due) return false;
-            return due <= todayEnd;
+            if (due) return due <= todayEnd;
+            const kind = getChoreKind(task);
+            return !!kind && isRecurringDueOnDate(task, todayDate, due);
           })
-          .filter((task) => (task.status ?? 0) !== 2);
+          .filter((task) => (task.status ?? 0) !== 2)
+          .filter((task) => {
+            if (!getChoreKind(task)) return true;
+            const lastDone = getTaskLastDoneMs(task);
+            if (!lastDone) return true;
+            return lastDone < todayStart || lastDone > todayEnd;
+          });
 
         rows.sort((a, b) => {
-          const aDue = getTaskDueMs(a) || 0;
-          const bDue = getTaskDueMs(b) || 0;
+          const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || 0;
+          const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || 0;
           if (aDue !== bDue) return aDue - bDue;
           const aScore = Number((a as any).aiCriticalityScore || 0);
           const bScore = Number((b as any).aiCriticalityScore || 0);
@@ -618,7 +659,7 @@ const UnifiedPlannerPage: React.FC = () => {
     );
 
     return () => unsubscribe();
-  }, [currentPersona, currentUser, getTaskDueMs]);
+  }, [currentPersona, currentUser, getTaskDueMs, getChoreKind, getTaskLastDoneMs]);
 
   useEffect(() => {
     if (!currentUser || !currentPersona) {
@@ -1156,22 +1197,48 @@ const UnifiedPlannerPage: React.FC = () => {
     }
   }, []);
 
+  const handleCompleteChoreTask = useCallback(async (task: Task) => {
+    if (!currentUser) return;
+    const taskId = task.id;
+    if (!taskId || choreCompletionBusy[taskId]) return;
+    setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      const fn = httpsCallable(functions, 'completeChoreTask');
+      await fn({ taskId });
+    } catch (err) {
+      console.warn('Unified planner: failed to complete chore task', err);
+      setFeedback({ variant: 'danger', message: 'Could not complete chore or habit item.' });
+      setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: false }));
+      return;
+    }
+    setTimeout(() => {
+      setChoreCompletionBusy((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }, 1500);
+  }, [currentUser, choreCompletionBusy]);
+
   const sortedTasksDueToday = useMemo(() => {
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    const todayStart = todayDate.getTime();
     const rows = [...tasksDueToday];
     if (tasksSortMode === 'ai') {
       rows.sort((a, b) => {
         const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
         const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
         if (aScore !== bScore) return bScore - aScore;
-        const aDue = getTaskDueMs(a) || 0;
-        const bDue = getTaskDueMs(b) || 0;
+        const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || getTaskDueMs(a) || 0;
+        const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || getTaskDueMs(b) || 0;
         return aDue - bDue;
       });
       return rows;
     }
     rows.sort((a, b) => {
-      const aDue = getTaskDueMs(a) || 0;
-      const bDue = getTaskDueMs(b) || 0;
+      const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || getTaskDueMs(a) || 0;
+      const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || getTaskDueMs(b) || 0;
       if (aDue !== bDue) return aDue - bDue;
       const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
       const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
@@ -1179,6 +1246,16 @@ const UnifiedPlannerPage: React.FC = () => {
     });
     return rows;
   }, [tasksDueToday, tasksSortMode, getTaskDueMs]);
+
+  const sortedTaskItemsDueToday = useMemo(
+    () => sortedTasksDueToday.filter((task) => !getChoreKind(task)),
+    [sortedTasksDueToday, getChoreKind],
+  );
+
+  const sortedChoreItemsDueToday = useMemo(
+    () => sortedTasksDueToday.filter((task) => !!getChoreKind(task)),
+    [sortedTasksDueToday, getChoreKind],
+  );
 
   const handleAutoPlan = useCallback(async () => {
     setPlanning(true);
@@ -1472,7 +1549,7 @@ const UnifiedPlannerPage: React.FC = () => {
   return (
     <Container fluid className="py-4 unified-planner">
       <Row className="g-4">
-        <Col lg={8} xl={9}>
+        <Col lg={7} xl={8}>
           <Card className="shadow-sm border-0 h-100">
             <Card.Header className="d-flex flex-wrap align-items-center justify-content-between gap-3">
               <div className="d-flex align-items-center gap-3">
@@ -1610,7 +1687,7 @@ const UnifiedPlannerPage: React.FC = () => {
             </Card.Body>
           </Card>
         </Col>
-        <Col lg={4} xl={3}>
+        <Col lg={5} xl={4}>
           <Card className="shadow-sm border-0 mb-4">
             <Card.Header className="d-flex align-items-center justify-content-between">
               <div className="fw-semibold d-flex align-items-center gap-2">
@@ -1638,6 +1715,29 @@ const UnifiedPlannerPage: React.FC = () => {
                 ) : (
                   <>
                     <div>
+                      <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
+                      {top3Stories.length === 0 ? (
+                        <div className="text-muted small">No stories flagged.</div>
+                      ) : (
+                        top3Stories.map((story, idx) => {
+                          const label = storyLabel(story);
+                          const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
+                          const href = `/stories/${(story as any).ref || story.id}`;
+                          return (
+                            <div key={story.id} className="border rounded p-2 mb-2">
+                              <div className="fw-semibold">
+                                <a href={href} className="text-decoration-none">{label}</a>
+                              </div>
+                              <div className="text-muted small d-flex justify-content-between">
+                                <span>Rank {idx + 1}</span>
+                                <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div>
                       <div className="text-uppercase text-muted small fw-semibold mb-1">Tasks</div>
                       {top3Tasks.length === 0 ? (
                         <div className="text-muted small">No tasks flagged.</div>
@@ -1661,29 +1761,6 @@ const UnifiedPlannerPage: React.FC = () => {
                         })
                       )}
                     </div>
-                    <div>
-                      <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
-                      {top3Stories.length === 0 ? (
-                        <div className="text-muted small">No stories flagged.</div>
-                      ) : (
-                        top3Stories.map((story, idx) => {
-                          const label = storyLabel(story);
-                          const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
-                          const href = `/stories/${(story as any).ref || story.id}`;
-                          return (
-                            <div key={story.id} className="border rounded p-2 mb-2">
-                              <div className="fw-semibold">
-                                <a href={href} className="text-decoration-none">{label}</a>
-                              </div>
-                              <div className="text-muted small d-flex justify-content-between">
-                                <span>Rank {idx + 1}</span>
-                                <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
                   </>
                 )}
               </Card.Body>
@@ -1691,79 +1768,134 @@ const UnifiedPlannerPage: React.FC = () => {
           </Card>
 
           <Card className="shadow-sm border-0 mb-4">
-            <Card.Header className="d-flex align-items-center justify-content-between">
-              <div className="fw-semibold d-flex align-items-center gap-2">
-                <Clock size={16} /> Tasks due today & overdue
-              </div>
-              <div className="d-flex align-items-center gap-2">
-                <Form.Select
-                  size="sm"
-                  value={tasksSortMode}
-                  onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai')}
-                >
-                  <option value="due">Sort: Due time</option>
-                  <option value="ai">Sort: AI score</option>
-                </Form.Select>
-                <Badge bg={sortedTasksDueToday.length > 0 ? 'info' : 'secondary'} pill>
-                  {sortedTasksDueToday.length}
-                </Badge>
-              </div>
-            </Card.Header>
-            <Card.Body className="p-3 d-flex flex-column gap-2">
-              {tasksLoading ? (
-                <div className="d-flex align-items-center gap-2 text-muted">
-                  <Spinner size="sm" animation="border" /> Loading tasks…
-                </div>
-              ) : sortedTasksDueToday.length === 0 ? (
-                <div className="text-muted small">No tasks due today or overdue.</div>
-              ) : (
-                sortedTasksDueToday.map((task) => {
-                  const dueMs = getTaskDueMs(task);
-                  const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                  const refLabel = taskRefLabel(task);
-                  const priorityBadge = getPriorityBadge((task as any).priority);
-                  const dueLabel = dueMs ? formatDueLabel(dueMs) : null;
-                  return (
-                    <div key={task.id} className="border rounded p-2">
-                      <div className="d-flex justify-content-between align-items-start gap-2">
-                        <div>
-                          <div className="fw-semibold">{task.title}</div>
-                          {refLabel && (
-                            <div className="text-muted small">
-                              <a href={`/tasks/${task.id}`} className="text-decoration-none">
-                                <code className="text-primary">{refLabel}</code>
-                              </a>
+                <Card.Header className="d-flex align-items-center justify-content-between">
+                  <div className="fw-semibold d-flex align-items-center gap-2">
+                    <Clock size={16} /> Tasks due today & overdue
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Form.Select
+                      size="sm"
+                      value={tasksSortMode}
+                      onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai')}
+                    >
+                      <option value="due">Sort: Due time</option>
+                      <option value="ai">Sort: AI score</option>
+                    </Form.Select>
+                    <Badge bg={sortedTaskItemsDueToday.length > 0 ? 'info' : 'secondary'} pill>
+                      {sortedTaskItemsDueToday.length}
+                    </Badge>
+                  </div>
+                </Card.Header>
+                <Card.Body className="p-3 d-flex flex-column gap-2">
+                  {tasksLoading ? (
+                    <div className="d-flex align-items-center gap-2 text-muted">
+                      <Spinner size="sm" animation="border" /> Loading tasks…
+                    </div>
+                  ) : sortedTaskItemsDueToday.length === 0 ? (
+                    <div className="text-muted small">No tasks due today or overdue.</div>
+                  ) : (
+                    sortedTaskItemsDueToday.map((task) => {
+                      const dueMs = getTaskDueMs(task);
+                      const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                      const refLabel = taskRefLabel(task);
+                      const priorityBadge = getPriorityBadge((task as any).priority);
+                      const dueLabel = dueMs ? formatDueLabel(dueMs) : null;
+                      return (
+                        <div key={task.id} className="border rounded p-2">
+                          <div className="d-flex justify-content-between align-items-start gap-2">
+                            <div className="flex-grow-1">
+                              <div className="fw-semibold">{task.title}</div>
+                              {refLabel && (
+                                <div className="text-muted small">
+                                  <a href={`/tasks/${task.id}`} className="text-decoration-none">
+                                    <code className="text-primary">{refLabel}</code>
+                                  </a>
+                                </div>
+                              )}
+                              <div className="text-muted small d-flex align-items-center gap-1">
+                                <Clock size={12} /> Due {dueLabel ?? '—'}
+                              </div>
                             </div>
-                          )}
-                          <div className="text-muted small d-flex align-items-center gap-1">
-                            <Clock size={12} /> Due {dueLabel ?? '—'}
+                          </div>
+                          <div className="d-flex align-items-center justify-content-between mt-2 gap-2 flex-wrap">
+                            <div className="d-flex align-items-center gap-2 flex-wrap">
+                              <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
+                              <span className="text-muted small">
+                                AI {aiScore != null ? Math.round(aiScore) : '—'}
+                              </span>
+                            </div>
+                            <Form.Select
+                              size="sm"
+                              value={Number(task.status ?? 0)}
+                              onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                              aria-label="Update task status"
+                              style={{ width: 106, fontSize: '0.75rem' }}
+                            >
+                              <option value={0}>To do</option>
+                              <option value={1}>Doing</option>
+                              <option value={2}>Done</option>
+                            </Form.Select>
                           </div>
                         </div>
-                        <Form.Select
-                          size="sm"
-                          value={Number(task.status ?? 0)}
-                          onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
-                          aria-label="Update task status"
-                          style={{ width: 140 }}
-                        >
-                          <option value={0}>To Do</option>
-                          <option value={1}>In Progress</option>
-                          <option value={2}>Done</option>
-                        </Form.Select>
-                      </div>
-                      <div className="d-flex align-items-center justify-content-between mt-2">
-                        <div className="d-flex align-items-center gap-2 flex-wrap">
-                          <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
-                        </div>
-                        <span className="text-muted small">
-                          AI score {aiScore != null ? Math.round(aiScore) : '—'}
-                        </span>
-                      </div>
+                      );
+                    })
+                  )}
+                </Card.Body>
+          </Card>
+          <Card className="shadow-sm border-0 mb-4">
+                <Card.Header className="d-flex align-items-center justify-content-between">
+                  <div className="fw-semibold d-flex align-items-center gap-2">
+                    <ListChecks size={16} /> Chores & Habits
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Button size="sm" variant="outline-secondary" href="/chores/checklist">
+                      Checklist
+                    </Button>
+                    <Badge bg={sortedChoreItemsDueToday.length > 0 ? 'info' : 'secondary'} pill>
+                      {sortedChoreItemsDueToday.length}
+                    </Badge>
+                  </div>
+                </Card.Header>
+                <Card.Body className="p-3 d-flex flex-column gap-2">
+                  {tasksLoading ? (
+                    <div className="d-flex align-items-center gap-2 text-muted">
+                      <Spinner size="sm" animation="border" /> Loading chores…
                     </div>
-                  );
-                })
-              )}
-            </Card.Body>
+                  ) : sortedChoreItemsDueToday.length === 0 ? (
+                    <div className="text-muted small">No chores, habits, or routines due today.</div>
+                  ) : (
+                    sortedChoreItemsDueToday.map((task) => {
+                      const kind = getChoreKind(task) || 'chore';
+                      const dueMs = resolveRecurringDueMs(task, new Date(), startOfDay(new Date()).getTime());
+                      const dueLabel = dueMs ? formatDueLabel(dueMs) : 'today';
+                      const isOverdue = !!dueMs && dueMs < startOfDay(new Date()).getTime();
+                      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                      const busy = !!choreCompletionBusy[task.id];
+                      return (
+                        <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
+                          <Form.Check
+                            type="checkbox"
+                            checked={busy}
+                            disabled={busy}
+                            onChange={() => handleCompleteChoreTask(task)}
+                            aria-label={`Complete ${task.title}`}
+                          />
+                          <div className="flex-grow-1">
+                            <div className="fw-semibold">{task.title}</div>
+                            <div className="text-muted small d-flex align-items-center gap-1">
+                              <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
+                            </div>
+                          </div>
+                          <div className="d-flex flex-column align-items-end gap-1">
+                            {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                            <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </Card.Body>
           </Card>
 
           <Card className="shadow-sm border-0 mb-4">

@@ -1635,6 +1635,20 @@
       ]
     },
     {
+      "collectionGroup": "youtube_history",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "watchedAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "monzo_transactions",
       "queryScope": "COLLECTION",
       "fields": [
@@ -1705,6 +1719,10 @@
         {
           "fieldPath": "tags",
           "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
         }
       ]
     },
@@ -1723,6 +1741,10 @@
         {
           "fieldPath": "tags",
           "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
         }
       ]
     }

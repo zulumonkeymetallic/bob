@@ -9,6 +9,7 @@ import { db } from '../firebase';
 import { Task, Story, Goal, Sprint } from '../types';
 import ModernTaskTable from './ModernTaskTable';
 import TasksCardView from './TasksCardView';
+import EditTaskModal from './EditTaskModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useSprint } from '../contexts/SprintContext';
@@ -27,6 +28,7 @@ const TaskListView: React.FC = () => {
   const [dueFilter, setDueFilter] = useState<'all' | 'today'>('all');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
+  const [showAddTaskModal, setShowAddTaskModal] = useState(false);
   const { selectedSprintId, setSelectedSprintId, sprints: rawSprints } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
   const location = useLocation();
@@ -259,6 +261,13 @@ const TaskListView: React.FC = () => {
             </p>
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => setShowAddTaskModal(true)}
+            >
+              Add task
+            </Button>
             <Button
               size="sm"
               variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
@@ -516,6 +525,12 @@ const TaskListView: React.FC = () => {
           </Card.Body>
         </Card>
       </div>
+      <EditTaskModal
+        show={showAddTaskModal}
+        task={null}
+        onHide={() => setShowAddTaskModal(false)}
+        onUpdated={() => setShowAddTaskModal(false)}
+      />
     </div>
   );
 };
