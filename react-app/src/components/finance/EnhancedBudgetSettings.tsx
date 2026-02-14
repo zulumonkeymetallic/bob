@@ -77,6 +77,7 @@ const EnhancedBudgetSettings: React.FC = () => {
     const [createPotBusy, setCreatePotBusy] = useState(false);
     const [createPotError, setCreatePotError] = useState('');
     const [potLinkSaving, setPotLinkSaving] = useState<string | null>(null);
+    const [transferBusy, setTransferBusy] = useState(false);
     const { showSidebar } = useSidebar();
 
     // Load budget data
@@ -287,6 +288,35 @@ const EnhancedBudgetSettings: React.FC = () => {
         } catch (error) {
             console.error('Error saving budgets:', error);
             setSaved('Error saving');
+        }
+    };
+
+    const runTransferPlan = async ({ dryRun, testMode }: { dryRun: boolean; testMode: boolean }) => {
+        if (!currentUser) return;
+        try {
+            setTransferBusy(true);
+            const callable = httpsCallable(functions, 'monzoTransferPlan');
+            const resp: any = await callable({ dryRun, testMode });
+            const payload = resp?.data || {};
+            const plan = payload?.plan || {};
+            const total = formatCurrency(Number(plan.totalPence || 0), currency);
+            if (payload?.ok === false && payload?.error) {
+                setSaved(`Transfer plan ready (${plan.count || 0}), but not executed: ${payload.error}`);
+                return;
+            }
+            const executed = Number(payload?.executed || 0);
+            const planned = Number(plan.count || 0);
+            if (dryRun || testMode) {
+                setSaved(`Transfer simulation complete: ${planned} planned, ${executed} executed, total ${total}.`);
+            } else {
+                setSaved(`Transfers executed: ${executed}/${planned} complete, total ${total}.`);
+            }
+            setTimeout(() => setSaved(''), 5_000);
+        } catch (error: any) {
+            console.error('Transfer plan run failed', error);
+            setSaved(error?.message || 'Transfer run failed');
+        } finally {
+            setTransferBusy(false);
         }
     };
 
@@ -1035,9 +1065,28 @@ const EnhancedBudgetSettings: React.FC = () => {
                                     <Form.Text className="text-muted">Dry-run only until transfers are enabled.</Form.Text>
                                 </Col>
                                 <Col md={4}>
-                                    <Button variant="outline-primary" onClick={() => setSaved('Simulation: no money moved')}>
-                                        Simulate transfers (dry run)
-                                    </Button>
+                                    <div className="d-flex gap-2">
+                                        <Button
+                                            variant="outline-primary"
+                                            disabled={transferBusy}
+                                            onClick={() => runTransferPlan({ dryRun: true, testMode: true })}
+                                        >
+                                            {transferBusy ? 'Running…' : 'Simulate transfers'}
+                                        </Button>
+                                        <Button
+                                            variant="primary"
+                                            disabled={transferBusy || !autoTransferEnabled}
+                                            onClick={() => {
+                                                if (!window.confirm('Execute live Monzo transfers now?')) return;
+                                                runTransferPlan({ dryRun: false, testMode: false });
+                                            }}
+                                        >
+                                            Run now
+                                        </Button>
+                                    </div>
+                                    <Form.Text className="text-muted">
+                                        Live run requires auto-transfer enabled.
+                                    </Form.Text>
                                 </Col>
                             </Row>
 

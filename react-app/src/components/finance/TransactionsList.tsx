@@ -21,6 +21,7 @@ type TxRow = {
   userCategoryKey?: string | null;
   userCategoryLabel?: string | null;
   userCategoryType?: string | null;
+  defaultCategoryLabel?: string | null;
   defaultCategoryType?: string | null;
   aiCategoryKey?: string | null;
   aiCategoryLabel?: string | null;
@@ -43,20 +44,85 @@ type DisplayRow =
   | { kind: 'row'; row: TxRow };
 
 const PAGE_SIZE = 150;
-const COLUMN_STORAGE_KEY = 'finance_tx_columns';
+const COLUMN_STORAGE_KEY = 'finance_tx_columns_v2';
 const COLUMN_OPTIONS = [
-  { key: 'date', label: 'Date', width: '1.05fr' },
-  { key: 'merchant', label: 'Merchant', width: '1.2fr' },
-  { key: 'description', label: 'Description / Pot', width: '1.55fr' },
-  { key: 'bucket', label: 'Bucket', width: '0.95fr' },
-  { key: 'category', label: 'Category', width: '1.45fr' },
-  { key: 'aiCategory', label: 'AI Category', width: '1.15fr' },
-  { key: 'aiSuggestion', label: 'AI Suggestion', width: '1.2fr' },
+  { key: 'date', label: 'Date', width: '1.1fr' },
+  { key: 'merchant', label: 'Merchant', width: '1.3fr' },
+  { key: 'description', label: 'Description / Pot', width: '1.8fr' },
+  { key: 'bucket', label: 'Bucket', width: '1.05fr' },
+  { key: 'category', label: 'Category', width: '1.7fr' },
+  { key: 'aiCategory', label: 'AI Category', width: '1.3fr' },
+  { key: 'aiSuggestion', label: 'AI Suggestion', width: '1.25fr' },
   { key: 'anomaly', label: 'Anomaly', width: '1.1fr' },
-  { key: 'amount', label: 'Amount', width: '0.85fr' },
-  { key: 'actions', label: 'Actions', width: '0.95fr' },
+  { key: 'amount', label: 'Amount', width: '0.95fr' },
+  { key: 'actions', label: 'Actions', width: '1.25fr' },
 ];
-const DEFAULT_VISIBLE_COLUMNS = ['date', 'merchant', 'description', 'bucket', 'category', 'aiCategory', 'amount', 'actions'];
+const DEFAULT_VISIBLE_COLUMNS = ['date', 'merchant', 'description', 'category', 'amount', 'actions'];
+const COMPACT_COLUMN_PRIORITY = ['date', 'merchant', 'description', 'category', 'amount', 'actions'];
+const NARROW_COLUMN_PRIORITY = ['date', 'merchant', 'category', 'amount', 'actions'];
+const ULTRA_COMPACT_COLUMN_PRIORITY = ['date', 'merchant', 'amount', 'actions'];
+type SortableColumn = 'date' | 'merchant' | 'description' | 'bucket' | 'category' | 'aiCategory' | 'aiSuggestion' | 'anomaly' | 'amount';
+type SortDirection = 'asc' | 'desc';
+
+const SORTABLE_COLUMNS: SortableColumn[] = ['date', 'merchant', 'description', 'bucket', 'category', 'aiCategory', 'aiSuggestion', 'anomaly', 'amount'];
+const SORT_COLUMN_LABELS: Record<SortableColumn, string> = {
+  date: 'Date',
+  merchant: 'Merchant',
+  description: 'Description / Pot',
+  bucket: 'Bucket',
+  category: 'Category',
+  aiCategory: 'AI Category',
+  aiSuggestion: 'AI Suggestion',
+  anomaly: 'Anomaly',
+  amount: 'Amount',
+};
+const DEFAULT_SORT_DIRECTION: Record<SortableColumn, SortDirection> = {
+  date: 'desc',
+  merchant: 'asc',
+  description: 'asc',
+  bucket: 'asc',
+  category: 'asc',
+  aiCategory: 'asc',
+  aiSuggestion: 'asc',
+  anomaly: 'desc',
+  amount: 'desc',
+};
+
+const toText = (value: any, fallback = ''): string => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || fallback;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const candidates = [
+      value.name,
+      value.label,
+      value.title,
+      value.displayName,
+      value.merchantName,
+      value.categoryLabel,
+      value.categoryKey,
+      value.id,
+      value.key,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed) return trimmed;
+      } else if (typeof candidate === 'number' || typeof candidate === 'boolean') {
+        return String(candidate);
+      }
+    }
+  }
+  return fallback;
+};
+
+const toNullableText = (value: any): string | null => {
+  const text = toText(value, '');
+  return text || null;
+};
 
 const TransactionsList: React.FC = () => {
   const { currentUser } = useAuth();
@@ -73,17 +139,22 @@ const TransactionsList: React.FC = () => {
   const [amountMin, setAmountMin] = useState<string>('');
   const [amountMax, setAmountMax] = useState<string>('');
   const [missingOnly, setMissingOnly] = useState<boolean>(false);
+  const [anomalyFilter, setAnomalyFilter] = useState<'all' | 'flagged' | 'normal'>('all');
   const [categorySelection, setCategorySelection] = useState<Record<string, string>>({});
   const pageAnchorsRef = React.useRef<Array<DocumentSnapshot | null>>([null]);
   const [pageIndex, setPageIndex] = useState(0);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [hasPrevPage, setHasPrevPage] = useState(false);
-  const [sortKey, setSortKey] = useState<'date_desc' | 'amount_desc' | 'amount_asc'>('date_desc');
+  const [sortColumn, setSortColumn] = useState<SortableColumn>('date');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [groupByMerchant, setGroupByMerchant] = useState(false);
-  const [tableRef, bounds] = useMeasure();
+  const [tableRef] = useMeasure();
+  const [tableShellRef, shellBounds] = useMeasure();
   const [customCategories, setCustomCategories] = useState<FinanceCategory[]>([]);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
+  const [dataScope, setDataScope] = useState<'page' | 'all'>('page');
+  const [datasetRowCount, setDatasetRowCount] = useState(0);
   const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem(COLUMN_STORAGE_KEY);
@@ -93,6 +164,7 @@ const TransactionsList: React.FC = () => {
     return DEFAULT_VISIBLE_COLUMNS;
   });
   const [showAnomalyToast, setShowAnomalyToast] = useState(true);
+  const fullDatasetMode = missingOnly || anomalyFilter !== 'all';
 
   const mapDocToRow = useCallback((d: any): TxRow => {
     const data = d.data() as any;
@@ -101,21 +173,22 @@ const TransactionsList: React.FC = () => {
     const createdAt = data.createdAt instanceof Timestamp ? data.createdAt.toDate() : null;
     return {
       id: d.id,
-      transactionId: data.transactionId || d.id,
+      transactionId: toText(data.transactionId, d.id),
       createdISO: createdAt ? createdAt.toISOString() : data.createdISO || null,
       amount: typeof data.amount === 'number' ? data.amount : (data.amountMinor || 0) / 100,
-      description: data.description || data.defaultCategoryLabel || 'Transaction',
-      merchant: data.merchant?.name || data.counterparty?.name || null,
-      merchantLogo: data.merchant?.logo || null,
-      merchantKey: data.merchantKey || null,
-      userCategoryKey: data.userCategoryKey || null,
-      userCategoryLabel: data.userCategoryLabel || data.defaultCategoryLabel || null,
-      userCategoryType: data.userCategoryType || data.defaultCategoryType || null,
-      defaultCategoryType: data.defaultCategoryType || null,
-      aiCategoryKey: data.aiCategoryKey || null,
-      aiCategoryLabel: data.aiCategoryLabel || null,
-      aiBucket: data.aiBucket || null,
-      aiReduceSuggestion: data.aiReduceSuggestion || null,
+      description: toText(data.description || data.defaultCategoryLabel, 'Transaction'),
+      merchant: toNullableText(data.merchant?.name || data.merchant || data.counterparty?.name),
+      merchantLogo: toNullableText(data.merchant?.logo),
+      merchantKey: toNullableText(data.merchantKey),
+      userCategoryKey: toNullableText(data.userCategoryKey),
+      userCategoryLabel: toNullableText(data.userCategoryLabel),
+      userCategoryType: toNullableText(data.userCategoryType || data.defaultCategoryType),
+      defaultCategoryLabel: toNullableText(data.defaultCategoryLabel),
+      defaultCategoryType: toNullableText(data.defaultCategoryType),
+      aiCategoryKey: toNullableText(data.aiCategoryKey),
+      aiCategoryLabel: toNullableText(data.aiCategoryLabel),
+      aiBucket: toNullableText(data.aiBucket),
+      aiReduceSuggestion: toNullableText(data.aiReduceSuggestion),
       aiAnomalyFlag: !!data.aiAnomalyFlag,
       aiAnomalyReason: data.aiAnomalyReason || null,
       aiAnomalyScore: data.aiAnomalyScore || null,
@@ -150,6 +223,8 @@ const TransactionsList: React.FC = () => {
       const snap = await getDocs(qBase);
       const docs = snap.docs.slice(0, PAGE_SIZE);
       setRows(docs.map(mapDocToRow));
+      setDataScope('page');
+      setDatasetRowCount(docs.length);
       setHasPrevPage(targetIndex > 0);
       setHasNextPage(snap.docs.length > PAGE_SIZE);
       const newAnchors = [...anchors];
@@ -167,10 +242,41 @@ const TransactionsList: React.FC = () => {
     }
   }, [currentUser, mapDocToRow]);
 
+  const loadAllRows = useCallback(async () => {
+    if (!currentUser) return;
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      const fullQuery = query(
+        collection(db, 'monzo_transactions'),
+        where('ownerUid', '==', currentUser.uid),
+        orderBy('createdAt', 'desc')
+      );
+      const snap = await getDocs(fullQuery);
+      setRows(snap.docs.map(mapDocToRow));
+      pageAnchorsRef.current = [null];
+      setHasPrevPage(false);
+      setHasNextPage(false);
+      setPageIndex(0);
+      setDataScope('all');
+      setDatasetRowCount(snap.size);
+      setLastLoadedAt(new Date());
+    } catch (err) {
+      console.error('Failed to load full transactions dataset', err);
+      setErrorMsg((err as any)?.message || 'Failed to load full transactions dataset.');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUser, mapDocToRow]);
+
   useEffect(() => {
     if (!currentUser) return;
+    if (fullDatasetMode) {
+      loadAllRows();
+      return;
+    }
     loadPage(0);
-  }, [currentUser, loadPage]);
+  }, [currentUser, fullDatasetMode, loadAllRows, loadPage]);
 
   useEffect(() => {
     if (!currentUser?.uid) {
@@ -185,7 +291,10 @@ const TransactionsList: React.FC = () => {
         const arr = Array.isArray(data?.categories) ? data.categories : [];
         setCustomCategories(arr.filter((c) => c?.key) as FinanceCategory[]);
       },
-      (err) => console.error('Failed to load finance categories', err)
+      (err) => {
+        console.error('Failed to load finance categories', err);
+        setErrorMsg((err as any)?.message || 'Missing permission to load finance categories.');
+      }
     );
     return () => unsub();
   }, [currentUser]);
@@ -193,20 +302,27 @@ const TransactionsList: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     const potsQuery = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
-    const unsub = onSnapshot(potsQuery, (snap) => {
-      const map: Record<string, { name: string; balance: number; currency: string }> = {};
-      snap.docs.forEach((d) => {
-        const data = d.data() as any;
-        const id = data.potId || d.id;
-        if (!id) return;
-        map[String(id)] = {
-          name: data.name || id,
-          balance: data.balance || 0,
-          currency: data.currency || 'GBP',
-        };
-      });
-      setPots(map);
-    });
+    const unsub = onSnapshot(
+      potsQuery,
+      (snap) => {
+        const map: Record<string, { name: string; balance: number; currency: string }> = {};
+        snap.docs.forEach((d) => {
+          const data = d.data() as any;
+          const id = data.potId || d.id;
+          if (!id) return;
+          map[String(id)] = {
+            name: data.name || id,
+            balance: data.balance || 0,
+            currency: data.currency || 'GBP',
+          };
+        });
+        setPots(map);
+      },
+      (err) => {
+        console.error('Failed to load Monzo pots snapshot', err);
+        setErrorMsg((err as any)?.message || 'Missing permission to load Monzo pots.');
+      }
+    );
     return () => unsub();
   }, [currentUser]);
 
@@ -231,9 +347,9 @@ const TransactionsList: React.FC = () => {
       const isTransferToPot = Boolean(meta.destination_pot_id) || (!meta.source_pot_id && r.amount < 0);
       const transferLabel = potName ? `Transfer ${isTransferToPot ? 'to' : 'from'} ${potName}` : null;
       const displayDescription =
-        transferLabel && (r.description || '').startsWith('pot_') ? transferLabel : r.description;
-      const displayCategoryLabel = transferLabel || r.aiCategoryLabel || r.userCategoryLabel || null;
-      const displayBucket = isPotTransfer ? 'bank_transfer' : (r.aiBucket || r.userCategoryType || r.defaultCategoryType || null);
+        transferLabel && toText(r.description, '').startsWith('pot_') ? transferLabel : toText(r.description, 'Transaction');
+      const displayCategoryLabel = transferLabel || toNullableText(r.aiCategoryLabel || r.userCategoryLabel || r.defaultCategoryLabel);
+      const displayBucket = isPotTransfer ? 'bank_transfer' : toNullableText(r.aiBucket || r.userCategoryType || r.defaultCategoryType);
       return {
         ...r,
         potName,
@@ -256,24 +372,50 @@ const TransactionsList: React.FC = () => {
       if (potFilter !== 'all' && (r.potId || '') !== potFilter) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${r.description || ''} ${r.merchant || ''} ${r.userCategoryLabel || ''} ${r.aiCategoryLabel || ''} ${r.displayCategoryLabel || ''} ${r.aiReduceSuggestion || ''} ${r.potName || ''}`.toLowerCase();
+        const hay = `${toText(r.description, '')} ${toText(r.merchant, '')} ${toText(r.userCategoryLabel, '')} ${toText(r.aiCategoryLabel, '')} ${toText(r.displayCategoryLabel, '')} ${toText(r.aiReduceSuggestion, '')} ${toText(r.potName, '')}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      if (merchantFilter.trim() && !(r.merchant || '').toLowerCase().includes(merchantFilter.toLowerCase())) return false;
-      if (descFilter.trim() && !(r.displayDescription || r.description || '').toLowerCase().includes(descFilter.toLowerCase())) return false;
-      if (missingOnly && (r.userCategoryKey || r.userCategoryLabel)) return false;
+      if (merchantFilter.trim() && !toText(r.merchant, '').toLowerCase().includes(merchantFilter.toLowerCase())) return false;
+      if (descFilter.trim() && !toText(r.displayDescription || r.description, '').toLowerCase().includes(descFilter.toLowerCase())) return false;
+      if (missingOnly && toText(r.userCategoryKey, '')) return false;
+      if (anomalyFilter === 'flagged' && !r.aiAnomalyFlag) return false;
+      if (anomalyFilter === 'normal' && r.aiAnomalyFlag) return false;
       const amt = Math.abs(r.amount);
       if (amountMin && amt < Number(amountMin)) return false;
       if (amountMax && amt > Number(amountMax)) return false;
       return true;
     });
 
+    const sortableValue = (row: TxRow, key: SortableColumn): number | string => {
+      const selectedCategoryKey = categorySelection[row.id] ?? row.userCategoryKey ?? (row.isPotTransfer ? 'pot_transfer' : '');
+      const selectedCategoryLabel = selectedCategoryKey
+        ? getCategoryByKey(selectedCategoryKey, allCategories)?.label || selectedCategoryKey
+        : '';
+      const bucketRaw = row.displayBucket || row.aiBucket || row.userCategoryType || row.defaultCategoryType || 'unknown';
+      const bucketKey = bucketRaw === 'discretionary' ? 'optional' : bucketRaw;
+      const bucketLabel = BUCKET_LABELS[bucketKey as keyof typeof BUCKET_LABELS] || bucketKey || 'unknown';
+
+      if (key === 'date') return row.createdISO ? new Date(row.createdISO).getTime() : 0;
+      if (key === 'merchant') return toText(row.merchant, '').toLowerCase();
+      if (key === 'description') return toText(row.displayDescription || row.description, '').toLowerCase();
+      if (key === 'bucket') return bucketLabel.toLowerCase();
+      if (key === 'category') return selectedCategoryLabel.toLowerCase();
+      if (key === 'aiCategory') return toText(row.displayCategoryLabel || row.aiCategoryLabel || row.aiCategoryKey, '').toLowerCase();
+      if (key === 'aiSuggestion') return toText(row.aiReduceSuggestion, '').toLowerCase();
+      if (key === 'anomaly') return row.aiAnomalyFlag ? (row.aiAnomalyScore || 1) : 0;
+      return Math.abs(row.amount || 0);
+    };
+
     const sorted = [...subset].sort((a, b) => {
-      if (sortKey === 'amount_desc') return Math.abs(b.amount) - Math.abs(a.amount);
-      if (sortKey === 'amount_asc') return Math.abs(a.amount) - Math.abs(b.amount);
-      const at = a.createdISO ? new Date(a.createdISO).getTime() : 0;
-      const bt = b.createdISO ? new Date(b.createdISO).getTime() : 0;
-      return bt - at;
+      const aVal = sortableValue(a, sortColumn);
+      const bVal = sortableValue(b, sortColumn);
+      let comparison = 0;
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        comparison = aVal - bVal;
+      } else {
+        comparison = String(aVal).localeCompare(String(bVal), undefined, { numeric: true, sensitivity: 'base' });
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
     });
     return sorted;
   }, [
@@ -286,9 +428,13 @@ const TransactionsList: React.FC = () => {
     merchantFilter,
     descFilter,
     missingOnly,
+    anomalyFilter,
     amountMin,
     amountMax,
-    sortKey,
+    allCategories,
+    categorySelection,
+    sortColumn,
+    sortDirection,
   ]);
 
   const visibleColumnOptions = useMemo(() => {
@@ -297,12 +443,28 @@ const TransactionsList: React.FC = () => {
     return map;
   }, []);
 
+  const availableTableWidth = Math.floor(shellBounds.width || 0);
+  const compactLevel: 'full' | 'narrow' | 'ultra' = useMemo(() => {
+    if (availableTableWidth > 0 && availableTableWidth < 1060) return 'ultra';
+    if (availableTableWidth > 0 && availableTableWidth < 1360) return 'narrow';
+    return 'full';
+  }, [availableTableWidth]);
+  const effectiveVisibleColumns = useMemo(() => {
+    const base = visibleColumns.length ? visibleColumns : DEFAULT_VISIBLE_COLUMNS;
+    if (compactLevel === 'full') return base;
+    const priority = compactLevel === 'ultra' ? ULTRA_COMPACT_COLUMN_PRIORITY : NARROW_COLUMN_PRIORITY;
+    const compact = priority.filter((key) => base.includes(key));
+    if (compact.length) return compact;
+    return compactLevel === 'ultra' ? ULTRA_COMPACT_COLUMN_PRIORITY : COMPACT_COLUMN_PRIORITY;
+  }, [compactLevel, visibleColumns]);
+
   const gridTemplateColumns = useMemo(() => {
-    const widths = visibleColumns
+    const widths = effectiveVisibleColumns
       .map((key) => visibleColumnOptions.get(key)?.width)
       .filter(Boolean) as string[];
-    return widths.length ? widths.join(' ') : COLUMN_OPTIONS.map((c) => c.width).join(' ');
-  }, [visibleColumnOptions, visibleColumns]);
+    const sized = widths.length ? widths : COLUMN_OPTIONS.map((c) => c.width);
+    return sized.map((width) => `minmax(0, ${width})`).join(' ');
+  }, [effectiveVisibleColumns, visibleColumnOptions]);
 
   useEffect(() => {
     try {
@@ -385,6 +547,7 @@ const TransactionsList: React.FC = () => {
         docId: tx.id,
         categoryKey,
         categoryLabel: cat?.label || categoryKey,
+        categoryType: mapBucketToType(bucket),
       });
 
       if (tx.merchantKey || tx.merchant) {
@@ -398,7 +561,8 @@ const TransactionsList: React.FC = () => {
           applyToExisting,
         });
       }
-      await loadPage(pageIndex);
+      if (fullDatasetMode) await loadAllRows();
+      else await loadPage(pageIndex);
     } catch (err) {
       console.error('Failed to update category', err);
       setErrorMsg((err as any)?.message || 'Failed to update category');
@@ -410,6 +574,33 @@ const TransactionsList: React.FC = () => {
   if (!currentUser) {
     return <Alert variant="warning" className="m-3">Sign in to view transactions.</Alert>;
   }
+
+  const toggleHeaderSort = (column: SortableColumn) => {
+    if (sortColumn === column) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortColumn(column);
+    setSortDirection(DEFAULT_SORT_DIRECTION[column]);
+  };
+
+  const sortIndicator = (column: SortableColumn) => {
+    if (sortColumn !== column) return '↕';
+    return sortDirection === 'asc' ? '↑' : '↓';
+  };
+
+  const renderSortHeader = (column: SortableColumn, endAligned = false) => (
+    <button
+      type="button"
+      className={`finance-sort-header${endAligned ? ' finance-sort-header--end' : ''}${sortColumn === column ? ' is-active' : ''}`}
+      onClick={() => toggleHeaderSort(column)}
+    >
+      <span>{SORT_COLUMN_LABELS[column]}</span>
+      <span className="finance-sort-indicator">{sortIndicator(column)}</span>
+    </button>
+  );
+
+  const tableWidth = Math.max(availableTableWidth - 2, 320);
 
   const renderCategoryControl = (tx: TxRow, currentKey: string) => {
     return (
@@ -433,9 +624,43 @@ const TransactionsList: React.FC = () => {
     );
   };
 
+  const refreshSnapshot = () => {
+    if (fullDatasetMode) {
+      loadAllRows();
+      return;
+    }
+    loadPage(pageIndex);
+  };
+
+  const renderColumnsMenu = () => (
+    <Dropdown align="end">
+      <Dropdown.Toggle size="sm" variant="outline-secondary">View columns</Dropdown.Toggle>
+      <Dropdown.Menu style={{ minWidth: 220 }}>
+        {COLUMN_OPTIONS.map((col) => (
+          <Dropdown.Item key={col.key} as="div" className="px-3">
+            <Form.Check
+              type="switch"
+              id={`col-${col.key}`}
+              label={col.label}
+              checked={visibleColumns.includes(col.key)}
+              onChange={() =>
+                setVisibleColumns((prev) => {
+                  if (prev.includes(col.key) && prev.length === 1) return prev;
+                  return prev.includes(col.key)
+                    ? prev.filter((k) => k !== col.key)
+                    : [...prev, col.key];
+                })
+              }
+            />
+          </Dropdown.Item>
+        ))}
+      </Dropdown.Menu>
+    </Dropdown>
+  );
+
   return (
     <div className="finance-table-page">
-      <div className="container" ref={tableRef}>
+      <div className="container-fluid finance-table-container" ref={tableRef}>
         <div className="d-flex justify-content-between align-items-center mb-2">
           <span className="small text-muted">Signed in as: <code>{currentUser.uid}</code></span>
         </div>
@@ -443,7 +668,8 @@ const TransactionsList: React.FC = () => {
           <div>
             <h3 className="mb-1">Monzo Transactions</h3>
             <div className="text-muted">
-              Excel-like view with grouping, filters, pagination (150/page). Uses the last synced Firestore snapshot — refresh does not trigger a Monzo resync. You can save categories even while a refresh runs.
+              Modern virtualized table with grouping, filters, and 150/page pagination. `Missing category` and anomaly
+              filters automatically switch to all-record mode so they scan your full transaction history.
             </div>
           </div>
           <div className="d-flex flex-wrap gap-2 align-items-center text-muted small">
@@ -454,31 +680,9 @@ const TransactionsList: React.FC = () => {
                 Loaded {lastLoadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             ) : null}
-            <Button size="sm" variant="outline-secondary" disabled={loading} onClick={() => loadPage(pageIndex)}>
+            <Button size="sm" variant="outline-secondary" disabled={loading} onClick={refreshSnapshot}>
               Refresh snapshot
             </Button>
-            <Dropdown align="end">
-              <Dropdown.Toggle size="sm" variant="outline-secondary">Columns</Dropdown.Toggle>
-              <Dropdown.Menu style={{ minWidth: 220 }}>
-                {COLUMN_OPTIONS.map((col) => (
-                  <Dropdown.Item key={col.key} as="div" className="px-3">
-                    <Form.Check
-                      type="switch"
-                      id={`col-${col.key}`}
-                      label={col.label}
-                      checked={visibleColumns.includes(col.key)}
-                      onChange={() =>
-                        setVisibleColumns((prev) =>
-                          prev.includes(col.key)
-                            ? prev.filter((k) => k !== col.key)
-                            : [...prev, col.key]
-                        )
-                      }
-                    />
-                  </Dropdown.Item>
-                ))}
-              </Dropdown.Menu>
-            </Dropdown>
           </div>
         </div>
 
@@ -549,13 +753,27 @@ const TransactionsList: React.FC = () => {
                 />
               </Col>
               <Col md={2} className="d-flex align-items-center gap-2">
-                <Form.Check
-                  type="switch"
-                  id="missing-only"
-                  label="Missing category"
-                  checked={missingOnly}
-                  onChange={(e) => setMissingOnly(e.target.checked)}
-                />
+                <div className="w-100">
+                  <Form.Label className="text-muted small">Anomaly</Form.Label>
+                  <Form.Select
+                    size="sm"
+                    className="finance-input"
+                    value={anomalyFilter}
+                    onChange={(e) => setAnomalyFilter(e.target.value as 'all' | 'flagged' | 'normal')}
+                  >
+                    <option value="all">All transactions</option>
+                    <option value="flagged">Flagged only</option>
+                    <option value="normal">Non-flagged only</option>
+                  </Form.Select>
+                  <Form.Check
+                    className="mt-2"
+                    type="switch"
+                    id="missing-only"
+                    label="Missing category"
+                    checked={missingOnly}
+                    onChange={(e) => setMissingOnly(e.target.checked)}
+                  />
+                </div>
               </Col>
             </Row>
 
@@ -582,11 +800,27 @@ const TransactionsList: React.FC = () => {
               </Col>
               <Col md={3}>
                 <Form.Label className="text-muted small">Sort</Form.Label>
-                <Form.Select size="sm" className="finance-input" value={sortKey} onChange={(e) => setSortKey(e.target.value as any)}>
-                  <option value="date_desc">Newest first</option>
-                  <option value="amount_desc">Amount (high → low)</option>
-                  <option value="amount_asc">Amount (low → high)</option>
-                </Form.Select>
+                <div className="d-flex gap-2">
+                  <Form.Select
+                    size="sm"
+                    className="finance-input"
+                    value={sortColumn}
+                    onChange={(e) => setSortColumn(e.target.value as SortableColumn)}
+                  >
+                    {SORTABLE_COLUMNS.map((column) => (
+                      <option key={column} value={column}>{SORT_COLUMN_LABELS[column]}</option>
+                    ))}
+                  </Form.Select>
+                  <Form.Select
+                    size="sm"
+                    className="finance-input"
+                    value={sortDirection}
+                    onChange={(e) => setSortDirection(e.target.value as SortDirection)}
+                  >
+                    <option value="asc">Asc</option>
+                    <option value="desc">Desc</option>
+                  </Form.Select>
+                </div>
               </Col>
               <Col md={3} className="d-flex align-items-center gap-3 justify-content-end">
                 <Form.Check
@@ -596,25 +830,29 @@ const TransactionsList: React.FC = () => {
                   checked={groupByMerchant}
                   onChange={(e) => setGroupByMerchant(e.target.checked)}
                 />
-                <div className="d-flex align-items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline-secondary"
-                    disabled={!hasPrevPage || loading}
-                    onClick={() => loadPage(Math.max(0, pageIndex - 1))}
-                  >
-                    ◀ Prev
-                  </Button>
-                  <span className="small text-muted">Page {pageIndex + 1}</span>
-                  <Button
-                    size="sm"
-                    variant="outline-secondary"
-                    disabled={!hasNextPage || loading}
-                    onClick={() => loadPage(pageIndex + 1)}
-                  >
-                    Next ▶
-                  </Button>
-                </div>
+                {!fullDatasetMode ? (
+                  <div className="d-flex align-items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline-secondary"
+                      disabled={!hasPrevPage || loading}
+                      onClick={() => loadPage(Math.max(0, pageIndex - 1))}
+                    >
+                      ◀ Prev
+                    </Button>
+                    <span className="small text-muted">Page {pageIndex + 1}</span>
+                    <Button
+                      size="sm"
+                      variant="outline-secondary"
+                      disabled={!hasNextPage || loading}
+                      onClick={() => loadPage(pageIndex + 1)}
+                    >
+                      Next ▶
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="small text-muted">All-record mode (pagination off)</span>
+                )}
               </Col>
             </Row>
         </Card.Body>
@@ -622,7 +860,11 @@ const TransactionsList: React.FC = () => {
 
         <Card className="finance-table-card shadow-sm border-0">
           <div className="finance-table-meta d-flex justify-content-between align-items-center">
-            <div className="small text-muted">Showing up to {PAGE_SIZE} rows per page</div>
+            <div className="small text-muted">
+              {dataScope === 'all'
+                ? `Full dataset loaded: ${datasetRowCount.toLocaleString()} transactions`
+                : `Showing up to ${PAGE_SIZE} rows per page`}
+            </div>
           <div className="d-flex align-items-center gap-3">
             {errorMsg && <span className="text-danger small">{errorMsg}</span>}
             {!loading && lastLoadedAt ? (
@@ -633,18 +875,26 @@ const TransactionsList: React.FC = () => {
             {loading && <div className="small text-muted">Loading snapshot… (you can still edit rows)</div>}
           </div>
         </div>
-        <div className="finance-table-shell">
+        <div className="finance-table-shell" ref={tableShellRef}>
+          <div className="finance-grid-toolbar">
+            <div className="small text-muted">
+              {compactLevel !== 'full'
+                ? `Compact column mode (${compactLevel}) enabled for laptop widths. Expand window to show more columns.`
+                : `${effectiveVisibleColumns.length} columns visible`}
+            </div>
+            {renderColumnsMenu()}
+          </div>
           <div className="finance-grid-header" style={{ gridTemplateColumns }}>
-            {visibleColumns.includes('date') && <span>Date</span>}
-            {visibleColumns.includes('merchant') && <span>Merchant</span>}
-            {visibleColumns.includes('description') && <span>Description / Pot</span>}
-            {visibleColumns.includes('bucket') && <span>Bucket</span>}
-            {visibleColumns.includes('category') && <span>Category</span>}
-            {visibleColumns.includes('aiCategory') && <span>AI Category</span>}
-            {visibleColumns.includes('aiSuggestion') && <span>AI Suggestion</span>}
-            {visibleColumns.includes('anomaly') && <span>Anomaly</span>}
-            {visibleColumns.includes('amount') && <span className="text-end">Amount</span>}
-            {visibleColumns.includes('actions') && <span className="text-end">Actions</span>}
+            {effectiveVisibleColumns.includes('date') && renderSortHeader('date')}
+            {effectiveVisibleColumns.includes('merchant') && renderSortHeader('merchant')}
+            {effectiveVisibleColumns.includes('description') && renderSortHeader('description')}
+            {effectiveVisibleColumns.includes('bucket') && renderSortHeader('bucket')}
+            {effectiveVisibleColumns.includes('category') && renderSortHeader('category')}
+            {effectiveVisibleColumns.includes('aiCategory') && renderSortHeader('aiCategory')}
+            {effectiveVisibleColumns.includes('aiSuggestion') && renderSortHeader('aiSuggestion')}
+            {effectiveVisibleColumns.includes('anomaly') && renderSortHeader('anomaly')}
+            {effectiveVisibleColumns.includes('amount') && renderSortHeader('amount', true)}
+            {effectiveVisibleColumns.includes('actions') && <span className="text-end">Actions</span>}
           </div>
           {!loading && displayRows.length === 0 ? (
             <div className="finance-empty">No transactions match your filters.</div>
@@ -653,7 +903,7 @@ const TransactionsList: React.FC = () => {
             <div className="finance-list-wrapper">
               <List
                   height={580}
-                  width={bounds.width || 1200}
+                  width={tableWidth}
                   itemCount={displayRows.length}
                   itemSize={92}
                   itemKey={(index) => {
@@ -684,13 +934,13 @@ const TransactionsList: React.FC = () => {
                     const anomalyLabel = tx.aiAnomalyFlag ? 'Anomaly' : '—';
                     return (
                       <div style={{ ...style, gridTemplateColumns }} className={`finance-row${tx.aiAnomalyFlag ? ' finance-row--anomaly' : ''}`}>
-                        {visibleColumns.includes('date') && (
+                        {effectiveVisibleColumns.includes('date') && (
                           <div className="finance-cell">
                           <div className="finance-label">{dateLabel}</div>
                           <div className="finance-subtext">{timeLabel}</div>
                         </div>
                         )}
-                        {visibleColumns.includes('merchant') && (
+                        {effectiveVisibleColumns.includes('merchant') && (
                           <div className="finance-cell">
                           <div className="d-flex align-items-center gap-2">
                             {tx.merchantLogo ? (
@@ -699,21 +949,21 @@ const TransactionsList: React.FC = () => {
                               <div className="finance-avatar-placeholder" />
                             )}
                             <div>
-                              <div className="finance-label">{tx.merchant || '—'}</div>
-                              <div className="finance-subtext">{tx.merchantKey || '—'}</div>
+                              <div className="finance-label">{toText(tx.merchant, '—')}</div>
+                              <div className="finance-subtext">{toText(tx.merchantKey, '—')}</div>
                             </div>
                           </div>
                         </div>
                         )}
-                        {visibleColumns.includes('description') && (
+                        {effectiveVisibleColumns.includes('description') && (
                           <div className="finance-cell">
-                          <div className="finance-label text-truncate" title={tx.displayDescription || tx.description}>
-                            {tx.displayDescription || tx.description}
+                          <div className="finance-label text-truncate" title={toText(tx.displayDescription || tx.description, 'Transaction')}>
+                            {toText(tx.displayDescription || tx.description, 'Transaction')}
                           </div>
-                          <div className="finance-subtext">{tx.potName || 'No pot'}</div>
+                          <div className="finance-subtext">{toText(tx.potName, 'No pot')}</div>
                         </div>
                         )}
-                        {visibleColumns.includes('bucket') && (
+                        {effectiveVisibleColumns.includes('bucket') && (
                           <div className="finance-cell">
                             <div className="finance-chip subtle">
                               {bucketLabelFromCategory(
@@ -723,23 +973,23 @@ const TransactionsList: React.FC = () => {
                             </div>
                           </div>
                         )}
-                        {visibleColumns.includes('category') && (
+                        {effectiveVisibleColumns.includes('category') && (
                           <div className="finance-cell">
                             {renderCategoryControl(tx, selectedKey)}
                           </div>
                         )}
-                        {visibleColumns.includes('aiCategory') && (
+                        {effectiveVisibleColumns.includes('aiCategory') && (
                           <div className="finance-cell">
-                            <div className="finance-label">{tx.displayCategoryLabel || tx.aiCategoryLabel || tx.aiCategoryKey || '—'}</div>
-                            <div className="finance-subtext">{tx.displayBucket || tx.aiBucket || 'Unassigned'}</div>
+                            <div className="finance-label">{toText(tx.displayCategoryLabel || tx.aiCategoryLabel || tx.aiCategoryKey, '—')}</div>
+                            <div className="finance-subtext">{toText(tx.displayBucket || tx.aiBucket, 'Unassigned')}</div>
                           </div>
                         )}
-                        {visibleColumns.includes('aiSuggestion') && (
+                        {effectiveVisibleColumns.includes('aiSuggestion') && (
                           <div className="finance-cell">
                             <div className="finance-subtext">{tx.aiReduceSuggestion || '—'}</div>
                           </div>
                         )}
-                        {visibleColumns.includes('anomaly') && (
+                        {effectiveVisibleColumns.includes('anomaly') && (
                           <div className="finance-cell">
                             <Badge bg={tx.aiAnomalyFlag ? 'danger' : 'secondary'}>{anomalyLabel}</Badge>
                             {tx.aiAnomalyReason && (
@@ -747,12 +997,12 @@ const TransactionsList: React.FC = () => {
                             )}
                           </div>
                         )}
-                        {visibleColumns.includes('amount') && (
+                        {effectiveVisibleColumns.includes('amount') && (
                           <div className="finance-cell text-end">
                           <div className={amountClass}>{formatMoney(tx.amount)}</div>
                         </div>
                         )}
-                        {visibleColumns.includes('actions') && (
+                        {effectiveVisibleColumns.includes('actions') && (
                           <div className="finance-cell">
                           <div className="finance-actions">
                             <Button

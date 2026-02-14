@@ -51,6 +51,23 @@ try {
 } catch (e) {
   console.warn('[init] dailyDigestGenerator not loaded', e?.message || e);
 }
+
+try {
+  const financeEnhancements = require('./finance/enhancements');
+  if (financeEnhancements) {
+    exports.importExternalFinanceTransactions = financeEnhancements.importExternalFinanceTransactions;
+    exports.importMonzoTransactionsCsv = financeEnhancements.importMonzoTransactionsCsv;
+    exports.matchExternalToMonzoTransactions = financeEnhancements.matchExternalToMonzoTransactions;
+    exports.recomputeDebtServiceBreakdown = financeEnhancements.recomputeDebtServiceBreakdown;
+    exports.generateFinanceActionInsights = financeEnhancements.generateFinanceActionInsights;
+    exports.convertFinanceActionToStory = financeEnhancements.convertFinanceActionToStory;
+    exports.upsertManualFinanceAccount = financeEnhancements.upsertManualFinanceAccount;
+    exports.deleteManualFinanceAccount = financeEnhancements.deleteManualFinanceAccount;
+    exports.fetchFinanceEnhancementData = financeEnhancements.fetchFinanceEnhancementData;
+  }
+} catch (e) {
+  console.warn('[init] financeEnhancements not loaded', e?.message || e);
+}
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
 const crypto = require('crypto');
@@ -136,7 +153,9 @@ const updateGoalTargetYears = async () => {
   return { updated: updates };
 };
 
-exports.updateGoalTargetYears = schedulerV2.onSchedule('0 3 * * *', async () => {
+exports.updateGoalTargetYears = schedulerV2.onSchedule(
+  { schedule: '0 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  async () => {
   try {
     return await updateGoalTargetYears();
   } catch (e) {
@@ -5408,8 +5427,13 @@ exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT
   const docIdOverride = String(req.data?.docId || '').trim();
   const categoryKey = String(req.data?.categoryKey || '').trim();
   const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
+  const categoryType = req.data?.categoryType ? String(req.data.categoryType).trim().toLowerCase() : null;
+  const allowedTypes = new Set(['mandatory', 'optional', 'savings', 'income']);
 
   if (!transactionId || !categoryKey) throw new httpsV2.HttpsError('invalid-argument', 'transactionId and categoryKey are required');
+  if (categoryType && !allowedTypes.has(categoryType)) {
+    throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+  }
 
   const db = admin.firestore();
   const col = db.collection('monzo_transactions');
@@ -5429,12 +5453,14 @@ exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT
   if (!snap || !snap.exists) throw new httpsV2.HttpsError('not-found', 'Transaction not found');
   if (snap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your transaction');
 
-  await docRef.update({
+  const updatePayload = {
     userCategoryKey: categoryKey,
     userCategoryLabel: categoryLabel,
     manualCategory: true,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  };
+  if (categoryType) updatePayload.userCategoryType = categoryType;
+  await docRef.update(updatePayload);
 
   return { ok: true };
 });
@@ -5763,14 +5789,18 @@ exports.monzoIntegrationMonitor = schedulerV2.onSchedule('every 60 minutes', asy
   return { stale: snap.size };
 });
 
-async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since }) {
+async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since, fullRefresh = false, historyStart = null }) {
   const db = admin.firestore();
   const transactionsCol = db.collection('monzo_transactions');
   const limit = 200;
-  let cursor = since || null;
-  let prevCursor = cursor || null;
+  let sinceCursor = since || null;
+  let refreshSinceCursor = fullRefresh ? (historyStart || null) : null;
+  let beforeCursor = null;
+  let fullRefreshDirection = null; // asc | desc
   let total = 0;
   let lastCreated = since || null;
+  let firstCreated = null;
+  const historyFloorMs = historyStart ? Date.parse(historyStart) : null;
 
   // Preload merchant mappings for this user to auto-apply categorisation
   const merchantMappingsSnap = await db.collection('merchant_mappings')
@@ -5809,7 +5839,12 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     const params = new URLSearchParams();
     params.set('account_id', accountId);
     params.set('limit', String(limit));
-    if (cursor) params.set('since', cursor);
+    if (fullRefresh) {
+      if (refreshSinceCursor) params.set('since', refreshSinceCursor);
+      if (beforeCursor) params.set('before', beforeCursor);
+    } else if (sinceCursor) {
+      params.set('since', sinceCursor);
+    }
     params.append('expand[]', 'merchant');
 
     const data = await monzoApi(accessToken, '/transactions', params);
@@ -5817,6 +5852,9 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     if (!transactions.length) break;
 
     const batch = db.batch();
+    let pageNewestCreated = null;
+    let pageOldestCreated = null;
+
     for (const tx of transactions) {
       const docRef = transactionsCol.doc(`${uid}_${tx.id}`);
       const defaultCategoryType = inferDefaultCategoryType(tx);
@@ -5909,18 +5947,51 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
       }
 
       batch.set(docRef, docData, { merge: true });
+
+      if (tx.created) {
+        if (!pageNewestCreated || tx.created > pageNewestCreated) pageNewestCreated = tx.created;
+        if (!pageOldestCreated || tx.created < pageOldestCreated) pageOldestCreated = tx.created;
+      }
     }
 
     await batch.commit();
 
     total += transactions.length;
+    if (pageNewestCreated && (!lastCreated || pageNewestCreated > lastCreated)) lastCreated = pageNewestCreated;
+    if (pageOldestCreated && (!firstCreated || pageOldestCreated < firstCreated)) firstCreated = pageOldestCreated;
+
+    if (fullRefresh) {
+      if (!fullRefreshDirection && transactions.length >= 2) {
+        const firstMs = Date.parse(transactions[0]?.created || '');
+        const lastMs = Date.parse(transactions[transactions.length - 1]?.created || '');
+        if (Number.isFinite(firstMs) && Number.isFinite(lastMs)) {
+          fullRefreshDirection = firstMs >= lastMs ? 'desc' : 'asc';
+        }
+      }
+      if (transactions.length < limit) break;
+
+      if (fullRefreshDirection === 'asc') {
+        if (!pageNewestCreated) break;
+        const nextSince = new Date(new Date(pageNewestCreated).getTime() + 1).toISOString();
+        if (nextSince === refreshSinceCursor) break;
+        refreshSinceCursor = nextSince;
+      } else {
+        if (!pageOldestCreated) break;
+        const oldestMs = Date.parse(pageOldestCreated);
+        if (Number.isFinite(historyFloorMs) && Number.isFinite(oldestMs) && oldestMs <= historyFloorMs) break;
+        const nextBefore = new Date(oldestMs - 1).toISOString();
+        if (nextBefore === beforeCursor) break;
+        beforeCursor = nextBefore;
+      }
+      continue;
+    }
+
     const lastTx = transactions[transactions.length - 1];
     if (lastTx?.created) {
-      lastCreated = lastTx.created;
-      prevCursor = cursor;
       const nextDate = new Date(lastTx.created);
-      cursor = new Date(nextDate.getTime() + 1).toISOString();
-      if (cursor === prevCursor) break;
+      const nextSince = new Date(nextDate.getTime() + 1).toISOString();
+      if (nextSince === sinceCursor) break;
+      sinceCursor = nextSince;
     } else {
       break;
     }
@@ -5928,7 +5999,7 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     if (transactions.length < limit) break;
   }
 
-  return { count: total, lastCreated };
+  return { count: total, lastCreated, firstCreated };
 }
 
 const loadFinanceCategoriesForUser = async (db, uid) => {
@@ -6392,6 +6463,31 @@ exports.monzoSpendAnomalySweep = schedulerV2.onSchedule({
 });
 
 
+async function findEarliestMonzoTransactionCreated(db, uid, accountId) {
+  const snap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', uid)
+    .where('accountId', '==', accountId)
+    .select('createdISO', 'createdAt')
+    .get();
+
+  let earliestMs = null;
+  snap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    let candidateMs = NaN;
+    if (data.createdAt?.toDate) {
+      candidateMs = data.createdAt.toDate().getTime();
+    } else if (data.createdAt?._seconds) {
+      candidateMs = Number(data.createdAt._seconds) * 1_000;
+    } else if (typeof data.createdISO === 'string' && data.createdISO) {
+      candidateMs = Date.parse(data.createdISO);
+    }
+    if (!Number.isFinite(candidateMs)) return;
+    earliestMs = earliestMs === null ? candidateMs : Math.min(earliestMs, candidateMs);
+  });
+
+  return earliestMs === null ? null : new Date(earliestMs).toISOString();
+}
+
 async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
   const { accessToken } = await ensureMonzoAccessToken(uid);
   const db = admin.firestore();
@@ -6473,10 +6569,34 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     const syncSnap = await syncStateRef.get();
     const stateData = syncSnap.data() || {};
     const sinceCursor = fullRefresh ? null : (since || stateData.lastTransactionCreated || null);
+    const historyFloorISO = '2018-01-01T00:00:00.000Z';
+    const parsedAccountCreatedMs = Date.parse(String(account?.created || ''));
+    const accountCreatedISO = Number.isNaN(parsedAccountCreatedMs)
+      ? null
+      : new Date(parsedAccountCreatedMs).toISOString();
+    const historyStart = fullRefresh
+      ? (accountCreatedISO && accountCreatedISO > historyFloorISO ? accountCreatedISO : historyFloorISO)
+      : null;
 
-    const txSummary = await syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since: sinceCursor });
+    const txSummary = await syncMonzoTransactionsForAccount({
+      uid,
+      accountId,
+      accessToken,
+      since: sinceCursor,
+      fullRefresh: !!fullRefresh,
+      historyStart,
+    });
+    let firstCreated = txSummary.firstCreated || null;
+    if (fullRefresh && !firstCreated) {
+      firstCreated = await findEarliestMonzoTransactionCreated(db, uid, accountId);
+    }
     summary.transactions += txSummary.count;
-    summary.accountsSynced.push({ accountId, transactions: txSummary.count, lastCreated: txSummary.lastCreated || null });
+    summary.accountsSynced.push({
+      accountId,
+      transactions: txSummary.count,
+      lastCreated: txSummary.lastCreated || null,
+      firstCreated,
+    });
 
     const update = {
       ownerUid: uid,
@@ -6488,6 +6608,10 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     if (txSummary.lastCreated) {
       update.lastTransactionCreated = txSummary.lastCreated;
       update.lastTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.lastCreated));
+    }
+    if (firstCreated) {
+      update.firstTransactionCreated = firstCreated;
+      update.firstTransactionTs = admin.firestore.Timestamp.fromDate(new Date(firstCreated));
     }
 
     await syncStateRef.set(update, { merge: true });
@@ -6535,31 +6659,61 @@ exports.syncMonzoNow = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_
 
     return { success: true, summary: result };
   } catch (error) {
+    const normalizedError = error instanceof httpsV2.HttpsError ? error : null;
+    const errorCode = normalizedError?.code || 'internal';
+    const errorMessage = normalizedError?.message || error?.message || String(error);
+    const reconnectRequired =
+      errorCode === 'failed-precondition' &&
+      /missing monzo refresh token|refresh token/i.test(errorMessage);
+    const userMessage = reconnectRequired
+      ? 'Monzo connection expired. Reconnect Monzo in Integrations, then run sync again.'
+      : errorMessage;
+    console.error('[syncMonzoNow] manual sync failed', {
+      uid,
+      errorCode,
+      errorMessage,
+      stack: error?.stack || null,
+    });
+
     const db = admin.firestore();
     await db.collection('integration_logs').add({
       integration: 'monzo',
       type: 'manual_sync',
       status: 'error',
       userId: uid,
-      error: error.message,
+      errorCode,
+      error: userMessage,
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Email admin on failure
-    try {
-      await sendEmail({
-        to: 'support@jc1.tech',
-        subject: `Monzo Manual Sync Failed - ${uid}`,
-        html: `<h3>Monzo manual sync failed</h3>
-               <p><strong>User:</strong> ${uid}</p>
-               <p><strong>Error:</strong> ${error.message}</p>
-               <pre>${JSON.stringify(error, null, 2)}</pre>`
-      });
-    } catch (emailError) {
-      console.error('Failed to send alert email:', emailError);
+    // Email admin only for unexpected server-side failures when Brevo is configured on this revision.
+    if (errorCode === 'internal' || errorCode === 'unknown') {
+      if (process.env.BREVO_API_KEY) {
+        try {
+          await sendEmail({
+            to: 'support@jc1.tech',
+            subject: `Monzo Manual Sync Failed - ${uid}`,
+            html: `<h3>Monzo manual sync failed</h3>
+                 <p><strong>User:</strong> ${uid}</p>
+                 <p><strong>Error:</strong> ${errorMessage}</p>
+                 <pre>${JSON.stringify(error, null, 2)}</pre>`
+          });
+        } catch (emailError) {
+          console.error('Failed to send alert email:', emailError);
+        }
+      } else {
+        console.warn('[syncMonzoNow] Brevo not configured, skipping alert email');
+      }
     }
 
-    throw new httpsV2.HttpsError('internal', `Sync failed: ${error.message}`);
+    if (normalizedError) {
+      if (userMessage !== normalizedError.message) {
+        throw new httpsV2.HttpsError(errorCode, userMessage);
+      }
+      throw normalizedError;
+    }
+
+    throw new httpsV2.HttpsError('internal', `Sync failed: ${userMessage}`);
   }
 });
 
@@ -16820,7 +16974,7 @@ Keep it professional, actionable, and encourage the team.`;
 });
 
 // ===== Theme Allocations =====
-exports.saveThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-central1'] }, async (req) => {
+exports.saveThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const uid = req.auth.uid;
   const allocations = req.data.allocations || [];
@@ -16833,7 +16987,7 @@ exports.saveThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-cen
   return { ok: true };
 });
 
-exports.getThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-central1'] }, async (req) => {
+exports.getThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const uid = req.auth.uid;
   const db = admin.firestore();

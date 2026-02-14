@@ -234,6 +234,23 @@ const Dashboard: React.FC = () => {
     });
   }, []);
 
+  const formatInstanceTime = useCallback((instance: ScheduledInstanceModel) => {
+    try {
+      if (instance.plannedStart && instance.plannedEnd) {
+        const start = new Date(instance.plannedStart);
+        const end = new Date(instance.plannedEnd);
+        return `${format(start, 'HH:mm')} - ${format(end, 'HH:mm')}`;
+      }
+      if (instance.plannedStart) {
+        return format(new Date(instance.plannedStart), 'HH:mm');
+      }
+      return 'Flexible window';
+    } catch (err) {
+      console.warn('Failed to format instance window', err);
+      return 'Flexible window';
+    }
+  }, []);
+
   const monzoLastSyncDate = useMemo(() => {
     if (!monzoIntegrationStatus) return null;
     return decodeToDate(
@@ -1568,6 +1585,7 @@ const Dashboard: React.FC = () => {
           const tx: any = docSnap.data() || {};
           const amount = extractMonzoAmountPence(tx);
           if (amount >= 0) return;
+
           const bucket = resolveMonzoBucket(tx);
           if (FINANCE_INCOME_BUCKETS.has(bucket)) return;
 
