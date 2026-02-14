@@ -169,6 +169,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [analysisCategoryFilter, setAnalysisCategoryFilter] = useState('all');
     const [analysisMerchantFilter, setAnalysisMerchantFilter] = useState('all');
 
+    // Chart drill-down filter state
+    const [chartFilter, setChartFilter] = useState<{ type: 'category' | 'bucket' | null; value: string | null }>({ type: null, value: null });
+
     const [editingManualAccountId, setEditingManualAccountId] = useState<string | null>(null);
     const [manualForm, setManualForm] = useState<{
         name: string;
@@ -548,17 +551,15 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const trendOption = {
         tooltip: { trigger: 'axis' },
         legend: { data: activeKeys },
-        grid: { left: 50, right: 10, top: 30, bottom: 20 },
+        grid: { left: 50, right: 10, top: 30, bottom: 50 },
         xAxis: { type: 'category', data: trendData.map((r: any) => r.month) },
         yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
         series: activeKeys.map((key, idx) => ({
             name: key,
-            type: 'line',
+            type: 'bar',
             stack: 'spend',
-            areaStyle: { opacity: 0.2 },
             data: trendData.map((row: any) => Math.abs(row[key] || 0)),
             color: THEME_COLORS[idx % THEME_COLORS.length],
-            smooth: true,
             emphasis: { focus: 'series' },
         })),
     };
@@ -607,10 +608,53 @@ const FinanceDashboardAdvanced: React.FC = () => {
         ],
     };
 
+    // Chart click handlers
+    const handleTrendClick = (params: any) => {
+        if (params.componentType === 'series') {
+            const categoryName = params.seriesName;
+            setChartFilter({ type: 'category', value: categoryName });
+        }
+    };
+
+    const handlePieClick = (params: any) => {
+        if (params.componentType === 'series') {
+            const selectedName = params.name;
+            const filterType = viewMode === 'bucket' ? 'bucket' : 'category';
+            setChartFilter({ type: filterType, value: selectedName });
+        }
+    };
+
+    const clearChartFilter = () => {
+        setChartFilter({ type: null, value: null });
+    };
+
     const filteredRecentTransactions = (data?.recentTransactions || [])
         .filter((tx: any) => {
             const bucket = (tx.userCategoryType || tx.aiBucket || tx.categoryType || '').toLowerCase();
-            return bucket !== 'bank_transfer' && bucket !== 'unknown';
+            if (bucket === 'bank_transfer' || bucket === 'unknown') return false;
+
+            // Apply chart filter
+            if (chartFilter.type && chartFilter.value) {
+                if (chartFilter.type === 'category') {
+                    const categoryLabel = toText(
+                        tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
+                        'Uncategorised'
+                    );
+                    if (categoryLabel !== chartFilter.value) return false;
+                } else if (chartFilter.type === 'bucket') {
+                    const bucketLabel = toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, '');
+                    // Normalize bucket names for comparison
+                    const normalizedBucket = bucketLabel.toLowerCase();
+                    const normalizedFilter = chartFilter.value.toLowerCase();
+                    if (normalizedBucket !== normalizedFilter &&
+                        !(normalizedBucket === 'discretionary' && normalizedFilter === 'discretionary') &&
+                        !(normalizedBucket === 'mandatory' && normalizedFilter === 'mandatory')) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
         })
         .map((tx: any) => ({
             ...tx,
@@ -620,6 +664,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
                 'Uncategorised'
             ),
+            __bucketLabel: toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, 'Unknown'),
         }));
 
     const spendTrackingSeries = enhancementData?.spendTrackingSeries ?? EMPTY_LIST;
@@ -677,7 +722,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 data: spendTrackingSeries.map((item: any) => toPounds(item.mandatoryPence || 0)),
             },
             {
-                name: 'Optional',
+                name: 'Discretionary',
                 type: 'bar',
                 stack: 'spend',
                 itemStyle: { color: '#fd5d93' },
@@ -983,13 +1028,17 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
             <Row className="g-4 mb-4">
                 <Col lg={8}>
-                    <PremiumCard title="Spend Trend" icon={TrendingUp} height={350}>
-                        <ReactECharts option={trendOption} style={{ height: '100%' }} />
+                    <PremiumCard title="Spend Trend (Click bars to filter)" icon={TrendingUp} height={350}>
+                        <ReactECharts
+                            option={trendOption}
+                            style={{ height: '100%' }}
+                            onEvents={{ click: handleTrendClick }}
+                        />
                     </PremiumCard>
                 </Col>
                 <Col lg={4}>
                     <PremiumCard
-                        title="Top 10 Distribution"
+                        title="Top 10 Distribution (Click to filter)"
                         icon={PieIcon}
                         height={350}
                         action={
@@ -999,7 +1048,103 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             </ButtonGroup>
                         }
                     >
-                        <ReactECharts option={distributionOption} style={{ height: '100%' }} />
+                        <ReactECharts
+                            option={distributionOption}
+                            style={{ height: '100%' }}
+                            onEvents={{ click: handlePieClick }}
+                        />
+                    </PremiumCard>
+                </Col>
+            </Row>
+
+            {/* Transaction Table with Active Filter Badge */}
+            <Row className="mb-4">
+                <Col>
+                    <PremiumCard
+                        title={`Recent Transactions (${filteredRecentTransactions.length})`}
+                        icon={CreditCard}
+                        action={
+                            chartFilter.type && chartFilter.value ? (
+                                <div className="d-flex align-items-center gap-2">
+                                    <Badge bg="primary">
+                                        {chartFilter.type}: {chartFilter.value}
+                                    </Badge>
+                                    <Button size="sm" variant="outline-secondary" onClick={clearChartFilter}>
+                                        Clear Filter
+                                    </Button>
+                                </div>
+                            ) : undefined
+                        }
+                    >
+                        <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
+                            <table className="table table-sm table-hover">
+                                <thead className="sticky-top bg-white" style={{ top: 0, zIndex: 1 }}>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Merchant</th>
+                                        <th>Category</th>
+                                        <th>Bucket</th>
+                                        <th>Pot</th>
+                                        <th className="text-end">Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredRecentTransactions.length === 0 && (
+                                        <tr>
+                                            <td colSpan={6} className="text-center text-muted py-4">
+                                                No transactions match the current filter
+                                            </td>
+                                        </tr>
+                                    )}
+                                    {filteredRecentTransactions.slice(0, 100).map((tx: any) => {
+                                        const createdDate = parseTxDate(tx);
+                                        const dateStr = createdDate ? createdDate.toLocaleDateString('en-GB', {
+                                            day: 'numeric',
+                                            month: 'short',
+                                            year: 'numeric'
+                                        }) : '—';
+                                        const amount = txAmountMinor(tx) / 100;
+                                        const isNegative = amount < 0;
+
+                                        return (
+                                            <tr key={tx.id || Math.random()}>
+                                                <td style={{ whiteSpace: 'nowrap' }}>{dateStr}</td>
+                                                <td>{tx.__merchantLabel}</td>
+                                                <td>
+                                                    <small className="text-muted">{tx.__categoryLabel}</small>
+                                                </td>
+                                                <td>
+                                                    <Badge
+                                                        bg={
+                                                            tx.__bucketLabel.toLowerCase().includes('mandatory') ? 'danger' :
+                                                            tx.__bucketLabel.toLowerCase().includes('discretionary') ? 'warning' :
+                                                            tx.__bucketLabel.toLowerCase().includes('saving') ? 'info' :
+                                                            'secondary'
+                                                        }
+                                                        className="text-uppercase"
+                                                        style={{ fontSize: '0.65rem' }}
+                                                    >
+                                                        {tx.__bucketLabel}
+                                                    </Badge>
+                                                </td>
+                                                <td><small className="text-muted">{tx.__potLabel}</small></td>
+                                                <td className="text-end" style={{
+                                                    fontWeight: 600,
+                                                    color: isNegative ? '#dc3545' : '#28a745'
+                                                }}>
+                                                    {isNegative ? '-' : '+'}£{Math.abs(amount).toFixed(2)}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                            {filteredRecentTransactions.length > 100 && (
+                                <div className="text-center text-muted py-2">
+                                    <small>Showing first 100 of {filteredRecentTransactions.length} transactions</small>
+                                </div>
+                            )}
+                        </div>
                     </PremiumCard>
                 </Col>
             </Row>
@@ -1770,7 +1915,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const viewButtons: Array<{ key: FinanceView; label: string }> = [
         { key: 'overview', label: 'Overview' },
         { key: 'spend', label: 'Spend analysis + Forecast' },
-        { key: 'optional', label: 'Optional spend' },
+        { key: 'discretionary', label: 'Discretionary spend' },
         { key: 'actions', label: 'Actions' },
         { key: 'sources', label: 'Data sources' },
         { key: 'assets', label: 'Assets & Debts' },
@@ -1870,7 +2015,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
             {activeView === 'overview' && renderOverview()}
             {activeView === 'spend' && renderSpendAnalysis()}
-            {activeView === 'optional' && renderOptionalSpend()}
+            {activeView === 'discretionary' && renderOptionalSpend()}
             {activeView === 'actions' && renderActions()}
             {activeView === 'sources' && renderDataSources()}
             {activeView === 'assets' && renderAssets()}
