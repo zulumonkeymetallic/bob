@@ -567,7 +567,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const localDistribution = ((data?.recentTransactions || []) as any[])
         .filter((tx) => {
             const cat = (tx.userCategoryKey || tx.aiCategoryKey || tx.categoryKey || tx.categoryType || '').toLowerCase();
-            return cat && cat !== 'bank_transfer' && cat !== 'unknown';
+            // Exclude bank transfers, income, and unknown from distribution pie chart
+            return cat && cat !== 'bank_transfer' && cat !== 'unknown' &&
+                   cat !== 'net_salary' && cat !== 'irregular_income' && cat !== 'income';
         })
         .reduce((acc: Record<string, number>, tx: any) => {
             const label = toText(
@@ -631,7 +633,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const filteredRecentTransactions = (data?.recentTransactions || [])
         .filter((tx: any) => {
             const bucket = (tx.userCategoryType || tx.aiBucket || tx.categoryType || '').toLowerCase();
-            if (bucket === 'bank_transfer' || bucket === 'unknown') return false;
+            // Exclude bank transfers, income, and unknown transactions from spend analysis
+            if (bucket === 'bank_transfer' || bucket === 'unknown' ||
+                bucket === 'net_salary' || bucket === 'irregular_income' ||
+                bucket === 'income') return false;
 
             // Apply chart filter
             if (chartFilter.type && chartFilter.value) {

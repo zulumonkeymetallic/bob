@@ -650,41 +650,63 @@ const FinanceDashboardModern: React.FC = () => {
                         <Card.Body className="p-2">
                             <Card.Title className="h6">Recent Transactions</Card.Title>
                             <div className="d-flex flex-column gap-2 mt-2 overflow-auto" style={{ maxHeight: '250px' }}>
-                                {filteredTransactions.map(tx => (
-                                    <div
-                                        key={tx.transactionId}
-                                        className="border rounded bg-white p-2"
-                                        style={{
-                                            display: 'grid',
-                                            gridTemplateColumns: '1fr 1.4fr auto auto',
-                                            gap: '8px',
-                                            alignItems: 'center',
-                                        }}
-                                    >
-                                        <div>
-                                            <div className="fw-semibold small">{tx.createdISO ? new Date(tx.createdISO).toLocaleDateString() : '—'}</div>
-                                            <div className="text-muted" style={{ fontSize: '0.7rem' }}>
-                                                {tx.createdISO ? new Date(tx.createdISO).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                {filteredTransactions.map(tx => {
+                                    const bucket = (tx.userCategoryType || tx.aiBucket || '').toLowerCase();
+                                    const bucketLabel = bucket.includes('mandatory') || bucket === 'debt_repayment' ? 'Mandatory' :
+                                                       bucket === 'discretionary' || bucket === 'optional' ? 'Discretionary' :
+                                                       bucket.includes('saving') || bucket === 'investment' ? 'Savings' :
+                                                       bucket === 'net_salary' || bucket === 'irregular_income' || bucket === 'income' ? 'Income' :
+                                                       'Other';
+                                    const bucketVariant = bucketLabel === 'Mandatory' ? 'danger' :
+                                                         bucketLabel === 'Discretionary' ? 'warning' :
+                                                         bucketLabel === 'Savings' ? 'info' :
+                                                         bucketLabel === 'Income' ? 'success' :
+                                                         'secondary';
+                                    return (
+                                        <div
+                                            key={tx.transactionId}
+                                            className="border rounded bg-white p-2"
+                                            style={{
+                                                display: 'grid',
+                                                gridTemplateColumns: '1fr 1.4fr auto auto auto',
+                                                gap: '8px',
+                                                alignItems: 'center',
+                                            }}
+                                        >
+                                            <div>
+                                                <div className="fw-semibold small">{tx.createdISO ? new Date(tx.createdISO).toLocaleDateString() : '—'}</div>
+                                                <div className="text-muted" style={{ fontSize: '0.7rem' }}>
+                                                    {tx.createdISO ? new Date(tx.createdISO).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="fw-semibold text-truncate small">{tx.merchantName || tx.description}</div>
+                                                <div className="text-muted text-truncate" style={{ fontSize: '0.7rem' }}>
+                                                    {tx.potName
+                                                        ? `${tx.amount > 0 ? 'Transfer from' : 'Transfer to'} ${tx.potName}`
+                                                        : 'No pot'}
+                                                </div>
+                                            </div>
+                                            <div className="text-nowrap">
+                                                <Badge
+                                                    bg={bucketVariant}
+                                                    className="text-uppercase"
+                                                    style={{ fontSize: '0.65rem' }}
+                                                >
+                                                    {bucketLabel}
+                                                </Badge>
+                                            </div>
+                                            <div className="text-nowrap">
+                                                <Badge bg="light" text="dark" className="border" style={{ fontSize: '0.7rem' }}>
+                                                    {tx.userCategoryLabel || 'Uncategorised'}
+                                                </Badge>
+                                            </div>
+                                            <div className={`text-end fw-bold small text-nowrap ${tx.amount > 0 ? 'text-success' : ''}`}>
+                                                {formatMoney(Math.abs(tx.amount))}
                                             </div>
                                         </div>
-                                        <div>
-                                            <div className="fw-semibold text-truncate small">{tx.merchantName || tx.description}</div>
-                                            <div className="text-muted text-truncate" style={{ fontSize: '0.7rem' }}>
-                                                {tx.potName
-                                                    ? `${tx.amount > 0 ? 'Transfer from' : 'Transfer to'} ${tx.potName}`
-                                                    : 'No pot'}
-                                            </div>
-                                        </div>
-                                        <div className="text-nowrap">
-                                            <Badge bg="light" text="dark" className="border" style={{ fontSize: '0.7rem' }}>
-                                                {tx.userCategoryLabel || 'Uncategorised'}
-                                            </Badge>
-                                        </div>
-                                        <div className={`text-end fw-bold small text-nowrap ${tx.amount > 0 ? 'text-success' : ''}`}>
-                                            {formatMoney(Math.abs(tx.amount))}
-                                        </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </Card.Body>
                     </Card>
