@@ -446,7 +446,7 @@ function durationMinutesFromTask(task) {
   const isChoreLike = ['chore', 'routine', 'habit'].includes(type);
   const choreMin = 10;
   if (estimateMin > 0) return Math.min(180, Math.max(isChoreLike ? choreMin : 15, Math.round(estimateMin)));
-  if (points > 0) return Math.min(240, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 60)));
+  if (points > 0) return Math.min(240, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 30)));
   return isChoreLike ? choreMin : 30;
 }
 
@@ -12078,7 +12078,7 @@ exports.scheduleDueTasksToday = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_I
 
   for (const t of tasks) {
     const points = Number(t.points ?? t.estimateMin ? Math.round(Number(t.estimateMin) / 60) : 0);
-    const dur = Math.min(180, Math.max(30, points > 0 ? points * 60 : 30));
+    const dur = Math.min(180, Math.max(30, points > 0 ? points * 30 : 30));
     const slotStart = findSlot(dur);
     if (!slotStart) continue;
     const slotEnd = slotStart + dur * 60000;

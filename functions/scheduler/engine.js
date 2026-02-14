@@ -365,7 +365,7 @@ function computeTaskOccurrences(tasks, windowStart, windowEnd, userId) {
 
     const estimateMinutes = task.estimateMin
       || (Number.isFinite(Number(task.estimatedHours)) ? Number(task.estimatedHours) * 60 : null)
-      || (Number.isFinite(Number(task.points)) ? Number(task.points) * 45 : null);
+      || (Number.isFinite(Number(task.points)) ? Number(task.points) * 30 : null);
     const durationMinutes = clampDurationMinutes(estimateMinutes || 60);
     const priority = task.isDueTodayMandatory ? 1
       : Number.isFinite(Number(task.schedulerPriority))
@@ -464,7 +464,7 @@ async function computeStoryOccurrences(stories, windowStart, windowEnd, userId, 
 
     const estimateMinutes = story.estimateMin
       || (Number.isFinite(Number(story.estimatedHours)) ? Number(story.estimatedHours) * 60 : null)
-      || (Number.isFinite(Number(story.points)) ? Number(story.points) * 45 : null);
+      || (Number.isFinite(Number(story.points)) ? Number(story.points) * 30 : null);
     const durationMinutes = clampDurationMinutes(estimateMinutes || 90, { min: 30, max: 360 });
     const priority = Number.isFinite(Number(story.schedulerPriority))
       ? Number(story.schedulerPriority)

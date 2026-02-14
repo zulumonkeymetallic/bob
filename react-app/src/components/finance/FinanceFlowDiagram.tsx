@@ -105,7 +105,7 @@ const FinanceFlowDiagram: React.FC = () => {
     txs.forEach((t: any) => {
       const amount = typeof t.amount === 'number' ? t.amount : 0;
       if (amount >= 0) return; // only spend
-      const bucket = String(t.aiBucket || t.categoryType || 'optional').toLowerCase();
+      const bucket = String(t.aiBucket || t.categoryType || 'discretionary').toLowerCase();
       if (bucket === 'bank_transfer' || bucket === 'income' || bucket === 'net_salary' || bucket === 'irregular_income') return;
       const category = String(t.aiCategoryKey || t.categoryKey || t.aiCategoryLabel || t.categoryLabel || 'uncategorised');
       const merchant = String(t.merchantName || 'merchant');
