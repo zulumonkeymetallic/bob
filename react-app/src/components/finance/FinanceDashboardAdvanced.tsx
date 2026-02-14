@@ -32,7 +32,7 @@ import './FinanceDashboardAdvanced.css';
 
 type DateFilter = 'month' | 'quarter' | 'year' | 'all' | 'custom';
 type ViewMode = 'category' | 'bucket';
-type FinanceView = 'overview' | 'spend' | 'optional' | 'actions' | 'sources' | 'assets';
+type FinanceView = 'overview' | 'spend' | 'discretionary' | 'actions' | 'sources' | 'assets';
 type ExternalSource = 'barclays' | 'paypal' | 'other' | 'monzo_csv';
 type AnalysisDimension = 'bucket' | 'category' | 'merchant';
 type AnalysisChartType = 'trend' | 'pie' | 'breakdown';
@@ -122,7 +122,7 @@ const parseFinanceView = (tab: string | null): FinanceView | null => {
     if (tab === 'cashflow') return 'spend';
     if (tab === 'overview') return 'overview';
     if (tab === 'spend') return 'spend';
-    if (tab === 'optional') return 'optional';
+    if (tab === 'discretionary') return 'discretionary';
     if (tab === 'actions') return 'actions';
     if (tab === 'sources') return 'sources';
     if (tab === 'assets') return 'assets';
@@ -658,7 +658,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const spendTrackingOption = {
         tooltip: { trigger: 'axis' },
-        legend: { data: ['Mandatory', 'Optional', 'Savings', 'Income'] },
+        legend: { data: ['Mandatory', 'Discretionary', 'Savings', 'Income'] },
         grid: { left: 50, right: 15, top: 30, bottom: 30 },
         xAxis: {
             type: 'category',

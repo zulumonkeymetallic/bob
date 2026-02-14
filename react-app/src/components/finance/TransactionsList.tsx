@@ -362,8 +362,7 @@ const TransactionsList: React.FC = () => {
 
     const subset = enriched.filter((r) => {
       if (bucketFilter !== 'all') {
-        const rawBucket = r.displayBucket || r.aiBucket || r.userCategoryType || (r.userCategoryKey ? r.defaultCategoryType : 'optional');
-        const bucket = rawBucket === 'discretionary' ? 'optional' : rawBucket;
+        const bucket = r.displayBucket || r.aiBucket || r.userCategoryType || (r.userCategoryKey ? r.defaultCategoryType : 'discretionary');
         if (bucket !== bucketFilter) return false;
       }
       if (categoryFilter !== 'all') {
@@ -391,8 +390,7 @@ const TransactionsList: React.FC = () => {
       const selectedCategoryLabel = selectedCategoryKey
         ? getCategoryByKey(selectedCategoryKey, allCategories)?.label || selectedCategoryKey
         : '';
-      const bucketRaw = row.displayBucket || row.aiBucket || row.userCategoryType || row.defaultCategoryType || 'unknown';
-      const bucketKey = bucketRaw === 'discretionary' ? 'optional' : bucketRaw;
+      const bucketKey = row.displayBucket || row.aiBucket || row.userCategoryType || row.defaultCategoryType || 'unknown';
       const bucketLabel = BUCKET_LABELS[bucketKey as keyof typeof BUCKET_LABELS] || bucketKey || 'unknown';
 
       if (key === 'date') return row.createdISO ? new Date(row.createdISO).getTime() : 0;
@@ -488,10 +486,10 @@ const TransactionsList: React.FC = () => {
 
   const mapBucketToType = (bucket: string) => {
     if (bucket === 'mandatory' || bucket === 'debt_repayment' || bucket === 'bank_transfer') return 'mandatory';
-    if (bucket === 'discretionary') return 'optional';
+    if (bucket === 'discretionary') return 'discretionary';
     if (bucket?.includes('saving') || bucket === 'investment') return 'savings';
     if (bucket === 'net_salary' || bucket === 'irregular_income') return 'income';
-    return 'optional';
+    return 'discretionary';
   };
 
   const bucketLabelFromCategory = (categoryKey?: string | null, fallbackType?: string | null) => {
@@ -537,7 +535,7 @@ const TransactionsList: React.FC = () => {
       return;
     }
     const cat = allCategories.find((c) => c.key === categoryKey);
-    const bucket = cat?.bucket || 'optional';
+    const bucket = cat?.bucket || 'discretionary';
     setSavingId(tx.id);
     setErrorMsg('');
     try {
@@ -694,7 +692,7 @@ const TransactionsList: React.FC = () => {
                 <Form.Select size="sm" className="finance-input" value={bucketFilter} onChange={(e) => setBucketFilter(e.target.value)}>
                   <option value="all">All buckets</option>
                   <option value="mandatory">Mandatory</option>
-                  <option value="optional">Optional</option>
+                  <option value="discretionary">Discretionary</option>
                   <option value="savings">Savings</option>
                   <option value="income">Income</option>
                 </Form.Select>

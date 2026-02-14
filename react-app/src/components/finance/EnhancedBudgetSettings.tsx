@@ -138,7 +138,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                         const normalized = arr.map((c: any) => ({
                             key: c.key,
                             label: c.label || c.key,
-                            bucket: c.bucket || 'optional',
+                            bucket: c.bucket || 'discretionary',
                             isDefault: false,
                             isCustom: true
                         })) as CategoryItem[];
@@ -395,7 +395,7 @@ const EnhancedBudgetSettings: React.FC = () => {
                 map.set(normalized, {
                     key: normalized,
                     label: normalized,
-                    bucket: 'optional' as CategoryBucket,
+                    bucket: 'discretionary' as CategoryBucket,
                     isDefault: false,
                     isCustom: true
                 } as CategoryItem);
@@ -435,7 +435,7 @@ const EnhancedBudgetSettings: React.FC = () => {
         let totalAmount = 0;
 
         Object.entries(categoryBudgets).forEach(([key, budget]) => {
-            const bucket = bucketIndex.get(key) || 'optional';
+            const bucket = bucketIndex.get(key) || 'discretionary';
             // Exclude income and bank transfers from allocation math
             if (bucket === 'net_salary' || bucket === 'irregular_income' || bucket === 'bank_transfer') {
                 return;
